@@ -498,6 +498,26 @@ class PurchaseInitRequest(BaseModel):
     origin_url: str
     display_currency: Optional[str] = None  # what /purchase/price last showed this buyer; audit only, never affects the actual charge
 
+class BankTransferInitiateRequest(BaseModel):
+    buyer_name: str
+    buyer_email: str
+
+class BankTransferProofRequest(BaseModel):
+    proof_image: str  # data:image/... URL
+
+class BankTransferAdminActionRequest(BaseModel):
+    reason: Optional[str] = ""
+
+class AdminBankTransferSettingsUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    bank_name: Optional[str] = None
+    account_name: Optional[str] = None
+    account_number: Optional[str] = None
+    timeout_minutes: Optional[int] = None
+    proof_required: Optional[bool] = None
+    support_contact: Optional[str] = None
+    instructions: Optional[str] = None
+
 class AdminSettingsUpdate(BaseModel):
     paystack_secret_key: Optional[str] = None
     pin_price_kobo: Optional[int] = None
@@ -1009,12 +1029,13 @@ async def _get_fx_rates() -> dict:
         logger.warning(f"FX rate fetch failed: {e}")
     return _fx_rate_cache
 
-def _detect_display_currency(request: Request, requested: Optional[str] = None) -> str:
-    """Precedence: explicit visitor selection > CDN-provided country header
-    > Accept-Language country subtag > NGN-for-Nigeria/USD-international
-    default. Never used to change what's actually charged."""
-    if requested:
-        return requested.upper()
+def _detect_country_code(request: Request) -> str:
+    """CDN-provided country header (Cloudflare/Vercel-style edge headers)
+    first, Accept-Language country subtag as a secondary signal, empty
+    string if neither is present -- never guesses further than that.
+    Shared by currency display (informational) and bank-transfer
+    eligibility (a real access-control gate, re-validated server-side on
+    every bank-transfer endpoint regardless of what the UI showed)."""
     country = (
         request.headers.get("cf-ipcountry")
         or request.headers.get("x-vercel-ip-country")
@@ -1027,6 +1048,15 @@ def _detect_display_currency(request: Request, requested: Optional[str] = None) 
         m = re.search(r"-([A-Z]{2})\b", accept_lang.upper())
         if m:
             country = m.group(1)
+    return country
+
+def _detect_display_currency(request: Request, requested: Optional[str] = None) -> str:
+    """Precedence: explicit visitor selection > detected country > NGN-for-
+    Nigeria/USD-international default. Never used to change what's
+    actually charged."""
+    if requested:
+        return requested.upper()
+    country = _detect_country_code(request)
     if country == "NG":
         return "NGN"
     return _COUNTRY_TO_DISPLAY_CURRENCY.get(country, "USD")
@@ -1332,6 +1362,157 @@ async def _fulfill_nomba_payment(reference: str, source: str) -> dict:
     await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
     logger.info(f"NOMBA_FULFILLED ref={reference} source={source}")
     return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
+
+
+# ---------------------------------------------------------------------------
+# Manual Nigeria-only bank transfer -- a second, deliberately manual purchase
+# path alongside Nomba's automatic card/transfer/ussd checkout above (kept
+# separate at the owner's request; see the payment-method decision this
+# session). A customer transfers directly to an admin-configured bank
+# account and clicks "I have made the transfer"; that action ONLY ever
+# advances payment_status to BANK_TRANSFER_SUBMITTED -- it can never mint a
+# license, bind an entitlement, or send the fulfillment email. Only an
+# authenticated admin's explicit approval can do that, via the same
+# _transition_payment_state() atomic-conditional-update mechanism the
+# Nomba/Paystack paths already use, so a double-click or two admins racing
+# each other still can't fulfill twice (plus the same DB-level unique index
+# on pin_licenses.payment_ref as defense-in-depth).
+# ---------------------------------------------------------------------------
+
+async def _get_bank_transfer_settings() -> dict:
+    s = await get_settings()
+    return {
+        "enabled": s.get("bank_transfer_enabled", False),
+        "bank_name": s.get("bank_transfer_bank_name", ""),
+        "account_name": s.get("bank_transfer_account_name", ""),
+        "account_number": s.get("bank_transfer_account_number", ""),
+        "timeout_minutes": s.get("bank_transfer_timeout_minutes", 60),
+        "proof_required": s.get("bank_transfer_proof_required", False),
+        "support_contact": s.get("bank_transfer_support_contact", TELEGRAM_SUPPORT_URL),
+        "instructions": s.get("bank_transfer_instructions", ""),
+    }
+
+def _bank_transfer_is_configured(settings: dict) -> bool:
+    return bool(settings.get("bank_name") and settings.get("account_name") and settings.get("account_number"))
+
+async def _bank_transfer_effective_status(tx: dict) -> str:
+    """Lazily expires an order that's past its deadline and still sitting
+    in PENDING/SUBMITTED -- there's no background scheduler in this
+    deployment, so expiry is enforced the moment anyone (customer poll or
+    admin queue) next looks at the order, and persisted at that point."""
+    status = tx.get("payment_status", "")
+    expires_at = tx.get("expires_at")
+    if status in ("BANK_TRANSFER_PENDING", "BANK_TRANSFER_SUBMITTED") and expires_at:
+        if datetime.now(timezone.utc).isoformat() > expires_at:
+            won = await _transition_payment_state(tx["reference"], [status], "BANK_TRANSFER_EXPIRED")
+            if won:
+                return "BANK_TRANSFER_EXPIRED"
+            fresh = await db.payment_transactions.find_one({"reference": tx["reference"]}, {"_id": 0})
+            return (fresh or {}).get("payment_status", status)
+    return status
+
+@api_router.get("/purchase/bank-transfer/eligibility")
+async def bank_transfer_eligibility(request: Request):
+    country = _detect_country_code(request)
+    settings = await _get_bank_transfer_settings()
+    eligible = country == "NG" and settings.get("enabled", False) and _bank_transfer_is_configured(settings)
+    return {"eligible": eligible, "detected_country": country or None}
+
+@api_router.post("/purchase/bank-transfer/initiate")
+async def initiate_bank_transfer(req: BankTransferInitiateRequest, request: Request):
+    _rate_limit(f"bank_transfer_init_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
+    # Re-validated here regardless of what the UI showed -- a non-Nigerian
+    # visitor manually calling this API directly must not be able to create
+    # a bank-transfer order just because the frontend hid the button.
+    country = _detect_country_code(request)
+    settings = await _get_bank_transfer_settings()
+    if not settings.get("enabled"):
+        raise HTTPException(status_code=503, detail="Bank transfer is not currently available.")
+    if country != "NG":
+        raise HTTPException(status_code=403, detail="Bank transfer is only available to customers in Nigeria.")
+    if not _bank_transfer_is_configured(settings):
+        raise HTTPException(status_code=503, detail="Bank transfer is not fully configured yet.")
+    kobo = (await get_settings()).get("pin_price_kobo", 30000000)
+    naira = kobo / 100
+    ref = f"ASE-BT-{uuid.uuid4().hex[:10].upper()}"
+    timeout_minutes = settings.get("timeout_minutes", 60)
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)).isoformat()
+    tx = {
+        "id": str(uuid.uuid4()), "reference": ref, "amount_kobo": kobo, "currency": "NGN",
+        "provider": "BANK_TRANSFER",
+        "buyer_name": req.buyer_name, "buyer_email": req.buyer_email,
+        "payment_status": "BANK_TRANSFER_PENDING", "pin_generated": None,
+        "created_at": datetime.now(timezone.utc).isoformat(), "state_transitions": {},
+        "expires_at": expires_at, "detected_country": country,
+        "bank_transfer_proof": None, "admin_notes": [],
+    }
+    await db.payment_transactions.insert_one(tx)
+    logger.info(f"BANK_TRANSFER_INITIATED ref={ref} country={country}")
+    return {
+        "reference": ref, "amount_naira": naira, "amount_formatted": f"₦{naira:,.0f}",
+        "bank_name": settings["bank_name"], "account_name": settings["account_name"],
+        "account_number": settings["account_number"],
+        "expires_at": expires_at, "timeout_minutes": timeout_minutes,
+        "proof_required": settings.get("proof_required", False),
+        "instructions": settings.get("instructions", ""),
+        "support_contact": settings.get("support_contact", ""),
+    }
+
+@api_router.post("/purchase/bank-transfer/{reference}/submitted")
+async def bank_transfer_mark_submitted(reference: str, request: Request):
+    """The customer's "I have made the transfer" action. This is the one
+    endpoint in the whole bank-transfer flow that must be the most
+    carefully constrained: it is ONLY ever allowed to move
+    BANK_TRANSFER_PENDING -> BANK_TRANSFER_SUBMITTED. It has no code path
+    that mints a license, touches pin_licenses, or calls send_pin_email --
+    a customer claiming they paid, truthfully or not, can never fulfill
+    their own order."""
+    _rate_limit(f"bank_transfer_submit_ip:{_client_ip(request)}", max_requests=20, window_seconds=600)
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    effective = await _bank_transfer_effective_status(tx)
+    if effective == "BANK_TRANSFER_EXPIRED":
+        raise HTTPException(status_code=410, detail="This order has expired.")
+    won = await _transition_payment_state(reference, ["BANK_TRANSFER_PENDING"], "BANK_TRANSFER_SUBMITTED")
+    if not won:
+        fresh = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+        return {"status": (fresh or {}).get("payment_status", effective)}
+    return {"status": "BANK_TRANSFER_SUBMITTED"}
+
+@api_router.post("/purchase/bank-transfer/{reference}/proof")
+async def bank_transfer_upload_proof(reference: str, req: BankTransferProofRequest, request: Request):
+    _rate_limit(f"bank_transfer_proof_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
+    if not req.proof_image.startswith("data:image/"):
+        raise HTTPException(status_code=400, detail="Proof must be an image.")
+    if len(req.proof_image) > 7_000_000:  # ~5MB of source image once base64-encoded
+        raise HTTPException(status_code=400, detail="Image too large (max ~5MB).")
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    if tx.get("payment_status") not in ("BANK_TRANSFER_PENDING", "BANK_TRANSFER_SUBMITTED"):
+        raise HTTPException(status_code=409, detail="Cannot attach proof at this stage.")
+    await db.payment_transactions.update_one(
+        {"reference": reference},
+        {"$set": {"bank_transfer_proof": req.proof_image, "proof_uploaded_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"status": "ok"}
+
+@api_router.get("/purchase/bank-transfer/{reference}/status")
+async def bank_transfer_status(reference: str):
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    status = await _bank_transfer_effective_status(tx)
+    return {
+        "reference": reference, "status": status,
+        # License PIN is never exposed before FULFILLED -- matches "no
+        # license before verified payment" even in the status-polling path.
+        "pin": tx.get("pin_generated") if status == "FULFILLED" else None,
+        "expires_at": tx.get("expires_at"),
+        "rejection_reason": tx.get("rejection_reason"),
+        "has_proof": bool(tx.get("bank_transfer_proof")),
+    }
 
 
 @api_router.get("/purchase/verify/{reference}")
@@ -2475,6 +2656,149 @@ async def get_nomba_audit_log(admin: dict = Depends(get_current_admin), limit: i
         {"provider": "NOMBA"}, {"_id": 0}
     ).sort("at", -1).to_list(length=min(limit, 200))
     return {"entries": entries}
+
+
+# ---------------------------------------------------------------------------
+# Admin bank-transfer management -- config + review queue for the manual
+# Nigeria-only bank-transfer path (see the customer-facing endpoints above).
+# ---------------------------------------------------------------------------
+
+@api_router.get("/admin/settings/bank-transfer", dependencies=[Depends(get_current_admin)])
+async def admin_get_bank_transfer_settings():
+    return await _get_bank_transfer_settings()
+
+@api_router.put("/admin/settings/bank-transfer")
+async def admin_update_bank_transfer_settings(req: AdminBankTransferSettingsUpdate, admin: dict = Depends(get_current_admin)):
+    field_map = {
+        "enabled": "bank_transfer_enabled", "bank_name": "bank_transfer_bank_name",
+        "account_name": "bank_transfer_account_name", "account_number": "bank_transfer_account_number",
+        "timeout_minutes": "bank_transfer_timeout_minutes", "proof_required": "bank_transfer_proof_required",
+        "support_contact": "bank_transfer_support_contact", "instructions": "bank_transfer_instructions",
+    }
+    updates = {}
+    changed_fields = []
+    for field, db_key in field_map.items():
+        val = getattr(req, field)
+        if val is not None:
+            updates[db_key] = val
+            changed_fields.append(field)
+    if updates:
+        await db.admin_settings.update_one({"key": "main"}, {"$set": updates}, upsert=True)
+        await db.payment_config_audit_log.insert_one({
+            "id": str(uuid.uuid4()), "provider": "BANK_TRANSFER", "admin_email": admin["email"],
+            "changed_fields": changed_fields, "at": datetime.now(timezone.utc).isoformat(),
+        })
+    return await _get_bank_transfer_settings()
+
+def _redact_bank_transfer_entry(tx: dict) -> dict:
+    """List view never returns the (potentially large) base64 proof image
+    -- just whether one exists. Fetch the full record via the detail
+    endpoint to see it."""
+    out = {k: v for k, v in tx.items() if k != "bank_transfer_proof"}
+    out["has_proof"] = bool(tx.get("bank_transfer_proof"))
+    return out
+
+@api_router.get("/admin/bank-transfers", dependencies=[Depends(get_current_admin)])
+async def admin_list_bank_transfers(status: Optional[str] = None, limit: int = 100):
+    query: Dict[str, Any] = {"provider": "BANK_TRANSFER"}
+    if status:
+        query["payment_status"] = status
+    entries = await db.payment_transactions.find(query, {"_id": 0}).sort("created_at", -1).limit(min(limit, 500)).to_list(500)
+    # Lazily expire anything past its deadline before returning the queue,
+    # so the admin never sees a stale PENDING/SUBMITTED that's actually run out.
+    resolved = []
+    for tx in entries:
+        tx["payment_status"] = await _bank_transfer_effective_status(tx)
+        resolved.append(_redact_bank_transfer_entry(tx))
+    return {"total": len(resolved), "entries": resolved}
+
+@api_router.get("/admin/bank-transfers/{reference}", dependencies=[Depends(get_current_admin)])
+async def admin_get_bank_transfer(reference: str):
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    tx["payment_status"] = await _bank_transfer_effective_status(tx)
+    return tx
+
+@api_router.post("/admin/bank-transfers/{reference}/approve")
+async def admin_approve_bank_transfer(reference: str, admin: dict = Depends(get_current_admin)):
+    """Idempotent: a double-click or two admins racing each other both
+    resolve to exactly one license, via the same atomic
+    _transition_payment_state() conditional update the Nomba/Paystack paths
+    use, backed by pin_licenses' unique index on payment_ref as
+    defense-in-depth."""
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    if tx.get("pin_generated") and tx.get("payment_status") == "FULFILLED":
+        return {"status": "already_fulfilled", "pin": tx["pin_generated"]}
+    effective = await _bank_transfer_effective_status(tx)
+    if effective not in ("BANK_TRANSFER_SUBMITTED", "UNDER_ADMIN_REVIEW"):
+        raise HTTPException(status_code=409, detail=f"Order is {effective}, not ready for approval.")
+    won = await _transition_payment_state(reference, [effective], "FULFILLING")
+    if not won:
+        fresh = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+        if fresh and fresh.get("pin_generated"):
+            return {"status": "already_fulfilled", "pin": fresh["pin_generated"]}
+        raise HTTPException(status_code=409, detail="Another request already claimed approval for this order.")
+    pin = generate_unique_pin()
+    while await db.pin_licenses.find_one({"pin": pin}):
+        pin = generate_unique_pin()
+    doc = PinLicense(pin=pin, buyer_name=tx.get("buyer_name", ""), buyer_email=tx.get("buyer_email", ""),
+                      notes=f"BankTransfer - {reference}", payment_ref=reference).model_dump()
+    doc["provider"] = "BANK_TRANSFER"
+    try:
+        await db.pin_licenses.insert_one(doc)
+    except DuplicateKeyError:
+        existing = await db.pin_licenses.find_one({"payment_ref": reference})
+        pin = existing["pin"] if existing else pin
+    await db.payment_transactions.update_one(
+        {"reference": reference},
+        {"$set": {"pin_generated": pin, "payment_status": "FULFILLED",
+                   "approved_by": admin["email"], "approved_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    logger.info(f"BANK_TRANSFER_APPROVED ref={reference} admin={admin['email']}")
+    return {"status": "approved", "pin": pin}
+
+@api_router.post("/admin/bank-transfers/{reference}/reject")
+async def admin_reject_bank_transfer(reference: str, req: BankTransferAdminActionRequest, admin: dict = Depends(get_current_admin)):
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    effective = await _bank_transfer_effective_status(tx)
+    won = await _transition_payment_state(reference, [effective], "BANK_TRANSFER_REJECTED")
+    if not won:
+        raise HTTPException(status_code=409, detail=f"Cannot reject an order in state {effective}.")
+    await db.payment_transactions.update_one(
+        {"reference": reference},
+        {"$set": {"rejected_by": admin["email"], "rejected_at": datetime.now(timezone.utc).isoformat(),
+                   "rejection_reason": req.reason or ""}},
+    )
+    logger.info(f"BANK_TRANSFER_REJECTED ref={reference} admin={admin['email']} reason={req.reason!r}")
+    return {"status": "rejected"}
+
+@api_router.post("/admin/bank-transfers/{reference}/mark-expired")
+async def admin_mark_bank_transfer_expired(reference: str, admin: dict = Depends(get_current_admin)):
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    effective = await _bank_transfer_effective_status(tx)
+    if effective == "BANK_TRANSFER_EXPIRED":
+        return {"status": "BANK_TRANSFER_EXPIRED", "no_op": True}
+    won = await _transition_payment_state(reference, [effective], "BANK_TRANSFER_EXPIRED")
+    if not won:
+        raise HTTPException(status_code=409, detail=f"Cannot expire an order in state {effective}.")
+    return {"status": "BANK_TRANSFER_EXPIRED", "no_op": False}
+
+@api_router.post("/admin/bank-transfers/{reference}/request-info")
+async def admin_bank_transfer_request_info(reference: str, req: BankTransferAdminActionRequest, admin: dict = Depends(get_current_admin)):
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    note = {"admin_email": admin["email"], "note": req.reason or "", "at": datetime.now(timezone.utc).isoformat(), "action": "request_info"}
+    await db.payment_transactions.update_one({"reference": reference}, {"$push": {"admin_notes": note}})
+    return {"status": "ok"}
 
 
 # v6.6.0 — global Gold/Index Mode platform switches (architecture phase).
