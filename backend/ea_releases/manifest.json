@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.25.30",
+  "current_version": "v6.25.31",
   "internal_codename": "XauCloud_m10_private_vps_ai",
   "production_branch": "XauCloud_m10_private_vps_ai",
   "production_branch_source_commit": "8498c47eefec0e3cba71ec0c3bb5967feb0de096",
@@ -136,6 +136,18 @@
       "ex5_sha256": "1244b533451553d493c0349d7211eee1ae46d71fc64424a2102726f1e5e2281e",
       "customer_filename": "XauCloud-m10.ex5",
       "release_notes": "Pure M10 scanner and execution authority. Each newly closed M10 candle runs one primary decision cycle. A fresh direction-matching setup that reaches TRANSITION_WATCH is preserved as a real classified candidate, while unconfirmed transition protection remains an explicit downstream normal gate before timer and OrderSend. Adds durable completed-cycle restart suppression, reconnect/session-reopen reconciliation, stale candidate/transition/timer clearing, startup health telemetry and exact order-send/retcode telemetry. Permanent Asia non-A+, A+ reset-pending and Grade-B category blocks remain enforced. No M5 evidence scans or hybrid M5-to-M10 state are present. Model 1 is excluded from verification.",
+      "stable_status": true
+    },
+    "v6.25.31": {
+      "version": "v6.25.31",
+      "edition": "Real broker-request validity fixes: SL-modify/close spam and proactive freeze/stops handling",
+      "source_commit": "1c2ae64f6feea72c52138972bf97cd0064957bfd",
+      "build_timestamp": "2026-08-04T00:00:00Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe, isolated sandbox); hash-verified identical on Mac and VPS",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.31.ex5",
+      "ex5_sha256": "7d1edcd815d51465af4c36aa16f6d58516715caa085d7931f34c2ef3c331d12d",
+      "customer_filename": "XauCloud-m10.ex5",
+      "release_notes": "Fixes a real defect (not just a MetaQuotes-listing cosmetic issue) discovered while diagnosing repeated Market validation failures on the sibling Market-edition fork of this same SafeModifySL()/OWNER_R_EXIT_CLOSE_ONLY() logic: this EA could repeatedly resend an SL-modify or position-close request the broker had just rejected (e.g. price within the broker's freeze/stops band of the position's existing stop), instead of recognizing the rejection and backing off. Root cause: the pre-flight distance checks only validated a *new* target against SYMBOL_TRADE_STOPS_LEVEL/SYMBOL_TRADE_FREEZE_LEVEL, and silently did nothing when a broker reported 0 for those properties (common on many symbols/brokers) -- and never checked the position's *current* stop, which is what the broker actually freezes around. Now: (1) a real minimum safe distance is enforced regardless of what the broker reports, (2) checked against both the current stop and any new target, (3) fresh Bid/Ask is re-read immediately before validating, (4) SL-modify and position-close no longer race each other on the same ticket, (5) new entries are skipped locally (not sent and rejected) when the broker's own trading session is closed. No change to signal logic, risk sizing, or exit intent -- only whether/when an already-decided action reaches the broker.",
       "stable_status": true
     }
   }

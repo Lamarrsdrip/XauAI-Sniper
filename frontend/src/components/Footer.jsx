@@ -17,6 +17,9 @@ export default function Footer() {
 
           <div className="flex items-center gap-5">
             <a href="/command" className="text-[11px] text-white/35 hover:text-white/70 font-mono transition-colors tracking-wider">COMMAND</a>
+            <a href="https://www.mql5.com/en/market/product/188838" target="_blank" rel="noopener noreferrer"
+              data-testid="footer-mql5-link"
+              className="text-[11px] text-white/35 hover:text-white/70 font-mono transition-colors tracking-wider">MQL5 MARKET</a>
             <a href="/admin" className="text-[11px] text-white/20 hover:text-white/45 font-mono transition-colors tracking-wider" data-testid="admin-link">ADMIN</a>
             <span className="text-[11px] text-white/20">Trading involves significant risk of loss.</span>
           </div>

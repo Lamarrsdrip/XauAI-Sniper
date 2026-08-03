@@ -52,6 +52,11 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
               className="rounded-full bg-amber-300 px-4 py-1.5 text-[12px] font-bold text-black transition hover:bg-amber-200">
               Buy Now
             </button>
+            <a href="https://www.mql5.com/en/market/product/188838" target="_blank" rel="noopener noreferrer"
+              data-testid="header-mql5-link"
+              className="hidden rounded-full border border-white/[0.1] bg-white/[0.04] px-4 py-1.5 text-[12px] font-semibold text-white/70 transition hover:text-white hover:bg-white/[0.08] sm:inline-flex items-center gap-1.5">
+              MQL5 Market
+            </a>
             <a href="/command"
               className="hidden rounded-full border border-white/[0.1] bg-white/[0.04] px-4 py-1.5 text-[12px] font-semibold text-white/70 transition hover:text-white hover:bg-white/[0.08] sm:inline-flex items-center gap-1.5">
               Command
@@ -85,6 +90,10 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
               </button>
               <a href="/command" className="rounded-2xl border border-white/[0.1] bg-white/[0.04] px-4 py-3.5 text-center text-sm font-semibold text-white/70">
                 Command Center
+              </a>
+              <a href="https://www.mql5.com/en/market/product/188838" target="_blank" rel="noopener noreferrer"
+                className="rounded-2xl border border-white/[0.1] bg-white/[0.04] px-4 py-3.5 text-center text-sm font-semibold text-white/70">
+                View on MQL5 Market
               </a>
             </div>
           </nav>
