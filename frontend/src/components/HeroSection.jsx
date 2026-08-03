@@ -67,9 +67,16 @@ export default function HeroSection({ goldPrice }) {
       <div className="relative z-10 mx-auto max-w-6xl px-4 pb-14 pt-14 md:px-8 md:pb-20 md:pt-20">
         <div className="grid items-center gap-10 lg:grid-cols-[1.15fr_0.85fr] lg:gap-12">
           <div className="text-center lg:text-left">
-            <div className="inline-flex items-center gap-2 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3.5 py-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">Gold-Only MT5 Expert Advisor</span>
+            <div className="flex flex-wrap items-center justify-center gap-2 lg:justify-start">
+              <div className="inline-flex items-center gap-2 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3.5 py-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">Gold-Only MT5 Expert Advisor</span>
+              </div>
+              <a href="https://www.mql5.com/en/market/product/188838" target="_blank" rel="noopener noreferrer"
+                data-testid="hero-mql5-badge"
+                className="inline-flex items-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.05] px-3.5 py-1.5 transition hover:bg-white/[0.09]">
+                <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-white/70">Listed on MQL5 Market ↗</span>
+              </a>
             </div>
 
             <h1 className="mt-5 font-heading text-4xl font-semibold leading-[1.06] tracking-tight sm:text-5xl lg:text-6xl" data-testid="hero-title">
