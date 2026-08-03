@@ -766,6 +766,65 @@ async def send_pin_email(to_email: str, buyer_name: str, pin: str):
 </div>"""
     return await _send_email(to_email, "Your XauCloud License PIN", html)
 
+_ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@aisniper.com").lower()
+
+async def _notify_admin(subject: str, html: str) -> bool:
+    return await _send_email(_ADMIN_NOTIFICATION_EMAIL, subject, html)
+
+async def send_bank_transfer_instructions_email(to_email: str, buyer_name: str, order: dict):
+    """Sent immediately after a bank-transfer order is created -- the
+    customer's own copy of the transfer details/reference/deadline, in
+    case they navigate away from the in-page instructions. Never implies
+    the order is paid; that only happens after admin approval sends
+    send_pin_email separately."""
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+<h2 style="color:#B8860B;">XauCloud - Bank Transfer Instructions</h2>
+<p>Hello {buyer_name or 'Trader'},</p>
+<p>Please transfer the exact amount below to complete your XauCloud purchase:</p>
+<div style="background:#f5f5f5;border:2px solid #B8860B;padding:16px;margin:16px 0;font-size:14px;">
+<p style="margin:4px 0;"><strong>Amount:</strong> {order['amount_formatted']}</p>
+<p style="margin:4px 0;"><strong>Bank:</strong> {order['bank_name']}</p>
+<p style="margin:4px 0;"><strong>Account name:</strong> {order['account_name']}</p>
+<p style="margin:4px 0;"><strong>Account number:</strong> {order['account_number']}</p>
+<p style="margin:4px 0;"><strong>Reference:</strong> {order['reference']}</p>
+</div>
+<p style="font-size:13px;color:#333;">This order expires at {order['expires_at']}. Once you've transferred, return to the site and click "I have made the transfer," then wait for admin approval -- you'll receive your license PIN by email once approved.</p>
+<div style="text-align:center;margin:20px 0;">
+<a href="{TELEGRAM_SUPPORT_URL}" style="display:inline-block;background:#229ED9;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:bold;font-size:13px;">Message XauCloud Support on Telegram</a>
+</div>
+</div>"""
+    return await _send_email(to_email, f"XauCloud Bank Transfer Instructions — {order['reference']}", html)
+
+async def send_bank_transfer_rejected_email(to_email: str, buyer_name: str, reference: str, reason: str):
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+<h2 style="color:#B8860B;">XauCloud - Bank Transfer Not Approved</h2>
+<p>Hello {buyer_name or 'Trader'},</p>
+<p>Your bank transfer order <strong>{reference}</strong> could not be approved.</p>
+{f'<p style="color:#555;">Reason: {reason}</p>' if reason else ''}
+<p style="font-size:13px;">If you believe this is a mistake, please contact support with your reference number.</p>
+<div style="text-align:center;margin:20px 0;">
+<a href="{TELEGRAM_SUPPORT_URL}" style="display:inline-block;background:#229ED9;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:bold;font-size:13px;">Message XauCloud Support on Telegram</a>
+</div>
+</div>"""
+    return await _send_email(to_email, f"XauCloud Bank Transfer Not Approved — {reference}", html)
+
+async def notify_admin_new_order(channel: str, reference: str, buyer_name: str, buyer_email: str, amount_formatted: str):
+    html = f"""<div style="font-family:Arial,sans-serif;">
+<h3>New XauCloud order — {channel}</h3>
+<p>Reference: {reference}<br>Buyer: {buyer_name} &lt;{buyer_email}&gt;<br>Amount: {amount_formatted}</p>
+</div>"""
+    return await _notify_admin(f"New {channel} order — {reference}", html)
+
+async def notify_admin_bank_transfer_submitted(tx: dict):
+    naira = tx.get("amount_kobo", 0) / 100
+    admin_url = f"{PUBLIC_SITE_URL}/admin"
+    html = f"""<div style="font-family:Arial,sans-serif;">
+<h3>Bank transfer marked as paid — needs review</h3>
+<p>Reference: {tx.get('reference')}<br>Buyer: {tx.get('buyer_name')} &lt;{tx.get('buyer_email')}&gt;<br>Amount: ₦{naira:,.0f}</p>
+<p><a href="{admin_url}">Review in Admin Dashboard</a></p>
+</div>"""
+    return await _notify_admin(f"Bank transfer submitted — {tx.get('reference')}", html)
+
 # -------------------------------------------------------------------
 # PUBLIC ROUTES
 # -------------------------------------------------------------------
@@ -1273,6 +1332,7 @@ async def _fulfill_payment(reference: str, source: str) -> dict:
     await db.payment_transactions.update_one(
         {"reference": reference}, {"$set": {"pin_generated": pin, "payment_status": "FULFILLED"}})
     await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    await notify_admin_new_order("card payment confirmed", reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), f"₦{tx.get('amount_kobo', 0) / 100:,.0f}")
     logger.info(f"PAYSTACK_FULFILLED ref={reference} source={source}")
     return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
 
@@ -1360,6 +1420,7 @@ async def _fulfill_nomba_payment(reference: str, source: str) -> dict:
         {"$set": {"pin_generated": pin, "payment_status": "FULFILLED", "nomba_transaction_id": result.nomba_transaction_id}},
     )
     await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    await notify_admin_new_order("card payment confirmed", reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), f"₦{tx.get('amount_kobo', 0) / 100:,.0f}")
     logger.info(f"NOMBA_FULFILLED ref={reference} source={source}")
     return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
 
@@ -1448,7 +1509,7 @@ async def initiate_bank_transfer(req: BankTransferInitiateRequest, request: Requ
     }
     await db.payment_transactions.insert_one(tx)
     logger.info(f"BANK_TRANSFER_INITIATED ref={ref} country={country}")
-    return {
+    order = {
         "reference": ref, "amount_naira": naira, "amount_formatted": f"₦{naira:,.0f}",
         "bank_name": settings["bank_name"], "account_name": settings["account_name"],
         "account_number": settings["account_number"],
@@ -1457,6 +1518,11 @@ async def initiate_bank_transfer(req: BankTransferInitiateRequest, request: Requ
         "instructions": settings.get("instructions", ""),
         "support_contact": settings.get("support_contact", ""),
     }
+    # Never let an email hiccup fail order creation -- _send_email already
+    # catches its own exceptions and returns False rather than raising.
+    await send_bank_transfer_instructions_email(req.buyer_email, req.buyer_name, order)
+    await notify_admin_new_order("bank transfer", ref, req.buyer_name, req.buyer_email, order["amount_formatted"])
+    return order
 
 @api_router.post("/purchase/bank-transfer/{reference}/submitted")
 async def bank_transfer_mark_submitted(reference: str, request: Request):
@@ -1478,6 +1544,7 @@ async def bank_transfer_mark_submitted(reference: str, request: Request):
     if not won:
         fresh = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
         return {"status": (fresh or {}).get("payment_status", effective)}
+    await notify_admin_bank_transfer_submitted(tx)
     return {"status": "BANK_TRANSFER_SUBMITTED"}
 
 @api_router.post("/purchase/bank-transfer/{reference}/proof")
@@ -2775,6 +2842,7 @@ async def admin_reject_bank_transfer(reference: str, req: BankTransferAdminActio
         {"$set": {"rejected_by": admin["email"], "rejected_at": datetime.now(timezone.utc).isoformat(),
                    "rejection_reason": req.reason or ""}},
     )
+    await send_bank_transfer_rejected_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), reference, req.reason or "")
     logger.info(f"BANK_TRANSFER_REJECTED ref={reference} admin={admin['email']} reason={req.reason!r}")
     return {"status": "rejected"}
 
