@@ -9792,6 +9792,91 @@ void XAU_SetPendingSLReason(ulong ticket, double newSL, string logTag)
 //|   3. Logs any non-success retcode so we see silent failures        |
 //| Returns TRUE if broker accepted the modify.                      |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| XAU_TRADE_REQUEST_GUARD (Phase 25): shared per-ticket state so   |
+//| SafeModifySL() and OWNER_R_EXIT_CLOSE_ONLY() never fight over    |
+//| the same ticket in the same window, and so a request known to be |
+//| doomed (price frozen near the position's own SL) is never sent   |
+//| in the first place -- reactive per-retcode cooldowns (Phase      |
+//| 22-24) only reduced how often a doomed request was resent after  |
+//| rejection; this prevents the send. Deliberately a separate,      |
+//| general-purpose array from g_rExit[]'s closeState machine, which |
+//| only covers the one narrow GENERAL-extension deadline-close      |
+//| feature -- this applies uniformly regardless of which exit       |
+//| authority (GROWTH_HARD_LOSS, CLEAN_STAGNANT, structural          |
+//| fail-fast, TTM_EXIT, etc.) triggered the call.                   |
+//+------------------------------------------------------------------+
+struct XAU_TradeGuardState
+{
+   ulong    ticket;
+   bool     closeIntentActive; // a close has been approved/attempted recently for this ticket
+   datetime closeIntentAt;
+};
+XAU_TradeGuardState g_tradeGuard[];
+
+int XAU_TradeGuard_FindOrCreateIdx(ulong ticket)
+{
+   for(int i = 0; i < ArraySize(g_tradeGuard); i++)
+      if(g_tradeGuard[i].ticket == ticket) return i;
+   int n = ArraySize(g_tradeGuard);
+   ArrayResize(g_tradeGuard, n + 1);
+   g_tradeGuard[n].ticket = ticket;
+   g_tradeGuard[n].closeIntentActive = false;
+   g_tradeGuard[n].closeIntentAt = 0;
+   return n;
+}
+
+// Bounded cleanup so this array doesn't grow unbounded across a long
+// run/backtest -- drops entries for tickets that no longer have an open
+// position. Cheap to call periodically (throttled by callers).
+void XAU_TradeGuard_PruneClosed()
+{
+   for(int i = ArraySize(g_tradeGuard) - 1; i >= 0; i--)
+   {
+      if(!PositionSelectByTicket(g_tradeGuard[i].ticket))
+      {
+         int last = ArraySize(g_tradeGuard) - 1;
+         if(i != last) g_tradeGuard[i] = g_tradeGuard[last];
+         ArrayResize(g_tradeGuard, last);
+      }
+   }
+}
+
+// Real minimum safe distance (in price terms) between a stop level and
+// current price, before the broker will accept a modify/close touching
+// it. Uses the wider of SYMBOL_TRADE_STOPS_LEVEL and
+// SYMBOL_TRADE_FREEZE_LEVEL, converted through the symbol's own point
+// size -- but never trusts a reported 0 as "no restriction": MetaQuotes'
+// own Market validation test account reports 0 for both properties on
+// XAUUSD yet still rejects modifies/closes within roughly 100-150 points
+// of a position's existing stop (observed directly in validation
+// reports), so a conservative floor applies regardless of what the
+// symbol reports. 150 points is comfortably above every rejection
+// distance observed in those reports.
+double XAU_SafeMinStopDistance()
+{
+   long   stopsLvl  = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+   long   freezeLvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_FREEZE_LEVEL);
+   long   maxLvl    = MathMax(stopsLvl, freezeLvl);
+   double pt        = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   double reported  = (double)maxLvl * pt;
+   double floorDist = 150.0 * pt;
+   return MathMax(reported, floorDist);
+}
+
+// Normalizes a price to the symbol's actual tradeable tick grid (not
+// just decimal digits -- some symbols/brokers have a tick size larger
+// than their minimal digit increment) before it's ever sent to the
+// broker or compared against another normalized price.
+double XAU_NormalizeToTick(double price)
+{
+   double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+   int    digits   = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   if(tickSize <= 0.0) return NormalizeDouble(price, digits);
+   double normalized = MathRound(price / tickSize) * tickSize;
+   return NormalizeDouble(normalized, digits);
+}
+
 bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curPrice, string logTag)
 {
    // v6.25.9 owner directive -- broker SL writes are deny-by-default. The
@@ -9825,26 +9910,49 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       return false;
    }
 
-   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
-   int    digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
-   long   stopsLvl  = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
-   long   freezeLvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_FREEZE_LEVEL);
-   double minStopsDist  = stopsLvl  * point;
-   double minFreezeDist = freezeLvl * point;
+   // Phase 25: a close has been approved/attempted for this ticket
+   // recently -- don't fight it with a stop-loss modification. Time-
+   // bounded (not permanent) so a close that never gets confirmed
+   // (e.g. a freeze condition that later clears without the close
+   // succeeding) doesn't leave the position permanently unprotected.
+   {
+      int trgIdx = XAU_TradeGuard_FindOrCreateIdx(ticket);
+      if(g_tradeGuard[trgIdx].closeIntentActive && TimeCurrent() - g_tradeGuard[trgIdx].closeIntentAt < 30)
+         return false;
+   }
 
-   // Clamp SL to at least stops_level away from current price
+   double point  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   int    digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   double minSafeDist = XAU_SafeMinStopDistance();
+
+   // Re-read the freshest executable-side price immediately before
+   // validating/sending -- curPrice was computed by the caller and may be
+   // stale by the time we reach here (several gates run between the
+   // caller's snapshot and this point). BUY SL closes against Bid, SELL
+   // SL closes against Ask.
+   double freshPrice = isBuy ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
+                              : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   if(freshPrice > 0.0) curPrice = freshPrice;
+
+   // Clamp SL to at least the safe minimum distance from current price.
+   // Only ever tightens toward the boundary when the caller's requested
+   // value would violate it -- never pushes a value that was already
+   // safely farther away. XAU_OwnerProtectedFloorAllowsModify() below
+   // re-validates whatever value comes out of this clamp against the
+   // owner's protected floor, so a clamp that would make the SL worse
+   // than the owner floor is caught there and the whole modify is
+   // deferred (returns false, original SL untouched) rather than sent.
    if(isBuy)
    {
-      // BUY: SL must be <= curPrice - minStopsDist
-      double maxAllowedSL = curPrice - minStopsDist;
-      if(minStopsDist > 0 && newSL > maxAllowedSL) newSL = NormalizeDouble(maxAllowedSL, digits);
+      double maxAllowedSL = curPrice - minSafeDist;
+      if(newSL > maxAllowedSL) newSL = maxAllowedSL;
    }
    else
    {
-      // SELL: SL must be >= curPrice + minStopsDist
-      double minAllowedSL = curPrice + minStopsDist;
-      if(minStopsDist > 0 && newSL < minAllowedSL) newSL = NormalizeDouble(minAllowedSL, digits);
+      double minAllowedSL = curPrice + minSafeDist;
+      if(newSL < minAllowedSL) newSL = minAllowedSL;
    }
+   newSL = XAU_NormalizeToTick(newSL);
 
    // Every legacy trail/BE/AI/transition authority converges here. Once the
    // immutable campaign owner floor is active, no caller may submit a worse SL.
@@ -9854,26 +9962,51 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
    // v4.6.5 - NO-OP GUARD: don't modify if SL is already at/very near target.
    //   Prevents "SL-MOD FAIL Ret=10025" (NO_CHANGES) spam when ladder/trail
    //   recomputes the same level tick after tick.
-   if(PositionSelectByTicket(ticket))
+   double curSL = 0.0, curTP = 0.0;
+   bool   havePosition = PositionSelectByTicket(ticket);
+   if(havePosition)
    {
-      double curSL = PositionGetDouble(POSITION_SL);
-      double curTP = PositionGetDouble(POSITION_TP);
-      double tol   = MathMax(point * 2, 0.00001);  // 2-pt tolerance
+      curSL = PositionGetDouble(POSITION_SL);
+      curTP = PositionGetDouble(POSITION_TP);
+      double tol = MathMax(point * 2, 0.00001);  // 2-pt tolerance
       if(MathAbs(curSL - newSL) < tol && MathAbs(curTP - tp) < tol)
          return true;  // already where we want it - silent success
    }
 
-   // Freeze level check - skip modify (but don't error) if price is within freeze band
-   if(minFreezeDist > 0)
+   // Phase 25: freeze/stops safety check, evaluated against BOTH the
+   // position's CURRENT stop level and the newly requested target. MT5's
+   // broker-side freeze (retcode 10029) and invalid-stops rejection
+   // (10016) trigger once price is within the freeze/stops band of a
+   // position's EXISTING SL, independent of what a new target would be --
+   // checking only the new target (the pre-Phase-25 behavior) missed this
+   // and let doomed requests reach the broker whenever the *current* SL
+   // was already close to price, even if the *new* target was not.
+   if(havePosition && curSL != 0.0)
    {
-      double distToSL = isBuy ? MathAbs(curPrice - newSL) : MathAbs(newSL - curPrice);
-      if(distToSL < minFreezeDist)
+      double distCurSL = MathAbs(curPrice - curSL);
+      if(distCurSL < minSafeDist)
+      {
+         static datetime lastFreezeWarnCur = 0;
+         if(TimeCurrent() - lastFreezeWarnCur > 60)
+         {
+            Print("SL-MOD SKIP #", ticket, " (", logTag, ") - current SL within freeze/stops band (",
+                  DoubleToString(distCurSL/point, 0), " pts < ", DoubleToString(minSafeDist/point, 0),
+                  " pts). Deferred until price moves.");
+            lastFreezeWarnCur = TimeCurrent();
+         }
+         return false;
+      }
+   }
+   {
+      double distNewSL = isBuy ? MathAbs(curPrice - newSL) : MathAbs(newSL - curPrice);
+      if(distNewSL < minSafeDist)
       {
          static datetime lastFreezeWarn = 0;
          if(TimeCurrent() - lastFreezeWarn > 60)
          {
-            Print("SL-MOD SKIP #", ticket, " (", logTag, ") - price within freeze level (",
-                  DoubleToString(distToSL/point, 0), " pts < ", freezeLvl, " pts). Retry next tick.");
+            Print("SL-MOD SKIP #", ticket, " (", logTag, ") - target SL within freeze/stops band (",
+                  DoubleToString(distNewSL/point, 0), " pts < ", DoubleToString(minSafeDist/point, 0),
+                  " pts). Deferred until price moves.");
             lastFreezeWarn = TimeCurrent();
          }
          return false;
@@ -26654,6 +26787,40 @@ bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = fal
    if(g_lastRejectedCloseTicket == ticket && TimeCurrent() - g_lastRejectedCloseAt < 60)
       return false;
 
+   // Phase 25: freeze/stops safety pre-check, shared with SafeModifySL().
+   // MT5 freezes ANY operation (modify or close) on a position once price
+   // is within the freeze/stops band of its CURRENT SL/TP -- don't send a
+   // close request known to be doomed for the same reason a modify would
+   // be. Defer; the next re-evaluation (a few ticks later, or the next
+   // time this exit condition is checked) retries once price has moved.
+   {
+      double curSLNow  = PositionGetDouble(POSITION_SL);
+      bool   isBuyNow  = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+      double freshPx   = isBuyNow ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
+                                   : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+      double minSafeDistClose = XAU_SafeMinStopDistance();
+      if(freshPx > 0.0 && curSLNow != 0.0 && MathAbs(freshPx - curSLNow) < minSafeDistClose)
+      {
+         static datetime lastCloseFreezeWarn = 0;
+         if(TimeCurrent() - lastCloseFreezeWarn > 60)
+         {
+            Print("CLOSE-SKIP #", ticket, " (", ctx, ") - current SL within freeze/stops band of price. Deferred until price moves.");
+            lastCloseFreezeWarn = TimeCurrent();
+         }
+         return false;
+      }
+   }
+
+   // Mark close-intent for SafeModifySL() before attempting the broker
+   // call (not after) -- a modify racing in on this exact tick, before
+   // the close result is known, is exactly the scenario this guards
+   // against.
+   {
+      int trgIdx = XAU_TradeGuard_FindOrCreateIdx(ticket);
+      g_tradeGuard[trgIdx].closeIntentActive = true;
+      g_tradeGuard[trgIdx].closeIntentAt     = TimeCurrent();
+   }
+
    PrintFormat("OWNER_R_EXIT_DECISION | ticket=%I64u | authority=%s | decision=APPROVE | external_manual=%s",
                ticket, ctx, externalManual ? "true" : "false");
    bool ok = trade.PositionClose(ticket);
@@ -29399,6 +29566,12 @@ void XAU_RExitCoreLoop()
    }
 
    XAU_RExit_ReconcileOrphans();
+   static datetime lastGuardPrune = 0;
+   if(TimeCurrent() - lastGuardPrune >= 30)
+   {
+      XAU_TradeGuard_PruneClosed();
+      lastGuardPrune = TimeCurrent();
+   }
    static datetime lastSave = 0;
    if(anyTicket || ArraySize(g_rExit) > 0 || TimeCurrent() - lastSave >= 30)
    {
@@ -36139,6 +36312,34 @@ bool XAU_TryForceOpenTrade(int dir, string setup, string grade, string originalB
    {
       rejectReason = "SYMBOL_TRADING_DISABLED";
       return false;
+   }
+   // Phase 25: SYMBOL_TRADE_MODE_DISABLED only catches an administrative
+   // disable, not the broker's own daily session close (e.g. gold's daily
+   // maintenance break) -- a MetaQuotes Market validation report showed
+   // one entry attempt sent while the symbol's actual trading session was
+   // closed, rejected as "[Market closed]". Check the current session
+   // using broker/server time via SymbolInfoSessionTrade before ever
+   // attempting an entry; skip locally rather than creating a failed
+   // broker request.
+   {
+      datetime srvNow = TimeCurrent();
+      MqlDateTime dtNow;
+      TimeToStruct(srvNow, dtNow);
+      datetime dayStart = srvNow - (dtNow.hour * 3600 + dtNow.min * 60 + dtNow.sec);
+      datetime sessFrom = 0, sessTo = 0;
+      bool sessionOpen = SymbolInfoSessionTrade(Symbol(), (ENUM_DAY_OF_WEEK)dtNow.day_of_week, 0, sessFrom, sessTo) &&
+                         srvNow >= dayStart + sessFrom && srvNow < dayStart + sessTo;
+      if(!sessionOpen)
+      {
+         rejectReason = "MARKET_SESSION_CLOSED";
+         static datetime lastSessionClosedLog = 0;
+         if(TimeCurrent() - lastSessionClosedLog > 60)
+         {
+            Print("MARKET_SESSION_CLOSED - skipping entry, broker session closed at server time ", TimeToString(srvNow, TIME_DATE|TIME_SECONDS));
+            lastSessionClosedLog = TimeCurrent();
+         }
+         return false;
+      }
    }
 
    double currentEntryPx = (dir == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
