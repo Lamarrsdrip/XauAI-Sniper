@@ -1585,6 +1585,171 @@ async def download_ea_release(token: str):
     return FileResponse(path=str(p), filename=release["customer_filename"], media_type="application/octet-stream")
 
 
+# ---------------------------------------------------------------------------
+# Admin release management -- promote/rollback/disable act directly on
+# backend/ea_releases/manifest.json (the same file _current_ea_release()
+# reads fresh on every call, so a promotion takes effect immediately, no
+# redeploy required). Writes are atomic (temp file + os.replace) to avoid a
+# reader ever observing a half-written file.
+#
+# Durability note: this file write is NOT automatically committed to git.
+# The CI auto-promotion workflow (.github/workflows/ea.yml) is the durable
+# path -- it updates manifest.json as part of a real commit on main, so the
+# change survives the next redeploy. An admin promote/rollback/disable here
+# takes effect immediately on the running instance but will be reverted by
+# the next redeploy unless the admin (or CI) also commits the resulting
+# manifest.json. This makes the admin panel the right tool for an
+# in-the-moment incident response (e.g. emergency rollback), while a normal
+# version bump should go through the push-to-main flow.
+# ---------------------------------------------------------------------------
+
+class ReleasePromoteRequest(BaseModel):
+    version: str
+
+class ReleaseDisableRequest(BaseModel):
+    version: str
+    reason: str = ""
+
+async def _log_release_action(admin_email: str, action: str, version: str, previous_version: Optional[str], detail: str = ""):
+    await db.release_audit_log.insert_one({
+        "id": str(uuid.uuid4()), "admin_email": admin_email, "action": action,
+        "version": version, "previous_version": previous_version, "detail": detail,
+        "at": datetime.now(timezone.utc).isoformat(),
+    })
+
+def _write_manifest(manifest: dict):
+    p = EA_RELEASES_DIR / "manifest.json"
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(_json.dumps(manifest, indent=2), encoding="utf-8")
+    os.replace(tmp, p)
+
+def _verify_release_artifact(version: str, release: dict) -> Optional[str]:
+    """Returns None if the release's EX5 exists on disk and its hash
+    matches the manifest, otherwise a human-readable reason it doesn't."""
+    filename = release.get("ex5_filename", "")
+    if not filename:
+        return "Manifest entry has no ex5_filename."
+    p = EA_RELEASES_DIR / version / filename
+    if not p.exists():
+        return f"EX5 artifact not found at {p}."
+    actual_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+    expected_hash = release.get("ex5_sha256", "")
+    if actual_hash != expected_hash:
+        return f"SHA-256 mismatch: manifest says {expected_hash}, artifact is {actual_hash}."
+    return None
+
+@api_router.get("/admin/releases", dependencies=[Depends(get_current_admin)])
+async def admin_list_releases():
+    manifest = _load_ea_release_manifest()
+    releases = manifest.get("releases", {})
+    current = manifest.get("current_version")
+    download_counts = {}
+    async for doc in db.ea_download_log.aggregate([
+        {"$match": {"result": "SUCCESS"}},
+        {"$group": {"_id": "$version", "count": {"$sum": 1}}},
+    ]):
+        download_counts[doc["_id"]] = doc["count"]
+    out = []
+    for version, release in releases.items():
+        out.append({
+            **release,
+            "is_current": version == current,
+            "artifact_ok": _verify_release_artifact(version, release) is None,
+            "download_count": download_counts.get(version, 0),
+        })
+    out.sort(key=lambda r: r.get("build_timestamp") or "", reverse=True)
+    return {"current_version": current, "releases": out}
+
+@api_router.get("/admin/releases/audit-log", dependencies=[Depends(get_current_admin)])
+async def admin_release_audit_log(limit: int = 100):
+    entries = await db.release_audit_log.find({}, {"_id": 0}).sort("at", -1).limit(min(limit, 500)).to_list(500)
+    return {"total": len(entries), "entries": entries}
+
+@api_router.get("/admin/downloads", dependencies=[Depends(get_current_admin)])
+async def admin_download_log(limit: int = 100):
+    """Read-side of ea_download_log -- previously write-only (every real and
+    rejected download was logged, but nothing ever surfaced it to an admin).
+    Never returns the license's PIN, only its id."""
+    entries = await db.ea_download_log.find({}, {"_id": 0}).sort("downloaded_at", -1).limit(min(limit, 500)).to_list(500)
+    return {"total": len(entries), "entries": entries}
+
+@api_router.post("/admin/releases/promote")
+async def admin_promote_release(req: ReleasePromoteRequest, admin: dict = Depends(get_current_admin)):
+    manifest = _load_ea_release_manifest()
+    releases = manifest.get("releases", {})
+    release = releases.get(req.version)
+    if not release:
+        raise HTTPException(status_code=404, detail=f"No release '{req.version}' in the manifest.")
+    if not release.get("stable_status"):
+        raise HTTPException(status_code=400, detail=f"Release '{req.version}' is not marked stable_status=true. Approve it before promoting.")
+    artifact_problem = _verify_release_artifact(req.version, release)
+    if artifact_problem:
+        raise HTTPException(status_code=422, detail=f"Cannot promote '{req.version}': {artifact_problem}")
+    previous = manifest.get("current_version")
+    if previous == req.version:
+        return {"promoted": True, "version": req.version, "previous_version": previous, "no_op": True}
+    manifest["current_version"] = req.version
+    _write_manifest(manifest)
+    await _log_release_action(admin["email"], "promote", req.version, previous)
+    logger.info(f"EA_RELEASE_PROMOTED version={req.version} previous={previous} admin={admin['email']}")
+    return {"promoted": True, "version": req.version, "previous_version": previous, "no_op": False}
+
+@api_router.post("/admin/releases/rollback")
+async def admin_rollback_release(admin: dict = Depends(get_current_admin)):
+    """Restores the most recent DIFFERENT version that was ever the active
+    current_version (per release_audit_log's promote history), provided it
+    is still stable_status=true and its artifact still checks out. This is
+    the one-click incident-response path -- for promoting an arbitrary
+    specific version, use POST /admin/releases/promote instead."""
+    manifest = _load_ea_release_manifest()
+    current = manifest.get("current_version")
+    history = await db.release_audit_log.find(
+        {"action": {"$in": ["promote", "rollback"]}}, {"_id": 0}
+    ).sort("at", -1).to_list(200)
+    target = None
+    for entry in history:
+        candidate = entry.get("previous_version")
+        if candidate and candidate != current and candidate in manifest.get("releases", {}):
+            target = candidate
+            break
+    if not target:
+        raise HTTPException(status_code=404, detail="No prior version found to roll back to.")
+    release = manifest["releases"][target]
+    if not release.get("stable_status"):
+        raise HTTPException(status_code=409, detail=f"Most recent prior version '{target}' is no longer stable_status=true -- use /admin/releases/promote to choose a specific version instead.")
+    artifact_problem = _verify_release_artifact(target, release)
+    if artifact_problem:
+        raise HTTPException(status_code=422, detail=f"Cannot roll back to '{target}': {artifact_problem}")
+    manifest["current_version"] = target
+    _write_manifest(manifest)
+    await _log_release_action(admin["email"], "rollback", target, current)
+    logger.warning(f"EA_RELEASE_ROLLED_BACK version={target} previous={current} admin={admin['email']}")
+    return {"rolled_back": True, "version": target, "previous_version": current}
+
+@api_router.post("/admin/releases/disable")
+async def admin_disable_release(req: ReleaseDisableRequest, admin: dict = Depends(get_current_admin)):
+    """Marks a release unstable so it can never again be promoted, minted a
+    download token for, or served -- for a compromised/buggy build found
+    after the fact. If the disabled version is the current one, this leaves
+    current_version pointing at a now-unstable entry; _current_ea_release()
+    already fails closed in that case (serves nothing) rather than silently
+    falling back to some other version the admin didn't explicitly choose --
+    use /admin/releases/rollback or /promote right after to pick the
+    replacement explicitly."""
+    manifest = _load_ea_release_manifest()
+    release = manifest.get("releases", {}).get(req.version)
+    if not release:
+        raise HTTPException(status_code=404, detail=f"No release '{req.version}' in the manifest.")
+    if release.get("stable_status") is False:
+        return {"disabled": True, "version": req.version, "no_op": True}
+    release["stable_status"] = False
+    manifest["releases"][req.version] = release
+    _write_manifest(manifest)
+    await _log_release_action(admin["email"], "disable", req.version, manifest.get("current_version"), detail=req.reason)
+    logger.warning(f"EA_RELEASE_DISABLED version={req.version} admin={admin['email']} reason={req.reason!r}")
+    return {"disabled": True, "version": req.version, "no_op": False, "is_current": req.version == manifest.get("current_version")}
+
+
 @api_router.get("/download/ea", deprecated=True)
 async def download_ea_retired():
     """Retired 2026-07-17 -- public unauthenticated MQ5 source distribution.
