@@ -129,3 +129,9 @@ def test_30day_replay_is_model4_resumable_and_powershell51_compatible():
     assert "Tee-Object -LiteralPath" not in REPLAY_30D
     assert "TESTER_REUSED job=COLLECT_WITH_OWNER" in REPLAY_30D
     assert "TESTER_REUSED job=COLLECT_NO_OWNER" in REPLAY_30D
+    assert 'if (Test-Path -LiteralPath $CacheFile)' in REPLAY_30D
+    assert 'CACHE_RESUMED file=$CacheFile' in REPLAY_30D
+    cleanup = REPLAY_30D[REPLAY_30D.index("foreach ($path in @("):REPLAY_30D.index("# Reuse only exact")]
+    assert "$CacheFile" not in cleanup
+    assert "VERIFIED_MODEL4_REPORT_CURRENT_CACHE" in REPLAY_30D
+    assert "LastWriteTimeUtc -ge $cacheWriteUtc" in REPLAY_30D
