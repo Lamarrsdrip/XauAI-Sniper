@@ -1,4 +1,4 @@
-# MetaQuotes Market Listing — Claude XauCloud
+# MetaQuotes Market Listing — XauCloud
 
 Draft submission-form content. Sourced from `docs/*` and
 `audits/xaucloud/17_market_edition_claude_xaucloud.md` — no claim here
@@ -6,13 +6,62 @@ that isn't already backed by those documents.
 
 ## Product name
 
-**Claude XauCloud**
+**XauCloud**
 
 ## Suggested category
 
 Expert Advisors → Forex / Metals (Gold). MQL5 Market's category tree is
 confirmed at submission time in the seller portal; this is the closest
 fit given the EA is XAUUSD-only by design (see `SYMBOL_COMPATIBILITY.md`).
+
+## Pricing (owner-directed)
+
+- **Lifetime purchase: USD $250.00** (fixed, not free).
+- **Suggested rental tiers** (proportioned off the $250 lifetime price,
+  not independently verified against any market-rate benchmark — the
+  owner should sanity-check these before submission):
+  - 1 month: **$45**
+  - 3 months: **$110**
+  - 6 months: **$190**
+  - 1 year: **$260** (intentionally close to lifetime price, so lifetime
+    remains the obviously better long-term deal)
+- Activations per sale: **10** (mid-range of MQL5's allowed 5–20; not
+  specified by the owner, chosen as a reasonable default — raise if you
+  expect buyers to commonly run this on more than a couple of machines).
+- MetaQuotes charges 20% of every sale; net proceeds at $250 = $200.
+
+## Recommended symbol and timeframe
+
+- **Symbol: XAUUSD only.** Designed, compiled, and tested against gold.
+  `IsXAUFastSymbol()` gates some memory/telemetry features on the symbol
+  name containing "XAU" or "GOLD" (case-insensitive) — other symbols are
+  not guaranteed to behave correctly and have not been tested.
+- **Timeframe: attach on any chart timeframe — the EA's own decision
+  cycle is fixed to M10 internally** (it reads M10 data regardless of
+  the visible chart period). State this clearly to avoid buyer confusion
+  about which chart timeframe to open.
+
+## SEO-friendly keywords
+
+gold EA, XAUUSD expert advisor, deterministic trading robot, no AI
+trading bot, offline expert advisor, M10 gold strategy, risk-managed
+gold EA, no network EA, MetaTrader 5 gold robot, rule-based trading
+system, structural stop loss EA, XAU trading robot
+
+## Product metadata
+
+- Product name: **XauCloud**
+- Product type: Expert Advisor (MetaTrader 5)
+- Version: **1.00**
+- Magic number: **26080301**
+- Platform: MetaTrader 5 only (no MT4 build produced)
+- Account type: Any (no netting/hedging-specific dependency identified —
+  owner should confirm against `SYMBOL_COMPATIBILITY.md`/testing before
+  restricting this field)
+- Expert Advisor type tag: **Trend** (structured regime/direction/entry-
+  quality scoring with a fixed structural stop and profit-lock exits —
+  not martingale, grid, arbitrage, hedging, scalping, news, neural-network,
+  or multicurrency by design)
 
 ## Short description (~200 chars, for listing cards/search results)
 
@@ -22,7 +71,7 @@ fit given the EA is XAUUSD-only by design (see `SYMBOL_COMPATIBILITY.md`).
 
 ## Full description
 
-Claude XauCloud is a self-contained MetaTrader 5 Expert Advisor for
+XauCloud is a self-contained MetaTrader 5 Expert Advisor for
 XAUUSD (gold), built around a 10-minute (M10) decision cycle. It is a
 direct fork of a live, cloud-connected trading product — but every AI/LLM
 call, cloud backend dependency, remote-command channel, and copy-trading
@@ -82,7 +131,7 @@ product calls an AI model.
 
 ## Installation guide (for the listing's install section)
 
-See `docs/INSTALLATION.md` — summary: copy `Claude_XauCloud.ex5` to
+See `docs/INSTALLATION.md` — summary: copy `XauCloud.ex5` to
 `MQL5/Experts`, attach to an XAUUSD chart, review `InpNormalRiskPct` and
 `InpMaxSpread` before first run. No WebRequest URL whitelist entry is
 required.
@@ -120,15 +169,28 @@ stated as an estimate, not a verified benchmark. See `FAQ.md`.
   without a product screenshot are unusual and likely to look incomplete
   to reviewers and buyers alike.
 
-## Pre-submission checklist (from MANIFEST.md's flagged items)
+## Pre-submission checklist
 
+- [x] MetaQuotes Market compliance audit complete — 4 real hardening
+      fixes applied (2 indicator-handle leaks, 1 unbounded array, 6
+      unbounded log files), zero network/DLL surface reconfirmed after
+      fixes. See `audits/xaucloud/20_market_compliance_audit.md`.
+- [x] Real Strategy Tester validation run against the exact final
+      compiled build (post-compliance-fixes, post-rename) — 7-day,
+      100%-real-tick XAUUSD M10 run, 4 trades, no crash across 2.95M
+      ticks. See `audits/xaucloud/20_market_compliance_audit.md` and
+      `audits/xaucloud/claude_xaucloud_qc_evidence/`.
+- [x] Final compile: 0 errors, 0 warnings.
+- [x] Product renamed to **XauCloud** (was drafted as "Claude XauCloud"
+      earlier in this session — owner corrected this; all customer-facing
+      strings, docs, and assets updated).
 - [ ] Confirm `InpMagicNumber` (`26080301`) doesn't collide with anything
       else you run on the same account.
-- [ ] Real Strategy Tester validation run against this exact compiled
-      build (in progress this session — see
-      `audits/xaucloud/21_qc_pass.md` once complete).
 - [ ] Replace `docs/SUPPORT.md` placeholder contact fields with your real
       support channel.
-- [ ] Capture at least one real terminal/chart screenshot.
-- [ ] Confirm the MetaQuotes Market compliance audit (in progress this
-      session) found no unresolved blockers.
+- [ ] Capture at least one real terminal/chart screenshot — still not
+      done; needs the owner's hands or GUI capture tooling this session
+      doesn't have.
+- [ ] Sanity-check the suggested rental price tiers above before
+      submission — proportioned off the $250 lifetime price, not
+      independently benchmarked.

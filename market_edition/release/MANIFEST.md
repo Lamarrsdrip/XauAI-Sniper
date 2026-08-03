@@ -1,21 +1,21 @@
-# Release Manifest — Claude XauCloud v1.00
+# Release Manifest — XauCloud v1.00
 
 ## Contents
 
-- `Claude_XauCloud.mq5` — full source
-- `Claude_XauCloud.ex5` — compiled binary
+- `XauCloud.mq5` — full source
+- `XauCloud.ex5` — compiled binary
 - `docs/` — the full documentation package (README, installation,
   strategy overview, risk disclosure, symbol compatibility, known
   limitations, changelog, inputs reference, FAQ, support)
 
 ## Identity
 
-- Product name: Claude XauCloud
+- Product name: XauCloud
 - Version: `1.00` (independent of the source cloud product's own internal
   version numbering)
 - Magic number: `26080301`
-- Copyright: Claude XauCloud
-- Source path: `market_edition/Claude_XauCloud.mq5`
+- Copyright: XauCloud
+- Source path: `market_edition/XauCloud.mq5`
   (repository: `XauAI-Sniper-market-edition-claude-xaucloud`, branch
   `market-edition/claude-xaucloud`)
 

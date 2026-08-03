@@ -32,7 +32,7 @@ account.
 The regime/direction/entry-quality/risk/exit logic in this file is
 unchanged from the source product's proven, live-traded code paths — no
 new trading logic was written for this fork. However, this specific
-compiled build (`Claude_XauCloud.ex5`, magic number `26080301`, version
+compiled build (`XauCloud.ex5`, magic number `26080301`, version
 `1.00`) has not yet had its own dedicated Strategy Tester real-tick
 validation run performed against it. Recommend running your own
 controlled Strategy Tester session on your broker's XAUUSD feed, and

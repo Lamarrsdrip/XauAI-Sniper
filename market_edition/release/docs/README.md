@@ -1,4 +1,4 @@
-# Claude XauCloud
+# XauCloud
 
 ## What this is
 
@@ -21,8 +21,8 @@ specific build's own testing record.
 
 ## Product identity
 
-- Product name: **Claude XauCloud**
-- File: `Claude_XauCloud.mq5` / `Claude_XauCloud.ex5`
+- Product name: **XauCloud**
+- File: `XauCloud.mq5` / `XauCloud.ex5`
 - Version: **1.00**
 - Magic number: **26080301**
 

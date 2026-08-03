@@ -49,11 +49,11 @@ count 0 in the final compiled source):**
 
 **Identity for this release:**
 
-- Product name: Claude XauCloud
+- Product name: XauCloud
 - Version: `1.00` (independent of the source product's own internal
   version numbering)
 - Magic number: `26080301`
-- File: `Claude_XauCloud.mq5` / `Claude_XauCloud.ex5`
+- File: `XauCloud.mq5` / `XauCloud.ex5`
 
 **Not done in this release** (see `KNOWN_LIMITATIONS.md`): no dedicated
 Strategy Tester validation run of this exact compiled build; inert legacy

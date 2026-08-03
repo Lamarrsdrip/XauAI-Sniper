@@ -24226,6 +24226,14 @@ bool ManageBasket()
          if(risingATR && (acceleratingUp || acceleratingDown))
             armUSD *= 1.25;     // give the trend extra room
       }
+      // Market Edition compliance fix (Task 20): this handle was created
+      // every tick while the basket is unarmed and never released -- a
+      // genuine indicator-handle leak in the OnTick hot path (ManageBasket
+      // is called every tick). Release it here, matching the local-handle
+      // pattern already used elsewhere in this file (e.g. VolatilityKillReason,
+      // STI_ComputeExhaustion). Does not change the arm-threshold decision
+      // logic above in any way.
+      if(hATR_dbtp != INVALID_HANDLE) IndicatorRelease(hATR_dbtp);
    }
    // v6.20.4 (Commit D) — R-normalize the basket arm threshold the same way
    // EV_PROTECT (line ~5089) and A+ Shield (line ~18567) already do via
@@ -26752,6 +26760,16 @@ struct XAU_EntryQualityRecord
 };
 XAU_EntryQualityRecord g_entryQuality[];
 int g_entryQualityCheckpointSeconds[XAU_EQ_CHECKPOINTS] = {30, 60, 180, 300, 600};
+// Market Edition compliance fix (Task 20): g_entryQuality[] previously grew
+// by one record per position ever opened, for the life of the terminal --
+// .active/.finalized were set but no entry was ever evicted or the array
+// ever shrunk, so a VPS running for weeks/months would accumulate one
+// permanent record per historical trade. Bounded the same way this file
+// already bounds g_delayOutcome[]/g_exitBiasKeys[] (cap + evict-oldest).
+// Only FINALIZED (closed-and-scored) records are eligible for eviction --
+// records for still-open positions are never touched. This is pure
+// telemetry per the "Pure recorder" comment below; no control-flow impact.
+#define XAU_ENTRY_QUALITY_MAX_RECORDS 500
 
 int XAU_EntryQuality_FindIdx(ulong positionId)
 {
@@ -26772,9 +26790,21 @@ void XAU_RecordEntryQualityTelemetry(ulong positionId, int direction, datetime e
    if(idx < 0)
    {
       int n = ArraySize(g_entryQuality);
-      ArrayResize(g_entryQuality, n + 1);
-      ZeroMemory(g_entryQuality[n]);
-      idx = n;
+      if(n >= XAU_ENTRY_QUALITY_MAX_RECORDS)
+      {
+         int oldest = -1;
+         for(int i = 0; i < n; i++)
+            if(g_entryQuality[i].finalized &&
+               (oldest < 0 || g_entryQuality[i].entryTime < g_entryQuality[oldest].entryTime))
+               oldest = i;
+         if(oldest >= 0) idx = oldest;
+      }
+      if(idx < 0)
+      {
+         ArrayResize(g_entryQuality, n + 1);
+         idx = n;
+      }
+      ZeroMemory(g_entryQuality[idx]);
       g_entryQuality[idx].active = true;
       g_entryQuality[idx].positionId = positionId;
       g_entryQuality[idx].direction = direction;
@@ -30919,6 +30949,34 @@ bool XAU_LocalAIReplayLookup(const string snapshot,string &response)
    return false;
 }
 
+// Market Edition compliance hardening (Task 20): these XAUAI_* telemetry
+// files (TradeBrain/BlockedMemory/ConsciousMemory/TimingProof/TradingIntel
+// CSV+JSON, plus the local-AI-replay snapshot cache below) are append-only —
+// FILE_READ|FILE_WRITE + FileSeek(SEEK_END) — with a single stable filename
+// per production scope, so on a long-running VPS they grow without bound
+// across weeks/months. This is a pure file-housekeeping fix: it only ever
+// deletes and lets the existing "not exists -> rewrite header" logic at each
+// call site recreate the file from empty. It never touches trade decisions,
+// risk, lot sizing, SL/TP, or exit logic. Call once, immediately before the
+// existing FileIsExist(fn, FILE_COMMON) check (or equivalent FileOpen) at
+// each append site. Defined here, ahead of its first caller below, because
+// MQL5 requires a function be declared/defined before use in the same file.
+#define XAU_TELEMETRY_FILE_MAX_BYTES 10485760  // 10 MB per file before rotation
+void XAU_RotateTelemetryFileIfOversized(string fn)
+{
+   if(!FileIsExist(fn, FILE_COMMON)) return;
+   int h = FileOpen(fn, FILE_READ | FILE_BIN | FILE_COMMON);
+   if(h == INVALID_HANDLE) return;
+   ulong sz = FileSize(h);
+   FileClose(h);
+   if(sz >= (ulong)XAU_TELEMETRY_FILE_MAX_BYTES)
+   {
+      FileDelete(fn, FILE_COMMON);
+      PrintFormat("TELEMETRY_FILE_ROTATED | file=%s | sizeBytes=%I64u | capBytes=%d — deleted, will be recreated fresh on next write",
+                  fn, sz, XAU_TELEMETRY_FILE_MAX_BYTES);
+   }
+}
+
 void XAU_LocalAIReplayCollectSnapshot(const string snapshot)
 {
    if(!InpLocalAIReplayCollectMissing || StringLen(snapshot)<=0) return;
@@ -30928,6 +30986,7 @@ void XAU_LocalAIReplayCollectSnapshot(const string snapshot)
    ArrayResize(g_localAIReplayCollected,n+1);
    g_localAIReplayCollected[n]=snapshot;
 
+   XAU_RotateTelemetryFileIfOversized(InpLocalAIReplaySnapshotFile);
    int h=FileOpen(InpLocalAIReplaySnapshotFile,FILE_READ|FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_ANSI);
    if(h==INVALID_HANDLE)
       h=FileOpen(InpLocalAIReplaySnapshotFile,FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_ANSI);
@@ -32999,6 +33058,7 @@ void XAU_AppendConsciousMemory(string eventName, string strategy, int direction,
 {
    if(!InpTradeBrainMemory || !IsXAUFastSymbol() || direction == 0) return;
    string fn = XAU_ConsciousMemoryFile();
+   XAU_RotateTelemetryFileIfOversized(fn);
    bool exists = FileIsExist(fn, FILE_COMMON);
    int h = exists
            ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_CSV | FILE_COMMON, ',')
@@ -33614,6 +33674,7 @@ void XAU_AppendTimingProof(XAU_TimingProofRecord &r, ulong thesisId,
                            string executionOwner)
 {
    string fn = XAU_TimingProofFile();
+   XAU_RotateTelemetryFileIfOversized(fn);
    bool exists = FileIsExist(fn, FILE_COMMON);
    int h = exists
            ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_CSV | FILE_COMMON, ',')
@@ -34006,6 +34067,7 @@ void XAU_IntelAppendJson(string eventName, string decisionId, ulong posId, int d
    bool wasEAForcedClose = XAU_WasEAForcedCloseField(isCloseEvent, closeReasonExact, closedBy);
    double floatingProfitAtClose = isCloseEvent ? profit : 0.0;
    string fn = XAU_TradingIntelJsonFile();
+   XAU_RotateTelemetryFileIfOversized(fn);
    bool exists = FileIsExist(fn, FILE_COMMON);
    int h = exists
            ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_TXT | FILE_COMMON)
@@ -34084,6 +34146,7 @@ void XAU_IntelAppend(string eventName, string decisionId, ulong posId, int dir,
    bool wasEAForcedClose = XAU_WasEAForcedCloseField(isCloseEvent, closeReasonExact, closedBy);
    double floatingProfitAtClose = isCloseEvent ? profit : 0.0;
    string fn = XAU_TradingIntelCsvFile();
+   XAU_RotateTelemetryFileIfOversized(fn);
    bool exists = FileIsExist(fn, FILE_COMMON);
    int h = exists
            ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_CSV | FILE_COMMON, ',')
@@ -34306,6 +34369,7 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
 {
    if(!InpTradeBrainMemory || !IsXAUFastSymbol()) return;
    string fn = XAU_TradeBrainFile();
+   XAU_RotateTelemetryFileIfOversized(fn);
    bool exists = FileIsExist(fn, FILE_COMMON);
    int h = exists
            ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_TXT | FILE_COMMON)
@@ -35710,6 +35774,7 @@ void XAU_AppendBlockedMemory(string eventName, BlockedIdea &idea, int checkpoint
 {
    if(!InpBlockedTradeMemoryReport || !IsXAUFastSymbol()) return;
    string fn = XAU_BlockedMemoryFile();
+   XAU_RotateTelemetryFileIfOversized(fn);
    bool exists = FileIsExist(fn, FILE_COMMON);
    int h = exists
            ? FileOpen(fn, FILE_READ | FILE_WRITE | FILE_CSV | FILE_COMMON, ',')
@@ -40083,6 +40148,13 @@ int TFDirectionByEMA(int signal, ENUM_TIMEFRAMES tf, double atrThreshold, string
    int loc_hATR = iATR(Symbol(), tf, 14);
    if(hEMA == INVALID_HANDLE || loc_hATR == INVALID_HANDLE)
    {
+      // Market Edition compliance fix (Task 20): release whichever handle
+      // DID succeed before bailing out -- previously only the failure path
+      // was handled, silently leaking the other handle on a partial
+      // creation failure. Same pattern PG_HTFTrend already uses a few
+      // hundred lines above. No change to the DATA/bail decision itself.
+      if(hEMA != INVALID_HANDLE) IndicatorRelease(hEMA);
+      if(loc_hATR != INVALID_HANDLE) IndicatorRelease(loc_hATR);
       why = TFShortName(tf) + ":DATA";
       return 0;
    }

@@ -2,7 +2,7 @@
 
 ## 1. Copy the file
 
-Copy `Claude_XauCloud.ex5` (the compiled binary — this is what most buyers
+Copy `XauCloud.ex5` (the compiled binary — this is what most buyers
 will receive) into your terminal's `MQL5/Experts/` folder. If you have the
 `.mq5` source instead, open it in MetaEditor and compile (Compile button
 or F7); a clean compile reports "0 errors, 0 warnings."
