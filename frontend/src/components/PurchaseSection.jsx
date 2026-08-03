@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { ShoppingCart, ShieldCheck, Lightning, Check } from "@phosphor-icons/react";
+import { PaymentMethodModal } from "./BankTransferFlow";
 
 const PERKS = [
   "Lifetime license — free updates forever",
@@ -17,6 +18,7 @@ export default function PurchaseSection({ api }) {
   const [priceData,  setPriceData]  = useState(null);
   const [currency,   setCurrency]   = useState(null); // null = let the server detect it
   const [error,      setError]      = useState("");
+  const [showMethodModal, setShowMethodModal] = useState(false);
 
   useEffect(() => {
     const params = currency ? { display_currency: currency } : {};
@@ -27,11 +29,21 @@ export default function PurchaseSection({ api }) {
 
   const paymentUnavailable = priceData?.payment_method === "unavailable";
 
-  const handlePurchase = async () => {
-    if (loading) return; // belt-and-braces against double-submit beyond the disabled button alone
+  const validateBuyer = () => {
+    if (!buyerName.trim() || !buyerEmail.trim()) { setError("Please enter your name and email."); return false; }
+    if (!buyerEmail.includes("@")) { setError("Please enter a valid email address."); return false; }
+    return true;
+  };
+
+  const openMethodChoice = () => {
     if (paymentUnavailable) { setError("Payments are temporarily unavailable. Please try again shortly."); return; }
-    if (!buyerName.trim() || !buyerEmail.trim()) { setError("Please enter your name and email."); return; }
-    if (!buyerEmail.includes("@")) { setError("Please enter a valid email address."); return; }
+    if (!validateBuyer()) return;
+    setError("");
+    setShowMethodModal(true);
+  };
+
+  const payByCard = async () => {
+    if (loading) return; // belt-and-braces against double-submit beyond the disabled button alone
     setError(""); setLoading(true);
     try {
       const res = await axios.post(`${api}/purchase/initialize`, {
@@ -134,11 +146,11 @@ export default function PurchaseSection({ api }) {
               )}
               <button
                 data-testid="purchase-btn"
-                onClick={handlePurchase}
+                onClick={openMethodChoice}
                 disabled={loading || paymentUnavailable}
                 className="mt-1 w-full inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-4 text-[14px] font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-50">
                 <ShoppingCart size={17} weight="bold" />
-                {loading ? "Redirecting…" : paymentUnavailable ? "Payments Unavailable" : `Pay ${displayPrice} Now`}
+                {loading ? "Redirecting…" : paymentUnavailable ? "Payments Unavailable" : `Continue to Payment · ${displayPrice}`}
               </button>
             </div>
 
@@ -154,6 +166,17 @@ export default function PurchaseSection({ api }) {
         </div>
 
       </div>
+
+      {showMethodModal && (
+        <PaymentMethodModal
+          api={api}
+          priceDisplay={displayPrice}
+          buyerName={buyerName}
+          buyerEmail={buyerEmail}
+          onCard={() => { setShowMethodModal(false); payByCard(); }}
+          onClose={() => setShowMethodModal(false)}
+        />
+      )}
     </div>
   );
 }
