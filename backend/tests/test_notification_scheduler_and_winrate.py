@@ -36,11 +36,11 @@ SERVER_SRC = read(BACKEND_DIR / "server.py")
 # ---------------------------------------------------------------------------
 def test_hourly_slot_field_is_computed_and_stored():
     assert 'hourly_slot = now.strftime("%Y-%m-%dT%H:00")' in MO_SRC
-    assert MO_SRC.count('"hourly_slot": hourly_slot,') == 3  # both early-return docs + main doc
+    assert MO_SRC.count('"hourly_slot": hourly_slot,') == 4  # early returns, invalid-quote guard, main doc
 
 
 def test_hourly_tick_checks_exact_slot_not_rolling_lookback():
-    fn_idx = MO_SRC.index("async def hourly_generation_tick()")
+    fn_idx = MO_SRC.index("async def hourly_generation_tick(")
     fn = MO_SRC[fn_idx: fn_idx + 4000]
     assert '"hourly_slot": current_slot' in fn
     # the old bug: a rolling-window lookback that a late publication could
@@ -61,7 +61,7 @@ def test_late_publication_does_not_skip_next_slot():
 
 
 def test_missed_slot_catchup_marks_late_catchup_once():
-    fn_idx = MO_SRC.index("async def hourly_generation_tick()")
+    fn_idx = MO_SRC.index("async def hourly_generation_tick(")
     fn = MO_SRC[fn_idx: fn_idx + 4000]
     assert "is_late_catchup = (current_slot_dt - last_slot_dt) > timedelta(hours=1, minutes=5)" in fn
     assert "generate_outlook_for_account(lic_key, account, account_id=account, is_late_catchup=is_late_catchup)" in fn
@@ -72,7 +72,7 @@ def test_next_scheduled_slot_remains_the_next_real_hour_not_shifted():
     # it never computes or stores any kind of "next slot" override -- the
     # very next tick simply computes current_slot fresh from wall-clock `now`
     # again, so a late catch-up cannot push future slots later.
-    fn_idx = MO_SRC.index("async def hourly_generation_tick()")
+    fn_idx = MO_SRC.index("async def hourly_generation_tick(")
     fn = MO_SRC[fn_idx: fn_idx + 4000]
     assert "next_slot" not in fn
     assert "current_slot = now.strftime" in fn
@@ -86,7 +86,7 @@ def test_hourly_loop_sleeps_until_next_wall_clock_hour_not_flat_3600s():
 
 
 def test_dedup_key_scoped_by_account_symbol_and_slot():
-    fn_idx = MO_SRC.index("async def hourly_generation_tick()")
+    fn_idx = MO_SRC.index("async def hourly_generation_tick(")
     fn = MO_SRC[fn_idx: fn_idx + 2000]
     assert '"account": account, "symbol": OUTLOOK_SYMBOL, "hourly_slot": current_slot' in fn
 
@@ -94,13 +94,12 @@ def test_dedup_key_scoped_by_account_symbol_and_slot():
 # ---------------------------------------------------------------------------
 # Notification: real state, not preference-tier alone
 # ---------------------------------------------------------------------------
-def test_subscription_deletion_only_on_confirmed_permanent_failure():
-    fn_idx = NOTIF_SRC.index("async def send_outlook_notification")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 3500]
-    assert 'if failure_class == "PERMANENT_SUBSCRIPTION_GONE":' in fn
-    idx = fn.index('if failure_class == "PERMANENT_SUBSCRIPTION_GONE":')
-    window = fn[idx: idx + 200]
-    assert "await db.cloud_push_subscriptions.delete_one" in window
+def test_subscription_never_deleted_on_delivery_failure():
+    # v6.25.3 owner directive 2026-07-17 -- OneSignal owns device/subscription
+    # lifecycle entirely (unlike the retired self-hosted Web Push code, which
+    # deleted a subscription on a confirmed 404/410). This module must never
+    # delete a cloud_push_subscriptions record for any reason.
+    assert "cloud_push_subscriptions.delete_one" not in NOTIF_SRC
 
 
 def test_temporary_failures_do_not_delete_subscription():
@@ -109,18 +108,19 @@ def test_temporary_failures_do_not_delete_subscription():
     assert "if not ok:\n                    await db.cloud_push_subscriptions.delete_one" not in NOTIF_SRC
 
 
-def test_webpush_returns_classified_failure_not_bare_bool():
-    fn_idx = NOTIF_SRC.index("async def _send_webpush(device: Dict, payload: Dict) -> tuple:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 2000]
-    for status_class in ["SERVER_NOT_CONFIGURED", "DEPENDENCY_MISSING", "PERMANENT_SUBSCRIPTION_GONE",
-                          "TEMPORARY_DELIVERY_FAILURE", "UNKNOWN_FAILURE"]:
+def test_onesignal_returns_classified_failure_not_bare_bool():
+    fn_idx = NOTIF_SRC.index("async def _send_onesignal(user_id: str, payload: Dict) -> tuple:")
+    fn = NOTIF_SRC[fn_idx: fn_idx + 4300]
+    for status_class in ["SERVER_NOT_CONFIGURED", "AUTHENTICATION_FAILED",
+                          "TEMPORARY_DELIVERY_FAILURE", "NO_ACTIVE_ONESIGNAL_RECIPIENT", "UNKNOWN_FAILURE"]:
         assert status_class in fn
 
 
-def test_permanent_gone_only_on_404_or_410_status():
-    fn_idx = NOTIF_SRC.index("async def _send_webpush(device: Dict, payload: Dict) -> tuple:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 2000]
-    assert "status_code in (404, 410)" in fn
+def test_empty_message_id_classified_as_no_device_registered():
+    fn_idx = NOTIF_SRC.index("async def _send_onesignal(user_id: str, payload: Dict) -> tuple:")
+    fn = NOTIF_SRC[fn_idx: fn_idx + 4300]
+    assert 'if provider["message_id"]' in fn
+    assert "return False, NO_ACTIVE_ONESIGNAL_RECIPIENT, provider" in fn
 
 
 def test_notification_status_endpoint_exists_and_derives_final_status():
@@ -136,35 +136,38 @@ def test_status_is_off_regardless_of_device_state_when_tier_is_off():
     fn_idx = NOTIF_SRC.index('async def get_notification_status(user_id: str, account: str = "") -> Dict:')
     fn = NOTIF_SRC[fn_idx: fn_idx + 2500]
     idx = fn.index('if saved_tier == "OFF":')
-    window = fn[idx: idx + 80]
-    assert 'final_status = "OFF"' in window
-    assert window.index('final_status = "OFF"') < window.index("elif")
+    window = fn[idx: idx + 120]
+    assert 'final_status, remediation = "OFF", "NONE"' in window
+    assert window.index('final_status, remediation = "OFF", "NONE"') < window.index("elif")
 
 
 def test_on_verified_requires_devices_and_server_ready():
     fn_idx = NOTIF_SRC.index('async def get_notification_status(user_id: str, account: str = "") -> Dict:')
     fn = NOTIF_SRC[fn_idx: fn_idx + 2500]
-    assert 'elif not devices:\n        final_status = "SUBSCRIPTION_MISSING"' in fn
+    assert 'elif not complete:' in fn
+    assert 'final_status, remediation = "SUBSCRIPTION_MISSING", "REGISTER_DEVICE"' in fn
+    assert 'elif not server_ready:' in fn
+    assert 'final_status, remediation = "ON_VERIFIED", "NONE"' in fn
 
 
 def test_test_notification_uses_real_production_dispatcher():
     fn_idx = NOTIF_SRC.index("async def send_test_notification(user_id: str) -> Dict:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 2000]
-    assert "await _send_webpush(device, payload)" in fn
+    fn = NOTIF_SRC[fn_idx: fn_idx + 4200]
+    assert "await _send_onesignal(user_id, payload)" in fn
     assert '@r.post("/outlook/notifications/test")' in ROUTES_SRC
 
 
 def test_test_notification_never_creates_an_outlook():
     fn_idx = NOTIF_SRC.index("async def send_test_notification(user_id: str) -> Dict:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 2000]
+    fn = NOTIF_SRC[fn_idx: fn_idx + 4200]
     assert "cloud_market_outlooks" not in fn
     assert "generate_outlook_for_account" not in fn
 
 
 def test_test_notification_returns_named_status_not_bare_bool():
     fn_idx = NOTIF_SRC.index("async def send_test_notification(user_id: str) -> Dict:")
-    fn = NOTIF_SRC[fn_idx: fn_idx + 2500]
-    for status in ["SERVER_NOT_CONFIGURED", "DEPENDENCY_MISSING", "NO_DEVICE", "SENT", "SUBSCRIPTION_EXPIRED", "FAILED"]:
+    fn = NOTIF_SRC[fn_idx: fn_idx + 4200]
+    for status in ["SERVER_NOT_CONFIGURED", "NO_DEVICE", "SENT", "FAILED"]:
         assert status in fn
 
 
@@ -185,12 +188,11 @@ def test_win_rate_formula_is_wins_over_wins_plus_losses():
     assert "len(activated)" not in win_rate_line
 
 
-def test_no_entry_and_invalidated_never_count_as_win_or_loss():
-    idx = ROUTES_SRC.index("resolved_rows = [o for o in stats_rows if")
-    window = ROUTES_SRC[idx: idx + 300]
-    assert "activation" in window and "final_r" in window
-    # resolved_rows requires BOTH activation and a real final_r -- a
-    # no-entry/invalidated-before-entry row has final_r None and is excluded
+def test_only_authoritative_completed_outcomes_count_as_win_or_loss():
+    idx = ROUTES_SRC.index("completed = [o for o in actionable")
+    window = ROUTES_SRC[idx: idx + 250]
+    assert "ANALYTICS_WIN" in window and "ANALYTICS_LOSS" in window
+    assert "HISTORICAL_DATA_UNAVAILABLE" not in window
 
 
 def test_zero_resolved_signals_yields_none_not_zero_percent():

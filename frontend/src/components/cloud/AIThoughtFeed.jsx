@@ -10,11 +10,6 @@ import { API } from "@/lib/api";
 // ─── Axios (mirrors CloudDashboard's commandAxios — kept local since this
 // file is meant to be a self-contained, droppable panel) ───────────────────
 const feedAxios = axios.create({ baseURL: API, withCredentials: true });
-feedAxios.interceptors.request.use((cfg) => {
-  const token = localStorage.getItem("cloud_token");
-  if (token) cfg.headers.Authorization = `Bearer ${token}`;
-  return cfg;
-});
 
 // ─── Style tokens (matches CloudDashboard's dark/glass aesthetic) ─────────
 const MONO_LABEL = "font-mono text-[10px] uppercase tracking-[0.2em] text-white/35";
@@ -29,7 +24,7 @@ const TONE = {
 const toneOf = (t) => TONE[t] || TONE.neutral;
 const FRESH_DECISION_MS = 24 * 60 * 60 * 1000;
 const MAX_LIVE_DECISION_CARDS = 20;
-const NO_FRESH_DECISION_TEXT = "No fresh AI decision yet. Waiting for next M5 evaluation.";
+const NO_FRESH_DECISION_TEXT = "No fresh AI decision yet. Waiting for the next completed M10 evaluation.";
 
 const tsMs = (iso) => {
   if (!iso) return NaN;
@@ -281,7 +276,7 @@ const ageText = (minutes) => {
 };
 
 // ─── Current Trade panel — "Open Trade Thinking" ───────────────────────────
-function CurrentTradePanel({ opinion, onForceClose }) {
+export function CurrentTradePanel({ opinion, onForceClose }) {
   if (!opinion || !opinion.open) {
     return (
       <div className="rounded-3xl border border-white/[0.07] bg-[#0d0e13] p-5" data-testid="current-trade-panel">

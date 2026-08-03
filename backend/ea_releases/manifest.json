@@ -1,0 +1,142 @@
+{
+  "current_version": "v6.25.30",
+  "internal_codename": "XauCloud_m10_private_vps_ai",
+  "production_branch": "XauCloud_m10_private_vps_ai",
+  "production_branch_source_commit": "8498c47eefec0e3cba71ec0c3bb5967feb0de096",
+  "website_product_name": "XauCloud",
+  "mt5_market_product_name": "Claude XauCloud",
+  "releases": {
+    "v6.25.2": {
+      "version": "v6.25.2",
+      "edition": "M10 origination fallback, freshness bar-identity fix",
+      "source_commit": "dab42001e594e9c2e831db726ba352236ff86989",
+      "build_timestamp": "2026-07-17T10:33:00Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe, isolated sandbox + Mac live install + VPS, all three hash-identical)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.2.ex5",
+      "ex5_sha256": "98586d59bd39190a43d8a2d12057a882caba4c9b88e1361982908afc28676f5a",
+      "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.2.ex5",
+      "release_notes": "M10 can now originate its own qualifying trade candidate when ScoreSetups proposes nothing or a stale/mismatched direction, instead of only vetoing. Fixed M10 freshness classification (bar-identity based, not raw elapsed seconds).",
+      "stable_status": false
+    },
+    "v6.25.3": {
+      "version": "v6.25.3",
+      "edition": "Rich trade-ledger telemetry (Phase 7A)",
+      "source_commit": "70ce33e3046ca5225a075e90ca391d62e280d486",
+      "build_timestamp": "2026-07-17T16:13:00Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe, isolated sandbox only -- NOT YET verified on the owner's Mac live install or VPS; do not treat as hash-confirmed across all three until that verification happens)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.3.ex5",
+      "ex5_sha256": "336f38848ef88cd83b3a5dfb1eaa255f3059abcc43a3eca3d4a2985faf2020ec",
+      "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.3.ex5",
+      "release_notes": "LogTradeToServer() now reports rich per-trade data at close (broker ticket, entry/exit price and time, commission, swap, original risk USD, final R, MAE/MFE in R, campaign ID, EA version, account login, exit reason, exit owner, trade family) to a new additive /api/journal/log schema. Backend GET /api/cloud/performance/analytics computes real win rate, profit factor, average R, drawdown, and a real cumulative equity curve from this data, replacing the Command Center's synthetic 5-point interpolated equity curve. Older EA installs posting the pre-v6.25.3 thin payload continue to work unchanged; their trades are excluded from analytics (no fabricated risk/R data) rather than breaking ingestion.",
+      "stable_status": false
+    },
+    "v6.25.4": {
+      "version": "v6.25.4",
+      "edition": "URGENT M10 freshness fix -- continuationEntryPaused decoupled from data staleness",
+      "source_commit": "fff9eb87638ebb089d1fc6eccfab7a0b8ba6163f",
+      "build_timestamp": "2026-07-17T17:16:00Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe, isolated sandbox + owner's Mac live MT5 install, hash-identical: b13892889d51640ba2c693e32d5dcb2dc356dc6fdcb95ed939da49fc97817d40 -- VPS NOT verified, this session has no remote access to it; the EA is copied into the Mac's live Experts folder but MT5 does not hot-reload an already-attached expert, so the owner must detach/reattach the EA (or restart the terminal) for this build to actually take effect there)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.4.ex5",
+      "ex5_sha256": "b13892889d51640ba2c693e32d5dcb2dc356dc6fdcb95ed939da49fc97817d40",
+      "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.4.ex5",
+      "release_notes": "URGENT root-cause fix for a live incident (16:50:30, a genuinely fresh M10 bar at closeAgeSeconds=30 was reported freshnessState=STALE, rejecting a valid BUY/TREND_PULLBACK candidate). Root cause: XAU_BuildM10EvidenceSnapshot() used td.continuationEntryPaused as a proxy for 'this bar's data is incomplete', but that field is actually !continuationEntryAllowed -- a real market-condition signal (true whenever exhaustion/transition readings currently disfavor a continuation-direction entry), completely unrelated to data availability. Any ordinary exhaustion/transition reading was forcing the entire M10 evidence snapshot to STALE regardless of how fresh the bar actually was. Fixed by separating freshness (bar identity only: evaluatedShift) from a new dataState axis (driven by a new evidenceDataUnavailable field, set true only in the two genuine fail-closed branches of XAU_AdaptiveMarketTransitionEngine() -- missing closed-bar/ATR/close price, or the bar being more than 2x the primary period old). STALE now always carries an explicit staleCause (NO_EVALUATED_BAR / BAR_MORE_THAN_ONE_CLOSED_M10_BEHIND / BAR_IDENTITY_MISMATCH). No approved trading behavior (risk, SL widening, timing, direction exclusivity, R-Exit, basket protection, exhaustion evidence-only, M10 primary authority) was altered -- this only fixes which readings are allowed to reach the unchanged decision logic. Also fixes a Phase 17 release-identity mismatch found during the same audit: #property version was still \"6.259\" (matching no real release) and #property description still said \"v6.25.1\" -- both now correctly read 6.254/v6.25.4, matching XAUAI_EA_VERSION and this manifest.",
+      "stable_status": false
+    },
+    "v6.25.5": {
+      "version": "v6.25.5",
+      "edition": "M30 three-M10-evidence consensus mode (optional, default OFF)",
+      "source_commit": "c710c8aadd9a77db7caead85de1e4489051eb68f",
+      "build_timestamp": "2026-07-17T20:54:00Z",
+      "compiler_result": "0 errors, 0 warnings, 67470 ms elapsed (MetaEditor64.exe; isolated source hash e249f0f71bd5289bcde789a18904158fb38eead04df4e931b209aeb747a1d5c9; focused owner-correction suite 82 passed, 13 Mongo-backed concurrency cases pending independent rerun; test candidate, final Mac/VPS runtime journal proof still pending)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.5.ex5",
+      "ex5_sha256": "95dfa7fda4bab287d9fb46dcef1a557374933b154c8c3f489ec1429e9ea694ea",
+      "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.5.ex5",
+      "release_notes": "Codex forensic test candidate repairing the v6.25.5 M30 implementation: three completed M10 snapshots retain 20%/30%/50% weighting; a qualifying M30 BUY/SELL immediately creates one immutable slot-and-evidence candidate and starts exactly one 120-180 second timer; retrace/location remains evidence only; final movement at or above 0.30R cancels; invalid or missed candidates cannot carry, restart, or resurrect. Original candidate timing and evidence identity persist across restart, completed M10 evidence is restored only when validated against closed broker history, structural SL is mandatory with one 1.20 widening, and ambiguous broker outcomes reconcile without an immediate resend. Source default remains legacy M10; M30 must be explicitly selected and proven in the actual terminal journal. This artifact is available for owner testing while the remaining backend, browser, Mac, and VPS forensic verification continues; it is not yet a final production recommendation.",
+      "stable_status": false
+    },
+    "v6.25.6": {
+      "version": "v6.25.6",
+      "edition": "Trade-frequency fix (M30 exhaustion-gate scope) + real M30 candidate/timer lifecycle telemetry + tenant-scoped remote-command idempotency",
+      "source_commit": "f30c03f322c96bb63c0284643504cf5f239303c5",
+      "build_timestamp": "2026-07-18T00:24:00Z",
+      "compiler_result": "0 errors, 0 warnings, 32513 ms elapsed (MetaEditor64.exe, isolated sandbox; source SHA-256 f0e7058cb2347bbcb6a9cda552cf52be2a14ff73fc3f076ad35bdeca0eae6575; full test suite: 127/127 EA-source tests + 16/16 backend test files, 0 failures, against real local MongoDB; NOT YET verified on the owner's Mac live install or VPS)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.6.ex5",
+      "ex5_sha256": "9a034fc26174bef55e07e274d6421285d653faf48bc17715ac39f065ad2174bb",
+      "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.6.ex5",
+      "release_notes": "Forensic trade-frequency audit (triggered by a real 8-campaigns-in-30-days owner concern) root-caused and fixed EXHAUSTED_SAME_DIRECTION_REENTRY_BLOCK in OpenTrade(): a legacy-M10 re-entry gate that lacked the same M30-mode exemption its sibling gate (XAU_PostTradeCooldownActive) already had, silently discarding roughly 86% of already-approved M30 candidates. Verified via a real 7-trading-day MetaQuotes-Demo Strategy Tester replay (100% real ticks): 65 M30 candidates reached FinalEntryArbiter decision=ALLOW, but the pre-fix build opened only ~4 core trades before this gate discarded the rest as CANCEL_EXECUTION_NOT_CONFIRMED. Also adds a MQL_TESTER-scoped bypass for XAU_ClaimDirectionReservation()'s cross-instance reservation WebRequest so Strategy Tester can exercise the M30 path at all (tester-only; does not alter live/demo behavior). Implements the Codex handover's next task (checkpoint e483dd0): XAU-026 real M30 candidate/timer lifecycle visibility (XAU_M30DisplayJson now reports has_active_candidate, candidate_id, execution_key, timer timing, origin price, move-R since origin, and last-outcome fields sourced only from durable state -- no fabricated structural-SL/reservation status; surfaced in the Command Center's new Candidate Lifecycle section) and XAU-027 tenant-scoped remote-command idempotency with immutable terminal states (client-generated idempotency_key + server dedupe_key on /cloud/command/request; atomic conditional state-machine transition on /cloud/command/ack so EXECUTED/FAILED/SKIPPED/EXPIRED can never be overwritten by a late, replayed, or racing acknowledgement), covered by 16 new Mongo-backed concurrency/duplicate/expiry/cross-tenant tests. Also fixes two real production bugs found while repairing the surrounding test suite (not introduced by this change): /journal/log's account_login check was bypassing this endpoint's established graceful error-response contract with a raw HTTPException, and cloud_performance_analytics() was querying trade_journal by a \"pin\" field that log_trade_journal() has deliberately never stored since the v6.25.4 P0 fix (it stores license_id instead), silently returning empty analytics for every real user since that fix shipped. Not yet deployed to the owner's Mac live install or VPS; not yet merged to main.",
+      "stable_status": false
+    },
+    "v6.25.7": {
+      "version": "v6.25.7",
+      "edition": "Owner regime-aware profit locks, -0.75R hard loss cap, breakout permissions, and broker-time blackouts",
+      "source_commit": "c2ffda723b99c681a59a4b185f9ed8ebe246574d",
+      "build_timestamp": "2026-07-18T06:57:00Z",
+      "compiler_result": "0 errors, 0 warnings, 556782 ms elapsed (MetaEditor64.exe, isolated MT5 sandbox; source SHA-256 da55aa8b13d59e13480ff56caa388d371025e38a99da3093d2eb40e9642eff6d)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.7.ex5",
+      "ex5_sha256": "59967dd6c3e111e70657856bec1aee7353231be528b485e57c31593f8d55060e",
+      "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.7.ex5",
+      "release_notes": "Owner-directed v6.25.7 only: GENERAL exits arm +0.30R at a +0.40R peak and ratchet at 70% from +0.50R; the frozen TREND_DN_SPECIAL campaign profile arms +0.40R at +0.50R and ratchets at 70% from +0.70R. Lot sizing remains based on the original once-widened structural 1R, then the same lot receives a broker-confirmed -0.75 original-R hard stop. BRKT_DN blocks all new exposure; BRKT_UP permits only canonical A/A+; broker-server-time windows 06:10:00-07:30:59 and 14:10:00-15:30:59 cancel/deny entries while open-position management remains active. Existing M30 three-M10 consensus, 120-180 second timer, 0.30R missed-move cancellation, signal/grade math, news, direction exclusivity, and M30 re-entry exemption remain unchanged.",
+      "stable_status": false
+    },
+    "v6.25.8": {
+      "version": "v6.25.8",
+      "edition": "Final owner breakout blocks, full 1R structural risk, and frozen regime exit floors",
+      "source_commit": "ce5c62b62f030dbcf918823b22f65d879e455c2d",
+      "build_timestamp": "2026-07-18T12:23:36Z",
+      "compiler_result": "0 errors, 0 warnings, 25295 ms elapsed (MetaEditor64.exe, isolated MT5 sandbox; source SHA-256 bb4026f9bbbfcf703f5bcb2b8f65db53ec24bde4374fd04bbe4bfdb1d4231363; focused current policy, M30 consensus, and 120-180-second timer suites: 110 passed, 0 failed)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.8.ex5",
+      "ex5_sha256": "3880eded56ee5c084002fa034bcd082dcdc664c09a039e5daf0e44f29b7a79e4",
+      "customer_filename": "XAUUSD_AI_Sniper_EA_v6.25.8.ex5",
+      "release_notes": "Final owner policy: BRKT_UP and BRKT_DN are hard-blocked through the canonical pre-order authority, including core, re-entry, pyramid and isolated direct-send paths. No owner time-window blackout exists; 06:10-07:30 and 14:10-15:30 remain eligible whenever normal EA session logic approves. Approved normal, re-entry and pyramid trades use full configured risk against the original full 1.00R structural stop, with no universal 0.75R cap. The frozen TREND_UP campaign profile locks +0.40R at a +0.50R peak and ratchets at 70% from +0.70R; every other allowed regime uses GENERAL, locking +0.30R at +0.40R and ratcheting at 70% from +0.50R. All broker-facing close and SL-modify paths reject attempts below an active owner floor. Existing 120-180-second entry timing and unrelated signal, AI, memory, news, session, lifecycle and re-entry behavior remain unchanged.",
+      "stable_status": true
+    },
+    "v6.25.24": {
+      "version": "v6.25.24",
+      "edition": "M10 decision authority + fixed configurable Gold-move broker SL (XauCloud production foundation)",
+      "source_commit": "61ec3814527c0c57815b7e4cbd39745b2c19d40d",
+      "build_timestamp": "2026-07-24T09:48:00Z",
+      "compiler_result": "0 errors, 0 warnings, 42327 ms elapsed (MetaEditor64.exe build 6037, isolated MT5_Isolated sandbox -- NOT the live/attached terminal; Mac/VPS runtime verification still required, see audits/xaucloud/05_live_step_packages.md)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.24.ex5",
+      "ex5_sha256": "948aeee5d792df440c13bf455e2f876725a832eda154fc1de9e9eb86c711a06b",
+      "customer_filename": "XauCloud.ex5",
+      "release_notes": "XauCloud production foundation: M10 decision authority (M30 confirmed dead/unreachable in this build), fixed configurable Gold-move broker SL (InpStopLossGoldMove) kept independent of internal R, own TradeBrain model. This session's audit fixed XC-002 (InpMaxReEntriesPerDay hard cap was declared but never enforced -- now enforced, adversarially reviewed, independently re-reviewed) and XC-001 (customer docs described a selectable M30 mode that is dead code -- corrected). Rebrand to XauCloud applied to all confirmed-safe user-facing surfaces; domain and internal compatibility identifiers unchanged (see audits/xaucloud/03_rebrand_ledger.md). Real isolated 60-day M10 tick replay (2026-05-22 to 2026-07-21, MetaQuotes-Demo, History Quality 100%, 219957 ticks): +$10,839.11 net, 116 trades, 68.10% win rate, PF 1.43, max drawdown 43.97%/44.98% (higher than the previously recorded 30-day fixed-SL run -- flagged, not explained away, see audits/xaucloud/08_60day_replay_results.md). Mac/VPS runtime attach-and-verify and a longer/out-of-sample replay window remain required before live promotion. CORRECTION 2026-07-24: the 60-day replay numbers cited above were later found to be from a synthetic-tick (Model=1) Tester run, not genuine real ticks. A same-binary real-tick (Model=4) rerun shows a materially worse result (-$3,406.54 net vs the +$10,839.11 originally reported). See audits/xaucloud/13_CORRECTION_synthetic_vs_real_tick_data.md.",
+      "stable_status": false
+    },
+    "v6.25.25": {
+      "version": "v6.25.25",
+      "edition": "Permanent LOCATION_EXCELLENT / LOCATION_LATE automated-entry hard block (XauCloud production)",
+      "source_commit": "94c315be1da718e26e54225677a9068ac2bbf1a8",
+      "build_timestamp": "2026-07-24T16:31:00Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe build 6037, isolated MT5_Isolated sandbox; deployed to owner's Mac live Experts folder and VPS Experts folder, both hash-verified 11dba1cf9746c7852fe57ad0aedde264a83174cf7969e1ab70dba12dfa53c58a -- not yet attached to any chart, owner will attach manually)",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.25.ex5",
+      "ex5_sha256": "11dba1cf9746c7852fe57ad0aedde264a83174cf7969e1ab70dba12dfa53c58a",
+      "customer_filename": "XauCloud.ex5",
+      "release_notes": "Owner permanent policy (2026-07-24): LOCATION_EXCELLENT and LOCATION_LATE are now an absolute, unconditional automated-entry hard block, reversing the v6.25.22 removal. Implemented inside the single existing XAU_OwnerEntryPermission choke point (the sole gate for CORE/RE_ENTRY/PYRAMID/COUNTER_EXCURSION at both CANDIDATE_ACCEPTANCE and FINAL_EXECUTION), plus an independent XAU_OwnerLocationFinalAssertion post-fill check at all three trade.Buy/trade.Sell execution points. Real-tick (Model=4, 23,648,730 ticks) 60-day replay, identical window/settings before and after: baseline net -$3,406.54 / PF 0.84 / 122 trades / 66.10%-66.92% drawdown -> blocked net +$12,287.43 / PF 1.39 / 108 trades / 29.77%-33.54% drawdown. Zero OWNER_LOCATION_HARD_BLOCK_ASSERTION_FAILURE across the full run log -- excellentExecuted=0 and lateExecuted=0 held for the entire replay. 29 new regression tests, zero new failures in the existing suite. See audits/xaucloud/15_owner_location_permanent_hardblock_m10.md for full detail. No other strategy change in this release: M10 signal generation, fixed Gold SL, internal R, lot sizing, GENERAL exits, the 600s extension, and session/news/breakout logic are byte-for-byte unchanged from v6.25.24.",
+      "stable_status": true
+    },
+    "v6.25.28": {
+      "version": "v6.25.28",
+      "edition": "Extension-only +0.15R floor / 70%-of-peak ratchet, both independently input-toggleable (default OFF)",
+      "source_commit": "dca5f1e86f81cd1583a99f9eb8c047adac562066",
+      "build_timestamp": "2026-07-24T20:11:00Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe build 6037, isolated MT5_Isolated sandbox); deployed to owner's Mac and VPS Experts folders, both hash-verified 68a710374868da4b8b1ff6f41d124bc3ef56b1ff575b3a90d239b7ac107600dc -- not attached to any chart",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.28.ex5",
+      "ex5_sha256": "68a710374868da4b8b1ff6f41d124bc3ef56b1ff575b3a90d239b7ac107600dc",
+      "customer_filename": "XauCloud.ex5",
+      "release_notes": "Adds an extension-only exit rule on top of v6.25.25's permanent LOCATION_EXCELLENT/LOCATION_LATE hard block, scoped strictly to the active 600s GENERAL profitable-exit extension: an extension-start +0.15R minimum floor and a 70%-of-peak ratchet (activates once peak reaches +0.70R during the extension), each independently controlled by new inputs InpExtensionFloor015REnabled and InpExtension70PctRatchetEnabled -- BOTH DEFAULT FALSE, so out of the box this release trades identically to v6.25.25 (only the wide original structural SL protects the extension, exactly like pre-v6.25.26 behavior). Real-tick (Model=4, 23,648,730 ticks, 60-day window) evidence across all four toggle combinations: baseline (both off) $12,287.43 net/PF 1.39; ratchet-only $10,429.01/PF 1.36 (identical win count to baseline -- the ratchet never converts a loser to a winner on its own, it only trims already-profitable trades); floor-only $6,918.78/PF 1.26; both $6,970.16/PF 1.26. The floor does essentially all of the protective work (win count 71->79) at a real profit cost on this instrument/window; the ratchet's incremental effect on top of the floor is negligible ($51). Shipped with both off by default so the owner can switch either on live via Inputs without a recompile, informed by this evidence. No other change from v6.25.25: M10 signal generation, fixed Gold SL, internal R, lot sizing, location hard-block, and pre-extension GENERAL exit behavior are all unchanged.",
+      "stable_status": true
+    },
+    "v6.25.30": {
+      "version": "v6.25.30",
+      "edition": "Official XauCloud-m10: pure M10 cycle-authority repair",
+      "source_commit": "c86594811eee1e947c15b6fc4f52dd66b01fee6f",
+      "build_timestamp": "2026-08-02T16:52:00Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe, Model 4 real-tick verification); deployed and hash-verified on Mac and VPS",
+      "ex5_filename": "XAUUSD_AI_Sniper_EA_v6.25.30.ex5",
+      "ex5_sha256": "1244b533451553d493c0349d7211eee1ae46d71fc64424a2102726f1e5e2281e",
+      "customer_filename": "XauCloud-m10.ex5",
+      "release_notes": "Pure M10 scanner and execution authority. Each newly closed M10 candle runs one primary decision cycle. A fresh direction-matching setup that reaches TRANSITION_WATCH is preserved as a real classified candidate, while unconfirmed transition protection remains an explicit downstream normal gate before timer and OrderSend. Adds durable completed-cycle restart suppression, reconnect/session-reopen reconciliation, stale candidate/transition/timer clearing, startup health telemetry and exact order-send/retcode telemetry. Permanent Asia non-A+, A+ reset-pending and Grade-B category blocks remain enforced. No M5 evidence scans or hybrid M5-to-M10 state are present. Model 1 is excluded from verification.",
+      "stable_status": true
+    }
+  }
+}

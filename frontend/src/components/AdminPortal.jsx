@@ -4,11 +4,11 @@ import {
   Key, GearSix, SignOut, ShieldCheck, Copy, Check, Trash, Plus,
   UserCircle, CurrencyNgn, Envelope, Lock, Eye, EyeSlash, ArrowLeft,
   FloppyDisk, ChartBar, Lightning, Flame,
-  House, Pulse, TrendUp,
+  House, Pulse, TrendUp, Bell, ArrowClockwise, WarningCircle,
 } from "@phosphor-icons/react";
 
 const ax = axios.create({ withCredentials: true });
-const auth = (token) => ({ headers: { Authorization: `Bearer ${token}` } });
+const auth = () => ({});
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const BG   = "bg-[#060609]";
@@ -80,38 +80,38 @@ function Btn({ children, variant = "primary", className = "", ...props }) {
 
 // ─── Main portal ──────────────────────────────────────────────────────────────
 export default function AdminPortal({ api }) {
-  const [token, setToken] = useState(localStorage.getItem("admin_token") || "");
   const [admin, setAdmin] = useState(null);
   const [tab, setTab] = useState("dashboard");
 
   const checkAuth = useCallback(async () => {
-    if (!token) return;
     try {
-      const res = await ax.get(`${api}/auth/me`, auth(token));
+      const res = await ax.get(`${api}/auth/me`);
       setAdmin(res.data);
     } catch {
-      setToken(""); localStorage.removeItem("admin_token");
+      setAdmin(null);
     }
-  }, [api, token]);
+  }, [api]);
 
   useEffect(() => { checkAuth(); }, [checkAuth]);
 
-  const handleLogin  = (t) => { setToken(t); localStorage.setItem("admin_token", t); };
+  const handleLogin  = (user) => { setAdmin(user); };
   const handleLogout = () => {
-    setToken(""); setAdmin(null); localStorage.removeItem("admin_token");
+    setAdmin(null);
     ax.post(`${api}/auth/logout`).catch(() => {});
   };
 
   if (!admin) return <LoginPage api={api} onLogin={handleLogin} />;
 
   const TABS = [
-    { id: "dashboard",    label: "Dashboard",  icon: House          },
-    { id: "pins",         label: "Licenses",   icon: Key            },
-    { id: "command",      label: "Bot Ops",    icon: Pulse          },
-    { id: "settings",     label: "Settings",   icon: GearSix        },
-    { id: "configurator", label: "EA Config",  icon: ChartBar       },
-    { id: "transactions", label: "Payments",   icon: CurrencyNgn    },
-    { id: "account",      label: "Account",    icon: UserCircle     },
+    { id: "dashboard",     label: "Dashboard",     icon: House          },
+    { id: "pins",          label: "Licenses",      icon: Key            },
+    { id: "command",       label: "Bot Ops",       icon: Pulse          },
+    { id: "notifications", label: "Notifications", icon: Bell           },
+    { id: "performance",   label: "Performance",   icon: TrendUp        },
+    { id: "settings",      label: "Settings",      icon: GearSix        },
+    { id: "configurator",  label: "EA Config",     icon: ChartBar       },
+    { id: "transactions",  label: "Payments",      icon: CurrencyNgn    },
+    { id: "account",       label: "Account",       icon: UserCircle     },
   ];
 
   return (
@@ -123,8 +123,8 @@ export default function AdminPortal({ api }) {
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-300">
               <span className="font-mono text-[10px] font-black text-black">XA</span>
             </div>
-            <span className="text-[14px] font-semibold">XauAI Sniper</span>
-            <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · v6.24.1</span>
+            <span className="text-[14px] font-semibold">XauCloud</span>
+            <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-2 py-0.5 font-mono text-[9px] text-white/40">ADMIN · PUBLISHED RELEASE</span>
           </div>
           <div className="flex items-center gap-4">
             <span className="hidden text-[11px] text-white/35 sm:block">{admin.email}</span>
@@ -157,13 +157,15 @@ export default function AdminPortal({ api }) {
 
       {/* Content */}
       <div className="mx-auto max-w-7xl px-5 md:px-8 py-7">
-        {tab === "dashboard"    && <DashboardTab    api={api} token={token} />}
-        {tab === "pins"         && <PinsTab         api={api} token={token} />}
-        {tab === "command"      && <CommandOpsTab   api={api} token={token} />}
-        {tab === "settings"     && <SettingsTab     api={api} token={token} />}
-        {tab === "configurator" && <ConfigTab       api={api} token={token} />}
-        {tab === "transactions" && <TransactionsTab api={api} token={token} />}
-        {tab === "account"      && <AccountTab api={api} token={token} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
+        {tab === "dashboard"     && <DashboardTab     api={api} />}
+        {tab === "pins"          && <PinsTab          api={api} />}
+        {tab === "command"       && <CommandOpsTab    api={api} />}
+        {tab === "notifications" && <NotificationsTab api={api} />}
+        {tab === "performance"   && <PerformanceTab   api={api} />}
+        {tab === "settings"      && <SettingsTab      api={api} />}
+        {tab === "configurator"  && <ConfigTab        api={api} />}
+        {tab === "transactions"  && <TransactionsTab  api={api} />}
+        {tab === "account"       && <AccountTab api={api} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
       </div>
     </div>
   );
@@ -181,7 +183,7 @@ function LoginPage({ api, onLogin }) {
     e.preventDefault(); setError(""); setLoading(true);
     try {
       const res = await ax.post(`${api}/auth/login`, { email, password });
-      onLogin(res.data.token);
+      onLogin(res.data);
     } catch (err) {
       const d = err.response?.data?.detail;
       setError(typeof d === "string" ? d : "Login failed");
@@ -196,7 +198,7 @@ function LoginPage({ api, onLogin }) {
             <span className="font-mono text-base font-black text-black">XA</span>
           </div>
           <h1 className="text-2xl font-semibold text-white">XauAI Admin</h1>
-          <p className="mt-1 text-[13px] text-white/38">v6.24.1 management portal</p>
+          <p className="mt-1 text-[13px] text-white/38">Published-release management portal</p>
         </div>
 
         <form onSubmit={handleSubmit} className={`${CARD} p-6 space-y-4`}>
@@ -233,10 +235,10 @@ function LoginPage({ api, onLogin }) {
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-function DashboardTab({ api, token }) {
+function DashboardTab({ api }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const h = useMemo(() => auth(token), [token]);
+  const h = useMemo(() => auth(), []);
 
   useEffect(() => {
     ax.get(`${api}/admin/dashboard`, h).then(r => setData(r.data)).catch(() => {}).finally(() => setLoading(false));
@@ -279,7 +281,7 @@ function DashboardTab({ api, token }) {
             {[
               ["Licenses", "Create, revoke, activate, and copy ASE license keys."],
               ["Bot Ops",  "Watch live heartbeat, command queue, and EA activity."],
-              ["Payments", "Review Paystack transactions and generated license keys."],
+              ["Payments", "Review Nomba (and historical Paystack) transactions and generated license keys."],
               ["Settings", "Set license price, payment keys, and email delivery."],
             ].map(([title, body]) => (
               <div key={title} className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-3">
@@ -294,8 +296,299 @@ function DashboardTab({ api, token }) {
   );
 }
 
+// ─── Notifications ────────────────────────────────────────────────────────────
+// v6.25.3 owner directive 2026-07-17 -- switched from self-hosted Web Push
+// (pywebpush + VAPID, permanently blocked by a missing Python package that
+// only a full backend rebuild could fix) to OneSignal's REST API (plain
+// HTTPS POST via `httpx`, already installed and working). Real, live
+// visibility into push health, backed by GET /admin/notifications/health.
+// The only "not configured" state now is the admin not having entered a
+// real OneSignal App ID + REST API Key yet -- see the Settings tab.
+function NotificationsTab({ api }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const h = useMemo(() => auth(), []);
+
+  const load = useCallback(() => {
+    setLoading(true); setError("");
+    ax.get(`${api}/admin/notifications/health`, h)
+      .then(r => setData(r.data))
+      .catch(e => setError(e.response?.data?.detail || "Failed to load notification health"))
+      .finally(() => setLoading(false));
+  }, [api, h]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading && !data) return <div className="py-12 text-center text-white/40 text-sm">Loading notification health…</div>;
+
+  const onesignal = data?.onesignal || {};
+  const configured = onesignal.configured === true;
+
+  return (
+    <div className="space-y-5" data-testid="admin-notifications-tab">
+      <CardSection
+        title="Push notification system health (OneSignal)"
+        action={
+          <button onClick={load} className="flex items-center gap-1.5 text-[11px] text-white/40 hover:text-white/75 transition">
+            <ArrowClockwise size={13} /> Refresh
+          </button>
+        }
+      >
+        {error && <p className="mb-3 text-[12px] text-red-300">{error}</p>}
+
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <StatCard label="OneSignal" value={configured ? "Configured" : "Not configured"} tone={configured ? "green" : "amber"} testId="stat-onesignal-configured" />
+          <StatCard label="Subscribed devices" value={data?.subscribed_devices ?? "—"} testId="stat-device-count" />
+          <StatCard label="State" value={onesignal.initialization_state || "—"} tone="neutral" testId="stat-init-state" />
+        </div>
+
+        {!configured && (
+          <div className="mt-4 flex items-start gap-3 rounded-xl border border-amber-300/25 bg-amber-300/[0.06] p-4">
+            <WarningCircle size={18} className="mt-0.5 flex-none text-amber-300" />
+            <div>
+              <div className="text-[13px] font-semibold text-amber-200">No notification can be delivered yet</div>
+              <p className="mt-1 text-[12px] leading-5 text-amber-100/80">{onesignal.remediation}</p>
+              <p className="mt-2 text-[11px] leading-5 text-white/40">
+                Go to the Settings tab and enter your OneSignal App ID + REST API Key. Unlike the retired VAPID
+                system, this takes effect immediately -- no backend restart needed.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {configured && (
+          <div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-300/[0.06] p-4 text-[12px] text-emerald-200">
+            {onesignal.remediation}
+          </div>
+        )}
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <div className={`${CARD} p-4`}>
+            <div className={LABEL}>Last successful send</div>
+            {data?.last_successful_send ? (
+              <div className="mt-2 text-[12px] text-white/70">{data.last_successful_send.scheduled_time}</div>
+            ) : (
+              <div className="mt-2 text-[12px] text-white/35">None recorded yet</div>
+            )}
+          </div>
+          <div className={`${CARD} p-4`}>
+            <div className={LABEL}>Last failed send</div>
+            {data?.last_failed_send ? (
+              <div className="mt-2 text-[12px] text-red-200">
+                {data.last_failed_send.scheduled_time} — {data.last_failed_send.delivery_status}
+                {data.last_failed_send.failure_reason ? ` (${data.last_failed_send.failure_reason})` : ""}
+              </div>
+            ) : (
+              <div className="mt-2 text-[12px] text-white/35">None recorded yet</div>
+            )}
+          </div>
+        </div>
+      </CardSection>
+    </div>
+  );
+}
+
+// ─── Performance / Reporting Periods ────────────────────────────────────────
+function fmtNum(v, digits = 1) {
+  return v == null || Number.isNaN(v) ? "--" : Number(v).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits });
+}
+function fmtDate(iso) {
+  if (!iso) return "--";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "--" : d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function StartPeriodDialog({ api, h, onDone, onCancel }) {
+  const [name, setName] = useState("");
+  const [reason, setReason] = useState("");
+  const [accountLogins, setAccountLogins] = useState("");
+  const [eaVersions, setEaVersions] = useState("");
+  const [password, setPassword] = useState("");
+  const [step, setStep] = useState("form"); // form | confirm
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      await ax.post(`${api}/admin/performance/periods/start`, {
+        name,
+        reason,
+        account_logins: accountLogins.split(",").map(s => s.trim()).filter(Boolean) || undefined,
+        ea_versions: eaVersions.split(",").map(s => s.trim()).filter(Boolean) || undefined,
+        current_password: password,
+        confirm: true,
+      }, h);
+      onDone();
+    } catch (e) {
+      setError(e?.response?.data?.detail || "Failed to start new period — check your password and try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4" data-testid="start-period-dialog">
+      <div className={`${CARD} w-full max-w-lg`}>
+        <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-white/[0.06]">
+          <h4 className="text-[11px] font-bold uppercase tracking-[0.15em] text-white/45">Start new forward period</h4>
+        </div>
+        <div className="p-5 space-y-4">
+          {step === "form" && (
+            <>
+              <p className="text-[12px] leading-5 text-white/45">
+                This archives the current active period (nothing is deleted) and starts a brand-new, honest forward
+                record from this exact moment. Only trades opened after this timestamp will count toward the new period's
+                win rate, profit factor, and drawdown.
+              </p>
+              <Field label="Period name">
+                <Input data-testid="start-period-name" value={name} onChange={e => setName(e.target.value)} placeholder="XauCloud Forward Record — July 2026" />
+              </Field>
+              <Field label="Reason">
+                <Input data-testid="start-period-reason" value={reason} onChange={e => setReason(e.target.value)} placeholder="Why start a new period now" />
+              </Field>
+              <Field label="Account logins (optional, comma-separated)">
+                <Input data-testid="start-period-accounts" value={accountLogins} onChange={e => setAccountLogins(e.target.value)} placeholder="Leave blank to include all" />
+              </Field>
+              <Field label="EA versions (optional, comma-separated)">
+                <Input data-testid="start-period-versions" value={eaVersions} onChange={e => setEaVersions(e.target.value)} placeholder="Leave blank to include all" />
+              </Field>
+              <div className="flex justify-end gap-2 pt-2">
+                <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
+                <Btn variant="primary" disabled={!name || !reason} onClick={() => setStep("confirm")}>Continue</Btn>
+              </div>
+            </>
+          )}
+          {step === "confirm" && (
+            <>
+              <div className="rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-4 text-[12px] leading-5 text-amber-100">
+                You're about to archive the current period and start <span className="font-bold">"{name}"</span> effective
+                immediately. The homepage will show <span className="font-bold">0 closed trades</span> until real trades
+                close after this moment. This action is logged with your admin account and cannot be undone.
+              </div>
+              <Field label="Confirm your password">
+                <Input data-testid="start-period-password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Current admin password" />
+              </Field>
+              {error && <p className="text-[12px] text-red-400">{error}</p>}
+              <div className="flex justify-end gap-2 pt-2">
+                <Btn variant="ghost" onClick={() => setStep("form")} disabled={saving}>Back</Btn>
+                <Btn variant="danger" disabled={!password || saving} onClick={submit}>{saving ? "Starting…" : "Start new period"}</Btn>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PerformanceTab({ api }) {
+  const h = useMemo(() => auth(), []);
+  const [periods, setPeriods] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [dialogOpen, setDialogOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await ax.get(`${api}/admin/performance/periods`, h);
+      setPeriods(r.data.periods || []);
+    } catch {
+      setPeriods(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [api, h]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const active = periods?.find(p => p.status === "ACTIVE");
+  const archived = periods?.filter(p => p.status !== "ACTIVE") || [];
+
+  return (
+    <div className="max-w-3xl space-y-5" data-testid="admin-performance-tab">
+      <CardSection
+        title="Active reporting period"
+        action={<Btn variant="primary" onClick={() => setDialogOpen(true)} data-testid="start-new-period-btn"><ArrowClockwise size={13} /> Start New Forward Period</Btn>}
+      >
+        {loading && <p className="text-[12px] text-white/40">Loading…</p>}
+        {!loading && !periods && <p className="text-[12px] text-white/40">Could not load reporting periods.</p>}
+        {!loading && periods && !active && <p className="text-[12px] text-white/40">No active period yet. Start one to begin honest forward tracking.</p>}
+        {active && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[14px] font-bold">{active.period_name}</span>
+              <Badge tone="green">ACTIVE</Badge>
+            </div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div>
+                <div className={LABEL}>Started</div>
+                <div className="mt-1 text-[13px] font-mono">{fmtDate(active.epoch_started_at)}</div>
+              </div>
+              <div>
+                <div className={LABEL}>Closed trades</div>
+                <div className="mt-1 text-[13px] font-mono">{active.total_trades ?? "--"}</div>
+              </div>
+              <div>
+                <div className={LABEL}>Status</div>
+                <div className="mt-1 text-[13px] font-mono">{active.sufficient_data ? "Reporting live" : `Collecting (${active.minimum_sample || 20} needed)`}</div>
+              </div>
+              <div>
+                <div className={LABEL}>Account scope</div>
+                <div className="mt-1 text-[13px] font-mono">{active.account_logins?.length ? active.account_logins.join(", ") : "All accounts"}</div>
+              </div>
+              <div>
+                <div className={LABEL}>EA version scope</div>
+                <div className="mt-1 text-[13px] font-mono">{active.ea_versions?.length ? active.ea_versions.join(", ") : "All versions"}</div>
+              </div>
+              <div>
+                <div className={LABEL}>Started by</div>
+                <div className="mt-1 text-[13px] font-mono">{active.started_by_admin || "--"}</div>
+              </div>
+            </div>
+            {active.reason && (
+              <div>
+                <div className={LABEL}>Reason</div>
+                <p className="mt-1 text-[12px] text-white/50">{active.reason}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </CardSection>
+
+      <CardSection title={`Archived periods (${archived.length})`}>
+        {archived.length === 0 && <p className="text-[12px] text-white/40">Nothing archived yet.</p>}
+        <div className="space-y-3">
+          {archived.map(p => (
+            <div key={p.period_id} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4" data-testid="archived-period-row">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[13px] font-semibold">{p.period_name}</span>
+                <Badge tone="neutral">ARCHIVED</Badge>
+              </div>
+              <div className="mt-1 font-mono text-[11px] text-white/35">
+                {fmtDate(p.epoch_started_at)} – {fmtDate(p.epoch_ended_at)} · {p.total_trades ?? 0} trades · Win rate {p.win_rate != null ? `${fmtNum(p.win_rate)}%` : "--"}
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardSection>
+
+      {dialogOpen && (
+        <StartPeriodDialog
+          api={api}
+          h={h}
+          onCancel={() => setDialogOpen(false)}
+          onDone={() => { setDialogOpen(false); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── Pins / Licenses ──────────────────────────────────────────────────────────
-function PinsTab({ api, token }) {
+function PinsTab({ api }) {
   const [pins, setPins] = useState([]);
   const [stats, setStats] = useState(null);
   const [genCount, setGenCount] = useState(1);
@@ -304,7 +597,7 @@ function PinsTab({ api, token }) {
   const [notes, setNotes] = useState("");
   const [copiedPin, setCopiedPin] = useState(null);
   const [generating, setGenerating] = useState(false);
-  const h = useMemo(() => auth(token), [token]);
+  const h = useMemo(() => auth(), []);
 
   const fetchPins = useCallback(async () => {
     try {
@@ -405,16 +698,242 @@ function PinsTab({ api, token }) {
   );
 }
 
+// ─── Nomba payment settings ───────────────────────────────────────────────────
+function NombaCredentialFields({ env, values, onChange, existing }) {
+  const set = (field) => (e) => onChange(env, field, e.target.value);
+  const ex = existing || {};
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <Field label="Client ID">
+        <Input value={values.client_id} onChange={set("client_id")} className="font-mono"
+          placeholder={ex.client_id?.configured ? `Configured (${ex.client_id.preview})` : "Enter Client ID"} />
+      </Field>
+      <Field label="Client Secret">
+        <Input type="password" value={values.client_secret} onChange={set("client_secret")} className="font-mono"
+          placeholder={ex.client_secret?.configured ? "Configured — enter new to change" : "Enter Client Secret"} />
+      </Field>
+      <Field label="Account ID">
+        <Input value={values.account_id} onChange={set("account_id")} className="font-mono"
+          placeholder={ex.account_id?.configured ? `Configured (${ex.account_id.preview})` : "Enter Account ID"} />
+      </Field>
+      <Field label="Webhook Signature Key">
+        <Input type="password" value={values.webhook_signature_key} onChange={set("webhook_signature_key")} className="font-mono"
+          placeholder={ex.webhook_signature_key?.configured ? "Configured — enter new to change" : "Enter Webhook Signature Key"} />
+      </Field>
+    </div>
+  );
+}
+
+const NOMBA_EMPTY_ENV_FORM = { client_id: "", client_secret: "", account_id: "", webhook_signature_key: "" };
+const NOMBA_PAYMENT_METHODS = ["card", "transfer", "ussd", "qr"];
+
+function NombaSettingsSection({ api }) {
+  const [cfg, setCfg] = useState(null);
+  const [enabled, setEnabled] = useState(false);
+  const [environment, setEnvironment] = useState("sandbox");
+  const [sandboxForm, setSandboxForm] = useState(NOMBA_EMPTY_ENV_FORM);
+  const [productionForm, setProductionForm] = useState(NOMBA_EMPTY_ENV_FORM);
+  const [methods, setMethods] = useState(NOMBA_PAYMENT_METHODS);
+  const [currency, setCurrency] = useState("NGN");
+  const [description, setDescription] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [error, setError] = useState("");
+
+  const load = useCallback(() => {
+    ax.get(`${api}/admin/settings/nomba`).then(r => {
+      setCfg(r.data);
+      setEnabled(r.data.enabled);
+      setEnvironment(r.data.environment);
+      setMethods(r.data.allowed_payment_methods || NOMBA_PAYMENT_METHODS);
+      setCurrency(r.data.currency || "NGN");
+      setDescription(r.data.payment_description || "");
+    }).catch(() => {});
+  }, [api]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const productionTouched = productionForm.client_id || productionForm.client_secret ||
+    productionForm.account_id || productionForm.webhook_signature_key ||
+    (environment === "production" && cfg?.environment !== "production");
+
+  const setEnvField = (env, field, value) => {
+    (env === "sandbox" ? setSandboxForm : setProductionForm)(prev => ({ ...prev, [field]: value }));
+  };
+
+  const save = async () => {
+    setError(""); setSaving(true); setSaved(false);
+    const payload = { enabled, environment, allowed_payment_methods: methods, currency, payment_description: description };
+    if (sandboxForm.client_id) payload.sandbox_client_id = sandboxForm.client_id;
+    if (sandboxForm.client_secret) payload.sandbox_client_secret = sandboxForm.client_secret;
+    if (sandboxForm.account_id) payload.sandbox_account_id = sandboxForm.account_id;
+    if (sandboxForm.webhook_signature_key) payload.sandbox_webhook_signature_key = sandboxForm.webhook_signature_key;
+    if (productionForm.client_id) payload.production_client_id = productionForm.client_id;
+    if (productionForm.client_secret) payload.production_client_secret = productionForm.client_secret;
+    if (productionForm.account_id) payload.production_account_id = productionForm.account_id;
+    if (productionForm.webhook_signature_key) payload.production_webhook_signature_key = productionForm.webhook_signature_key;
+    if (productionTouched) {
+      if (!currentPassword) { setError("Enter your current admin password to change production settings."); setSaving(false); return; }
+      payload.current_password = currentPassword;
+    }
+    try {
+      await ax.put(`${api}/admin/settings/nomba`, payload);
+      setSaved(true); setTimeout(() => setSaved(false), 3000);
+      setSandboxForm(NOMBA_EMPTY_ENV_FORM); setProductionForm(NOMBA_EMPTY_ENV_FORM); setCurrentPassword("");
+      load();
+    } catch (e) {
+      setError(e.response?.data?.detail || "Failed to save Nomba settings.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const testConnection = async () => {
+    setTesting(true); setTestResult(null);
+    try {
+      const r = await ax.post(`${api}/admin/settings/nomba/test-connection`);
+      setTestResult(r.data);
+    } catch (e) {
+      setTestResult({ success: false, message: e.response?.data?.detail || "Test connection failed." });
+    } finally {
+      setTesting(false);
+      load();
+    }
+  };
+
+  const toggleMethod = (m) => {
+    setMethods(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
+  };
+
+  if (!cfg) return null;
+  const activeEnvView = environment === "sandbox" ? cfg.sandbox : cfg.production;
+
+  return (
+    <CardSection
+      title="Nomba payment configuration"
+      action={
+        <label className="flex items-center gap-2 text-[11px] text-white/50 cursor-pointer">
+          <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} className="accent-amber-300" />
+          Enable Nomba Payments
+        </label>
+      }
+    >
+      {!cfg.encryption_configured && (
+        <div className="mb-4 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-[12px] text-red-300">
+          PAYMENT_CONFIG_ENCRYPTION_KEY is not set on the server. Nomba credentials cannot be saved until this
+          environment variable is configured — see audits/nomba_migration/ for setup instructions.
+        </div>
+      )}
+
+      <div className="space-y-5">
+        <Field label="Environment">
+          <div className="flex gap-2">
+            {["sandbox", "production"].map(env => (
+              <button key={env} onClick={() => setEnvironment(env)}
+                className={`flex-1 rounded-xl border px-4 py-2.5 text-[12px] font-bold uppercase tracking-wide transition ${
+                  environment === env ? "border-amber-300/50 bg-amber-300/10 text-amber-200" : "border-white/[0.08] bg-white/[0.03] text-white/50 hover:text-white/80"
+                }`}>
+                {env}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1.5 text-[11px] text-white/35">
+            Status: {activeEnvView?.last_validation_ok === true && <Badge tone="green">Last test passed</Badge>}
+            {activeEnvView?.last_validation_ok === false && <Badge tone="red">Last test failed</Badge>}
+            {activeEnvView?.last_validation_ok == null && <Badge tone="neutral">Not tested yet</Badge>}
+            {activeEnvView?.last_validated_at && <span className="ml-2 text-white/30">({new Date(activeEnvView.last_validated_at).toLocaleString()})</span>}
+          </p>
+        </Field>
+
+        <div className="rounded-xl border border-white/[0.06] p-4">
+          <div className="mb-3 text-[11px] font-bold uppercase tracking-wide text-white/40">Sandbox credentials</div>
+          <NombaCredentialFields env="sandbox" values={sandboxForm} onChange={setEnvField} existing={cfg.sandbox} />
+        </div>
+
+        <div className="rounded-xl border border-amber-300/15 bg-amber-300/[0.02] p-4">
+          <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-amber-200/70">Production credentials</div>
+          <p className="mb-3 text-[11px] text-white/35">Changing any production field requires your current admin password below.</p>
+          <NombaCredentialFields env="production" values={productionForm} onChange={setEnvField} existing={cfg.production} />
+        </div>
+
+        {productionTouched && (
+          <Field label="Current admin password (required to change production settings)">
+            <Input type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} placeholder="••••••••" />
+          </Field>
+        )}
+
+        <Field label="Allowed payment methods">
+          <div className="flex flex-wrap gap-2">
+            {NOMBA_PAYMENT_METHODS.map(m => (
+              <button key={m} onClick={() => toggleMethod(m)}
+                className={`rounded-full border px-3.5 py-1.5 text-[11px] font-bold uppercase transition ${
+                  methods.includes(m) ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-white/[0.08] bg-white/[0.03] text-white/40"
+                }`}>
+                {m}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Currency">
+            <Input value={currency} onChange={e => setCurrency(e.target.value.toUpperCase())} className="font-mono" />
+          </Field>
+          <Field label="Payment description">
+            <Input value={description} onChange={e => setDescription(e.target.value)} placeholder="XauCloud EA Lifetime License" />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Callback URL (read-only, copy into your Nomba dashboard)">
+            <div className="flex gap-2">
+              <Input value={cfg.callback_url} readOnly className="font-mono text-white/50" />
+              <Btn variant="ghost" onClick={() => navigator.clipboard.writeText(cfg.callback_url)}><Copy size={14} /></Btn>
+            </div>
+          </Field>
+          <Field label="Webhook URL (read-only, copy into your Nomba dashboard)">
+            <div className="flex gap-2">
+              <Input value={cfg.webhook_url} readOnly className="font-mono text-white/50" />
+              <Btn variant="ghost" onClick={() => navigator.clipboard.writeText(cfg.webhook_url)}><Copy size={14} /></Btn>
+            </div>
+          </Field>
+        </div>
+
+        {error && <div className="text-[12px] text-rose-400 font-mono">{error}</div>}
+        {testResult && (
+          <div className={`rounded-xl border px-4 py-3 text-[12px] ${testResult.success ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-red-400/20 bg-red-500/10 text-red-300"}`}>
+            {testResult.message}
+          </div>
+        )}
+
+        <div className="flex items-center gap-3 pt-2 border-t border-white/[0.06]">
+          <Btn onClick={save} disabled={saving}>
+            <FloppyDisk size={15} /> {saving ? "Saving…" : saved ? "Saved ✓" : "Save Configuration"}
+          </Btn>
+          <Btn variant="ghost" onClick={testConnection} disabled={testing}>
+            <Lightning size={15} /> {testing ? "Testing…" : "Test Connection"}
+          </Btn>
+        </div>
+      </div>
+    </CardSection>
+  );
+}
+
 // ─── Settings ─────────────────────────────────────────────────────────────────
-function SettingsTab({ api, token }) {
+function SettingsTab({ api }) {
   const [settings, setSettings] = useState(null);
   const [pk, setPk] = useState("");
   const [priceNaira, setPriceNaira] = useState(300000);
   const [smtpEmail, setSmtpEmail] = useState("");
   const [smtpPw, setSmtpPw] = useState("");
+  const [onesignalAppId, setOnesignalAppId] = useState("");
+  const [onesignalApiKey, setOnesignalApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const h = useMemo(() => auth(token), [token]);
+  const h = useMemo(() => auth(), []);
 
   // v6.9.0 — global Gold/Index Mode platform switches (architecture phase)
   const [marketSettings, setMarketSettings] = useState(null);
@@ -445,6 +964,7 @@ function SettingsTab({ api, token }) {
   useEffect(() => {
     ax.get(`${api}/admin/settings`, h).then(r => {
       setSettings(r.data); setPriceNaira(r.data.pin_price_naira || 300000); setSmtpEmail(r.data.smtp_email || "");
+      setOnesignalAppId(r.data.onesignal_app_id || "");
     }).catch(() => {});
   }, [api, h]);
 
@@ -455,16 +975,38 @@ function SettingsTab({ api, token }) {
     updates.pin_price_kobo = Math.round(priceNaira * 100);
     if (smtpEmail) updates.smtp_email = smtpEmail;
     if (smtpPw) updates.smtp_password = smtpPw;
+    if (onesignalAppId) updates.onesignal_app_id = onesignalAppId;
+    if (onesignalApiKey) updates.onesignal_api_key = onesignalApiKey;
     try {
       await ax.put(`${api}/admin/settings`, updates, h);
-      setSaved(true); setPk(""); setSmtpPw(""); setTimeout(() => setSaved(false), 3000);
+      setSaved(true); setPk(""); setSmtpPw(""); setOnesignalApiKey(""); setTimeout(() => setSaved(false), 3000);
       const r = await ax.get(`${api}/admin/settings`, h); setSettings(r.data);
     } catch {} finally { setSaving(false); }
   };
 
   return (
     <div className="max-w-2xl space-y-5" data-testid="admin-settings-tab">
-      <CardSection title="Paystack configuration">
+      <CardSection title="Pricing">
+        <div className="space-y-4">
+          <Field label="PIN price (Naira)">
+            <div className="flex items-center gap-2">
+              <span className="text-white/50">₦</span>
+              <Input data-testid="settings-price" type="number" value={priceNaira} onChange={e => setPriceNaira(parseInt(e.target.value) || 0)} className="font-mono" />
+            </div>
+            <p className="mt-1 text-[11px] text-white/35">Current: ₦{priceNaira?.toLocaleString()} — used by both the Nomba checkout below and any still-resolving Paystack transaction.</p>
+          </Field>
+        </div>
+      </CardSection>
+
+      <NombaSettingsSection api={api} />
+
+      <CardSection title="Paystack (legacy — historical transactions only)">
+        <p className="text-[12px] text-white/40 mb-4 leading-5">
+          Paystack is no longer used for new purchases — every new checkout goes through Nomba above.
+          This key is kept only so any Paystack transaction still resolving (webhook/verify race) and
+          historical records remain lookupable. Existing customers, licenses, and purchase history are
+          untouched.
+        </p>
         <div className="space-y-4">
           <Field label="Paystack secret key">
             <Input data-testid="settings-paystack-key" type="password" value={pk} onChange={e => setPk(e.target.value)}
@@ -473,13 +1015,6 @@ function SettingsTab({ api, token }) {
               Status: <span className={settings?.paystack_configured ? "text-emerald-400" : "text-red-400"}>{settings?.paystack_configured ? "Configured" : "Not set"}</span>
               {settings?.paystack_key_preview && settings.paystack_configured && <span className="ml-1 font-mono">({settings.paystack_key_preview})</span>}
             </p>
-          </Field>
-          <Field label="PIN price (Naira)">
-            <div className="flex items-center gap-2">
-              <span className="text-white/50">₦</span>
-              <Input data-testid="settings-price" type="number" value={priceNaira} onChange={e => setPriceNaira(parseInt(e.target.value) || 0)} className="font-mono" />
-            </div>
-            <p className="mt-1 text-[11px] text-white/35">Current: ₦{priceNaira?.toLocaleString()}</p>
           </Field>
         </div>
       </CardSection>
@@ -501,6 +1036,32 @@ function SettingsTab({ api, token }) {
         </div>
       </CardSection>
 
+      {/* v6.25.3 owner directive 2026-07-17 -- OneSignal replaces the retired
+          self-hosted VAPID/pywebpush push system, which was permanently
+          blocked by a missing Python package in production. App ID is not
+          secret (the frontend SDK needs it directly); REST API Key is. Get
+          both from onesignal.com -> your app -> Settings -> Keys & IDs. */}
+      <CardSection title="Push notifications (OneSignal)">
+        <p className="text-[12px] text-white/40 mb-4 leading-5">
+          Free account at <span className="text-white/60">onesignal.com</span> — create a Web Push app, then paste
+          its App ID and REST API Key here. Takes effect immediately, no backend restart needed.
+        </p>
+        <div className="space-y-4">
+          <Field label="OneSignal App ID">
+            <Input data-testid="settings-onesignal-app-id" value={onesignalAppId} onChange={e => setOnesignalAppId(e.target.value)}
+              placeholder="e.g. 8f4d2a1c-..." className="font-mono" />
+          </Field>
+          <Field label="OneSignal REST API Key">
+            <Input data-testid="settings-onesignal-api-key" type="password" value={onesignalApiKey} onChange={e => setOnesignalApiKey(e.target.value)}
+              placeholder={settings?.onesignal_api_key_configured ? "Configured — enter new key to change" : "os_v2_app_xxxxxx"} className="font-mono" />
+            <p className="mt-1 text-[11px] text-white/35">
+              Status: <span className={settings?.onesignal_api_key_configured ? "text-emerald-400" : "text-red-400"}>{settings?.onesignal_api_key_configured ? "Configured" : "Not set"}</span>
+              {settings?.onesignal_api_key_preview && settings.onesignal_api_key_configured && <span className="ml-1 font-mono">({settings.onesignal_api_key_preview})</span>}
+            </p>
+          </Field>
+        </div>
+      </CardSection>
+
       <Btn onClick={save} disabled={saving} data-testid="settings-save-btn">
         <FloppyDisk size={14} weight="bold" /> {saving ? "Saving…" : saved ? "Saved!" : "Save settings"}
       </Btn>
@@ -511,7 +1072,7 @@ function SettingsTab({ api, token }) {
           trades until a real, tested index strategy exists. */}
       <CardSection title="Market modes">
         <p className="mb-4 text-[12px] leading-5 text-white/40">
-          Controls what the public site and Command Center offer. Gold Mode is the live, fully tested strategy.
+          Controls what the public site and Command Center offer. Gold Mode is the primary published product, but live M30 behavior and each broker deployment still require explicit runtime proof.
           Index Mode is currently detection + diagnostics only — no index entry strategy has shipped yet, so
           enabling it here only affects what customers see, not what the EA trades.
         </p>
@@ -522,7 +1083,7 @@ function SettingsTab({ api, token }) {
             <label className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-white/[0.03] p-3.5 cursor-pointer">
               <span>
                 <span className="block text-[13px] font-semibold">Gold Mode enabled on platform</span>
-                <span className="mt-0.5 block text-[11px] text-white/38">Live and fully tested for XAUUSD.</span>
+                <span className="mt-0.5 block text-[11px] text-white/38">Primary XAUUSD product; broker and terminal proof required.</span>
               </span>
               <input type="checkbox" checked={!!marketSettings.platform_gold_mode_enabled}
                 onChange={e => setMarketSettings(s => ({ ...s, platform_gold_mode_enabled: e.target.checked }))}
@@ -563,76 +1124,38 @@ function SettingsTab({ api, token }) {
 }
 
 // ─── EA Config ────────────────────────────────────────────────────────────────
-function ConfigTab({ api, token }) {
-  const PRESETS = [
-    { id: "conservative", label: "Conservative", icon: ShieldCheck, wt: 20, risk: 0.5,  trades: 2, conf: 85, tone: "green"  },
-    { id: "moderate",     label: "Moderate",     icon: Lightning,   wt: 35, risk: 1.0,  trades: 3, conf: 75, tone: "amber"  },
-    { id: "aggressive",   label: "Aggressive",   icon: Flame,       wt: 50, risk: 1.5,  trades: 5, conf: 65, tone: "red"    },
+function ConfigTab() {
+  const contract = [
+    ["Decision authority", "Source default: legacy M10. Intended normal mode after proof: three completed M10 snapshots feeding M30."],
+    ["Evidence weights", "Oldest 20% · middle 30% · newest 50%. Never use the forming candle."],
+    ["Entry timing", "Exactly one fresh 120–180 second timer per immutable candidate."],
+    ["Final outcome", "Execute if still valid and below 0.30R; otherwise cancel. Never wait another candle or slot."],
+    ["Structural stop", "Mandatory invalidation, widened exactly once by 1.20. Missing structure at expiry cancels."],
+    ["Risk and broker truth", "Configured core sizing remains 10%; broker acceptance plus matching truth is required."],
   ];
-  const [config, setConfig] = useState({ name: "Default", risk_percent: 1, daily_loss_limit: 3, weekly_drawdown_limit: 5, weekly_profit_target: 35, max_open_trades: 2, max_trades_per_day: 3, enable_trend_mode: true, enable_range_mode: true, enable_breakout_mode: true, confidence_threshold: 75, ema_fast: 50, ema_slow: 200, min_rr_ratio: 1.5, partial_close_percent: 50, trailing_atr_multi: 1.5, sl_atr_multiplier: 2, trade_london: true, trade_new_york: true, equity_protection: 70, profit_mode: "moderate" });
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const h = { headers: { Authorization: `Bearer ${token}` } };
-
-  const u = (k, v) => { setConfig(p => ({ ...p, [k]: v })); setSaved(false); };
-  const applyPreset = (p) => setConfig(prev => ({ ...prev, weekly_profit_target: p.wt, risk_percent: p.risk, max_trades_per_day: p.trades, confidence_threshold: p.conf, profit_mode: p.id }));
-  const save = async () => {
-    setSaving(true);
-    try { await ax.post(`${api}/admin/configs`, config, h); setSaved(true); setTimeout(() => setSaved(false), 3000); } catch {} finally { setSaving(false); }
-  };
-
   return (
     <div className="space-y-5" data-testid="admin-config-tab">
-      <div className="grid grid-cols-3 gap-3">
-        {PRESETS.map((p) => {
-          const Icon = p.icon;
-          const sel = config.profit_mode === p.id;
-          const toneClasses = { green: "border-emerald-400/30 bg-emerald-400/10 text-emerald-300", amber: "border-amber-300/30 bg-amber-300/10 text-amber-200", red: "border-red-400/30 bg-red-500/10 text-red-300" };
-          return (
-            <button key={p.id} onClick={() => applyPreset(p)} data-testid={`admin-preset-${p.id}`}
-              className={`rounded-2xl border p-4 text-left transition ${sel ? toneClasses[p.tone] : "border-white/[0.08] bg-white/[0.03] text-white/55 hover:border-white/[0.14]"}`}>
-              <div className="flex items-center gap-2 mb-2">
-                <Icon size={14} weight={sel ? "fill" : "regular"} />
-                <span className="text-[11px] font-bold uppercase tracking-[0.1em]">{p.label}</span>
-              </div>
-              <div className="font-mono text-xl font-black">{p.wt}%<span className="text-[11px] font-medium text-white/40 ml-1">/wk</span></div>
-              <div className="mt-1 text-[11px] text-white/38">Risk {p.risk}% · {p.trades}/day max</div>
-            </button>
-          );
-        })}
+      <div className="rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-4 py-3 text-[12px] leading-5 text-amber-200/90">
+        Read-only release contract. This admin page does <strong>not</strong> write trading parameters and cannot change a running EA. Runtime inputs must be set intentionally in MT5 and proven in the terminal journal.
       </div>
-
-      <CardSection title="Parameters">
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-5">
-          {[["Risk %","risk_percent",0.1,3,0.1],["Daily loss","daily_loss_limit",1,10,0.5],["Weekly DD","weekly_drawdown_limit",5,20,1],["Weekly target","weekly_profit_target",10,100,5],["Confidence","confidence_threshold",50,95,5],["Min R:R","min_rr_ratio",1,5,0.1]].map(([l, k, mn, mx, st]) => {
-            const v = config[k];
-            const pct = ((v - mn) / (mx - mn)) * 100;
-            return (
-              <div key={k}>
-                <div className="flex justify-between mb-1.5">
-                  <span className="text-[12px] text-white/55">{l}</span>
-                  <span className="font-mono text-[12px] font-bold">{Number.isInteger(v) ? v : v.toFixed(1)}</span>
-                </div>
-                <input type="range" min={mn} max={mx} step={st} value={v} onChange={e => u(k, parseFloat(e.target.value))}
-                  className="w-full h-1.5 rounded-full appearance-none cursor-pointer accent-amber-300"
-                  style={{ background: `linear-gradient(to right, #d4af37 ${pct}%, rgba(255,255,255,0.1) ${pct}%)` }} />
-              </div>
-            );
-          })}
+      <CardSection title="Owner-approved release contract">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {contract.map(([title, body]) => (
+            <div key={title} className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-4">
+              <div className="text-[12px] font-semibold text-white/80">{title}</div>
+              <p className="mt-2 text-[11px] leading-5 text-white/42">{body}</p>
+            </div>
+          ))}
         </div>
       </CardSection>
-
-      <Btn onClick={save} disabled={saving} data-testid="admin-config-save">
-        <FloppyDisk size={14} weight="bold" /> {saving ? "Saving…" : saved ? "Saved!" : "Save config"}
-      </Btn>
     </div>
   );
 }
 
 // ─── Transactions ─────────────────────────────────────────────────────────────
-function TransactionsTab({ api, token }) {
+function TransactionsTab({ api }) {
   const [txs, setTxs] = useState([]);
-  const h = useMemo(() => auth(token), [token]);
+  const h = useMemo(() => auth(), []);
   useEffect(() => { ax.get(`${api}/admin/transactions`, h).then(r => setTxs(r.data.transactions || [])).catch(() => {}); }, [api, h]);
 
   return (
@@ -673,10 +1196,10 @@ function TransactionsTab({ api, token }) {
 }
 
 // ─── Bot Ops ──────────────────────────────────────────────────────────────────
-function CommandOpsTab({ api, token }) {
+function CommandOpsTab({ api }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const h = useMemo(() => auth(token), [token]);
+  const h = useMemo(() => auth(), []);
 
   const fetchOps = useCallback(async () => {
     setLoading(true);
@@ -716,7 +1239,7 @@ function CommandOpsTab({ api, token }) {
           <div className="grid grid-cols-2 gap-3 text-[12px]">
             {[
               ["Status",         bot.status || (online ? "ONLINE" : "OFFLINE")],
-              ["EA version",     bot.ea_version || "v6.24.1"],
+              ["EA version",     bot.ea_version || "Unknown"],
               ["Account",        bot.account_number || "—"],
               ["Broker",         bot.broker_server  || "—"],
               ["Symbol",         `${bot.symbol || "—"} ${bot.timeframe || ""}`.trim()],
@@ -770,7 +1293,7 @@ function CommandOpsTab({ api, token }) {
 }
 
 // ─── Account ──────────────────────────────────────────────────────────────────
-function AccountTab({ api, token, admin, onLogin, onLogout }) {
+function AccountTab({ api, admin, onLogin, onLogout }) {
   const [newEmail, setNewEmail] = useState(admin?.email || "");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -780,7 +1303,7 @@ function AccountTab({ api, token, admin, onLogin, onLogout }) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const h = { headers: { Authorization: `Bearer ${token}` } };
+  const h = {};
 
   const handleSave = async () => {
     setError(""); setMessage("");
@@ -796,7 +1319,7 @@ function AccountTab({ api, token, admin, onLogin, onLogout }) {
       const res = await ax.put(`${api}/admin/account`, body, h);
       if (res.data.updated) {
         setMessage("Account updated.");
-        if (res.data.token) onLogin(res.data.token);
+        onLogin({ ...admin, email: res.data.email || newEmail });
         setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
       } else {
         setMessage("No changes to save.");
@@ -816,7 +1339,7 @@ function AccountTab({ api, token, admin, onLogin, onLogout }) {
             <div>
               <div className="text-[14px] font-semibold">{admin?.name || "Admin"}</div>
               <div className="text-[12px] text-white/40">{admin?.email}</div>
-              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · v6.24.1</div>
+              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · RELEASE CONTROL</div>
             </div>
           </div>
 

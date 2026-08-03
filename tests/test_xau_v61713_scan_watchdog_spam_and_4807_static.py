@@ -113,7 +113,7 @@ def test_stale_handle_and_other_errors_still_rebuild_normally():
 # ---------------------------------------------------------------------------
 def test_watchdog_print_is_now_throttled():
     ea = read(BACKEND_EA)
-    marker = "if(watchdogDue && !newM5Bar)"
+    marker = "if(watchdogDue && !newPrimaryBar)"  # v6.25.0: newM5Bar renamed to newPrimaryBar (M10 migration)
     idx = ea.index(marker)
     window = ea[idx: idx + 500]
     assert "g_lastWatchdogLog" in window

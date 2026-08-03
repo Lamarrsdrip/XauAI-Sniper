@@ -1,0 +1,37 @@
+# git status --short immediately before handover checkpoint
+ M XAUUSD_AI_Sniper_EA.mq5
+ M XauIndex_EA_v3.1.mq5
+ M backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+ M backend/ea_code_xauindex/XauIndex_EA.mq5
+ M backend/requirements.txt
+ M backend/server.py
+ M backend/tests/test_reservation_endpoint_authentication.py
+ M frontend/public/index.html
+ M frontend/public/service-worker.js
+ M frontend/src/components/AdminPortal.jsx
+ M frontend/src/components/BrokerSection.jsx
+ M frontend/src/components/CloudPromoSection.jsx
+ M frontend/src/components/DownloadSection.jsx
+ M frontend/src/components/FeaturesSection.jsx
+ M frontend/src/components/Footer.jsx
+ M frontend/src/components/Header.jsx
+ M frontend/src/components/HeroSection.jsx
+ M frontend/src/components/HowItWorksSection.jsx
+ M frontend/src/components/InstallationSection.jsx
+ M frontend/src/components/PerformanceSection.jsx
+ M frontend/src/components/PurchaseSection.jsx
+ M frontend/src/components/cloud/AIMarketOutlookCard.jsx
+ M frontend/src/components/cloud/AIThoughtFeed.jsx
+ M frontend/src/components/cloud/CloudAuth.jsx
+ M frontend/src/components/cloud/CloudDashboard.jsx
+ M frontend/src/components/cloud/CloudLanding.jsx
+ M frontend/src/pages/AIMarketOutlookPage.jsx
+?? CODEX_HANDOVER_XAUAI_SNIPER.json
+?? CODEX_HANDOVER_XAUAI_SNIPER.md
+?? audits/CODEX_FULL_PROJECT_FINDINGS.md
+?? backend/llm_adapter.py
+?? codex_handover_xauaisniper/
+?? frontend/src/forensic.contract.test.js
+?? tests/test_xau_v6255_authenticated_client_contract.py
+?? CODEX_HANDOVER_CHANGED_FILES.txt
+?? CODEX_HANDOVER_UNCOMMITTED.patch

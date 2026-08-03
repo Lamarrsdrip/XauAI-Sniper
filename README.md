@@ -1,4 +1,11 @@
-# XauAI Sniper
+# XauCloud (internal codename: XauCloud_m10_private_vps_ai)
+
+Primary production branch: `XauCloud_m10_private_vps_ai`, cut from the
+replay-approved private-VPS-AI-relay build (`8498c47`, "Fix local Model 4
+inference timeout chain", on top of the "Add private VPS AI relay for
+customer pure-M10 EAs" merge). See
+`audits/xaucloud/16_production_branch_promotion.md` for the promotion record
+and correction history.
 
 The active EA version is NOT hardcoded here — it's derived live from the EA
 source header by `backend/server.py::_get_ea_meta()` and served at

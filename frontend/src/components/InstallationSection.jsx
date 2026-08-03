@@ -122,7 +122,7 @@ export default function InstallationSection({ data }) {
                   <li>Open Strategy Tester (Ctrl+R)</li>
                   <li>Select XAUUSD_AI_Sniper_EA</li>
                   <li>Set symbol: XAUUSD</li>
-                  <li>Set timeframe: M5</li>
+                  <li>Open an XAUUSD M10 chart and confirm the selected Decision Mode in the journal</li>
                   <li>Select date range (min 6 months)</li>
                 </ol>
               </div>

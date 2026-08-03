@@ -18267,14 +18267,15 @@ int GetAIAnalysis(double emaF, double emaS, double rsi, double atr, double price
 
    string url = InpServerURL + "/api/ai/analyze";
    string headers = "Content-Type: application/json\r\n";
+   string aiAccountId = IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN));
    string body = StringFormat(
-      "{\"price\":%.2f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"rsi\":%.1f,\"stoch\":%.1f,\"mom\":%.2f,\"atr\":%.2f,"
+      "{\"pin\":\"%s\",\"account_id\":\"%s\",\"price\":%.2f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"rsi\":%.1f,\"stoch\":%.1f,\"mom\":%.2f,\"atr\":%.2f,"
       "\"h1_trend\":\"%s\",\"htf_consensus\":\"%s\",\"spread\":%.0f,\"setup\":\"%s\",\"regime\":\"%s\","
       "\"session\":\"%s\",\"session_quality\":%.2f,\"open_positions\":%d,\"basket_float_pl\":%.2f,"
       "\"recent_wins\":%d,\"recent_losses\":%d,\"account_equity\":%.2f,\"daily_pct\":%.2f,"
       "\"grade\":\"%s\",\"setup_score\":%.2f,\"combined_score\":%.2f,\"signature\":\"%s\","
       "\"recent_candles\":\"%s\"}",
-      price, emaF, emaS, rsi, stoch, mom, atr,
+      InpLicensePIN, aiAccountId, price, emaF, emaS, rsi, stoch, mom, atr,
       h1Dir, htfConsensusStr, spread, setup, regime,
       sessionName, sessQ, openPositions, basketFloat,
       recentWins10, recentLosses10, equity, dailyPct,
@@ -18495,13 +18496,13 @@ AIExitVerdict CheckPositionWithAI(string dir, double entry, double current, doub
    else sessionNow = "OFF_HOURS";
 
    string body = StringFormat(
-      "{\"direction\":\"%s\",\"entry_price\":%.2f,\"current_price\":%.2f,\"profit\":%.2f,"
+      "{\"pin\":\"%s\",\"account_id\":\"%I64d\",\"direction\":\"%s\",\"entry_price\":%.2f,\"current_price\":%.2f,\"profit\":%.2f,"
       "\"lots\":%.2f,\"rsi\":%.1f,\"ema_fast\":%.2f,\"ema_slow\":%.2f,\"atr\":%.2f,"
       "\"minutes_open\":%d,\"sl\":%.2f,\"tp\":%.2f,\"thesis\":\"%s\",\"invalidation\":\"%s\","
       "\"confidence\":%d,\"peak_profit\":%.2f,\"pending_exit_reason\":\"%s\",\"regime\":\"%s\","
       "\"r_mult\":%.2f,\"htf_consensus\":\"%s\",\"session\":\"%s\","
       "\"daily_pct\":%.2f,\"open_positions\":%d,\"setup_name\":\"%s\"}",
-      dir, entry, current, profit,
+      InpLicensePIN, AccountInfoInteger(ACCOUNT_LOGIN), dir, entry, current, profit,
       lots, rsi, emaF, emaS, atr,
       minsOpen, sl, tp, thesisEsc, invalEsc,
       currentTradeConfidence, peakProfit, pendingExitReason, regime,
@@ -18694,7 +18695,7 @@ void SavePatterns()
             patterns[i].wasWinner ? 1 : 0, patterns[i].profit, patterns[i].signature);
       }
       jp += "]";
-      string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\",\"patterns\":%s}", InpLicensePIN, Symbol(), jp);
+      string body = StringFormat("{\"pin\":\"%s\",\"account_id\":\"%I64d\",\"symbol\":\"%s\",\"patterns\":%s}", InpLicensePIN, AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), jp);
       char pd[], res[]; string rh;
       StringToCharArray(body, pd, 0, StringLen(body));
       WebRequest("POST", url, headers, 10000, pd, res, rh);
@@ -18723,7 +18724,7 @@ void LoadPatterns()
    {
       string url = InpServerURL + "/api/ml/patterns/load";
       string headers = "Content-Type: application/json\r\n";
-      string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\"}", InpLicensePIN, Symbol());
+      string body = StringFormat("{\"pin\":\"%s\",\"account_id\":\"%I64d\",\"symbol\":\"%s\"}", InpLicensePIN, AccountInfoInteger(ACCOUNT_LOGIN), Symbol());
       char pd[], result[]; string rh;
       StringToCharArray(body, pd, 0, StringLen(body));
       int res = WebRequest("POST", url, headers, 15000, pd, result, rh);
@@ -19033,11 +19034,11 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                StringReplace(fbReasonEsc, "\"", "'");
                StringReplace(fbReasonEsc, "\n", " ");
                string fbBody = StringFormat(
-                  "{\"trade_id\":\"%I64u\",\"ai_verdict\":\"%s\",\"ai_confidence\":%d,"
+                  "{\"pin\":\"%s\",\"account_id\":\"%I64d\",\"trade_id\":\"%I64u\",\"ai_verdict\":\"%s\",\"ai_confidence\":%d,"
                   "\"ai_reason\":\"%s\",\"outcome\":\"%s\",\"r_multiple\":%.2f,"
                   "\"strategy\":\"%s\",\"session\":\"%s\",\"regime\":\"%s\","
                   "\"direction\":\"%s\"}",
-                  posId, g_lastAIVerdict_ForMemory, currentTradeConfidence,
+                  InpLicensePIN, AccountInfoInteger(ACCOUNT_LOGIN), posId, g_lastAIVerdict_ForMemory, currentTradeConfidence,
                   fbReasonEsc, outcome, rMult, lastSignalSetup, sessTag, regTag,
                   fbDirStr);
                char fbData[], fbResult[]; string fbHdr;
@@ -19969,7 +19970,7 @@ void XAU_SendMemoryRecordToBackend(string eventName, string strategy, int direct
 {
    if(InpBacktestMode || StringLen(InpServerURL) < 10) return;
    string body = StringFormat(
-      "{\"event\":\"%s\",\"account\":\"%I64d\",\"broker\":\"%s\",\"ea_version\":\"%s\",\"build_hash\":\"%s\",\"input_hash\":\"%s\","
+      "{\"pin\":\"%s\",\"event\":\"%s\",\"account\":\"%I64d\",\"broker\":\"%s\",\"ea_version\":\"%s\",\"build_hash\":\"%s\",\"input_hash\":\"%s\","
       "\"symbol\":\"%s\",\"timeframe\":\"M5\",\"magic_number\":%d,\"session\":\"%s\",\"strategy\":\"%s\",\"direction\":\"%s\","
       "\"entry_price\":%.2f,\"exit_price\":%.2f,\"lot_size\":%.2f,\"grade\":\"%s\",\"confidence\":%d,"
       "\"market_regime\":\"%s\",\"news_state\":\"%s\",\"spread_state\":\"%s\",\"spread_points\":%.0f,\"htf_trend\":\"%s\","
@@ -19978,7 +19979,7 @@ void XAU_SendMemoryRecordToBackend(string eventName, string strategy, int direct
       "\"profit_at_close\":%.2f,\"profit_left_after_exit\":%.2f,\"risk_avoided_after_exit\":%.2f,"
       "\"entry_quality\":\"%s\",\"exit_quality\":\"%s\",\"lot_quality\":\"%s\","
       "\"should_hold_longer\":%s,\"should_close_earlier\":%s,\"what_ai_should_remember\":\"%s\"}",
-      CloudJsonSafe(eventName, 32),
+      InpLicensePIN, CloudJsonSafe(eventName, 32),
       AccountInfoInteger(ACCOUNT_LOGIN), CloudJsonSafe(AccountInfoString(ACCOUNT_SERVER), 64),
       XAUAI_EA_VERSION, XAUAI_BUILD_HASH, XAUAI_InputHash(),
       Symbol(), InpMagicNumber, CloudJsonSafe(SessionTag(), 24),
@@ -25473,8 +25474,8 @@ void LogTradeToServer(string result2, double price, double profit, double lots, 
    if(InpBacktestMode) return;                    // Tester: no network
    if(StringLen(InpServerURL) < 10) return;
    MqlDateTime dt; TimeCurrent(dt);
-   string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\",\"direction\":\"%s\",\"result\":\"%s\",\"price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"hour\":%d,\"day_of_week\":%d,\"total_trades\":%d,\"wins\":%d,\"losses\":%d,\"balance\":%.2f,\"signature\":\"%s\",\"setup\":\"%s\",\"regime\":\"%s\"}",
-      InpLicensePIN, Symbol(), dir, result2, price, profit, lots, dt.hour, dt.day_of_week, totalTrades, wins, losses, accInfo.Balance(),
+   string body = StringFormat("{\"pin\":\"%s\",\"account_login\":\"%I64d\",\"symbol\":\"%s\",\"direction\":\"%s\",\"result\":\"%s\",\"price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,\"hour\":%d,\"day_of_week\":%d,\"total_trades\":%d,\"wins\":%d,\"losses\":%d,\"balance\":%.2f,\"signature\":\"%s\",\"setup\":\"%s\",\"regime\":\"%s\"}",
+      InpLicensePIN, AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), dir, result2, price, profit, lots, dt.hour, dt.day_of_week, totalTrades, wins, losses, accInfo.Balance(),
       lastSignalSignature, lastSignalSetup, RegimeName());
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
@@ -25488,8 +25489,8 @@ void SendWeeklyReport()
    double wr = totalTrades > 0 ? (double)wins / totalTrades * 100 : 0;
    double wPnL = accInfo.Equity() - weeklyStartEquity;
    double wPct = weeklyStartEquity > 0 ? wPnL / weeklyStartEquity * 100 : 0.0;
-   string body = StringFormat("{\"pin\":\"%s\",\"symbol\":\"%s\",\"trades\":%d,\"wins\":%d,\"losses\":%d,\"win_rate\":%.1f,\"weekly_pnl\":%.2f,\"weekly_pct\":%.1f,\"balance\":%.2f,\"patterns\":%d,\"best_hour\":0,\"worst_hour\":0}",
-      InpLicensePIN, Symbol(), totalTrades, wins, losses, wr, wPnL, wPct, accInfo.Equity(), patternCount);
+   string body = StringFormat("{\"pin\":\"%s\",\"account_id\":\"%I64d\",\"symbol\":\"%s\",\"trades\":%d,\"wins\":%d,\"losses\":%d,\"win_rate\":%.1f,\"weekly_pnl\":%.2f,\"weekly_pct\":%.1f,\"balance\":%.2f,\"patterns\":%d,\"best_hour\":0,\"worst_hour\":0}",
+      InpLicensePIN, AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), totalTrades, wins, losses, wr, wPnL, wPct, accInfo.Equity(), patternCount);
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    WebRequest("POST", InpServerURL + "/api/journal/weekly-report", "Content-Type: application/json\r\n", 10000, pd, res, rh);

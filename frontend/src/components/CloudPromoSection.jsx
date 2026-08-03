@@ -17,7 +17,7 @@ export default function CloudPromoSection() {
             </div>
 
             <h2 className="mb-4 text-3xl font-bold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl">
-              Run XAU AI Sniper on your MT5. <span className="text-[#D4AF37]">Watch it from your phone.</span>
+              Run XauCloud on your MT5. <span className="text-[#D4AF37]">Watch it from your phone.</span>
             </h2>
 
             <p className="mb-3 max-w-xl text-base leading-relaxed text-white/70 sm:text-lg">
@@ -57,22 +57,25 @@ export default function CloudPromoSection() {
           <div className="relative">
             <div className="absolute inset-0 bg-gradient-to-br from-[#D4AF37]/20 via-transparent to-transparent blur-3xl" />
             <div className="relative rounded-2xl border border-[#D4AF37]/20 bg-gradient-to-br from-white/5 to-white/[0.02] p-6 backdrop-blur-sm sm:rounded-3xl sm:p-8">
+              <div className="mb-4 rounded-lg border border-sky-300/20 bg-sky-300/[0.06] px-3 py-2 font-mono text-[9px] uppercase tracking-wider text-sky-200">
+                Illustrative preview · no live account data
+              </div>
               <div className="mb-5 flex items-center gap-3">
                 <XauAiLogo size={36} solid />
                 <div>
                   <div className="text-lg font-bold leading-none">Command Center</div>
                   <div className="mt-1 font-mono text-[10px] tracking-widest text-white/40">MONITOR · CONTROL · REPORT</div>
                 </div>
-                <div className="ml-auto flex items-center gap-1.5 rounded-full border border-green-400/20 bg-green-400/10 px-2 py-1 font-mono text-[10px] text-green-400">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-400" />
-                  ONLINE
+                <div className="ml-auto flex items-center gap-1.5 rounded-full border border-sky-300/20 bg-sky-300/10 px-2 py-1 font-mono text-[10px] text-sky-200">
+                  <span className="h-1.5 w-1.5 rounded-full bg-sky-300" />
+                  PREVIEW
                 </div>
               </div>
               <div className="space-y-3">
                 {[
-                  { icon: Terminal, k:"MT5", v:"Connected · Algo enabled" },
-                  { icon: RadioTower, k:"HEARTBEAT", v:"20s ago · v5.8.45" },
-                  { icon: Smartphone, k:"PHONE", v:"PWA ready · PIN control" },
+                  { icon: Terminal, k:"MT5", v:"Connection appears here" },
+                  { icon: RadioTower, k:"HEARTBEAT", v:"Version and mode appear here" },
+                  { icon: Smartphone, k:"PHONE", v:"PWA status appears here" },
                 ].map(({ icon: Icon, k, v }) => (
                   <div key={k} className="flex items-center justify-between rounded-xl border border-white/5 bg-black/40 p-3">
                     <div className="flex items-center gap-2 font-mono text-[10px] tracking-widest text-white/40">
@@ -84,7 +87,7 @@ export default function CloudPromoSection() {
               </div>
               <div className="mt-5 border-t border-white/5 pt-5">
                 <div className="font-mono text-[10px] tracking-widest text-white/40">LAST ACTION</div>
-                <div className="mt-2 text-sm text-white/75">REMOTE_COMMAND_EXECUTED · Force sync completed</div>
+                <div className="mt-2 text-sm text-white/75">Acknowledged command results appear here.</div>
               </div>
             </div>
           </div>

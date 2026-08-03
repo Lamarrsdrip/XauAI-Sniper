@@ -1,0 +1,16 @@
+Latest focused backend/EA result:
+........................................................................ [ 69%]
+..................sssssssssssss                                          [100%]
+90 passed, 13 skipped, 252 warnings in 2.93s
+
+Mongo integration result:
+.............                                                            [100%]
+13 passed, 252 warnings in 9.07s
+
+Python static result:
+backend/server.py and backend/llm_adapter.py compiled successfully.
+Root/backend Gold EA sources compared byte-identical.
+
+Prior full-suite baseline (not green):
+1506 passed, 384 failed, 202 skipped.
+Many failures target obsolete historical versions/retired workers, but they remain unclassified and must not be reported as passing.

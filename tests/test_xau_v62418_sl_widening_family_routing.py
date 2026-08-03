@@ -10,8 +10,24 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore").replace("\x00", "")
 
 
+def find_function(ea: str, signature: str) -> str:
+    start = ea.index(signature)
+    open_idx = ea.index("{", start)
+    depth = 0
+    i = open_idx
+    while i < len(ea):
+        if ea[i] == "{":
+            depth += 1
+        elif ea[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return ea[start:i + 1]
+        i += 1
+    raise AssertionError(f"unbalanced braces for {signature}")
+
+
 def test_all_three_source_copies_synced():
-    assert read(EA) == read(BACKEND_EA) == read(V62417_EA)
+    assert read(EA) == read(BACKEND_EA)
 
 
 def test_widening_factor_is_exactly_1_20():
@@ -67,24 +83,38 @@ def test_exact_sell_widening_second_example():
     assert final_sl == 3530.0
 
 
+# v6.25.1 owner directive 2026-07-17 -- the widening multiplication itself
+# moved into one canonical function, XAU_ComputeFinalRiskGeometry(), which
+# every R-based consumer (missed-move check, post-profit re-entry, lot
+# sizing, R-Exit capture) must read from -- no module may recompute a
+# second, independently-derived "1R" distance. OpenTrade's own widening
+# step now just calls this function and reassigns slDist from its output.
+def test_canonical_final_risk_geometry_function_does_the_widening():
+    ea = read(BACKEND_EA)
+    fn = find_function(ea, "XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)")
+    assert "g.widenedDistance = structuralDistance * XAU_SL_WIDENING_FACTOR;" in fn
+    assert "g.finalOriginalRiskDistance = g.widenedDistance;" in fn
+
+
 def test_widening_applied_exactly_once_in_opentrade():
     ea = read(BACKEND_EA)
-    # exactly one occurrence of the actual multiplication in OpenTrade's
-    # normal-family geometry step (the other XAU_SL_WIDENING_FACTOR uses
-    # are R-normalization / display reads of the already-final distance).
-    assert ea.count("slDist = rawSLDistance * XAU_SL_WIDENING_FACTOR;") == 1
+    # exactly one occurrence of the canonical-geometry call in OpenTrade's
+    # normal-family geometry step -- no second, independently recomputed
+    # widening anywhere else in the send path.
+    assert ea.count("XAU_FinalRiskGeometry finalGeometry = XAU_ComputeFinalRiskGeometry(rawSLDistance);") == 1
+    assert ea.count("slDist = finalGeometry.finalOriginalRiskDistance;") == 1
 
 
 def test_widening_happens_before_lot_sizing():
     ea = read(BACKEND_EA)
-    widen_idx = ea.index("slDist = rawSLDistance * XAU_SL_WIDENING_FACTOR;")
+    widen_idx = ea.index("XAU_FinalRiskGeometry finalGeometry = XAU_ComputeFinalRiskGeometry(rawSLDistance);")
     lot_sizing_idx = ea.index("double baseRisk = InpNormalRiskPct;                 // uniform target, ALL account sizes, ALL grades")
     assert widen_idx < lot_sizing_idx
 
 
 def test_lot_sizing_derives_from_the_already_widened_sldist():
     ea = read(BACKEND_EA)
-    widen_idx = ea.index("slDist = rawSLDistance * XAU_SL_WIDENING_FACTOR;")
+    widen_idx = ea.index("XAU_FinalRiskGeometry finalGeometry = XAU_ComputeFinalRiskGeometry(rawSLDistance);")
     window = ea[widen_idx: widen_idx + 10000]
     assert "double slDollarPerLotRaw = RiskPerLotForDistance(slDist);" in window
 
@@ -119,11 +149,11 @@ def test_counter_excursion_and_pyramid_do_not_use_the_widening_factor():
     # CEC_ scoring section) and the pyramid add block build their SL from
     # ATR*InpSLMultiplier directly -- never multiplied by the 1.20x factor,
     # which is reserved for normal-risk families only.
-    ce_send_idx = ea.index("bool ok = (counterDir == 1) ? trade.Buy(lots, Symbol(), 0, slPrice, tpPrice, comment)")
+    ce_send_idx = ea.index("bool requestOk = (counterDir == 1) ? trade.Buy(lots, Symbol(), 0, slPrice, tpPrice, comment)")
     ce_window = ea[max(0, ce_send_idx - 4000): ce_send_idx]
     assert "XAU_SL_WIDENING_FACTOR" not in ce_window
 
-    pyramid_send_idx = ea.index('bool ok=isBuy?trade.Buy(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)')
+    pyramid_send_idx = ea.index('bool requestOk=isBuy?trade.Buy(addLot,Symbol(),0,pyramidSL,pyramidTP,"XAU-SNIPER|"+why)')
     pyramid_window = ea[max(0, pyramid_send_idx - 4000): pyramid_send_idx]
     assert "XAU_SL_WIDENING_FACTOR" not in pyramid_window
 

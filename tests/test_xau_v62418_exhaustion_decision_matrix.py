@@ -187,11 +187,21 @@ def test_buy_and_sell_pressure_used_are_independently_sourced_not_100_minus():
     assert "100 - td.buyConfidence" not in fn
 
 
+# v6.25.1 owner directive 2026-07-17 -- the old single g_prevPressureSlopeBar
+# guard mutated on the FIRST call of a new bar, so a second call within the
+# SAME bar computed slope against the value it had just overwritten to
+# itself (repeated calls did not return the same slope). Replaced with the
+# canonical, bar-keyed two-slot pressure history shared with the M10 signal
+# engine (XAU_UpdateM10PressureHistory / XAU_M10BuySlope / XAU_M10SellSlope),
+# which only shifts prev<-current once per genuinely new closed bar.
 def test_pressure_slope_tracked_across_bars_not_within_a_bar():
     ea = read(BACKEND_EA)
     fn = fn_body(ea, "XAU_ExhaustionDecisionResult XAU_EvaluateExhaustionDecision(", 2000)
-    assert "g_prevPressureSlopeBar" in fn
-    assert "td.evaluatedBar != g_prevPressureSlopeBar" in fn
+    assert "XAU_UpdateM10PressureHistory(td.evaluatedBar, td.buyConfidence, td.sellConfidence);" in fn
+    assert "XAU_M10BuySlope(td.buyConfidence)" in fn
+    assert "XAU_M10SellSlope(td.sellConfidence)" in fn
+    history_fn = fn_body(ea, "void XAU_UpdateM10PressureHistory(datetime evaluatedBar, double buyConfidence, double sellConfidence)", 400)
+    assert "evaluatedBar == g_m10PressureHistoryCurrentBar" in history_fn, "must be a no-op on a repeated call for the same bar"
 
 
 def test_exhaustion_decision_structured_log_present():

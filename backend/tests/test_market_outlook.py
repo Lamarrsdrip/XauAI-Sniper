@@ -17,6 +17,7 @@ environment doesn't have.)
 """
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -51,12 +52,18 @@ def test_no_trade_execution_calls_anywhere_in_outlook_module():
 def test_outlook_module_only_writes_its_own_collections():
     import re
     writes = re.findall(r'db\.(\w+)\.(?:insert_one|update_one|delete_one|update_many)', MO_SRC)
-    own_collections = {"cloud_market_outlooks", "cloud_market_outlook_revisions", "cloud_market_outlook_outcomes"}
+    own_collections = {"cloud_market_outlooks", "cloud_market_outlook_revisions", "cloud_market_outlook_outcomes",
+                       "cloud_market_outlook_repair_runs"}
     for coll in writes:
         assert coll in own_collections, f"market_outlook.py writes to unexpected collection: {coll}"
 
 
 def test_notifications_module_only_writes_its_own_collections():
+    # v6.25.3 owner directive 2026-07-17 -- switched to OneSignal; the
+    # retired self-hosted VAPID keypair (system_settings/_id=
+    # web_push_vapid_primary) is gone. The notification module owns both
+    # genuine OneSignal device registrations and delivery log entries; routes
+    # validate/authenticate requests and delegate registration persistence.
     import re
     writes = re.findall(r'db\.(\w+)\.(?:insert_one|update_one|delete_one|update_many)', NOTIF_SRC)
     own_collections = {"cloud_notification_log", "cloud_push_subscriptions"}
@@ -94,9 +101,8 @@ def test_all_required_primary_directions_supported():
 
 
 def test_all_required_lifecycle_states_defined():
-    required = {"ANALYZING", "PUBLISHED", "WAITING_FOR_ENTRY_ZONE", "ENTRY_ZONE_ACTIVE",
-               "CONFIRMATION_PENDING", "ACTIVE", "TP1_HIT", "TP2_HIT", "TP3_HIT",
-               "INVALIDATED", "EXPIRED", "MISSED_WITHOUT_ENTRY", "CANCELLED_BY_NEW_STRUCTURE"}
+    required = {"INFORMATIONAL", "TRACKING_AMBER", "WIN_GREEN_0_5R",
+                "WIN_GREEN_TP1", "LOSS_RED_SL", "LOSS_RED_TIMEOUT"}
     assert required.issubset(set(mo.LIFECYCLE_STATES))
 
 
@@ -163,13 +169,58 @@ def test_sell_direction_zone_sits_above_current_price():
 # 10: entering zone alone does not always activate
 # ---------------------------------------------------------------------------
 
-def test_advance_outlook_state_requires_favorable_confirmation_not_just_zone_touch():
-    src = MO_SRC[MO_SRC.index("async def _advance_outlook_state"):]
-    assert "favorable_confirm" in src[:4000]
-    # confirms activation is gated on a confirmation margin, not the raw
-    # entry_zone_reached boolean alone
-    assert "if entry_zone_reached:" in src[:4000]
-    assert "favorable_confirm = " in src[:4000]
+def test_actionable_signal_activates_at_publication_not_zone_touch():
+    src = MO_SRC[MO_SRC.index("async def generate_outlook_for_account"):]
+    assert '"tracking_entry_price": tracking_entry if actionable else None' in src
+    assert '"activated": actionable' in src
+    assert "entry_zone_reached" not in MO_SRC[MO_SRC.index("def advance_persisted_signal"):]
+
+
+def test_publication_anchor_uses_buy_ask_and_sell_bid_never_zone_midpoint():
+    src = _outlook_gen_body()
+    assert "_build_tracking_anchor(direction_label, published_bid, published_ask, original_sl)" in src
+    helper = MO_SRC[MO_SRC.index("def _build_tracking_anchor"):MO_SRC.index("async def _insert_outlook_atomically")]
+    assert 'entry = ask if direction == "BUY" else bid' in helper
+    anchor_section = src[src.index("# Signal-performance tracking is anchored"):src.index("narrative = await")]
+    assert "entry_mid" not in anchor_section
+    assert "preferred_entry_zone" not in anchor_section
+
+
+def test_original_risk_uses_exact_anchor_and_original_published_sl():
+    src = _outlook_gen_body()
+    helper = MO_SRC[MO_SRC.index("def _build_tracking_anchor"):MO_SRC.index("async def _insert_outlook_atomically")]
+    assert "risk = abs(entry - sl)" in helper
+    assert 'geometry_valid = sl < entry if direction == "BUY" else sl > entry' in helper
+    assert '"original_sl": original_sl if actionable else None' in src
+    assert '"published_bid": published_bid if published_bid > 0 else None' in src
+    assert '"published_ask": published_ask if published_ask > 0 else None' in src
+
+
+def test_actionable_publication_rejects_stale_quote_and_initializes_spread_excursion():
+    src = _outlook_gen_body()
+    assert "MAX_PUBLICATION_QUOTE_AGE_SECONDS" in src
+    assert "quote_fresh" in src
+    assert "OUTLOOK_AWAITING_FRESH_PUBLICATION_QUOTE" in src
+    assert src.index("OUTLOOK_AWAITING_FRESH_PUBLICATION_QUOTE") < src.index("quote_valid =")
+    assert '"current_r": tracking_anchor["current_r"] if actionable else None' in src
+    assert '"mae_r": tracking_anchor["mae_r"] if actionable else None' in src
+
+
+def test_fresh_ea_quote_reenters_the_canonical_slot_idempotent_publisher():
+    server_src = SERVER_SRC
+    activity = server_src[server_src.index("async def cloud_monitor_activity"):]
+    activity = activity[:activity.index("# v6.25.1 owner directive", 1)]
+    assert 'await _mo.hourly_generation_tick(account=req.account or "")' in activity
+    assert "MAX_PUBLICATION_QUOTE_AGE_SECONDS = 30" in MO_SRC
+
+
+def test_background_monitor_and_pending_dispatch_are_not_capped_at_500_records():
+    monitor = MO_SRC[MO_SRC.index("async def track_outlook_lifecycle_tick"):MO_SRC.index("async def _record_revision")]
+    pending = MO_SRC[MO_SRC.index("async def dispatch_pending_signal_notifications"):MO_SRC.index("def _quote_from_activity")]
+    assert ".to_list(500)" not in monitor
+    assert ".to_list(500)" not in pending
+    assert "pending_event_conditions" in pending
+    assert 'notification_flags.TIMEOUT_60M' in pending
 
 
 # ---------------------------------------------------------------------------
@@ -186,59 +237,67 @@ def test_revisions_are_a_separate_collection_from_the_outlook_itself():
 
 
 def test_generation_only_ever_inserts_never_updates_the_original_outlook_doc():
+    # v6.25.2 owner directive 2026-07-17 -- generation's own insert_one calls
+    # moved into the shared _insert_outlook_atomically() helper (the
+    # duplicate-hourly-publication fix: a deterministic per-slot _id so a
+    # racing second insert raises DuplicateKeyError instead of creating a
+    # second record). The immutability guarantee this test protects --
+    # generation never UPDATES a prior outlook document -- still holds; it
+    # now goes through that one shared insert path instead of three direct
+    # insert_one calls.
     fn = MO_SRC[MO_SRC.index("async def generate_outlook_for_account"):]
-    fn_body = fn[:fn.index("\n\nasync def hourly_generation_tick")]
-    assert "insert_one" in fn_body
+    fn_body = fn[:fn.index("\n\nasync def publish_m10_signal_from_activity")]
+    assert "_insert_outlook_atomically" in fn_body
     assert "update_one" not in fn_body  # generation never mutates a prior outlook
+    helper_fn = MO_SRC[MO_SRC.index("async def _insert_outlook_atomically"):]
+    helper_fn_body = helper_fn[:helper_fn.index("\n\nasync def generate_outlook_for_account")]
+    assert "insert_one" in helper_fn_body
+    assert "update_one" not in helper_fn_body
 
 
 # ---------------------------------------------------------------------------
 # 13-16: SL/TP event ordering
 # ---------------------------------------------------------------------------
 
-def test_sl_checked_before_tp_in_activated_branch():
-    fn = MO_SRC[MO_SRC.index("# Activated: check SL vs TP1/2/3"):]
-    sl_idx = fn.index("sl_hit = ")
-    tp_idx = fn.index("hit_now = None")
-    assert sl_idx < tp_idx
+def test_sl_classification_precedes_timeout_and_win():
+    fn = MO_SRC[MO_SRC.index("def advance_persisted_signal"):]
+    classify = fn[fn.index("if outcome is None:"):]
+    assert classify.index("if sl_on_time:") < classify.index("elif tp1_on_time")
+    assert classify.index("elif tp1_on_time") < classify.index("elif half_on_time") < classify.index("elif deadline")
 
 
-def test_classify_final_result_tp_before_sl_is_green():
-    assert mo._classify_final_result(highest_tp=1, sl_hit=False, activated=True, entry_zone_reached=True) == "GREEN_TP1"
-    assert mo._classify_final_result(highest_tp=2, sl_hit=False, activated=True, entry_zone_reached=True) == "GREEN_TP2"
-    assert mo._classify_final_result(highest_tp=3, sl_hit=False, activated=True, entry_zone_reached=True) == "GREEN_TP3"
+def test_actionable_state_machine_has_persisted_win_states():
+    assert mo.SIGNAL_WIN_HALF_R == "WIN_GREEN_0_5R"
+    assert mo.SIGNAL_WIN_TP1 == "WIN_GREEN_TP1"
 
 
-def test_classify_final_result_sl_before_any_tp_is_red():
-    assert mo._classify_final_result(highest_tp=None, sl_hit=True, activated=True, entry_zone_reached=True) == "RED_STOPPED"
+def test_actionable_state_machine_has_persisted_loss_states():
+    assert mo.SIGNAL_LOSS_SL == "LOSS_RED_SL"
+    assert mo.SIGNAL_LOSS_TIMEOUT == "LOSS_RED_TIMEOUT"
 
 
-def test_classify_final_result_no_entry_is_gray_not_red():
-    assert mo._classify_final_result(highest_tp=None, sl_hit=False, activated=False, entry_zone_reached=False) == "GRAY_EXPIRED_NO_ENTRY"
-    result = mo._classify_final_result(highest_tp=None, sl_hit=False, activated=False, entry_zone_reached=False)
-    assert not result.startswith("RED")
+def test_actionable_lifecycle_never_emits_no_entry():
+    fn = MO_SRC[MO_SRC.index("def advance_persisted_signal"):MO_SRC.index("async def _account_quotes_since")]
+    assert "NO_ENTRY" not in fn
 
 
-def test_classify_final_result_invalidated_before_entry_is_gray():
-    result = mo._classify_final_result(highest_tp=None, sl_hit=False, activated=False, entry_zone_reached=True)
-    assert result == "GRAY_INVALIDATED_BEFORE_ENTRY"
+def test_historical_unavailable_is_explicit_and_excluded():
+    assert mo.ANALYTICS_UNAVAILABLE == "HISTORICAL_DATA_UNAVAILABLE"
 
 
-def test_time_expiry_alone_does_not_mark_red_when_never_activated():
-    # an outlook that simply expires without ever reaching its entry zone
-    # must be GRAY, never RED -- time passing is not a loss
-    result = mo._classify_final_result(highest_tp=None, sl_hit=False, activated=False, entry_zone_reached=False)
-    assert not result.startswith("RED")
-    assert result.startswith("GRAY")
+def test_exact_60_minute_timeout_is_a_loss_for_actionable_signal():
+    fn = MO_SRC[MO_SRC.index("def advance_persisted_signal"):]
+    assert "observed_at >= deadline" in fn
+    assert "SIGNAL_LOSS_TIMEOUT" in fn
 
 
 # ---------------------------------------------------------------------------
 # 17: MFE/MAE recorded
 # ---------------------------------------------------------------------------
 
-def test_advance_outlook_state_tracks_mfe_and_mae():
-    assert "mfe = max(mfe, favorable)" in MO_SRC
-    assert "mae = max(mae, -favorable)" in MO_SRC
+def test_persisted_signal_state_tracks_mfe_and_mae():
+    assert "mfe_r = max(mfe_r, current_r)" in MO_SRC
+    assert "mae_r = min(mae_r, current_r, 0.0)" in MO_SRC
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +305,7 @@ def test_advance_outlook_state_tracks_mfe_and_mae():
 # ---------------------------------------------------------------------------
 
 def test_outcome_record_stores_confidence_for_calibration_analysis():
-    fn = MO_SRC[MO_SRC.index("async def _finalize_outlook"):]
+    fn = MO_SRC[MO_SRC.index("async def _persist_signal_outcome"):]
     fn_body = fn[:fn.index("\n\n\n")]
     assert '"confidence_pct": doc.get("confidence_pct")' in fn_body
 
@@ -272,7 +331,7 @@ def test_idempotency_key_includes_event_outlook_and_user():
 
 def test_send_outlook_notification_checks_idempotency_before_sending():
     fn = NOTIF_SRC[NOTIF_SRC.index("async def send_outlook_notification"):]
-    fn_body = fn[:fn.index("\n\nasync def _send_webpush")]
+    fn_body = fn[:fn.index("\n\nasync def send_test_notification")]
     idem_check_idx = fn_body.index("cloud_notification_log.find_one")
     payload_build_idx = fn_body.index("_build_payload(doc, event)")
     assert idem_check_idx < payload_build_idx  # checked BEFORE building/sending anything
@@ -297,18 +356,25 @@ def test_off_tier_never_satisfies_any_event_requirement():
         assert notif._TIER_RANK["OFF"] < notif._TIER_RANK[min_tier]
 
 
-def test_expired_or_failed_device_is_removed_on_send_failure():
+def test_send_outlook_notification_never_deletes_subscriptions_itself():
+    # v6.25.3 owner directive 2026-07-17 -- OneSignal owns device/subscription
+    # lifecycle entirely; this module must never delete a
+    # cloud_push_subscriptions record on a delivery failure (unlike the
+    # retired self-hosted Web Push code, which deleted on a confirmed
+    # 404/410 -- OneSignal's failure modes are all config/auth/transient,
+    # never "the browser confirmed this endpoint is gone").
     fn = NOTIF_SRC[NOTIF_SRC.index("async def send_outlook_notification"):]
-    fn_body = fn[:fn.index("\n\nasync def _send_webpush")]
-    assert "cloud_push_subscriptions.delete_one" in fn_body
+    fn_body = fn[:fn.index("\n\nasync def send_test_notification")]
+    assert "cloud_push_subscriptions.delete_one" not in fn_body
+    assert "cloud_push_subscriptions.update_one" not in fn_body
 
 
-def test_vapid_keys_read_from_env_not_hardcoded():
-    assert 'os.environ.get("VAPID_PUBLIC_KEY"' in NOTIF_SRC
-    assert 'os.environ.get("VAPID_PRIVATE_KEY"' in NOTIF_SRC
+def test_onesignal_credentials_read_from_settings_not_hardcoded():
+    assert "onesignal_app_id" in NOTIF_SRC
+    assert "onesignal_api_key" in NOTIF_SRC
     # confirm no literal key material is hardcoded as a fallback default
     import re
-    assert not re.search(r'VAPID_(PUBLIC|PRIVATE)_KEY["\']?\s*,\s*["\'][A-Za-z0-9+/=_-]{20,}["\']', NOTIF_SRC)
+    assert not re.search(r'onesignal_api_key["\']?\s*[,:]\s*["\'][A-Za-z0-9+/=_-]{20,}["\']', NOTIF_SRC)
 
 
 # ---------------------------------------------------------------------------
@@ -319,8 +385,8 @@ def test_all_new_endpoints_require_cloud_user_auth():
     import re
     handlers = re.findall(r'async def \w+\([^)]*\):', ROUTES_SRC)
     for h in handlers:
-        if "get_vapid_public_key" in h:
-            continue  # public key is not secret, no auth needed to fetch it
+        if "get_onesignal_app_id" in h:
+            continue  # OneSignal App ID is not secret, no auth needed to fetch it
         assert "Depends(srv.get_cloud_user)" in h, f"endpoint missing auth dependency: {h}"
 
 
@@ -351,9 +417,13 @@ def test_activity_endpoint_copies_thesis_fields_into_details():
 # requirements.txt has the new dependency, no credential leakage
 # ---------------------------------------------------------------------------
 
-def test_pywebpush_in_requirements():
+def test_no_pywebpush_dependency():
+    # v6.25.3 owner directive 2026-07-17 -- pywebpush is retired along with
+    # self-hosted Web Push; OneSignal delivery only needs httpx, already a
+    # dependency for other reasons. Its absence here is deliberate, not an
+    # oversight -- this locks in that nothing reintroduces it.
     req = read(BACKEND_DIR / "requirements.txt")
-    assert "pywebpush==" in req
+    assert "pywebpush" not in req
 
 
 # ---------------------------------------------------------------------------
@@ -366,21 +436,29 @@ SERVER_SRC = read(BACKEND_DIR / "server.py")
 
 
 def test_gold_price_fallback_is_never_mislabeled_as_live():
+    # v6.25.6 update: Codex's XAU-018 forensic repair replaced the old
+    # hardcoded numeric fallback with an honest unavailable/null response --
+    # a failed quote provider is unavailable, never a licence to invent a
+    # price. This test now asserts THAT behavior exists, not the retired
+    # fallback-constant string it originally pinned.
     fn = SERVER_SRC[SERVER_SRC.index("async def fetch_live_gold_price"):]
     fn_body = fn[:fn.index("\n\ndef generate_unique_pin")]
-    assert 'source = "fallback_stale_constant"' in fn_body
-    # the hardcoded numeric fallback must not be returned tagged as "live"
-    assert '"source":"live"' not in fn_body.replace(" ", "")
+    assert '"available": False' in fn_body
+    assert '"source": "unavailable"' in fn_body
+    # the failed-provider branch must never fabricate a price/spread
+    assert '"bid": None, "ask": None,' in fn_body
+    # and a successful live fetch must never be mislabeled as anything else
+    assert '"source":"live"' not in fn_body.replace(" ", "") or 'source = "live"' in fn_body
 
 
 def _outlook_gen_body() -> str:
     fn = MO_SRC[MO_SRC.index("async def generate_outlook_for_account"):]
-    return fn[:fn.index("\n\nasync def hourly_generation_tick")]
+    return fn[:fn.index("\n\nasync def publish_m10_signal_from_activity")]
 
 
 def test_outlook_prefers_ea_reported_price_over_external_feed():
     body = _outlook_gen_body()
-    ea_price_idx = body.index("ea_mid = float(thesis_preview.get")
+    ea_price_idx = body.index("evidence_quote = extract_evidence_quote")
     fallback_idx = body.index("await srv.fetch_live_gold_price()")
     assert ea_price_idx < fallback_idx, "EA-reported price must be checked before the external fallback feed is ever called"
 
@@ -400,13 +478,25 @@ def test_outlook_has_price_sanity_gate_bounded_by_atr_not_fixed_dollars():
     assert "OUTLOOK_PRICE_SANITY_FAILED" in body
 
 
+def _resolve_hourly_bias_body() -> str:
+    fn = MO_SRC[MO_SRC.index("def _resolve_hourly_bias"):]
+    return fn[:fn.index("\n\nasync def generate_outlook_for_account")]
+
+
 def test_outlook_has_directional_consistency_gate():
-    body = _outlook_gen_body()
+    # v6.25.x refactor: the directional-consistency gate moved into the pure,
+    # independently-testable _resolve_hourly_bias() helper (called from
+    # generate_outlook_for_account, still asserted below), so this must look
+    # for it there. generate_outlook_for_account's own body still consumes
+    # its output via `directional_conflict = bias["directional_conflict"]`.
+    body = _resolve_hourly_bias_body()
     assert "directional_conflict" in body
     assert "TRANSITION" in body
     # both directions must be checked, not just one
     assert 'direction_label == "SELL"' in body
     assert 'direction_label == "BUY"' in body
+    assert "directional_conflict" in _outlook_gen_body()
+    assert "_resolve_hourly_bias(canonical_m10, thesis)" in _outlook_gen_body()
 
 
 def test_repair_function_never_overwrites_original_price_or_zone_fields():
@@ -426,4 +516,234 @@ def test_repair_function_is_not_wired_into_any_automatic_tick():
 
 def test_history_stats_exclude_flagged_records_but_keep_them_visible():
     assert "excluded_from_stats" in ROUTES_SRC
-    assert 'return {"outlooks": rows, "stats": stats}' in ROUTES_SRC
+    assert '"outlooks": rows' in ROUTES_SRC
+    assert '"timeline": group_meaningful_history(rows)' in ROUTES_SRC
+
+
+def test_history_analytics_are_not_limited_to_visible_card_page():
+    body = ROUTES_SRC[ROUTES_SRC.index('    @r.get("/outlook/history")'):]
+    body = body[:body.index('    @r.get("/outlook/{outlook_id}")')]
+    assert ".to_list(limit)" in body
+    assert "stats_rows = await" in body
+    assert ".to_list(None)" in body
+    assert "compute_outlook_stats(stats_rows)" in body
+
+
+def test_signal_outlook_hot_path_indexes_are_declared_at_startup():
+    for index_fragment in (
+        'cloud_market_outlooks.create_index([("account", 1), ("generated_at", -1)])',
+        'cloud_market_outlook_outcomes.create_index("outlook_id", unique=True)',
+        'cloud_bot_activity.create_index([("account", 1), ("ts", 1)])',
+    ):
+        assert index_fragment in SERVER_SRC
+
+
+def _m10_evidence(*, ready=None, decision="SELL_CANDIDATE", ask=4052.6, freshness="FRESH"):
+    return {
+        "ts": "2026-07-22T09:00:00+00:00",
+        "event_time": "2026-07-22T09:00:00+00:00",
+        "symbol": "XAUUSD",
+        "m10_signal": {
+            "decision": decision, "preferred_direction": "SELL", "confidence": 72,
+            "freshness_state": freshness, "bar_time": "2026-07-22T08:50:00+00:00",
+            "live_bid": 4052.4, "live_ask": ask,
+        },
+        "execution": {"final_execution_allowed": ready, "final_decision": "READY" if ready else "WAITING"},
+    }
+
+
+def test_contract_fresh_ready_m10_survives_missing_hourly_context():
+    contract = mo.build_authoritative_outlook_contract(
+        _m10_evidence(ready=True), "OK", hourly_doc=None,
+        now=datetime(2026, 7, 22, 9, 0, 5, tzinfo=timezone.utc),
+    )
+    assert contract["state"] == mo.OUTLOOK_ACTIONABLE
+    assert contract["direction"] == "SELL"
+    assert contract["hourlyContext"]["state"] == "UNAVAILABLE"
+    assert contract["notificationEligibility"]["eligible"] is True
+
+
+def test_contract_candidate_not_ready_is_watching_and_not_notifiable():
+    contract = mo.build_authoritative_outlook_contract(
+        _m10_evidence(ready=False), "OK", now=datetime(2026, 7, 22, 9, 0, 5, tzinfo=timezone.utc),
+    )
+    assert contract["state"] == mo.OUTLOOK_WATCHING
+    assert contract["executionReady"] is False
+    assert contract["notificationEligibility"] == {
+        "eligible": False, "reason": "CANDIDATE_NOT_EXECUTION_READY",
+    }
+
+
+def test_contract_healthy_no_candidate_is_not_data_unavailable():
+    evidence = _m10_evidence(ready=False, decision="NO_VALID_SIGNAL")
+    evidence["m10_signal"]["preferred_direction"] = ""
+    contract = mo.build_authoritative_outlook_contract(
+        evidence, "OK", now=datetime(2026, 7, 22, 9, 0, 5, tzinfo=timezone.utc),
+    )
+    assert contract["state"] == mo.OUTLOOK_NO_SIGNAL
+    assert contract["confidence"] is None
+
+
+def test_contract_missing_ask_is_data_unavailable_not_zero_confidence_neutral():
+    contract = mo.build_authoritative_outlook_contract(
+        _m10_evidence(ready=True, ask=None), "OK",
+        now=datetime(2026, 7, 22, 9, 0, 5, tzinfo=timezone.utc),
+    )
+    assert contract["state"] == mo.OUTLOOK_DATA_UNAVAILABLE
+    assert "BROKER_ASK" in contract["missingFields"]
+    assert contract["confidence"] != 0
+
+
+def test_m10_quote_mapper_accepts_quote_outside_market_thesis():
+    quote = mo.extract_evidence_quote(_m10_evidence(ready=True))
+    assert quote["valid"] is True
+    assert quote["bid"] == 4052.4
+    assert quote["ask"] == 4052.6
+
+
+# ---------------------------------------------------------------------------
+# Owner directive: the Hourly Manual Outlook must publish BUY or SELL for
+# every healthy evaluation window, independent of whether the strict M10
+# automated engine approved an executable entry. NEUTRAL/0%-confidence must
+# never appear merely because automated execution wasn't approved.
+# ---------------------------------------------------------------------------
+
+def _no_candidate_m10(actionable=False):
+    return {"direction": "", "actionable": actionable, "confidence": None,
+            "blocker_code": None, "execution_status": "NO_CANDIDATE"}
+
+
+def _candidate_m10(direction, actionable, blocker_code=None, confidence=72):
+    return {"direction": direction, "actionable": actionable, "confidence": confidence,
+            "blocker_code": blocker_code, "execution_status": "READY" if actionable else "BLOCKED"}
+
+
+def test_hourly_bias_never_returns_neutral_with_healthy_pressure_evidence():
+    for buy_p, sell_p in [(51, 49), (49, 51), (32, 68), (68, 32), (50, 50), (85, 15), (15, 85)]:
+        bias = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": buy_p, "sell_pressure": sell_p})
+        assert bias["direction_label"] in ("BUY", "SELL"), f"got {bias['direction_label']} for {buy_p}/{sell_p}"
+        assert bias["direction_label"] != "NEUTRAL"
+
+
+def test_hourly_bias_no_automated_candidate_still_produces_direction():
+    # This is the exact regression this fix targets: automated EA found no
+    # executable M10 candidate this hour, but real buy/sell pressure
+    # evidence exists -- must not collapse to NEUTRAL/0%.
+    bias = mo._resolve_hourly_bias(_no_candidate_m10(actionable=False), {"buy_pressure": 68, "sell_pressure": 32})
+    assert bias["direction_label"] == "BUY"  # buy pressure dominant
+    assert bias["automated_entry_approved"] is False
+    assert bias["confidence"] > 0
+
+
+def test_hourly_bias_stronger_buy_evidence_cannot_display_sell():
+    bias = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": 68, "sell_pressure": 32})
+    assert bias["direction_label"] == "BUY"
+
+
+def test_hourly_bias_stronger_sell_evidence_cannot_display_buy():
+    bias = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": 32, "sell_pressure": 68})
+    assert bias["direction_label"] == "SELL"
+
+
+def test_hourly_bias_small_evidence_gap_is_very_low_confidence():
+    bias = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": 51, "sell_pressure": 49})
+    assert bias["direction_label"] == "BUY"
+    assert bias["confidence"] <= 25
+    assert bias["confidence_category"] == "VERY_LOW"
+
+
+def test_hourly_bias_exact_tie_is_deterministic_not_neutral():
+    bias = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": 50, "sell_pressure": 50})
+    assert bias["direction_label"] == "BUY"
+    assert bias["confidence_category"] == "VERY_LOW"
+
+
+def test_hourly_bias_larger_gap_yields_higher_confidence_than_small_gap():
+    small_gap = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": 51, "sell_pressure": 49})
+    large_gap = mo._resolve_hourly_bias(_no_candidate_m10(), {"buy_pressure": 20, "sell_pressure": 80})
+    assert large_gap["confidence"] > small_gap["confidence"]
+
+
+def test_hourly_bias_prefers_explicit_ea_candidate_over_pressure_when_not_conflicting():
+    # Automated EA has an explicit BUY candidate but it's not execution-ready
+    # (e.g. blocked by a LATE location gate) -- pressure is mildly against
+    # but under the 15-point conflict threshold. The candidate direction
+    # must still win, with automated status reported separately.
+    m10 = _candidate_m10("BUY", actionable=False, blocker_code="OWNER_LOCATION_LATE_BLOCK")
+    bias = mo._resolve_hourly_bias(m10, {"buy_pressure": 45, "sell_pressure": 55})
+    assert bias["direction_label"] == "BUY"
+    assert bias["automated_entry_approved"] is False
+    assert bias["automated_block_reason"] == "OWNER_LOCATION_LATE_BLOCK"
+    assert bias["directional_transformation_applied"] is False
+
+
+def test_hourly_bias_flips_to_pressure_side_on_real_conflict_never_neutral():
+    # EA candidate says SELL, but pressure overwhelmingly favors BUY (gap
+    # well past the 15-point conflict threshold, no structural override).
+    # Must flip to the pressure-dominant side, not collapse to NEUTRAL/0%.
+    m10 = _candidate_m10("SELL", actionable=True, confidence=80)
+    bias = mo._resolve_hourly_bias(m10, {"buy_pressure": 75, "sell_pressure": 25, "structure": ""})
+    assert bias["direction_label"] == "BUY"
+    assert bias["direction_label"] != "NEUTRAL"
+    assert bias["directional_transformation_applied"] is True
+    assert bias["directional_conflict"] is not None
+    assert bias["confidence"] <= 65  # conflict caps confidence, never zeroes it
+    assert bias["confidence"] > 0
+
+
+def test_hourly_bias_structural_override_prevents_conflict_flip():
+    m10 = _candidate_m10("SELL", actionable=True, confidence=80)
+    bias = mo._resolve_hourly_bias(m10, {"buy_pressure": 75, "sell_pressure": 25, "structure": "STRUCTURE_STRONGLY_SUPPORTS"})
+    assert bias["direction_label"] == "SELL"
+    assert bias["directional_transformation_applied"] is False
+
+
+def test_hourly_bias_automated_approval_surfaced_independently_of_direction():
+    m10 = _candidate_m10("SELL", actionable=True, confidence=80)
+    bias = mo._resolve_hourly_bias(m10, {"buy_pressure": 30, "sell_pressure": 70})
+    assert bias["direction_label"] == "SELL"
+    assert bias["automated_entry_approved"] is True
+    assert bias["automated_block_reason"] is None
+
+
+def test_hourly_outlook_docs_carry_manual_advisory_identity_fields():
+    # Every hourly outlook document (success and all NO_VALID_OUTLOOK
+    # branches) must self-identify as a zero-execution-authority manual
+    # advisory, distinct from the M10 automated execution signal.
+    assert MO_SRC.count('"outlook_type": "HOURLY_MANUAL_BIAS"') >= 3
+    assert MO_SRC.count('"execution_authority": False') >= 4
+    assert '"automated_entry_approved": automated_entry_approved' in MO_SRC
+    assert '"automated_block_reason": automated_block_reason' in MO_SRC
+
+
+def test_confidence_category_thresholds_are_monotonic_and_cover_0_to_100():
+    labels = [mo._confidence_category(p) for p in (0, 10, 34, 35, 54, 55, 74, 75, 100)]
+    assert labels == ["VERY_LOW", "VERY_LOW", "VERY_LOW", "LOW", "LOW", "MODERATE", "MODERATE", "HIGH", "HIGH"]
+
+
+# ---------------------------------------------------------------------------
+# Notification-volume root cause: _dispatch_hourly_notification only ever
+# sends when primary_direction is BUY/SELL. Before the _resolve_hourly_bias
+# fix above, generate_outlook_for_account collapsed to NEUTRAL every time
+# the automated M10 engine had no actionable candidate (the common case),
+# which silently suppressed the hourly notification too -- not a push/
+# OneSignal delivery failure, a direction-calculation bug upstream of it.
+# This test locks in that the notification gate itself is unchanged (still
+# correctly advisory-only for genuinely non-directional data) while the
+# bias resolver above now reliably supplies BUY/SELL for healthy evidence,
+# so the gate is actually reached far more often than before.
+# ---------------------------------------------------------------------------
+
+def test_hourly_notification_gate_fires_on_any_healthy_directional_bias():
+    start = MO_SRC.index("async def _dispatch_hourly_notification")
+    fn_body = MO_SRC[start:start + 600]
+    assert 'doc.get("primary_direction") in ("BUY", "SELL")' in fn_body
+    assert "ADVISORY_ONLY" in fn_body
+
+
+def test_resolved_bias_for_healthy_no_candidate_evidence_satisfies_notification_gate():
+    # Direct proof of the fix: a healthy hour with no automated candidate but
+    # real pressure evidence now produces a primary_direction the
+    # notification gate actually accepts, closing the suppression gap.
+    bias = mo._resolve_hourly_bias(_no_candidate_m10(actionable=False), {"buy_pressure": 62, "sell_pressure": 38})
+    assert bias["direction_label"] in ("BUY", "SELL")

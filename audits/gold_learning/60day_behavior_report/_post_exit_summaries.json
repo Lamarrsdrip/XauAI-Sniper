@@ -1,0 +1,44 @@
+{
+  "core_10m": {
+    "label": "CORE profitable, 10-minute",
+    "n": 123,
+    "n_with_additional_movement": 120,
+    "n_missing_010R": 82,
+    "n_missing_025R": 39,
+    "n_missing_050R": 15,
+    "n_missing_100R": 2,
+    "avg_missed_r": 0.2485,
+    "median_missed_r": 0.1641,
+    "p75_missed_r": 0.305,
+    "p90_missed_r": 0.576,
+    "max_missed_r": 2.8964,
+    "total_missed_r": 30.5713,
+    "n_returned_to_entry": 45,
+    "n_sl_crossed": 2
+  },
+  "core_20m": {
+    "label": "CORE profitable, 20-minute",
+    "n": 0
+  },
+  "all_10m": {
+    "label": "All profitable (incl. pyramids), 10-minute",
+    "n": 151,
+    "n_with_additional_movement": 148,
+    "n_missing_010R": 101,
+    "n_missing_025R": 49,
+    "n_missing_050R": 20,
+    "n_missing_100R": 2,
+    "avg_missed_r": 0.2485,
+    "median_missed_r": 0.161,
+    "p75_missed_r": 0.3443,
+    "p90_missed_r": 0.5643,
+    "max_missed_r": 2.8964,
+    "total_missed_r": 37.5189,
+    "n_returned_to_entry": 58,
+    "n_sl_crossed": 2
+  },
+  "all_20m": {
+    "label": "All profitable (incl. pyramids), 20-minute",
+    "n": 0
+  }
+}

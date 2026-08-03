@@ -1,0 +1,124 @@
+diff --git a/backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 b/backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+index 9d4562a..ab109bb 100644
+--- a/backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
++++ b/backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+@@ -1979,7 +1979,7 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
+ 
+ #define XAUAI_EA_VERSION "v6.25.6"
+ #define XAUAI_EA_VERSION_NUM "6.25.6"
+-#define XAUAI_BUILD_HASH "v6256-m30-exhaustion-scope-fix-lifecycle-telemetry-20260718"
++#define XAUAI_BUILD_HASH "v6256-plus-20min-post-close-research-telemetry-only-20260718"
+ #define XAU_COUNTER_EXCURSION_BUILD true
+ 
+ // v6.25.0 owner directive 2026-07-17 -- canonical primary decision timeframe.
+@@ -17861,6 +17861,7 @@ void OnTick()
+    // smaller position in the same direction while signal holds.
+    XAU_UpdateOpenTradeQuality();
+    XAU_UpdateClosedTradeOutcomes();
++   XAU_UpdateClosedTradeOutcomes20MinOnly(); // v6.25.7 telemetry-only, see definition
+    CheckPyramidOpportunity();
+ 
+    // === THROTTLED DASHBOARD REFRESH (every 2s, keeps UI live between bars) ===
+@@ -31019,6 +31020,7 @@ void XAU_BrainWatchClosedTrade(TradeBrainOpen &r, double closePrice, double clos
+          " closePrice=", DoubleToString(closePrice, 2),
+          " closeProfit=$", DoubleToString(closeProfit, 2),
+          " will monitor 5/10/15/30/60m to judge early-vs-good exit.");
++   XAU_BrainWatchClosedTrade20MinOnly(r, closePrice, closeProfit);
+ }
+ 
+ void XAU_EVPostCloseReview(TradeBrainOpen &r, string verdict,
+@@ -31085,6 +31087,94 @@ void XAU_UpdateClosedTradeReviews()
+    XAU_UpdateClosedTradeOutcomes();
+ }
+ 
++// v6.25.7 owner-forensic-audit 2026-07-18 -- TELEMETRY-ONLY 20-minute
++// post-close checkpoint. The existing exit-learning pipeline immediately
++// above (XAU_BrainWatchClosedTrade / XAU_UpdateClosedTradeOutcomes /
++// XAU_EVPostCloseReview) only has 5/10/15/30/60m checkpoints, and its
++// XAU_EVPostCloseReview() call mutates g_evExitLearningBias /
++// g_exitBiasKeys, which XAU_EvaluateExitEV() reads back on live exit
++// decisions for LATER trades in the same run -- so adding a 6th checkpoint
++// into that same pipeline would change the bias trajectory and therefore
++// change which later trades get how much continuation-probability nudge,
++// which is a real trading-logic change, not telemetry. This is a fully
++// separate, parallel array/function pair instead: same closePrice/
++// closeProfit/dir/atr source data, its own independent running max, ONE
++// print at exactly +20 minutes, then done. It never calls
++// XAU_EVPostCloseReview, never touches g_evExitLearningBias or
++// g_exitBiasKeys, never calls XAU_AppendTradeBrain or
++// XAU_AppendConsciousMemory (both read back by live decisions elsewhere --
++// lot-sizing and XAU_EvaluateExitEV respectively). It only reads
++// SymbolInfoDouble(BID/ASK) and TimeCurrent() and prints. Uses the exact
++// executable-price convention requested for this analysis (Bid for a BUY's
++// favorable/adverse measurement, Ask for a SELL's) rather than the
++// existing pipeline's bid/ask midpoint, so both conventions are available
++// side by side for comparison.
++TradeBrainClosedWatch g_brainClosedWatch20m[];
++
++void XAU_BrainWatchClosedTrade20MinOnly(TradeBrainOpen &r, double closePrice, double closeProfit)
++{
++   if(!InpTradeBrainMemory || !InpTradeBrainMonitorAfterExit || !IsXAUFastSymbol()) return;
++   if(r.posId == 0 || r.dir == 0 || closePrice <= 0.0) return;
++   int n = ArraySize(g_brainClosedWatch20m);
++   if(n >= 60)
++   {
++      for(int i = 0; i < n - 1; i++) g_brainClosedWatch20m[i] = g_brainClosedWatch20m[i + 1];
++      ArrayResize(g_brainClosedWatch20m, n - 1);
++      n--;
++   }
++   ArrayResize(g_brainClosedWatch20m, n + 1);
++   g_brainClosedWatch20m[n].active = true;
++   g_brainClosedWatch20m[n].closeTime = TimeCurrent();
++   g_brainClosedWatch20m[n].nextCheckpointMin = 20;
++   g_brainClosedWatch20m[n].closePrice = closePrice;
++   g_brainClosedWatch20m[n].closeProfit = closeProfit;
++   g_brainClosedWatch20m[n].maxMoreMove = 0.0;
++   g_brainClosedWatch20m[n].maxReverseMove = 0.0;
++   g_brainClosedWatch20m[n].rec = r;
++}
++
++void XAU_UpdateClosedTradeOutcomes20MinOnly()
++{
++   if(!InpTradeBrainMemory || !InpTradeBrainMonitorAfterExit || !IsXAUFastSymbol()) return;
++   int n = ArraySize(g_brainClosedWatch20m);
++   if(n <= 0) return;
++   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
++   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
++   if(bid <= 0.0 || ask <= 0.0) return;
++
++   for(int i = n - 1; i >= 0; i--)
++   {
++      if(!g_brainClosedWatch20m[i].active) continue;
++      TradeBrainOpen r = g_brainClosedWatch20m[i].rec;
++      // BUY's favorable/adverse move is measured off Bid (the price a BUY
++      // would actually close at); SELL's off Ask -- the exact executable-
++      // price convention this analysis requested, not the existing
++      // pipeline's bid/ask midpoint.
++      double execPrice = (r.dir > 0) ? bid : ask;
++      double moveAfterClose = r.dir > 0 ? (execPrice - g_brainClosedWatch20m[i].closePrice)
++                                        : (g_brainClosedWatch20m[i].closePrice - execPrice);
++      g_brainClosedWatch20m[i].maxMoreMove = MathMax(g_brainClosedWatch20m[i].maxMoreMove, moveAfterClose);
++      g_brainClosedWatch20m[i].maxReverseMove = MathMax(g_brainClosedWatch20m[i].maxReverseMove, -moveAfterClose);
++
++      int ageMin = (int)((TimeCurrent() - g_brainClosedWatch20m[i].closeTime) / 60);
++      if(ageMin < 20) continue;
++
++      double atr = MathMax(r.atr, 0.01);
++      PrintFormat("POST_CLOSE_20M_TELEMETRY_ONLY posId=%I64u dir=%s closePrice=%.5f closeProfit=%.2f "
++                  "maxMoreMove=%.5f maxReverseMove=%.5f maxMoreATR=%.4f maxReverseATR=%.4f atr=%.5f "
++                  "bidNow=%.5f askNow=%.5f",
++                  r.posId, r.dir > 0 ? "BUY" : "SELL", g_brainClosedWatch20m[i].closePrice,
++                  g_brainClosedWatch20m[i].closeProfit,
++                  g_brainClosedWatch20m[i].maxMoreMove, g_brainClosedWatch20m[i].maxReverseMove,
++                  g_brainClosedWatch20m[i].maxMoreMove / atr, g_brainClosedWatch20m[i].maxReverseMove / atr,
++                  atr, bid, ask);
++      g_brainClosedWatch20m[i].active = false;
++      for(int j = i; j < n - 1; j++) g_brainClosedWatch20m[j] = g_brainClosedWatch20m[j + 1];
++      ArrayResize(g_brainClosedWatch20m, n - 1);
++      n--;
++   }
++}
++
+ void XAU_UpdateClosedTradeOutcomes()
+ {
+    if(!InpTradeBrainMemory || !InpTradeBrainMonitorAfterExit || !IsXAUFastSymbol()) return;

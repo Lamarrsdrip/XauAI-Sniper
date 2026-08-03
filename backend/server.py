@@ -8,6 +8,8 @@ from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os, logging, io, zipfile, random, string, time, uuid, secrets, smtplib, bcrypt, jwt, httpx, asyncio, re, hashlib, hmac, json as _json
+from pymongo.errors import DuplicateKeyError
+from pymongo import ReturnDocument
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
@@ -17,8 +19,9 @@ from datetime import datetime, timezone, timedelta
 try:
     from emergentintegrations.llm.chat import LlmChat, UserMessage
 except ImportError:
-    LlmChat = None
-    UserMessage = None
+    from llm_adapter import LlmChat, UserMessage
+import performance_engine
+import lease_service
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -27,18 +30,40 @@ db = client[os.environ['DB_NAME']]
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
+# v6.25.3 owner directive 2026-07-17 (Phase 6 P0, final pre-launch hardening)
+# -- unknown/unset ENVIRONMENT is treated as production (the strict,
+# fail-closed default), not development -- a misconfigured deployment must
+# never silently fall back to the permissive local-dev behavior below.
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "production").strip().lower()
+IS_PRODUCTION = ENVIRONMENT not in ("development", "dev", "local", "test", "testing")
+
+
 def _load_or_create_jwt_secret() -> str:
-    """v6.5.0 (audit bug #9): a fresh secrets.token_hex(32) on every process
-    start invalidates every session on restart and, on a multi-worker
-    deployment, makes tokens minted by one worker invalid on another — and
-    the Fernet key derived from this secret makes any data encrypted with it
-    unrecoverable after a restart if the env var was never set. Persist a
-    generated secret to a local file so restarts/workers on the same machine
-    share it, while still preferring the JWT_SECRET env var when set (the
-    only option that also works across separate machines)."""
+    """v6.5.0 (audit bug #9), hardened v6.25.3 (Phase 6 P0) -- a fresh
+    secrets.token_hex(32) on every process start invalidates every session
+    on restart and, on a multi-worker deployment, makes tokens minted by one
+    worker invalid on another. The old fix persisted a generated secret to a
+    local file (.jwt_secret) so restarts on the SAME machine shared it -- but
+    that is itself a real security gap in production: the secret ends up
+    sitting in a container filesystem instead of the deployment's secret
+    manager, and a second instance/redeploy on a different filesystem still
+    gets a DIFFERENT secret, silently invalidating every session and any
+    Fernet-encrypted data. In production, refuse to start rather than paper
+    over a missing JWT_SECRET with an auto-generated one -- this is a fail
+    startup, not fail open, by design. Only local development (ENVIRONMENT=
+    development) gets the old persist-to-disk fallback."""
     env_secret = os.environ.get('JWT_SECRET')
     if env_secret:
         return env_secret
+    if IS_PRODUCTION:
+        raise RuntimeError(
+            "JWT_SECRET environment variable is not set. Refusing to start in production with "
+            "an auto-generated secret -- this invalidates every session on every restart across "
+            "a multi-instance deployment and risks a real secret sitting in a container "
+            "filesystem instead of the deployment's secret manager. Set JWT_SECRET explicitly "
+            "(a long random value, e.g. `python3 -c \"import secrets; print(secrets.token_hex(32))\"`), "
+            "or set ENVIRONMENT=development for local work only."
+        )
     secret_file = ROOT_DIR / '.jwt_secret'
     try:
         if secret_file.exists():
@@ -46,8 +71,8 @@ def _load_or_create_jwt_secret() -> str:
         new_secret = secrets.token_hex(32)
         secret_file.write_text(new_secret, encoding='utf-8')
         logging.getLogger(__name__).warning(
-            f"JWT_SECRET env var not set — generated and persisted a secret to {secret_file}. "
-            "Set JWT_SECRET explicitly for multi-machine deployments."
+            f"JWT_SECRET env var not set — generated and persisted a secret to {secret_file} "
+            "(development mode only). Set JWT_SECRET explicitly for anything beyond local work."
         )
         return new_secret
     except OSError:
@@ -57,29 +82,58 @@ def _load_or_create_jwt_secret() -> str:
 
 JWT_SECRET = _load_or_create_jwt_secret()
 JWT_ALGORITHM = "HS256"
+
+# v6.25.3 owner directive 2026-07-17 (Phase 6 P0, final pre-launch hardening)
+# -- simple, dependency-free rate limiting. Deliberately NOT a new pip
+# package (slowapi/limits/etc.) -- this session already hit a real
+# production outage (push notifications) caused by a new dependency that
+# was declared in requirements.txt but never actually installed in the
+# deployed environment; a hand-rolled stdlib limiter cannot fail that way.
+# Per-process, in-memory, not shared across worker processes -- acceptable
+# for this deployment's scale; the goal is to blunt casual brute-force/
+# credential-stuffing/spam, not provide distributed-systems-grade limiting.
+_rate_limit_buckets: Dict[str, list] = {}
+
+
+def _rate_limit(key: str, max_requests: int, window_seconds: int) -> None:
+    """Raises HTTPException(429) if `key` has already been called
+    max_requests-or-more times in the last window_seconds; otherwise
+    records this call. Call at the top of any endpoint that needs
+    throttling, keyed by something like f"login:{client_ip}"."""
+    now = time.time()
+    cutoff = now - window_seconds
+    bucket = _rate_limit_buckets.setdefault(key, [])
+    while bucket and bucket[0] < cutoff:
+        bucket.pop(0)
+    if len(bucket) >= max_requests:
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait before trying again.")
+    bucket.append(now)
+    # Bound memory -- occasionally prune buckets that have gone fully quiet,
+    # instead of running a dedicated background task for it.
+    if len(_rate_limit_buckets) > 5000 and random.random() < 0.01:
+        for k in [k for k, v in _rate_limit_buckets.items() if not v]:
+            _rate_limit_buckets.pop(k, None)
+
+
+def _client_ip(request: Request) -> str:
+    # X-Forwarded-For is set by the reverse proxy in front of this backend;
+    # request.client.host alone would be the proxy's own address, not the
+    # real caller, behind Emergent's ingress.
+    fwd = request.headers.get("X-Forwarded-For", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 PAYSTACK_BASE_URL = "https://api.paystack.co"
 
-# Order lifecycle states (XauCloud commerce upgrade). A payment_transactions
-# doc's "status" field always holds exactly one of these; "payment_status"
-# ("pending"/"success") is kept alongside for backward compatibility with
-# existing frontend code that reads it, but new logic should read "status".
-ORDER_CREATED = "ORDER_CREATED"
-PAYMENT_PENDING = "PAYMENT_PENDING"
-PROVIDER_PROCESSING = "PROVIDER_PROCESSING"
-PAYMENT_CONFIRMED = "PAYMENT_CONFIRMED"
-FULFILLED = "FULFILLED"
-PAYMENT_FAILED = "PAYMENT_FAILED"
-PAYMENT_CANCELLED = "PAYMENT_CANCELLED"
-PAYMENT_EXPIRED = "PAYMENT_EXPIRED"
-REFUNDED = "REFUNDED"
-CHARGEBACK = "CHARGEBACK"
-PAID_FULFILLMENT_PENDING = "PAID_FULFILLMENT_PENDING"
-BANK_TRANSFER_PENDING = "BANK_TRANSFER_PENDING"
-BANK_TRANSFER_SUBMITTED = "BANK_TRANSFER_SUBMITTED"
-UNDER_ADMIN_REVIEW = "UNDER_ADMIN_REVIEW"
-BANK_TRANSFER_APPROVED = "BANK_TRANSFER_APPROVED"
-BANK_TRANSFER_REJECTED = "BANK_TRANSFER_REJECTED"
-BANK_TRANSFER_EXPIRED = "BANK_TRANSFER_EXPIRED"
+# v6.25.3 owner directive 2026-07-17 (final pre-launch hardening, Phase 2) --
+# the Paystack callback_url used to be built directly from a client-supplied
+# origin_url with no allowlist, so any caller of /purchase/initialize could
+# redirect the post-payment browser flow to an arbitrary attacker-controlled
+# domain. PUBLIC_SITE_URL is the one canonical, operator-controlled origin
+# every payment callback is built from -- client input is never used for it.
+PUBLIC_SITE_URL = os.environ.get("PUBLIC_SITE_URL", "https://xauaisniper.com").rstrip("/")
 LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 AI_COST_DAILY_CALL_LIMIT = int(os.environ.get("AI_COST_DAILY_CALL_LIMIT", "120"))
 AI_COST_MIN_SECONDS = int(os.environ.get("AI_COST_MIN_SECONDS", "45"))
@@ -287,7 +341,7 @@ def _record_ai_cost(provider: str, model: str, prompt: str, response_text: str,
     account_bucket["calls"] += 1
     account_bucket["last_call_at"] = time.time()
     entry = {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(timezone.utc),
         "purpose": purpose,
         "provider": provider,
         "model": model,
@@ -448,11 +502,43 @@ class AdminSettingsUpdate(BaseModel):
     pin_price_kobo: Optional[int] = None
     smtp_email: Optional[str] = None
     smtp_password: Optional[str] = None
+    # v6.25.3 owner directive 2026-07-17 -- OneSignal REST API credentials.
+    # Replaces self-hosted Web Push (pywebpush), which was permanently
+    # blocked by a missing Python package in the deployed environment that
+    # only a full backend rebuild could fix. OneSignal needs nothing but a
+    # plain HTTPS POST (via `requests`, already installed and working), so
+    # it can't fail the same way. onesignal_app_id is not secret (the
+    # frontend SDK needs it directly); onesignal_api_key is.
+    onesignal_app_id: Optional[str] = None
+    onesignal_api_key: Optional[str] = None
 
 class AdminAccountUpdate(BaseModel):
     new_email: Optional[str] = None
     new_password: Optional[str] = None
     current_password: str
+
+class NombaConfigUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    enabled: Optional[bool] = None
+    environment: Optional[str] = None  # "sandbox" | "production"
+    sandbox_client_id: Optional[str] = None
+    sandbox_client_secret: Optional[str] = None
+    sandbox_account_id: Optional[str] = None
+    sandbox_webhook_signature_key: Optional[str] = None
+    production_client_id: Optional[str] = None
+    production_client_secret: Optional[str] = None
+    production_account_id: Optional[str] = None
+    production_webhook_signature_key: Optional[str] = None
+    allowed_payment_methods: Optional[List[str]] = None
+    currency: Optional[str] = None
+    payment_description: Optional[str] = None
+    # Required only when this request changes anything under "production"
+    # (any production_* field, or environment -> "production") -- the
+    # owner's spec calls for "fresh administrator authentication ... before
+    # replacing production credentials", mirroring the existing
+    # AdminAccountUpdate.current_password pattern used for email/password
+    # changes (see update_admin_account() below).
+    current_password: Optional[str] = None
 
 # -------------------------------------------------------------------
 # GOLD PRICE
@@ -489,98 +575,27 @@ async def fetch_live_gold_price() -> Dict:
     except Exception as e: logger.warning(f"Gold scrape: {e}")
     source = "live"
     if price is None:
-        if _gold_cache and _gold_cache.get('bid'): return _gold_cache
-        # v6.24.17 audit fix: this hardcoded constant (originally accurate the
-        # day it was written) silently masqueraded as source="live" whenever
-        # the Google Finance scrape failed and no cache existed yet -- e.g.
-        # after a page-structure change breaks the CSS selectors above. A
-        # caller (AI Market Outlook) using this as ground truth for an actual
-        # gold price produced a real production incident: an entry zone ~$960
-        # away from the live broker price. This third-party scrape is NOT an
-        # authoritative price source for anything trade-relevant -- see
-        # market_outlook.py's generate_outlook_for_account, which must use
-        # the EA's own reported broker bid/ask instead and only falls back to
-        # this function, if at all, with source honestly marked as such.
-        price, change, change_pct = 4957.0, 0.0, 0.0
-        source = "fallback_stale_constant"
+        if _gold_cache and _gold_cache.get('available') and _gold_cache.get('bid'):
+            return {**_gold_cache, "source": "cached_live", "stale": True}
+        # Forensic repair: a failed quote provider is unavailable, not a
+        # licence to invent a market price or spread. This endpoint is display
+        # only; broker-reported prices remain the only execution authority.
+        return {
+            "symbol": "XAUUSD", "available": False, "bid": None, "ask": None,
+            "spread": None, "change": None, "change_pct": None,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "source": "unavailable", "stale": False,
+        }
     if change is None: change = 0.0
     if change_pct is None: change_pct = round(change/price*100, 3) if price else 0.0
-    sp = round(secrets.randbelow(500) / 1000 + 0.3, 2)
-    result = {"symbol":"XAUUSD","bid":round(price,2),"ask":round(price+sp,2),"spread":sp,"change":round(change,2),"change_pct":round(change_pct,3),"timestamp":datetime.now(timezone.utc).isoformat(),"source":source}
+    # The scraped source has no broker spread. Do not fabricate one.
+    result = {"symbol":"XAUUSD","available":True,"bid":round(price,2),"ask":None,"spread":None,"change":round(change,2),"change_pct":round(change_pct,3),"timestamp":datetime.now(timezone.utc).isoformat(),"source":source,"stale":False}
     _gold_cache, _gold_cache_time = result, now
     return result
 
 def generate_unique_pin():
     chars = string.ascii_uppercase + string.digits
     return f"ASE-{''.join(secrets.choice(chars) for _ in range(4))}-{''.join(secrets.choice(chars) for _ in range(4))}"
-
-async def _issue_pin_license(buyer_name: str, buyer_email: str, payment_ref: Optional[str], notes: str) -> str:
-    """Generate a fresh, collision-checked PIN and persist the license.
-    Callers that fulfill a paid transaction must first win the atomic claim
-    in _claim_transaction_fulfillment() so this never runs twice for the
-    same order (previously the webhook path skipped the collision check
-    that this path has, and both the webhook and /purchase/verify could
-    race each other into minting two PINs for one payment)."""
-    pin = generate_unique_pin()
-    while await db.pin_licenses.find_one({"pin": pin}):
-        pin = generate_unique_pin()
-    doc = PinLicense(pin=pin, buyer_name=buyer_name, buyer_email=buyer_email, notes=notes, payment_ref=payment_ref).model_dump()
-    await db.pin_licenses.insert_one(doc)
-    return pin
-
-async def _claim_transaction_fulfillment(reference: str) -> Optional[dict]:
-    """Atomically claim the right to fulfill a payment_transactions doc
-    exactly once. Returns the pre-claim document if this call won the race
-    (caller must proceed to mint a license), or None if the reference
-    doesn't exist or was already claimed/fulfilled by another caller (the
-    webhook and the customer's browser polling /purchase/verify can arrive
-    concurrently for the same reference)."""
-    return await db.payment_transactions.find_one_and_update(
-        {"reference": reference, "pin_generated": None},
-        {"$set": {"fulfillment_claimed_at": datetime.now(timezone.utc).isoformat(), "status": PAYMENT_CONFIRMED}},
-    )
-
-async def _fulfill_confirmed_payment(claimed: dict, reference: str, notes_prefix: str) -> str:
-    """Mint a license for an already-claimed (atomically confirmed) payment
-    and advance its status to FULFILLED — or to PAID_FULFILLMENT_PENDING if
-    the confirmation email fails to send, since the payment and license are
-    still valid and only delivery needs a retry, not a refund."""
-    pin = await _issue_pin_license(claimed.get("buyer_name",""), claimed.get("buyer_email",""), reference, f"{notes_prefix} - {reference}")
-    email_sent = await send_pin_email(claimed.get("buyer_email",""), claimed.get("buyer_name",""), pin)
-    final_status = FULFILLED if email_sent else PAID_FULFILLMENT_PENDING
-    await db.payment_transactions.update_one(
-        {"reference": reference},
-        {
-            "$set": {"pin_generated": pin, "payment_status": "success", "status": final_status},
-            "$push": {"fulfillment_attempts": {"at": datetime.now(timezone.utc).isoformat(), "email_sent": email_sent}},
-        },
-    )
-    if not email_sent:
-        logger.error(f"Fulfillment email failed for {reference} — order held at PAID_FULFILLMENT_PENDING, license {pin} already issued")
-    return pin
-
-def _paystack_amounts_match(provider_data: dict, tx: dict) -> bool:
-    amount_ok = provider_data.get("amount") == tx.get("amount_kobo")
-    currency_ok = (provider_data.get("currency") or "").upper() == (tx.get("currency") or "NGN").upper()
-    return amount_ok and currency_ok
-
-def _verify_paystack_signature(raw_body: bytes, signature: str, secret: str) -> bool:
-    if not secret or not signature:
-        return False
-    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha512).hexdigest()
-    return hmac.compare_digest(expected, signature)
-
-async def _log_webhook_event(source: str, event_type: str, reference: str, signature_valid: bool, outcome: str, detail: str = ""):
-    await db.webhook_events.insert_one({
-        "id": str(uuid.uuid4()),
-        "source": source,
-        "event_type": event_type,
-        "reference": reference,
-        "signature_valid": signature_valid,
-        "outcome": outcome,
-        "detail": detail,
-        "received_at": datetime.now(timezone.utc).isoformat(),
-    })
 
 async def get_settings():
     s = await db.admin_settings.find_one({"key": "main"}, {"_id": 0})
@@ -590,20 +605,110 @@ async def get_settings():
         s.pop('_id', None)
     return s
 
-async def send_pin_email(to_email: str, buyer_name: str, pin: str):
+# -------------------------------------------------------------------
+# NOMBA PAYMENT CONFIG -- separate collection from admin_settings
+# (which stores Paystack/SMTP/OneSignal as plaintext) because Nomba
+# credentials are encrypted at rest via payment_crypto.py, per the
+# owner's explicit spec for this migration. See
+# audits/nomba_migration/03_implementation_notes.md for the full
+# rationale.
+# -------------------------------------------------------------------
+_NOMBA_CONFIG_DEFAULT_METHODS = ["card", "transfer", "ussd", "qr"]
+
+def _empty_nomba_env_block() -> dict:
+    return {
+        "client_id_enc": None, "client_secret_enc": None,
+        "account_id_enc": None, "webhook_signature_key_enc": None,
+        "last_validated_at": None, "last_validation_ok": None,
+        "last_validation_error": None,
+    }
+
+async def get_nomba_config() -> dict:
+    cfg = await db.payment_nomba_config.find_one({"key": "main"}, {"_id": 0})
+    if not cfg:
+        cfg = {
+            "key": "main", "enabled": False, "environment": "sandbox",
+            "sandbox": _empty_nomba_env_block(), "production": _empty_nomba_env_block(),
+            "allowed_payment_methods": _NOMBA_CONFIG_DEFAULT_METHODS,
+            "currency": "NGN", "payment_description": "XauCloud EA Lifetime License",
+        }
+        await db.payment_nomba_config.insert_one(cfg)
+        cfg.pop('_id', None)
+    return cfg
+
+def _decrypt_nomba_env_block(env_block: dict, environment: str):
+    """Returns a nomba_service.NombaCredentials or None if any required
+    field is missing/unconfigured for this environment."""
+    import payment_crypto as _pc
+    import nomba_service as _nomba
+    try:
+        client_id = _pc.decrypt_secret(env_block.get("client_id_enc"))
+        client_secret = _pc.decrypt_secret(env_block.get("client_secret_enc"))
+        account_id = _pc.decrypt_secret(env_block.get("account_id_enc"))
+        webhook_key = _pc.decrypt_secret(env_block.get("webhook_signature_key_enc"))
+    except Exception as exc:
+        logger.error(f"NOMBA_CONFIG_DECRYPT_FAILED env={environment}: {exc}")
+        return None
+    if not (client_id and client_secret and account_id):
+        return None
+    return _nomba.NombaCredentials(
+        client_id=client_id, client_secret=client_secret, account_id=account_id,
+        webhook_signature_key=webhook_key, environment=environment,
+    )
+
+async def get_active_nomba_credentials():
+    """Returns (config_dict, NombaCredentials) for the currently active
+    environment, or (config_dict, None) if Nomba is disabled or the
+    active environment isn't fully configured yet. Never raises -- every
+    caller (checkout init, webhook) must treat 'not configured' as a
+    normal, handled state (503 to the customer), not a crash."""
+    cfg = await get_nomba_config()
+    if not cfg.get("enabled"):
+        return cfg, None
+    environment = cfg.get("environment", "sandbox")
+    env_block = cfg.get(environment) or _empty_nomba_env_block()
+    creds = _decrypt_nomba_env_block(env_block, environment)
+    return cfg, creds
+
+async def _log_nomba_config_audit(admin_email: str, changed_fields: list, environment: str, test_passed: Optional[bool]):
+    await db.payment_config_audit_log.insert_one({
+        "id": str(uuid.uuid4()),
+        "provider": "NOMBA",
+        "admin_email": admin_email,
+        "changed_fields": changed_fields,  # field NAMES only, never values
+        "environment": environment,
+        "test_connection_passed": test_passed,
+        "at": datetime.now(timezone.utc).isoformat(),
+    })
+
+async def _send_email(to_email: str, subject: str, html: str) -> bool:
+    """v6.25.3 owner directive 2026-07-17 (Phase 6 P0) -- shared SMTP sender,
+    extracted from send_pin_email's own inline logic so the new password-
+    reset flow doesn't duplicate the same Gmail SMTP_SSL boilerplate."""
     settings = await get_settings()
     smtp_email = settings.get("smtp_email", "")
     smtp_password = settings.get("smtp_password", "")
     if not smtp_email or not smtp_password:
-        logger.info(f"Email not configured. PIN {pin} for {to_email} not sent.")
+        logger.info(f"Email not configured. Message to {to_email} ({subject}) not sent.")
         return False
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "Your XauAI Sniper EA License PIN"
+        msg["Subject"] = subject
         msg["From"] = smtp_email
         msg["To"] = to_email
-        html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
-<h2 style="color:#B8860B;">XauAI Sniper EA - License PIN</h2>
+        msg.attach(MIMEText(html, "html"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(smtp_email, smtp_password)
+            server.sendmail(smtp_email, to_email, msg.as_string())
+        logger.info(f"Email sent to {to_email}: {subject}")
+        return True
+    except Exception as e:
+        logger.error(f"Email send failed: {e}")
+        return False
+
+async def send_pin_email(to_email: str, buyer_name: str, pin: str):
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+<h2 style="color:#B8860B;">XauCloud EA - License PIN</h2>
 <p>Hello {buyer_name or 'Trader'},</p>
 <p>Thank you for your purchase! Here is your unique license PIN:</p>
 <div style="background:#f5f5f5;border:2px solid #B8860B;padding:20px;text-align:center;margin:20px 0;">
@@ -613,15 +718,7 @@ async def send_pin_email(to_email: str, buyer_name: str, pin: str):
 <ol><li>Download the EA from our website</li><li>Install on MetaTrader 5 (follow our Setup Guide)</li><li>Enter this PIN in the EA settings</li><li>Enable Auto Trading and start!</li></ol>
 <p style="color:#888;font-size:12px;">Keep this PIN private. Each PIN works on one MT5 account.</p>
 </div>"""
-        msg.attach(MIMEText(html, "html"))
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(smtp_email, smtp_password)
-            server.sendmail(smtp_email, to_email, msg.as_string())
-        logger.info(f"PIN email sent to {to_email}")
-        return True
-    except Exception as e:
-        logger.error(f"Email send failed: {e}")
-        return False
+    return await _send_email(to_email, "Your XauCloud EA License PIN", html)
 
 # -------------------------------------------------------------------
 # PUBLIC ROUTES
@@ -629,7 +726,7 @@ async def send_pin_email(to_email: str, buyer_name: str, pin: str):
 
 @api_router.get("/")
 async def root():
-    return {"message": "XauAI Sniper EA API v2.0"}
+    return {"message": "XauCloud EA API v2.0"}
 
 @api_router.get("/health")
 async def health():
@@ -639,22 +736,180 @@ async def health():
 async def get_gold_price():
     return await fetch_live_gold_price()
 
-# --- Auth ---
-@api_router.post("/auth/login")
-async def login(req: LoginRequest):
-    user = await db.users.find_one({"email": req.email.lower()})
-    if not user or not verify_password(req.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+# --- Admin MFA/TOTP (v6.25.3 owner directive 2026-07-17, Phase 6 P0) ------
+# RFC 6238 TOTP, implemented with stdlib hmac/hashlib/base64/struct only --
+# deliberately NOT a new pip dependency (pyotp etc.), for the same reason
+# OneSignal replaced the self-hosted push system earlier this phase: a new
+# package declared in requirements.txt but never actually installed in the
+# deployed environment is exactly what caused a real production outage
+# earlier in this project. This is ~20 lines of well-specified, easily
+# tested math -- not worth that risk.
+def _generate_totp_secret() -> str:
+    import base64 as _b64
+    return _b64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+
+def _totp_code(secret_b32: str, for_time: float, period: int = 30, digits: int = 6) -> str:
+    import base64 as _b64, struct as _struct
+    key = _b64.b32decode(secret_b32 + "=" * ((8 - len(secret_b32) % 8) % 8), casefold=True)
+    counter = int(for_time // period)
+    msg = _struct.pack(">Q", counter)
+    digest = hmac.new(key, msg, hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    truncated = _struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF
+    return str(truncated % (10 ** digits)).zfill(digits)
+
+def _verify_totp(secret_b32: str, code: str, window: int = 1, period: int = 30) -> bool:
+    code = (code or "").strip()
+    if not code.isdigit():
+        return False
+    now = time.time()
+    return any(
+        hmac.compare_digest(_totp_code(secret_b32, now + offset * period, period), code)
+        for offset in range(-window, window + 1)
+    )
+
+def _admin_mfa_pending_token(email: str) -> str:
+    # Keyed by email, not _id -- matches get_current_admin's own lookup
+    # (db.users.find_one({"email": ...})), and avoids needing to parse a
+    # stringified ObjectId back out of the JWT.
+    return jwt.encode(
+        {"email": email, "type": "admin_mfa_pending",
+         "exp": datetime.now(timezone.utc) + timedelta(minutes=5)},
+        JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def _issue_admin_session(user: dict) -> JSONResponse:
     token = create_access_token(str(user["_id"]), user["email"])
-    response = JSONResponse(content={"email": user["email"], "name": user.get("name","Admin"), "role": user.get("role","admin"), "token": token})
+    response = JSONResponse(content={"email": user["email"], "name": user.get("name","Admin"), "role": user.get("role","admin")})
     # v6.5.0 (audit bug #9): secure=False meant the admin session cookie could
     # be sent over plain HTTP, exposing it to network interception. Default to
     # secure=True (safe for the production HTTPS deployment); COOKIE_SECURE=false
     # is available for local HTTP-only development.
+    # v6.25.3 owner directive 2026-07-17 (Phase 6 P0 -- CSRF hardening) --
+    # strict rather than lax: the admin portal has no legitimate top-level
+    # cross-site navigation into an authenticated action, so there's no
+    # workflow this can break, and it closes the (already narrow, since
+    # every mutating admin route is POST/PUT/DELETE which lax already
+    # blocks cross-site) remaining edge case around lax's top-level-GET
+    # allowance.
     response.set_cookie(key="access_token", value=token, httponly=True,
                         secure=os.environ.get('COOKIE_SECURE', 'true').lower() != 'false',
-                        samesite="lax", max_age=86400, path="/")
+                        samesite="strict", max_age=86400, path="/")
     return response
+
+# --- Auth ---
+@api_router.post("/auth/login")
+async def login(req: LoginRequest, request: Request):
+    # v6.25.3 owner directive 2026-07-17 (Phase 6 P0) -- rate-limited by both
+    # IP and the targeted email, so an attacker can't dodge the IP limit by
+    # spraying many emails from one address, nor dodge the email limit by
+    # rotating IPs against one known admin account.
+    ip = _client_ip(request)
+    _rate_limit(f"admin_login_ip:{ip}", max_requests=10, window_seconds=300)
+    _rate_limit(f"admin_login_email:{req.email.lower()}", max_requests=5, window_seconds=300)
+    user = await db.users.find_one({"email": req.email.lower()})
+    if not user or not verify_password(req.password, user["password_hash"]):
+        await db.login_audit_log.insert_one({
+            "id": str(uuid.uuid4()), "email": req.email.lower(), "ip": ip, "ok": False,
+            "role": "admin", "ts": datetime.now(timezone.utc),
+        })
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if user.get("mfa_enabled"):
+        # Password correct, but the session isn't issued until the TOTP
+        # code is also verified via /auth/login/mfa -- audit-logged as a
+        # distinct "password_ok_awaiting_mfa" entry, not a full success.
+        await db.login_audit_log.insert_one({
+            "id": str(uuid.uuid4()), "email": user["email"], "ip": ip, "ok": False,
+            "role": "admin", "ts": datetime.now(timezone.utc), "stage": "password_ok_awaiting_mfa",
+        })
+        return {"mfa_required": True, "mfa_token": _admin_mfa_pending_token(user["email"])}
+    await db.login_audit_log.insert_one({
+        "id": str(uuid.uuid4()), "email": user["email"], "ip": ip, "ok": True,
+        "role": "admin", "ts": datetime.now(timezone.utc),
+    })
+    return _issue_admin_session(user)
+
+class AdminMfaLoginReq(BaseModel):
+    mfa_token: str
+    code: str
+
+@api_router.post("/auth/login/mfa")
+async def login_mfa(req: AdminMfaLoginReq, request: Request):
+    ip = _client_ip(request)
+    _rate_limit(f"admin_mfa_ip:{ip}", max_requests=10, window_seconds=300)
+    try:
+        payload = jwt.decode(req.mfa_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="MFA session expired. Log in again.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid MFA session.")
+    if payload.get("type") != "admin_mfa_pending":
+        raise HTTPException(status_code=401, detail="Invalid MFA session.")
+    user = await db.users.find_one({"email": payload.get("email")})
+    if not user or not user.get("mfa_enabled") or not user.get("mfa_secret_enc"):
+        raise HTTPException(status_code=401, detail="MFA is not active on this account.")
+    _rate_limit(f"admin_mfa_email:{user['email']}", max_requests=8, window_seconds=300)
+    secret = _cloud_decrypt(user["mfa_secret_enc"])
+    if not secret or not _verify_totp(secret, req.code):
+        await db.login_audit_log.insert_one({
+            "id": str(uuid.uuid4()), "email": user["email"], "ip": ip, "ok": False,
+            "role": "admin", "ts": datetime.now(timezone.utc), "stage": "mfa_code_rejected",
+        })
+        raise HTTPException(status_code=401, detail="Incorrect code.")
+    await db.login_audit_log.insert_one({
+        "id": str(uuid.uuid4()), "email": user["email"], "ip": ip, "ok": True,
+        "role": "admin", "ts": datetime.now(timezone.utc), "stage": "mfa_verified",
+    })
+    return _issue_admin_session(user)
+
+class AdminMfaEnableReq(BaseModel):
+    code: str
+
+class AdminMfaDisableReq(BaseModel):
+    password: str
+    code: str
+
+@api_router.post("/auth/mfa/setup")
+async def admin_mfa_setup(admin: dict = Depends(get_current_admin)):
+    """Generates a NEW pending secret every call (not yet enabled) -- lets
+    the admin re-scan if a previous setup attempt was abandoned, without
+    ever activating a secret the admin never confirmed possession of."""
+    secret = _generate_totp_secret()
+    await db.users.update_one({"email": admin["email"]},
+                               {"$set": {"mfa_pending_secret_enc": _cloud_encrypt(secret)}})
+    issuer = "XauCloudAdmin"
+    label = admin.get("email", "admin")
+    otpauth_uri = f"otpauth://totp/{issuer}:{label}?secret={secret}&issuer={issuer}&algorithm=SHA1&digits=6&period=30"
+    return {"secret": secret, "otpauth_uri": otpauth_uri}
+
+@api_router.post("/auth/mfa/enable")
+async def admin_mfa_enable(req: AdminMfaEnableReq, admin: dict = Depends(get_current_admin)):
+    # get_current_admin projects _id/password_hash out but not other
+    # fields -- mfa_pending_secret_enc is present on `admin` if set.
+    pending = admin.get("mfa_pending_secret_enc")
+    if not pending:
+        raise HTTPException(status_code=400, detail="No MFA setup in progress. Call /auth/mfa/setup first.")
+    secret = _cloud_decrypt(pending)
+    if not secret or not _verify_totp(secret, req.code):
+        raise HTTPException(status_code=400, detail="Incorrect code. Scan the QR code again and try the current 6-digit code.")
+    await db.users.update_one(
+        {"email": admin["email"]},
+        {"$set": {"mfa_enabled": True, "mfa_secret_enc": pending}, "$unset": {"mfa_pending_secret_enc": ""}})
+    return {"ok": True, "message": "MFA enabled."}
+
+@api_router.post("/auth/mfa/disable")
+async def admin_mfa_disable(req: AdminMfaDisableReq, admin: dict = Depends(get_current_admin)):
+    # get_current_admin strips password_hash from its projection, so
+    # re-fetch the full document here rather than trusting a stripped copy.
+    full = await db.users.find_one({"email": admin["email"]})
+    if not full or not verify_password(req.password, full.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Incorrect password.")
+    secret = _cloud_decrypt(full.get("mfa_secret_enc", ""))
+    if not full.get("mfa_enabled") or not secret or not _verify_totp(secret, req.code):
+        raise HTTPException(status_code=400, detail="Incorrect code.")
+    await db.users.update_one(
+        {"email": admin["email"]},
+        {"$set": {"mfa_enabled": False}, "$unset": {"mfa_secret_enc": "", "mfa_pending_secret_enc": ""}})
+    return {"ok": True, "message": "MFA disabled."}
 
 @api_router.get("/auth/me")
 async def auth_me(admin: dict = Depends(get_current_admin)):
@@ -669,12 +924,23 @@ async def logout():
 # --- PIN Validate (public - EA calls this) ---
 @api_router.post("/pins/validate")
 async def validate_pin(req: PinValidateRequest):
-    pin_doc = await db.pin_licenses.find_one({"pin": req.pin}, {"_id": 0})
-    if not pin_doc: return {"valid": False, "reason": "PIN not found"}
-    if not pin_doc.get("is_active"): return {"valid": False, "reason": "PIN revoked"}
-    if not pin_doc.get("is_used"):
-        await db.pin_licenses.update_one({"pin": req.pin}, {"$set": {"is_used": True, "activated_at": datetime.now(timezone.utc).isoformat(), "mt5_account": req.mt5_account or ""}})
-    return {"valid": True, "pin": req.pin, "message": "License verified"}
+    """v6.25.3 owner directive 2026-07-17 (Phase 4 P0) -- was its own
+    separate, incomplete implementation: it bound mt5_account ONLY on the
+    very first call (is_used was still false) and then, on every
+    subsequent call for that same PIN, returned {"valid": true} with NO
+    account check at all -- meaning a PIN could be validated successfully
+    on an unlimited number of different MT5 accounts after its first
+    activation, not just the one it was actually sold for. Now routes
+    through _resolve_monitor_license(), the same canonical, atomic-
+    first-claim, fail-closed-on-mismatch license authority every other
+    EA-facing endpoint (heartbeat, activity, thesis status, direction
+    reservation, command polling, download authorization) already uses."""
+    try:
+        lic = await _resolve_monitor_license(req.pin, req.mt5_account or "")
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        return {"valid": False, "reason": detail.get("message") or detail.get("reason") or "License check failed"}
+    return {"valid": True, "pin": lic.get("pin", req.pin), "message": "License verified"}
 
 # --- Purchase (public) ---
 @api_router.get("/purchase/price")
@@ -682,102 +948,408 @@ async def get_pin_price():
     s = await get_settings()
     kobo = s.get("pin_price_kobo", 30000000)
     naira = kobo / 100
-    return {"price_kobo": kobo, "price_naira": naira, "currency": "NGN", "payment_method": "paystack", "formatted": f"\u20a6{naira:,.0f}"}
+    nomba_cfg, nomba_creds = await get_active_nomba_credentials()
+    return {
+        "price_kobo": kobo, "price_naira": naira, "currency": "NGN",
+        "payment_method": "nomba" if nomba_creds else "unavailable",
+        "formatted": f"\u20a6{naira:,.0f}",
+    }
 
 @api_router.post("/purchase/initialize")
-async def initialize_purchase(req: PurchaseInitRequest):
+async def initialize_purchase(req: PurchaseInitRequest, request: Request):
+    # v-nomba-migration owner directive -- Paystack is no longer the
+    # active payment provider for new purchases (historical Paystack
+    # transactions/licenses are untouched -- see
+    # audits/nomba_migration/01_paystack_audit.md). This endpoint now
+    # creates a Nomba checkout order exclusively; if Nomba isn't enabled
+    # and fully configured, it fails closed with 503 rather than ever
+    # falling back to Paystack for a new sale.
+    _rate_limit(f"purchase_init_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
+    nomba_cfg, creds = await get_active_nomba_credentials()
+    if not creds:
+        raise HTTPException(status_code=503, detail="Payment system not configured yet.")
+    kobo = (await get_settings()).get("pin_price_kobo", 30000000)
+    naira = kobo / 100
+    ref = f"ASE-{uuid.uuid4().hex[:12].upper()}"
+    # Same discipline as the pre-existing Paystack code this replaces:
+    # callback_url is built ONLY from the operator-controlled
+    # PUBLIC_SITE_URL, never from req.origin_url -- a client-supplied
+    # origin_url would let any caller redirect the post-payment browser
+    # flow to an arbitrary attacker-controlled domain.
+    callback_url = f"{PUBLIC_SITE_URL}/purchase/success?reference={ref}"
+    tx = {"id": str(uuid.uuid4()), "reference": ref, "amount_kobo": kobo, "currency": "NGN",
+          "provider": "NOMBA", "nomba_order_reference": ref, "nomba_transaction_id": None,
+          "buyer_name": req.buyer_name, "buyer_email": req.buyer_email,
+          "payment_status": "PENDING", "pin_generated": None,
+          "created_at": datetime.now(timezone.utc).isoformat(), "state_transitions": {}}
+    await db.payment_transactions.insert_one(tx)
+
+    import nomba_service as _nomba
+    try:
+        result = await _nomba.create_checkout_order(
+            creds, order_reference=ref, amount=naira, currency=nomba_cfg.get("currency", "NGN"),
+            callback_url=callback_url, customer_email=req.buyer_email,
+            allowed_payment_methods=nomba_cfg.get("allowed_payment_methods") or None,
+            idempotency_key=ref,
+        )
+    except _nomba.NombaError as exc:
+        logger.error(f"NOMBA_INITIALIZE_FAILED ref={ref}: {exc}")
+        raise HTTPException(status_code=502, detail="Payment init failed") from exc
+    return {"authorization_url": result["checkout_link"], "reference": result["order_reference"]}
+
+
+def _verify_paystack_signature(raw_body: bytes, signature: str, secret: str) -> bool:
+    """HMAC-SHA512 over the raw (unparsed) request body, exactly as Paystack
+    signs it -- must be computed before the body is JSON-decoded, since any
+    re-serialization can change byte-for-byte formatting and silently break
+    the comparison. Constant-time compare so timing cannot leak a partial
+    match."""
+    if not signature or not secret:
+        return False
+    computed = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha512).hexdigest()
+    return hmac.compare_digest(computed, signature)
+
+
+async def _transition_payment_state(reference: str, from_states: list, to_state: str) -> bool:
+    """Atomic state transition, single source of truth for the payment state
+    machine (PENDING -> VERIFYING -> PAID -> FULFILLING -> FULFILLED). The
+    MongoDB filter (reference + current state IN from_states) IS the
+    concurrency control: only the one caller whose update actually matches
+    a document performs the transition -- every other concurrent caller
+    (e.g. the webhook and the browser's polling verify racing each other)
+    gets modified_count == 0 and must not proceed as if it won."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    result = await db.payment_transactions.update_one(
+        {"reference": reference, "payment_status": {"$in": from_states}},
+        {"$set": {"payment_status": to_state, f"state_transitions.{to_state}": now_iso}},
+    )
+    won = result.modified_count == 1
+    logger.info(f"PAYMENT_STATE_TRANSITION ref={reference} to={to_state} won={won}")
+    return won
+
+
+async def _fulfill_payment(reference: str, source: str) -> dict:
+    """Single canonical fulfillment path -- used by BOTH the webhook and the
+    browser's /purchase/verify polling, so there is exactly one place that
+    can ever generate a PIN for a payment reference. Verifies the real
+    transaction status, amount, and currency against Paystack's own
+    transaction/verify API before ever creating a license -- never trusts
+    the webhook body's claims alone, even after signature verification.
+    Never creates a license when verification is unavailable (missing
+    secret key, network failure, non-200 response) -- returns "pending"
+    instead of silently defaulting to success."""
+    tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+    if not tx:
+        logger.warning(f"PAYSTACK_FULFILL_UNKNOWN_REFERENCE ref={reference} source={source}")
+        return {"status": "not_found"}
+    if tx.get("pin_generated") and tx.get("payment_status") == "FULFILLED":
+        return {"status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
+
+    won_verifying = await _transition_payment_state(reference, ["PENDING"], "VERIFYING")
+    if not won_verifying:
+        # Someone else already claimed verification for this reference (or
+        # it's further along already) -- reread current truth, never
+        # double-process.
+        tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+        if tx and tx.get("pin_generated"):
+            return {"status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
+        return {"status": "pending"}
+
     s = await get_settings()
     pk = s.get("paystack_secret_key", "")
-    if not pk: raise HTTPException(status_code=503, detail="Payment system not configured yet.")
-    kobo = s.get("pin_price_kobo", 30000000)
-    ref = f"ASE-{uuid.uuid4().hex[:12].upper()}"
-    callback_url = f"{req.origin_url}/purchase/success?reference={ref}"
-    tx = {
-        "id": str(uuid.uuid4()), "reference": ref, "channel": "card",
-        "amount_kobo": kobo, "amount_ngn": kobo / 100, "currency": "NGN",
-        "buyer_name": req.buyer_name, "buyer_email": req.buyer_email,
-        "payment_status": "pending", "status": ORDER_CREATED, "pin_generated": None,
-        "fulfillment_attempts": [], "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.payment_transactions.insert_one(tx)
-    async with httpx.AsyncClient(timeout=15.0) as http:
-        resp = await http.post(f"{PAYSTACK_BASE_URL}/transaction/initialize", headers={"Authorization": f"Bearer {pk}", "Content-Type": "application/json"}, json={"email": req.buyer_email, "amount": kobo, "reference": ref, "callback_url": callback_url, "metadata": {"buyer_name": req.buyer_name}, "currency": "NGN"})
+    if not pk:
+        logger.error(f"PAYSTACK_FULFILL_NO_SECRET_KEY ref={reference}")
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as http:
+            resp = await http.get(f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}", headers={"Authorization": f"Bearer {pk}"})
+    except Exception as e:
+        logger.error(f"PAYSTACK_VERIFY_CALL_FAILED ref={reference}: {e}")
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
     if resp.status_code != 200:
-        await db.payment_transactions.update_one({"reference": ref}, {"$set": {"status": PAYMENT_FAILED}})
-        raise HTTPException(status_code=502, detail="Payment init failed")
+        logger.warning(f"PAYSTACK_VERIFY_NON_200 ref={reference} status={resp.status_code}")
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
     data = resp.json()
-    if not data.get("status"):
-        await db.payment_transactions.update_one({"reference": ref}, {"$set": {"status": PAYMENT_FAILED}})
-        raise HTTPException(status_code=502, detail=data.get("message", "Failed"))
-    await db.payment_transactions.update_one({"reference": ref}, {"$set": {"status": PAYMENT_PENDING}})
-    return {"authorization_url": data["data"]["authorization_url"], "reference": ref}
+    vdata = data.get("data", {}) if data.get("status") else {}
+    if vdata.get("status") != "success":
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
+    # Cross-check the REAL paid amount/currency against what WE expect for
+    # this specific transaction -- refuses an under-paid, over-refunded, or
+    # wrong-currency transaction even though Paystack itself reports
+    # status=success (e.g. a partial/split payment scenario).
+    expected_amount = tx.get("amount_kobo", 0)
+    expected_currency = tx.get("currency", "NGN")
+    paid_amount = vdata.get("amount", 0)
+    paid_currency = vdata.get("currency", "")
+    if paid_amount < expected_amount or paid_currency != expected_currency:
+        logger.error(f"PAYSTACK_AMOUNT_MISMATCH ref={reference} expected={expected_amount}{expected_currency} paid={paid_amount}{paid_currency}")
+        await _transition_payment_state(reference, ["VERIFYING"], "REJECTED_AMOUNT_MISMATCH")
+        return {"status": "failed", "reason": "amount_mismatch"}
+
+    await _transition_payment_state(reference, ["VERIFYING"], "PAID")
+    won_fulfilling = await _transition_payment_state(reference, ["PAID"], "FULFILLING")
+    if not won_fulfilling:
+        tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+        if tx and tx.get("pin_generated"):
+            return {"status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
+        return {"status": "pending"}
+
+    pin = generate_unique_pin()
+    while await db.pin_licenses.find_one({"pin": pin}):
+        pin = generate_unique_pin()
+    doc = PinLicense(pin=pin, buyer_name=tx.get("buyer_name", ""), buyer_email=tx.get("buyer_email", ""),
+                      notes=f"{source} - {reference}", payment_ref=reference).model_dump()
+    try:
+        await db.pin_licenses.insert_one(doc)
+    except DuplicateKeyError:
+        # The unique index on pin_licenses.payment_ref caught a genuine
+        # double-fulfillment attempt that the state-machine transition
+        # somehow still let through (defense-in-depth, not the primary
+        # guard) -- reread the actual winner's PIN instead of erroring.
+        existing = await db.pin_licenses.find_one({"payment_ref": reference})
+        pin = existing["pin"] if existing else pin
+    await db.payment_transactions.update_one(
+        {"reference": reference}, {"$set": {"pin_generated": pin, "payment_status": "FULFILLED"}})
+    await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    logger.info(f"PAYSTACK_FULFILLED ref={reference} source={source}")
+    return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
+
+
+async def _fulfill_nomba_payment(reference: str, source: str) -> dict:
+    """Nomba's equivalent of _fulfill_payment() above -- deliberately
+    mirrors its exact state-machine/idempotency structure (same
+    _transition_payment_state helper, same PENDING->VERIFYING->PAID->
+    FULFILLING->FULFILLED flow, same unique-index-on-payment_ref
+    defense-in-depth) rather than inventing a parallel pattern. Only the
+    "how do we ask the provider whether this really succeeded" step
+    differs: nomba_service.verify_transaction() instead of a direct
+    Paystack HTTP call. Never trusts a webhook body's claims alone, even
+    after signature verification -- always re-verifies directly with
+    Nomba first."""
+    tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+    if not tx:
+        logger.warning(f"NOMBA_FULFILL_UNKNOWN_REFERENCE ref={reference} source={source}")
+        return {"status": "not_found"}
+    if tx.get("pin_generated") and tx.get("payment_status") == "FULFILLED":
+        return {"status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
+
+    won_verifying = await _transition_payment_state(reference, ["PENDING"], "VERIFYING")
+    if not won_verifying:
+        tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+        if tx and tx.get("pin_generated"):
+            return {"status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
+        return {"status": "pending"}
+
+    _cfg, creds = await get_active_nomba_credentials()
+    if not creds:
+        logger.error(f"NOMBA_FULFILL_NOT_CONFIGURED ref={reference}")
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
+    import nomba_service as _nomba
+    try:
+        result = await _nomba.verify_transaction(creds, order_reference=reference)
+    except _nomba.NombaError as exc:
+        logger.error(f"NOMBA_VERIFY_CALL_FAILED ref={reference}: {exc}")
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
+    if result.status == "NOT_FOUND":
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+    if result.status != "SUCCESS":
+        await _transition_payment_state(reference, ["VERIFYING"], "PENDING")
+        return {"status": "pending"}
+
+    # Cross-check the REAL paid amount/currency against what WE expect --
+    # same discipline as PAYSTACK_AMOUNT_MISMATCH above. tx.amount_kobo is
+    # kobo; Nomba's verified amount is in naira (major units).
+    expected_naira = tx.get("amount_kobo", 0) / 100
+    expected_currency = tx.get("currency", "NGN")
+    if result.amount is None or result.amount < expected_naira - 0.01 or (result.currency and result.currency != expected_currency):
+        logger.error(
+            f"NOMBA_AMOUNT_MISMATCH ref={reference} expected={expected_naira}{expected_currency} "
+            f"paid={result.amount}{result.currency}"
+        )
+        await _transition_payment_state(reference, ["VERIFYING"], "REJECTED_AMOUNT_MISMATCH")
+        return {"status": "failed", "reason": "amount_mismatch"}
+
+    await _transition_payment_state(reference, ["VERIFYING"], "PAID")
+    won_fulfilling = await _transition_payment_state(reference, ["PAID"], "FULFILLING")
+    if not won_fulfilling:
+        tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+        if tx and tx.get("pin_generated"):
+            return {"status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
+        return {"status": "pending"}
+
+    pin = generate_unique_pin()
+    while await db.pin_licenses.find_one({"pin": pin}):
+        pin = generate_unique_pin()
+    doc = PinLicense(pin=pin, buyer_name=tx.get("buyer_name", ""), buyer_email=tx.get("buyer_email", ""),
+                      notes=f"{source} - {reference}", payment_ref=reference).model_dump()
+    doc["provider"] = "NOMBA"
+    try:
+        await db.pin_licenses.insert_one(doc)
+    except DuplicateKeyError:
+        existing = await db.pin_licenses.find_one({"payment_ref": reference})
+        pin = existing["pin"] if existing else pin
+    await db.payment_transactions.update_one(
+        {"reference": reference},
+        {"$set": {"pin_generated": pin, "payment_status": "FULFILLED", "nomba_transaction_id": result.nomba_transaction_id}},
+    )
+    await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    logger.info(f"NOMBA_FULFILLED ref={reference} source={source}")
+    return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
+
 
 @api_router.get("/purchase/verify/{reference}")
-async def verify_purchase(reference: str):
-    tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
-    if not tx: raise HTTPException(status_code=404, detail="Not found")
-    if tx.get("pin_generated") and tx.get("payment_status") == "success":
-        return {"status": "success", "payment_status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name", "")}
-    s = await get_settings()
-    pk = s.get("paystack_secret_key", "")
-    if pk:
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as http:
-                resp = await http.get(f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}", headers={"Authorization": f"Bearer {pk}"})
-            if resp.status_code == 200:
-                data = resp.json()
-                provider_tx = data.get("data", {}) if data.get("status") else {}
-                if provider_tx.get("status") == "success":
-                    if not _paystack_amounts_match(provider_tx, tx):
-                        logger.error(f"Purchase verify amount/currency mismatch for {reference}: paystack={provider_tx.get('amount')} {provider_tx.get('currency')} expected={tx.get('amount_kobo')} {tx.get('currency')}")
-                        await _log_webhook_event("purchase_verify", "charge.success", reference, True, "amount_mismatch")
-                        return {"status": "pending", "payment_status": "pending", "pin": None}
-                    claimed = await _claim_transaction_fulfillment(reference)
-                    if claimed:
-                        pin = await _fulfill_confirmed_payment(claimed, reference, "Paystack")
-                        await _log_webhook_event("purchase_verify", "charge.success", reference, True, "fulfilled")
-                        return {"status": "success", "payment_status": "success", "pin": pin, "buyer_name": claimed.get("buyer_name","")}
-                    fresh = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
-                    if fresh and fresh.get("pin_generated"):
-                        return {"status": "success", "payment_status": "success", "pin": fresh["pin_generated"], "buyer_name": fresh.get("buyer_name","")}
-        except Exception as e: logger.error(f"Verify err: {e}")
+async def verify_purchase(reference: str, request: Request):
+    # Generous window -- the frontend legitimately polls this every few
+    # seconds while a real customer waits for their payment to confirm.
+    _rate_limit(f"purchase_verify_ip:{_client_ip(request)}", max_requests=60, window_seconds=60)
+    tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0, "provider": 1})
+    provider = (tx or {}).get("provider", "PAYSTACK")  # pre-migration rows have no provider field -> PAYSTACK
+    fulfill_fn = _fulfill_nomba_payment if provider == "NOMBA" else _fulfill_payment
+    result = await fulfill_fn(reference, source="poll")
+    if result["status"] == "success":
+        return {"status": "success", "payment_status": "success", "pin": result["pin"], "buyer_name": result.get("buyer_name", "")}
+    if result["status"] == "not_found":
+        raise HTTPException(status_code=404, detail="Not found")
     return {"status": "pending", "payment_status": "pending", "pin": None}
+
 
 @api_router.post("/webhook/paystack")
 async def paystack_webhook(request: Request):
+    # v6.25.3 owner directive 2026-07-17 (Phase 2 P0) -- this endpoint used
+    # to trust an unsigned charge.success POST body outright: any caller who
+    # knew (or brute-forced/observed) a real reference could POST a forged
+    # webhook here and get a real license generated for free, with no
+    # signature check and no amount/currency cross-check. Now: (1) verify
+    # the raw body's HMAC-SHA512 against Paystack's own secret before
+    # touching the body at all, reject with 401 otherwise; (2) never trust
+    # the webhook body's claims directly -- _fulfill_payment() re-verifies
+    # the real transaction status/amount/currency against Paystack's own
+    # transaction/verify API before ever creating a license.
     raw_body = await request.body()
     signature = request.headers.get("x-paystack-signature", "")
     s = await get_settings()
     secret = s.get("paystack_secret_key", "")
     if not _verify_paystack_signature(raw_body, signature, secret):
-        logger.warning("Rejected Paystack webhook: missing/invalid X-Paystack-Signature")
-        await _log_webhook_event("paystack", "unknown", "", False, "invalid_signature")
+        client_host = request.client.host if request.client else "unknown"
+        logger.warning(f"PAYSTACK_WEBHOOK_SIGNATURE_INVALID ip={client_host}")
         raise HTTPException(status_code=401, detail="Invalid signature")
     try:
         body = _json.loads(raw_body)
-    except ValueError:
-        await _log_webhook_event("paystack", "unknown", "", True, "invalid_json")
-        raise HTTPException(status_code=400, detail="Invalid payload")
-    event_type = body.get("event", "")
-    data = body.get("data", {}) or {}
-    ref = data.get("reference", "")
-    if event_type != "charge.success" or not ref:
-        await _log_webhook_event("paystack", event_type, ref, True, "ignored_event_type")
-        return {"status": "ok"}
-    tx = await db.payment_transactions.find_one({"reference": ref}, {"_id": 0})
-    if not tx:
-        await _log_webhook_event("paystack", event_type, ref, True, "unknown_reference")
-        return {"status": "ok"}
-    if not _paystack_amounts_match(data, tx):
-        logger.error(f"Webhook amount/currency mismatch for {ref}: paystack={data.get('amount')} {data.get('currency')} expected={tx.get('amount_kobo')} {tx.get('currency')}")
-        await _log_webhook_event("paystack", event_type, ref, True, "amount_mismatch")
-        return {"status": "ok"}
-    claimed = await _claim_transaction_fulfillment(ref)
-    if not claimed:
-        await _log_webhook_event("paystack", event_type, ref, True, "duplicate_or_already_fulfilled")
-        return {"status": "ok"}
-    await _fulfill_confirmed_payment(claimed, ref, "Webhook")
-    await _log_webhook_event("paystack", event_type, ref, True, "fulfilled")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    if body.get("event") != "charge.success":
+        return {"status": "ignored"}
+    ref = body.get("data", {}).get("reference", "")
+    if not ref:
+        raise HTTPException(status_code=400, detail="Missing reference")
+    await _fulfill_payment(ref, source="webhook")
+    return {"status": "ok"}
+
+
+@api_router.post("/webhook/nomba")
+async def nomba_webhook(request: Request):
+    """Mirrors paystack_webhook()'s exact safety discipline: (1) verify
+    the signature BEFORE trusting anything in the body, reject with 401
+    otherwise; (2) never trust the webhook body's own claims about
+    success -- _fulfill_nomba_payment() always re-verifies the real
+    transaction status/amount/currency directly against Nomba's own API.
+    A valid signature only proves the request came from Nomba; it does
+    not, by itself, prove the payment is real, current, or unprocessed.
+
+    Always returns a 2XX once the payload is structurally valid and
+    routed to fulfilment, even for events we don't act on (payout_*) or
+    already-fulfilled duplicates -- Nomba retries on any non-2XX with
+    exponential backoff (up to 5 times over ~53 minutes, per
+    audits/nomba_migration/02_nomba_api_reference.md), and retrying an
+    already-handled event serves no purpose."""
+    raw_body = await request.body()
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    signature = headers.get("nomba-signature", "")
+    timestamp = headers.get("nomba-timestamp", "")
+
+    try:
+        body = _json.loads(raw_body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    event_type = body.get("event_type", "")
+    order_ref = None
+    import nomba_service as _nomba
+    try:
+        order_ref = _nomba.extract_order_reference(body)
+    except Exception:
+        pass
+
+    # Determine which environment's webhook signature key to check
+    # against by looking up the pending transaction's own environment --
+    # but the transaction lookup itself must never happen before a valid
+    # signature, so first try BOTH configured environments' keys (a
+    # merchant only ever has webhooks pointed at one active environment
+    # at a time in practice, but checking both is cheap and avoids a
+    # chicken-and-egg problem between "which env is this for" and "is
+    # the signature even valid").
+    cfg = await get_nomba_config()
+    sig_fields = _nomba.extract_webhook_signature_fields(body)
+    valid = False
+    for env_name in ("sandbox", "production"):
+        env_block = cfg.get(env_name) or {}
+        creds = _decrypt_nomba_env_block(env_block, env_name)
+        if not creds or not creds.webhook_signature_key:
+            continue
+        if _nomba.verify_webhook_signature(
+            signature_header=signature, timestamp_header=timestamp,
+            webhook_signature_key=creds.webhook_signature_key, **sig_fields,
+        ):
+            valid = True
+            break
+
+    if not valid:
+        client_host = request.client.host if request.client else "unknown"
+        logger.warning(f"NOMBA_WEBHOOK_SIGNATURE_INVALID ip={client_host} event={event_type} ref={order_ref}")
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    if event_type not in ("payment_success", "payment_failed", "payment_reversal"):
+        # payout_success/payout_failed/payout_refund describe money
+        # leaving Nomba's account -- not relevant to this inbound-only
+        # checkout integration. Acknowledge with 2XX so Nomba doesn't
+        # retry an event we deliberately never act on.
+        return {"status": "ignored"}
+    if not order_ref:
+        raise HTTPException(status_code=400, detail="Missing order reference")
+
+    if event_type == "payment_success":
+        await _fulfill_nomba_payment(order_ref, source="webhook")
+    elif event_type == "payment_failed":
+        await _transition_payment_state(order_ref, ["PENDING", "VERIFYING"], "FAILED")
+        logger.info(f"NOMBA_PAYMENT_FAILED_WEBHOOK ref={order_ref}")
+    elif event_type == "payment_reversal":
+        # A reversal must never remain displayed as a successful settled
+        # payment -- flip status to REVERSED regardless of current state
+        # (a reversal can arrive after FULFILLED) and flag for admin
+        # review. Does not touch the already-issued PIN/license record --
+        # per the owner's spec, no automatic destruction of customer data;
+        # manual review decides next steps.
+        await db.payment_transactions.update_one(
+            {"reference": order_ref},
+            {"$set": {"payment_status": "REVERSED", "state_transitions.REVERSED": datetime.now(timezone.utc).isoformat()}},
+        )
+        await db.pin_licenses.update_many(
+            {"payment_ref": order_ref}, {"$set": {"review_required": True, "review_reason": "PAYMENT_REVERSED"}},
+        )
+        logger.warning(f"NOMBA_PAYMENT_REVERSAL ref={order_ref} -- license flagged review_required")
     return {"status": "ok"}
 
 # --- Public Docs ---
@@ -794,72 +1366,198 @@ def _get_ea_meta(src: str, filename_prefix: str = "XAUUSD_AI_Sniper_EA") -> dict
     checksum = hashlib.sha256(src.encode()).hexdigest()[:12]
     return {"version": version, "edition": edition_full, "filename": filename, "checksum": checksum}
 
-def _sanitize_ea_for_customer(src: str) -> str:
-    """Strip master-only secrets from the EA source so a customer can use it
-    on their own MT5 WITHOUT accidentally posting their trades into our cloud.
-    Disables CloudFanout by default and clears the agent token. Customers can
-    still re-enable everything if they have their own cloud setup."""
-    import re
-    out = src
-    # Flip cloud fanout default OFF
-    out = re.sub(
-        r'(input\s+bool\s+InpCloudFanout\s*=\s*)true(\s*;)',
-        r'\1false\2',
-        out, count=1)
-    # Clear the agent token default (don't ship our secret)
-    out = re.sub(
-        r'(input\s+string\s+InpCloudAgentToken\s*=\s*)"[^"]*"(\s*;)',
-        r'\1""\2',
-        out, count=1)
-    # Add a clear customer banner at the top so it's obvious what version they have
-    banner = ("// =====================================================================\n"
-              "// CUSTOMER EDITION — cloud master uplink DISABLED.\n"
-              "// This EA runs standalone on your MT5 and trades on YOUR account only.\n"
-              "// It does NOT mirror trades to or from the XauAi Cloud master.\n"
-              "// =====================================================================\n")
-    return banner + out
+# v6.25.3 owner directive 2026-07-17 (Phase 5 P0) -- retired
+# _sanitize_ea_for_customer() -- was already dead code (no call sites) even
+# before this cleanup; it stripped InpCloudFanout/InpCloudAgentToken from
+# the master-fanout EA input block, which belonged to the deleted
+# copy-trading subsystem.
+
+# ---------------------------------------------------------------------------
+# v6.25.3 owner directive 2026-07-17 (Phase 3 P0, final pre-launch hardening)
+# -- STOP PUBLIC MQ5 SOURCE DISTRIBUTION. /download/ea and /download/package
+# used to serve the full (sanitized-of-secrets-only) MQ5 SOURCE CODE to any
+# anonymous visitor -- no auth, no license check, the entire strategy's IP
+# was one click away for anyone who found the URL. Required flow now:
+# authenticated Command Center user -> active paid license belonging to
+# that user -> short-lived one-time signed download token -> compiled EX5
+# release artifact. MQ5 source and the admin master EX5 remain admin-only
+# (unchanged, see admin_download_ea_master below).
+#
+# The compiled EX5 is a checked-in release artifact (backend/ea_releases/),
+# not something this backend compiles on demand -- there is no MetaEditor/
+# Wine available in the deployed backend environment. Each release's EX5 is
+# compiled during development (0 errors/0 warnings, hash-verified against
+# the exact source commit) and committed alongside a manifest entry; this
+# mirrors how every EA version this project has shipped was actually built.
+# ---------------------------------------------------------------------------
+EA_RELEASES_DIR = ROOT_DIR / "ea_releases"
+DOWNLOAD_TOKEN_TTL_SECONDS = 300  # short-lived, single-purpose, not a session token
+
+
+def _load_ea_release_manifest() -> dict:
+    p = EA_RELEASES_DIR / "manifest.json"
+    if not p.exists():
+        return {}
+    try:
+        return _json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.error(f"EA_RELEASE_MANIFEST_PARSE_FAILED: {e}")
+        return {}
+
+
+def _current_ea_release() -> Optional[dict]:
+    manifest = _load_ea_release_manifest()
+    current = manifest.get("current_version")
+    if not current:
+        return None
+    return manifest.get("releases", {}).get(current)
+
+
+# ---------------------------------------------------------------------------
+# Public (customer-facing) release identity -- the Command Center header must
+# never render whatever internal build/experiment string the currently
+# attached EA happens to self-report in its heartbeat (e.g.
+# "V6.25.24_M10_FIXED10SL_EXPERIMENT"). It must show a short, stable
+# "XauCloud-<version>" derived from the one authoritative release manifest
+# (backend/ea_releases/manifest.json), independent of live EA telemetry.
+# Raw EA-reported build details remain available separately for Support
+# Diagnostics/admin use -- never hidden, just not the customer headline.
+# ---------------------------------------------------------------------------
+
+PRODUCTION_TIMEFRAME = "M10"  # the only authoritative production decision mode; see manifest release notes
+
+
+def _normalize_release_version(v: str) -> str:
+    raw = str(v or "").strip()
+    # The EA reports a product-qualified identity such as
+    # XauCloud-m10_v6.25.30_PURE_M10_CYCLE_AUTHORITY_FIX. The public release
+    # manifest intentionally uses only the stable numeric version.
+    marker = raw.lower().rfind("_v")
+    if marker >= 0:
+        raw = raw[marker + 2:]
+    return raw.lstrip("vV").split("_", 1)[0]
+
+
+def _known_release_versions() -> set:
+    manifest = _load_ea_release_manifest()
+    return {_normalize_release_version(v) for v in (manifest.get("releases") or {}).keys()}
+
+
+def build_public_release_display(ea_version: str) -> dict:
+    """Authoritative publicProductName/publicVersion/publicDisplayName. Adding
+    a new release to manifest.json is the only thing that changes what this
+    renders -- no frontend component hardcodes a version string."""
+    release = _current_ea_release()
+    public_version = _normalize_release_version((release or {}).get("version") or "")
+    reported = _normalize_release_version(ea_version)
+    recognized = bool(reported) and reported in _known_release_versions()
+    return {
+        "public_product_name": "XauCloud",
+        "public_version": public_version or None,
+        "public_display_name": f"XauCloud-{public_version}" if public_version else "XauCloud",
+        "reported_build_recognized": recognized,
+    }
+
+
+def reconcile_production_timeframe(reported_timeframe: str, build_recognized: bool) -> dict:
+    """Prevents an unrecognized/experimental attached EA build from
+    overwriting the customer-facing production timeframe status. The product
+    is M10-only; a mismatch is real diagnostic signal (worth surfacing to
+    Support Diagnostics, never silently discarded) but must never be
+    displayed to a customer as if it were the legitimate live status --
+    so the customer-facing value always falls back to the authoritative
+    PRODUCTION_TIMEFRAME whenever the reported value can't be trusted."""
+    reported = str(reported_timeframe or "").strip().upper()
+    mismatch = bool(reported) and reported != PRODUCTION_TIMEFRAME
+    trust_reported = build_recognized and not mismatch
+    return {
+        "display_timeframe": reported if trust_reported else PRODUCTION_TIMEFRAME,
+        "reported_timeframe": reported or None,
+        "timeframe_mismatch": mismatch,
+        "build_recognized": build_recognized,
+    }
+
 
 @api_router.get("/download/info")
 async def download_info():
-    """Return current EA release metadata — version, filename, size, checksum.
-    Frontend uses this to display live version info without hardcoding anything."""
-    import hashlib
-    p = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
-    if not p.exists():
-        raise HTTPException(status_code=404, detail="EA file not found")
-    src = p.read_text(encoding="utf-8", errors="ignore")
-    meta = _get_ea_meta(src)
-    stat = p.stat()
+    """PUBLIC metadata only -- version, checksum, release notes, whether a
+    download is currently available. Never reads or exposes source code;
+    reads only the release manifest (backend/ea_releases/manifest.json)."""
+    release = _current_ea_release()
+    if not release:
+        return {"available": False, "reason": "NO_RELEASE_PUBLISHED"}
     return {
-        "version":      meta["version"],
-        "edition":      meta["edition"],
-        "filename":     meta["filename"],
-        "size_bytes":   stat.st_size,
-        "size_kb":      round(stat.st_size / 1024, 1),
-        "checksum_sha256_12": meta["checksum"],
-        "last_modified": stat.st_mtime,
-        "download_url": "/api/download/ea",
-        "stable":       True,
+        "available": True,
+        "version": release["version"],
+        "edition": release["edition"],
+        "filename": release["customer_filename"],
+        "checksum_sha256_12": release["ex5_sha256"][:12],
+        "checksum_sha256": release["ex5_sha256"],
+        "release_notes": release.get("release_notes", ""),
+        "build_timestamp": release.get("build_timestamp"),
+        "stable": bool(release.get("stable_status", False)),
+        "requires_login": True,
+        "download_url": "/command",  # customer flow now goes through Command Center, not a direct link
     }
+# NOTE: POST /download/request-token is defined further down in this file,
+# right after _get_user_license() and get_cloud_user() both exist -- it
+# depends on get_cloud_user via FastAPI's Depends(), which is resolved at
+# decoration time, so it cannot be defined lexically before that name
+# exists in the module.
 
-@api_router.get("/download/ea")
-async def download_ea():
-    """PUBLIC customer download — sanitized (no master token, fanout OFF).
-    Filename and version are derived dynamically from the EA file header."""
-    p = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
-    if not p.exists(): raise HTTPException(status_code=404)
-    src = p.read_text(encoding="utf-8", errors="ignore")
-    meta = _get_ea_meta(src)
-    sanitized = _sanitize_ea_for_customer(src)
-    return Response(
-        content=sanitized.encode("utf-8"),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{meta["filename"]}"'},
-    )
+
+@api_router.get("/download/ea-release")
+async def download_ea_release(token: str):
+    """Serves the compiled EX5 release artifact -- never MQ5 source -- only
+    to a caller presenting a valid, unexpired, single-purpose token minted
+    by request_ea_download_token() above for a currently-active license.
+    Logs every real download (license id, never the raw PIN; see the
+    "without exposing the PIN" requirement) for audit."""
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Download link expired -- request a new one from Command Center.")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid download token.")
+    if payload.get("sub") != "ea_download":
+        raise HTTPException(status_code=401, detail="Invalid download token.")
+    license_id = payload.get("license_id", "")
+    lic = await db.pin_licenses.find_one({"id": license_id, "is_active": True}, {"_id": 0})
+    if not lic:
+        raise HTTPException(status_code=403, detail="License is no longer active.")
+    release = _load_ea_release_manifest().get("releases", {}).get(payload.get("version", ""))
+    if not release:
+        raise HTTPException(status_code=404, detail="Release no longer available.")
+    p = EA_RELEASES_DIR / payload["version"] / release["ex5_filename"]
+    if not p.exists():
+        logger.error(f"EA_RELEASE_ARTIFACT_MISSING version={payload.get('version')} path={p}")
+        raise HTTPException(status_code=404, detail="Release artifact missing.")
+    await db.ea_download_log.insert_one({
+        "id": str(uuid.uuid4()), "user_id": payload.get("user_id", ""), "license_id": license_id,
+        "version": payload.get("version", ""), "downloaded_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return FileResponse(path=str(p), filename=release["customer_filename"], media_type="application/octet-stream")
+
+
+@api_router.get("/download/ea", deprecated=True)
+async def download_ea_retired():
+    """Retired 2026-07-17 -- public unauthenticated MQ5 source distribution.
+    Returns 410 Gone rather than 404 so anything still pointed at the old
+    URL gets an explicit, permanent signal, not a transient-looking miss."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired. Sign in to Command Center to download your compiled EA build.")
+
+
+@api_router.get("/download/package", deprecated=True)
+async def download_package_retired():
+    """Retired 2026-07-17 -- see download_ea_retired() above."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired. Sign in to Command Center to download your compiled EA build.")
+
 
 @api_router.get("/admin/download/ea-master", dependencies=[Depends(get_current_admin)])
 async def admin_download_ea_master():
-    """Admin-only: serves the FULL master EA with agent token intact. Never expose publicly."""
+    """Admin-only: serves the FULL master MQ5 SOURCE with agent token intact.
+    Never expose publicly -- this is the only place the raw source is ever
+    served, and only to an authenticated admin."""
     p = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
     if not p.exists(): raise HTTPException(status_code=404)
     src = p.read_text(encoding="utf-8", errors="ignore")
@@ -870,69 +1568,30 @@ async def admin_download_ea_master():
         media_type="application/octet-stream",
     )
 
-@api_router.get("/download/package")
-async def download_package():
-    """PUBLIC customer package — uses sanitized EA. Zip filename includes version."""
-    p_ea = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
-    if p_ea.exists():
-        src = p_ea.read_text(encoding="utf-8", errors="ignore")
-        meta = _get_ea_meta(src)
-        zip_name = f"XauAI_Sniper_{meta['version']}_Package.zip"
-    else:
-        zip_name = "XauAI_Sniper_Package.zip"
-    d = ROOT_DIR / "ea_code"
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
-        for f in d.rglob("*"):
-            if not f.is_file(): continue
-            rel = f.relative_to(d)
-            if f.name == "XAUUSD_AI_Sniper_EA.mq5":
-                z.writestr(str(rel), _sanitize_ea_for_customer(
-                    f.read_text(encoding="utf-8", errors="ignore")))
-            else:
-                z.write(f, rel)
-    buf.seek(0)
-    return StreamingResponse(buf, media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'})
-
 # -------- XauIndex (separate product, separate download) --------
-# A DIFFERENT product from XauAI Sniper (gold-only, maintained separately).
+# A DIFFERENT product from XauCloud (gold-only, maintained separately).
 # XauIndex has Gold+Index market detection built in and is versioned
 # independently (1.0.0+) so the two are never confused with one another.
-# Mirrors the XauAI Sniper download endpoints exactly, pointed at its own
+# Mirrors the XauCloud download endpoints exactly, pointed at its own
 # ea_code_xauindex/ directory instead.
+# v6.25.3 owner directive 2026-07-17 (Phase 3 P0) -- XauIndex had the exact
+# same public MQ5 source exposure as the main EA. It has no compiled EX5
+# release artifact yet (this session never compiled a XauIndex build, unlike
+# XAUUSD_AI_Sniper_EA's v6.25.2) -- rather than fabricate one, this reports
+# honestly as unavailable rather than serving the raw source publicly.
 @api_router.get("/download/xauindex/info")
 async def download_xauindex_info():
-    p = ROOT_DIR / "ea_code_xauindex" / "XauIndex_EA.mq5"
-    if not p.exists():
-        raise HTTPException(status_code=404, detail="XauIndex EA file not found")
-    src = p.read_text(encoding="utf-8", errors="ignore")
-    meta = _get_ea_meta(src, filename_prefix="XauIndex_EA")
-    stat = p.stat()
-    return {
-        "version":      meta["version"],
-        "edition":      meta["edition"],
-        "filename":     meta["filename"],
-        "size_bytes":   stat.st_size,
-        "size_kb":      round(stat.st_size / 1024, 1),
-        "checksum_sha256_12": meta["checksum"],
-        "last_modified": stat.st_mtime,
-        "download_url": "/api/download/xauindex/ea",
-        "stable":       True,
-    }
+    return {"available": False, "reason": "NO_COMPILED_RELEASE_ARTIFACT_YET",
+            "message": "XauIndex download is not yet available through this channel -- no compiled EX5 release has been built."}
 
-@api_router.get("/download/xauindex/ea")
-async def download_xauindex_ea():
-    p = ROOT_DIR / "ea_code_xauindex" / "XauIndex_EA.mq5"
-    if not p.exists(): raise HTTPException(status_code=404)
-    src = p.read_text(encoding="utf-8", errors="ignore")
-    meta = _get_ea_meta(src, filename_prefix="XauIndex_EA")
-    sanitized = _sanitize_ea_for_customer(src)
-    return Response(
-        content=sanitized.encode("utf-8"),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{meta["filename"]}"'},
-    )
+
+@api_router.get("/download/xauindex/ea", deprecated=True)
+async def download_xauindex_ea_retired():
+    """Retired 2026-07-17 -- see download_ea_retired() above; same public
+    MQ5 source exposure issue, same fix. XauIndex has no signed-token/EX5
+    flow yet since no compiled release artifact exists for it."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired. XauIndex download is not yet available.")
+
 
 @api_router.get("/admin/download/xauindex-master", dependencies=[Depends(get_current_admin)])
 async def admin_download_xauindex_master():
@@ -946,191 +1605,280 @@ async def admin_download_xauindex_master():
         media_type="application/octet-stream",
     )
 
-@api_router.get("/download/xauindex/package")
-async def download_xauindex_package():
-    p_ea = ROOT_DIR / "ea_code_xauindex" / "XauIndex_EA.mq5"
-    if p_ea.exists():
-        src = p_ea.read_text(encoding="utf-8", errors="ignore")
-        meta = _get_ea_meta(src, filename_prefix="XauIndex_EA")
-        zip_name = f"XauIndex_{meta['version']}_Package.zip"
-    else:
-        zip_name = "XauIndex_Package.zip"
-    d = ROOT_DIR / "ea_code_xauindex"
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
-        for f in d.rglob("*"):
-            if not f.is_file(): continue
-            rel = f.relative_to(d)
-            if f.name == "XauIndex_EA.mq5":
-                z.writestr(str(rel), _sanitize_ea_for_customer(
-                    f.read_text(encoding="utf-8", errors="ignore")))
-            else:
-                z.write(f, rel)
-    buf.seek(0)
-    return StreamingResponse(buf, media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'})
+@api_router.get("/download/xauindex/package", deprecated=True)
+async def download_xauindex_package_retired():
+    """Retired 2026-07-17 -- see download_ea_retired() above."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired. XauIndex download is not yet available.")
+
+########################################
+# PERFORMANCE PERIODS (forward-record reset system)
+########################################
+# See audits/performance_reset/01_current_system_audit.md for the full
+# audit this replaces, and audits/performance_reset/02_implementation_notes.md
+# for the design decisions summarized here.
+#
+# Every displayed statistic comes from exactly one authoritative source:
+# performance_engine.compute_period_stats() over a query-scoped,
+# eligibility-filtered, deduplicated trade_journal dataset for a single
+# performance_periods document. No number is ever hand-typed, cached
+# indefinitely, or mixed across two different queries.
+
+class StartPerformancePeriodRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    reason: str
+    account_logins: Optional[List[str]] = None   # None = all accounts (see audit doc open item)
+    ea_versions: Optional[List[str]] = None       # None = all versions
+    symbol: str = "XAUUSD"
+    break_even_tolerance_usd: float = performance_engine.DEFAULT_BREAK_EVEN_TOLERANCE_USD
+    minimum_sample: int = performance_engine.DEFAULT_MINIMUM_SAMPLE
+    current_password: str  # fresh-auth requirement, same pattern as update_admin_account()
+    confirm: bool = False
+
+
+async def get_active_performance_period() -> Optional[dict]:
+    return await db.performance_periods.find_one({"status": "ACTIVE"}, {"_id": 0})
+
+
+def _period_query(period: dict) -> dict:
+    query: Dict[str, Any] = {
+        "has_rich_ledger_data": True,
+        "opened_at": {"$gte": period["epoch_started_at_unix"]},
+    }
+    if period.get("epoch_ended_at_unix"):
+        query["opened_at"]["$lt"] = period["epoch_ended_at_unix"]
+    scope = period.get("scope") or {}
+    if scope.get("account_logins"):
+        query["account_login"] = {"$in": scope["account_logins"]}
+    if scope.get("ea_versions"):
+        query["ea_version"] = {"$in": scope["ea_versions"]}
+    if scope.get("symbol"):
+        query["symbol"] = scope["symbol"]
+    return query
+
+
+async def _fetch_period_trades(period: dict) -> list:
+    query = _period_query(period)
+    raw = await db.trade_journal.find(query, {"_id": 0}).sort("opened_at", 1).to_list(length=20000)
+    eligible = [t for t in raw if performance_engine.is_eligible_trade(t)]
+    return performance_engine.dedupe_by_ticket(eligible)
+
+
+async def _period_summary_dict(period: dict) -> dict:
+    trades = await _fetch_period_trades(period)
+    scope = period.get("scope") or {}
+    stats = performance_engine.compute_period_stats(
+        trades,
+        be_tolerance_usd=scope.get("break_even_tolerance_usd", performance_engine.DEFAULT_BREAK_EVEN_TOLERANCE_USD),
+        minimum_sample=scope.get("minimum_sample", performance_engine.DEFAULT_MINIMUM_SAMPLE),
+    )
+    d = performance_engine.period_stats_to_dict(stats)
+    d.update({
+        "source": "live_journal",
+        "verification": "first_party_ea_journal",
+        "independently_verified": False,
+        "drawdown_label": "Max Balance Drawdown",
+        "period_id": period["id"],
+        "period_name": period["name"],
+        "period_status": period["status"],
+        "epoch_started_at": period["epoch_started_at"],
+        "epoch_ended_at": period.get("epoch_ended_at"),
+        "ea_version": (_current_ea_release() or {}).get("version", ""),
+        "recalculated_at": datetime.now(timezone.utc).isoformat(),
+        "recent_trades": performance_engine.build_recent_trades(
+            trades,
+            be_tolerance_usd=scope.get("break_even_tolerance_usd", performance_engine.DEFAULT_BREAK_EVEN_TOLERANCE_USD),
+            limit=20,
+        ),
+    })
+    return d
+
 
 @api_router.get("/performance/summary")
 async def get_performance_summary():
+    # v6.25.3 owner directive 2026-07-17 (Phase 7 truthfulness cleanup) --
+    # this endpoint used to also return an "ai_features" block that was
+    # either a hardcoded 0 or a trivial reshuffle of numbers reported
+    # elsewhere, mislabeled as measured AI performance. Removed rather
+    # than left reachable.
+    #
+    # v-performance-reset owner directive -- this endpoint used to
+    # aggregate every trade ever logged, all-time, no scope. It now
+    # reports ONLY the active forward performance period -- see
+    # audits/performance_reset/ for the full history.
     try:
-        trades = await db.trade_journal.find({}, {"_id": 0}).sort("created_ts", 1).to_list(length=5000)
+        period = await get_active_performance_period()
     except Exception as e:
-        logger.error(f"Performance summary error: {e}")
-        trades = []
+        logger.error(f"Performance summary error (period lookup): {e}")
+        return {"status": "unavailable"}
+    if not period:
+        # No forward period has ever been activated -- fail into an
+        # honest "unavailable" state rather than silently falling back
+        # to the old all-time aggregate.
+        return {"status": "unavailable"}
+    try:
+        d = await _period_summary_dict(period)
+    except Exception as e:
+        logger.error(f"Performance summary error (calculation): {e}")
+        return {"status": "unavailable"}
+    d["status"] = "active" if d["sufficient_data"] else "collecting"
+    return d
 
-    closed = [t for t in trades if str(t.get("result", "")).upper() in {"WIN", "LOSS", "BE"}]
-    total = len(closed)
-    wins = sum(1 for t in closed if str(t.get("result", "")).upper() == "WIN")
-    losses = sum(1 for t in closed if str(t.get("result", "")).upper() == "LOSS")
-    profits = [float(t.get("profit") or 0) for t in closed]
-    gross_profit = sum(p for p in profits if p > 0)
-    gross_loss = abs(sum(p for p in profits if p < 0))
-    net_profit = sum(profits)
-    winning_profits = [p for p in profits if p > 0]
-    losing_profits = [p for p in profits if p < 0]
-    avg_win = sum(winning_profits) / len(winning_profits) if winning_profits else 0
-    avg_loss = sum(losing_profits) / len(losing_profits) if losing_profits else 0
-    largest_win = max(winning_profits) if winning_profits else 0
-    largest_loss = min(losing_profits) if losing_profits else 0
 
-    summary = {
-        "source": "live_journal",
-        "sample": False,
-        "total_trades": total,
-        "win_rate": round(wins / total * 100, 1) if total else 0,
-        "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else (round(gross_profit, 2) if gross_profit > 0 else 0),
-        "net_profit": round(net_profit, 2),
-        "gross_profit": round(gross_profit, 2),
-        "gross_loss": round(gross_loss, 2),
-        "avg_win": round(avg_win, 2),
-        "avg_loss": round(avg_loss, 2),
-        "largest_win": round(largest_win, 2),
-        "largest_loss": round(largest_loss, 2),
-        "loss_to_avg_win": round(abs(avg_loss) / avg_win, 2) if avg_win > 0 and avg_loss < 0 else 0,
-        "max_drawdown": 0,
-        "avg_rr_ratio": 0,
-        "weekly_return_avg": 0,
-        "sharpe_ratio": 0,
-        "best_week": 0,
-        "worst_week": 0,
-        "avg_trade_duration": "n/a",
-        "longest_winning_streak": 0,
-        "longest_losing_streak": 0,
-        "monthly_returns": [],
-        "strategy_breakdown": [],
-        "weekly_data": [],
-        "equity_curve": [],
-        "ai_features": {
-            "market_classification_accuracy": 0,
-            "avg_confidence_on_wins": 0,
-            "avg_confidence_on_losses": 0,
-            "pattern_memory_size": total,
-            "adaptation_cycles": total,
-            "learning_rate_current": 0,
-            "win_rate_after_learning": round(wins / total * 100, 1) if total else 0,
-            "loss_avoidance_rate": round((total - losses) / total * 100, 1) if total else 0,
-        },
-    }
-    if not total:
-        return summary
+@api_router.get("/performance/full")
+async def get_performance_full(period_id: Optional[str] = None):
+    """Detailed performance page -- defaults to the active period; pass
+    period_id to view any specific (including archived) period's full
+    detail through the same one endpoint the historical page also uses."""
+    if period_id:
+        period = await db.performance_periods.find_one({"id": period_id}, {"_id": 0})
+    else:
+        period = await get_active_performance_period()
+    if not period:
+        return {"status": "unavailable"}
+    d = await _period_summary_dict(period)
+    d["status"] = "active" if d["sufficient_data"] else "collecting"
+    return d
 
-    running_equity = 0.0
-    peak_equity = 0.0
-    max_dd = 0.0
-    week_stats = {}
-    month_stats = {}
-    setup_stats = {}
-    current_win_streak = current_loss_streak = 0
 
-    for idx, trade in enumerate(closed, start=1):
-        profit = float(trade.get("profit") or 0)
-        running_equity += profit
-        peak_equity = max(peak_equity, running_equity)
-        max_dd = max(max_dd, peak_equity - running_equity)
-        balance = float(trade.get("balance") or 0)
-        summary["equity_curve"].append({"day": idx, "equity": round(balance if balance > 0 else running_equity, 2)})
-
-        raw_dt = trade.get("created_at")
+@api_router.get("/performance/historical")
+async def get_performance_historical():
+    """Every ARCHIVED period, oldest first, each with its own
+    independently-computed summary -- the read-only archive. Never
+    mixes trades across periods; each period's stats come from that
+    period's own scoped query only."""
+    periods = await db.performance_periods.find({"status": "ARCHIVED"}, {"_id": 0}).sort("epoch_started_at", 1).to_list(length=200)
+    results = []
+    for period in periods:
         try:
-            dt = datetime.fromisoformat(str(raw_dt).replace("Z", "+00:00")) if raw_dt else datetime.fromtimestamp(float(trade.get("created_ts") or 0), timezone.utc)
+            d = await _period_summary_dict(period)
+        except Exception as e:
+            logger.error(f"Historical performance error for period {period.get('id')}: {e}")
+            continue
+        results.append(d)
+    return {"periods": results}
+
+
+@api_router.get("/admin/performance/periods")
+async def admin_list_performance_periods(admin: dict = Depends(get_current_admin)):
+    periods = await db.performance_periods.find({}, {"_id": 0}).sort("epoch_started_at", -1).to_list(length=200)
+    enriched = []
+    for period in periods:
+        try:
+            trades = await _fetch_period_trades(period)
+            qualifying = len(trades)
         except Exception:
-            dt = datetime.now(timezone.utc)
-        week_key = f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}"
-        month_key = dt.strftime("%b %Y")
+            qualifying = None
+        enriched.append({**period, "qualifying_trade_count": qualifying})
+    return {"periods": enriched}
 
-        if week_key not in week_stats:
-            week_stats[week_key] = {"profit": 0.0, "trades": 0, "peak": 0.0, "equity": 0.0, "drawdown": 0.0}
-        week_stats[week_key]["profit"] += profit
-        week_stats[week_key]["trades"] += 1
-        week_stats[week_key]["equity"] += profit
-        week_stats[week_key]["peak"] = max(week_stats[week_key]["peak"], week_stats[week_key]["equity"])
-        week_stats[week_key]["drawdown"] = max(week_stats[week_key]["drawdown"], week_stats[week_key]["peak"] - week_stats[week_key]["equity"])
 
-        if month_key not in month_stats:
-            month_stats[month_key] = {"profit": 0.0, "trades": 0}
-        month_stats[month_key]["profit"] += profit
-        month_stats[month_key]["trades"] += 1
+@api_router.post("/admin/performance/periods/start")
+async def admin_start_performance_period(req: StartPerformancePeriodRequest, admin: dict = Depends(get_current_admin)):
+    # Fresh-auth requirement -- same pattern as update_admin_account() and
+    # the Nomba production-credential gate: a destructive/high-stakes
+    # admin action requires re-entering the current password, not just an
+    # already-valid session cookie.
+    full = await db.users.find_one({"email": admin["email"]})
+    if not full or not verify_password(req.current_password, full.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Incorrect password.")
+    if not req.confirm:
+        raise HTTPException(status_code=400, detail="Set confirm=true to acknowledge that the previous period will be archived, not deleted.")
+    if not req.name.strip() or not req.reason.strip():
+        raise HTTPException(status_code=400, detail="A period name and reason are both required.")
 
-        setup = str(trade.get("setup") or trade.get("signature") or "Unknown").split("|")[0] or "Unknown"
-        if setup not in setup_stats:
-            setup_stats[setup] = {"trades": 0, "wins": 0, "profit": 0.0}
-        setup_stats[setup]["trades"] += 1
-        setup_stats[setup]["profit"] += profit
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    now_unix = now.timestamp()
 
-        result = str(trade.get("result", "")).upper()
-        if result == "WIN":
-            setup_stats[setup]["wins"] += 1
-            current_win_streak += 1
-            current_loss_streak = 0
-        elif result == "LOSS":
-            current_loss_streak += 1
-            current_win_streak = 0
-        summary["longest_winning_streak"] = max(summary["longest_winning_streak"], current_win_streak)
-        summary["longest_losing_streak"] = max(summary["longest_losing_streak"], current_loss_streak)
+    current_active = await get_active_performance_period()
 
-    summary["max_drawdown"] = round(max_dd, 2)
-    weekly_profits = [v["profit"] for v in week_stats.values()]
-    summary["best_week"] = round(max(weekly_profits), 2) if weekly_profits else 0
-    summary["worst_week"] = round(min(weekly_profits), 2) if weekly_profits else 0
-    summary["weekly_return_avg"] = round(sum(weekly_profits) / len(weekly_profits), 2) if weekly_profits else 0
-    summary["weekly_data"] = [
-        {"week": k, "return": round(v["profit"], 2), "drawdown": round(v["drawdown"], 2), "trades": v["trades"]}
-        for k, v in sorted(week_stats.items())[-12:]
-    ]
-    summary["monthly_returns"] = [
-        {"month": k, "return": round(v["profit"], 2), "trades": v["trades"]}
-        for k, v in month_stats.items()
-    ][-12:]
-    summary["strategy_breakdown"] = [
-        {
-            "strategy": k[:24],
-            "trades": v["trades"],
-            "win_rate": round(v["wins"] / v["trades"] * 100, 1) if v["trades"] else 0,
-            "profit_share": round(v["profit"], 2),
-        }
-        for k, v in sorted(setup_stats.items(), key=lambda item: item[1]["profit"], reverse=True)[:3]
-    ]
-    return summary
+    # First-ever activation: also archive an implicit "Historical EA
+    # Journal" period covering everything before any period system
+    # existed, so the pre-reset 1,217-trade dataset gets its own labeled,
+    # queryable, permanently-preserved period rather than being an
+    # orphaned, un-scoped blob. Its own start is the earliest eligible
+    # trade's opened_at (or, if there is none, the same moment the first
+    # real period starts, making it an honest empty bucket rather than a
+    # fabricated date range).
+    if current_active is None:
+        existing_periods_count = await db.performance_periods.count_documents({})
+        if existing_periods_count == 0:
+            earliest = await db.trade_journal.find(
+                {"has_rich_ledger_data": True, "ticket": {"$gt": 0}, "opened_at": {"$gt": 0}},
+                {"_id": 0, "opened_at": 1},
+            ).sort("opened_at", 1).limit(1).to_list(length=1)
+            legacy_start_unix = earliest[0]["opened_at"] if earliest else now_unix
+            legacy_period = {
+                "id": str(uuid.uuid4()),
+                "name": "Historical EA Journal",
+                "status": "ARCHIVED",
+                "epoch_started_at": datetime.fromtimestamp(legacy_start_unix, timezone.utc).isoformat(),
+                "epoch_started_at_unix": legacy_start_unix,
+                "epoch_ended_at": now_iso,
+                "epoch_ended_at_unix": now_unix,
+                "scope": {"account_logins": None, "ea_versions": None, "symbol": None,
+                          "break_even_tolerance_usd": performance_engine.DEFAULT_BREAK_EVEN_TOLERANCE_USD,
+                          "minimum_sample": performance_engine.DEFAULT_MINIMUM_SAMPLE},
+                "created_by_admin_email": admin["email"],
+                "reason": "Automatically created to preserve all pre-reset trade history as its own labeled, permanent, read-only period.",
+                "created_at": now_iso,
+            }
+            await db.performance_periods.insert_one(legacy_period)
+    elif current_active:
+        # Archive the currently active period -- never deleted, never
+        # rewritten, just closed off at exactly this moment.
+        await db.performance_periods.update_one(
+            {"id": current_active["id"]},
+            {"$set": {"status": "ARCHIVED", "epoch_ended_at": now_iso, "epoch_ended_at_unix": now_unix}},
+        )
+
+    new_period = {
+        "id": str(uuid.uuid4()),
+        "name": req.name.strip(),
+        "status": "ACTIVE",
+        "epoch_started_at": now_iso,
+        "epoch_started_at_unix": now_unix,
+        "epoch_ended_at": None,
+        "epoch_ended_at_unix": None,
+        "scope": {
+            "account_logins": req.account_logins,
+            "ea_versions": req.ea_versions,
+            "symbol": req.symbol,
+            "break_even_tolerance_usd": req.break_even_tolerance_usd,
+            "minimum_sample": req.minimum_sample,
+        },
+        "created_by_admin_email": admin["email"],
+        "reason": req.reason.strip(),
+        "created_at": now_iso,
+    }
+    await db.performance_periods.insert_one(new_period)
+    logger.info(f"PERFORMANCE_PERIOD_STARTED id={new_period['id']} name={new_period['name']} by={admin['email']} epoch={now_iso}")
+    new_period.pop("_id", None)
+    return {"started": True, "period": new_period}
 
 @api_router.get("/architecture")
 async def get_architecture():
-    return {"modules":[{"name":"Market Analysis Engine","description":"Multi-layered analysis using EMA, RSI, ATR, BB across M5, H1, H4","components":["Trend Detection (EMA 50/200)","Market Structure (HH/LL)","Volatility Analysis (ATR)","Multi-Timeframe Confirmation"]},{"name":"AI Adaptive Decision Engine","description":"ML classifier targeting high-probability setups with self-improving confidence","components":["Market Classifier","Confidence Scoring (0-100)","Deep Pattern Memory","Self-Improving Engine"]},{"name":"Strategy Engine","description":"Three strategies with dynamic switching","components":["Trend Mode","Range Mode","Breakout Mode","Pattern Recognition"]},{"name":"Risk Management","description":"Institutional controls with account-aware exposure limits","components":["Dynamic Position Sizing","ATR-based SL/TP","Daily/Weekly Limits","Equity Protection"]},{"name":"Execution Engine","description":"Precision execution with PIN validation and cloud-safe synchronized exits","components":["Market/Limit Orders","Spread Filter","Structure Exit Logic","Trailing Stop"]},{"name":"Performance Tracking","description":"Logging + ML feedback loop","components":["Trade Journal","Win Rate Tracking","Drawdown Monitor","Pattern Learning"]}],"filters":[{"name":"Session Filter","description":"London & NY only"},{"name":"Spread Filter","description":"Avoids high spread"},{"name":"News Filter","description":"Avoids events"},{"name":"Volatility Filter","description":"Adapts to volatility"}]}
+    return {"modules":[{"name":"M10 Evidence Engine","description":"Builds immutable evidence from completed M10 bars and multi-timeframe context.","components":["Completed-bar trend and pressure","Market structure","Volatility","M10 evidence identity"]},{"name":"Decision Authority","description":"M10 legacy is the sole authoritative decision mode in this release. An M30 three-snapshot consensus path exists in source for possible future use but is not selectable or executable in the current build.","components":["M10 legacy mode (active)","M30 three-snapshot consensus (dormant, not selectable)","Immutable candidate identity","No forming-candle evidence"]},{"name":"Entry Lifecycle","description":"A qualifying candidate gets one 120–180 second observation window, followed by execute or cancel.","components":["Single timer","Final revalidation","0.30R missed-move cancellation","No retracement carry-forward"]},{"name":"Risk and Execution","description":"Core orders require a structural invalidation, one 1.20 widening, 10% configured risk sizing, direction exclusivity, and confirmed broker truth.","components":["Structural stop loss","Margin and spread checks","Cross-terminal reservation","Broker reconciliation"]},{"name":"Position Management","description":"Open-position and R-based exit management continues on every tick.","components":["R-based protection","Broker-confirmed close retries","Restart state","Exit audit"]},{"name":"Command Center","description":"Licensed users can inspect heartbeat, evidence, candidates, positions, events, and acknowledged controls.","components":["Tenant isolation","Decision-mode visibility","Audit trail","Admin separation"]}],"filters":[{"name":"Spread","description":"Current execution-risk check"},{"name":"News","description":"Current local evidence plus honest provider status"},{"name":"Structure","description":"Required core invalidation"},{"name":"Margin","description":"Broker/account execution reality"}]}
 
 @api_router.get("/docs/installation")
 async def get_installation_guide():
-    return {"steps":[{"step":1,"title":"Download EA","description":"Download .mq5 from Download section."},{"step":2,"title":"Open MT5","description":"Launch MetaTrader 5."},{"step":3,"title":"Copy to Folder","description":"File > Open Data Folder > MQL5 > Experts. Paste file."},{"step":4,"title":"Compile","description":"Press F4 (MetaEditor), open file, press F7."},{"step":5,"title":"Open Chart","description":"Open XAUUSD M5 chart."},{"step":6,"title":"Attach EA","description":"Drag EA from Navigator onto chart."},{"step":7,"title":"Enter PIN","description":"Input your license PIN. Configure settings."},{"step":8,"title":"Enable","description":"Click Algo Trading (green). Bot starts!"}],"requirements":["MetaTrader 5","XAUUSD symbol","Valid PIN","Internet","$1000+ balance","Low-spread broker"],"warnings":["Start with demo","No guaranteed profits","Don't risk what you can't lose","Keep PIN private"]}
+    return {"steps":[{"step":1,"title":"Download EA","description":"Sign in to Command Center and download the verified compiled .ex5 release."},{"step":2,"title":"Open MT5","description":"Launch MetaTrader 5."},{"step":3,"title":"Copy to Folder","description":"File > Open Data Folder > MQL5 > Experts. Paste the compiled file."},{"step":4,"title":"Refresh Navigator","description":"In Navigator, refresh Expert Advisors. Customer-side source compilation is not required."},{"step":5,"title":"Open Chart","description":"Open an XAUUSD M10 chart (including your broker's XAUUSD suffix)."},{"step":6,"title":"Attach EA","description":"Drag the verified EA from Navigator onto the chart."},{"step":7,"title":"Enter PIN","description":"Enter your license PIN. This release runs M10 legacy decision mode only — there is no M30 mode to select in the current build."},{"step":8,"title":"Enable","description":"Enable Algo Trading only after demo verification and broker checks."}],"requirements":["MetaTrader 5","Supported XAUUSD symbol","Valid PIN","Stable internet/VPS","Adequate broker margin","Broker-compatible spread and stops"],"warnings":["Start with demo","No guaranteed profits","Risk only capital you can afford to lose","Keep PIN private","Confirm the active EA version and Decision Mode in the MT5 journal"]}
 
 @api_router.get("/docs/how-it-works")
 async def get_how_it_works():
-    return {"sections":[{"title":"How XauAI Sniper Works","subtitle":"Your intelligent XAUUSD trading assistant","steps":[{"id":1,"title":"Market Scanning","description":"Scans XAUUSD across M5, H1, H4 every 5 minutes using EMA, RSI, ATR, Bollinger Bands.","detail":"Multi-timeframe filters false signals."},{"id":2,"title":"AI Classification","description":"Classifies market as TRENDING, RANGING, or BREAKOUT using weighted scoring.","detail":"Different strategy for each condition."},{"id":3,"title":"Confidence Scoring","description":"Scores each setup using market structure, momentum, volatility, session quality, and live journal memory.","detail":"Sniper approach = fewer, higher-quality trades."},{"id":4,"title":"Smart Execution","description":"ATR-based stop loss, wider structure-runner targets, synchronized SL/TP, and trailing logic.","detail":"Protects the account while giving valid gold moves room to breathe."},{"id":5,"title":"Risk Protection","description":"Per-trade risk limits, account exposure caps, drawdown checks, and cooldown after weak conditions.","detail":"Controls damage without blocking every pullback."},{"id":6,"title":"Global Learning","description":"Verified trade logs feed the global AI memory so repeated weak patterns can be avoided over time.","detail":"Cloud ML improves only from real outcomes, not fake sample stats."}]}],"faq":[{"q":"Do I need to keep my computer on?","a":"Yes. Use a VPS ($5-10/mo) for 24/7 trading."},{"q":"What account size?","a":"Min $500, recommended $1,000+. Bot auto-calculates lot sizes."},{"q":"Which broker?","a":"Any reliable MT5 broker with a low-spread XAUUSD symbol can work."},{"q":"Can I close trades manually?","a":"Yes, anytime. The bot won't interfere."},{"q":"What if I lose internet?","a":"Your SL/TP protect you. Bot resumes when reconnected."}]}
+    version = (_current_ea_release() or {}).get("version", "current release")
+    return {"sections":[{"title":f"How XauCloud {version} Works","subtitle":"Completed M10 evidence with a single authoritative decision mode","steps":[{"id":1,"title":"M10 Evidence","description":"The EA records one immutable snapshot for each completed M10 candle.","detail":"The forming candle is never used as evidence."},{"id":2,"title":"Decision Mode","description":"M10 legacy is the only decision mode in this release. An M30 three-snapshot consensus path exists in source for possible future use but is not selectable or executable in the current build.","detail":"The journal and Command Center confirm M10 legacy is the active mode."},{"id":3,"title":"One Entry Timer","description":"A qualifying BUY or SELL immediately starts one 120–180 second timer.","detail":"There is no second retracement, candle, slot, or AI wait."},{"id":4,"title":"Execute or Cancel","description":"At final revalidation the EA executes if valid and below 0.30R movement, otherwise it cancels.","detail":"A cancelled candidate cannot be carried or resurrected."},{"id":5,"title":"Risk and Broker Truth","description":"A core order requires structural SL, one 1.20 widening, configured 10% risk sizing, margin, direction exclusivity, and broker confirmation.","detail":"Ambiguous sends are reconciled and never immediately resent."},{"id":6,"title":"Tick-Based Management","description":"Once open, positions and exits continue to be managed on ticks.","detail":"Entry cadence does not slow exit management."}]}],"faq":[{"q":"Is M30 mode available?","a":"No. This release runs M10 legacy decision mode only; M30 is not a selectable option in the current build. Always confirm the active Decision Mode shown in the MT5 journal and Command Center."},{"q":"Do I need to keep MT5 running?","a":"Yes. A properly monitored VPS can provide continuous terminal operation."},{"q":"Does the EA guarantee profit?","a":"No. Trading can lose money; demo and broker-specific verification are required."},{"q":"Which broker?","a":"Use an MT5 broker whose XAUUSD symbol, stops, volume steps, margin, spread, and execution behavior you have verified."},{"q":"What if connectivity fails?","a":"Broker-held SL/TP remain important, but cloud features and EA-side management may be unavailable until connectivity returns."}]}
 
 @api_router.get("/docs/setup-guide")
 async def get_setup_guide():
-    return {"title":"Setup Guide (Even a 10-Year-Old Can Follow This)","intro":"Follow these steps one by one. Each has exactly what to click.","steps":[{"step":1,"title":"Download MetaTrader 5","instructions":["Go to metatrader5.com/en/download","Click 'Download MetaTrader 5'","Install (click Next until done)","Open MT5"],"tip":"Like installing any app!"},{"step":2,"title":"Create Demo Account","instructions":["Click 'Open a demo account'","Pick MetaQuotes-Demo","Fill any name/email","Choose Forex, 1:100 leverage","Click Finish"],"tip":"Demo = fake money. Can't lose real money."},{"step":3,"title":"Download EA File","instructions":["On our site, go to Download section","Click 'DOWNLOAD .MQ5 FILE'","File saves to Downloads folder"],"tip":"One file = the bot's brain."},{"step":4,"title":"Put File in Right Folder","instructions":["MT5: File > Open Data Folder","Open MQL5 > Experts","Paste the .mq5 file here"],"tip":"Like putting a game in the right folder."},{"step":5,"title":"Compile the EA","instructions":["Press F4 (MetaEditor opens)","Find file on left, double-click","Press F7 to compile","Check: 0 errors","Close MetaEditor"],"tip":"Turns code into a working bot."},{"step":6,"title":"Open Gold Chart","instructions":["Left panel: Market Watch","Right-click > Show All","Find XAUUSD","Right-click > Chart Window","Set to M5 timeframe"],"tip":"XAUUSD = Gold in USD."},{"step":7,"title":"Attach Bot to Chart","instructions":["Press Ctrl+N (Navigator)","Expand Expert Advisors","Drag XAUUSD_AI_Sniper_EA onto chart","Settings popup appears"],"tip":"You're telling the bot to watch gold."},{"step":8,"title":"Enter PIN & Configure","instructions":["Inputs tab > License PIN > enter your PIN","Set Profit Mode: 1=20%, 2=35%, 3=50%","Common tab > check Allow Algo Trading","Click OK"],"tip":"PIN = car key. No PIN = no trading."},{"step":9,"title":"Enable Auto Trading","instructions":["Find Algo Trading button in toolbar","Click until GREEN","Green = ON, Red = OFF"],"tip":"The master ON/OFF switch."},{"step":10,"title":"You're Done!","instructions":["Dashboard appears on chart","Bot scans every 5 minutes","Trades appear in Trade tab","Let it run!"],"tip":"Leave it alone = better performance."}],"important_notes":["START WITH DEMO! Practice 1-2 weeks first.","Keep MT5 running 24/7. Use VPS if needed.","Some losses are normal. Don't panic.","If bot stops: check Algo Trading is green, check session hours."]}
+    version = (_current_ea_release() or {}).get("version", "current release")
+    return {"title":f"XauCloud {version} Setup Guide","intro":"Install only the verified compiled EX5 and confirm the running inputs before enabling trading.","steps":[{"step":1,"title":"Prepare MT5 Demo","instructions":["Install your broker's MT5 terminal","Sign in to a demo account","Confirm the broker's exact XAUUSD symbol and trading specification"],"tip":"Do not begin with a real-money account."},{"step":2,"title":"Download Verified EX5","instructions":["Sign in to Command Center","Link the active license",f"Download {version} compiled EX5","Compare the displayed checksum with the release manifest"],"tip":"Customers do not need MQ5 source or MetaEditor compilation."},{"step":3,"title":"Install the EA","instructions":["MT5: File > Open Data Folder","Open MQL5 > Experts","Copy the verified EX5","Refresh Expert Advisors in Navigator"],"tip":"Keep older builds clearly separated."},{"step":4,"title":"Open Gold Chart","instructions":["Open your broker's XAUUSD chart","Set the chart to M10","Confirm live prices and normal broker spread"],"tip":"M10 is the primary evidence timeframe."},{"step":5,"title":"Attach and Review Inputs","instructions":["Drag XAUUSD_AI_Sniper_EA onto the chart","Enter the license PIN","Confirm Decision Mode shows M10 legacy","Confirm risk, magic number, server URL, and structural SL settings"],"tip":"This release runs M10 legacy decision mode only; there is no M30 mode to select."},{"step":6,"title":"Verify Journal","instructions":["Confirm the exact EA version and build hash","Confirm the active Decision Mode","Confirm license and indicator readiness","Confirm there is no older EA attached to another XAUUSD chart"],"tip":"The file name alone does not prove the running version."},{"step":7,"title":"Enable on Demo","instructions":["Enable Allow Algo Trading","Turn the MT5 Algo Trading button on","Watch heartbeat and Command Center status","Verify broker send/modify/close behavior on demo"],"tip":"Move to live only after owner approval and broker-specific evidence."}],"important_notes":["No profit is guaranteed.","The configured 10% risk is high and can produce large losses.","Keep MT5 and connectivity monitored.","Never share your PIN.","Mac and VPS must use the same approved artifact and intentional Decision Mode."]}
 
 @api_router.get("/docs/video-guide")
 async def get_video_guide():
-    return {"title":"Complete Visual Walkthrough","subtitle":"Screen-by-screen guide at your own pace","scenes":[{"scene":1,"title":"GETTING STARTED","duration":"2 min","frames":[{"action":"OPEN BROWSER","detail":"Go to metatrader5.com/en/download","visual":"Blue website with download button"},{"action":"CLICK DOWNLOAD","detail":"Click 'Download MetaTrader 5 for Windows'","visual":"mt5setup.exe starts downloading"},{"action":"INSTALL","detail":"Double-click file. Next > Next > Finish","visual":"Standard Windows installer"},{"action":"OPEN MT5","detail":"Click MetaTrader 5 on desktop","visual":"Trading terminal with charts"}]},{"scene":2,"title":"CREATING ACCOUNT","duration":"1 min","frames":[{"action":"DEMO","detail":"Click 'Open a demo account'","visual":"Account dialog"},{"action":"BROKER","detail":"Pick MetaQuotes-Demo, click Next","visual":"Broker list"},{"action":"DETAILS","detail":"Enter name, select Forex 1:100","visual":"Simple form"},{"action":"DONE","detail":"Click Finish. $10,000 demo money!","visual":"Balance shows $10,000"}]},{"scene":3,"title":"INSTALLING EA","duration":"3 min","frames":[{"action":"DOWNLOAD EA","detail":"Click gold DOWNLOAD button on site","visual":"Gold button"},{"action":"DATA FOLDER","detail":"MT5: File > Open Data Folder","visual":"Windows Explorer opens"},{"action":"NAVIGATE","detail":"MQL5 > Experts folder","visual":"Experts folder"},{"action":"PASTE","detail":"Copy .mq5 file here","visual":"File in folder"},{"action":"COMPILE","detail":"F4, find file, F7. 0 errors","visual":"MetaEditor success"},{"action":"BACK","detail":"Close MetaEditor","visual":"MT5 main window"}]},{"scene":4,"title":"CHART SETUP","duration":"1 min","frames":[{"action":"FIND GOLD","detail":"Market Watch > Show All > XAUUSD","visual":"Symbol list"},{"action":"OPEN CHART","detail":"Right-click > Chart Window","visual":"Candlestick chart"},{"action":"TIMEFRAME","detail":"Click M5 in toolbar","visual":"5-min candles"}]},{"scene":5,"title":"ACTIVATING BOT","duration":"2 min","frames":[{"action":"NAVIGATOR","detail":"Ctrl+N > Expert Advisors","visual":"EA list"},{"action":"DRAG","detail":"Drag EA onto XAUUSD chart","visual":"Settings popup"},{"action":"PIN","detail":"Inputs > License PIN > enter PIN","visual":"PIN input field"},{"action":"MODE","detail":"Set Profit Mode 1/2/3","visual":"Number input"},{"action":"ALGO","detail":"Common > Allow Algo Trading checked","visual":"Checkbox"},{"action":"GO","detail":"Click OK. Click Algo Trading GREEN","visual":"Green button = LIVE!"}]},{"scene":6,"title":"VPS SETUP","duration":"5 min","frames":[{"action":"WHAT IS VPS?","detail":"Cloud computer that runs 24/7","visual":"Computer that never sleeps"},{"action":"GET VPS","detail":"ForexVPS.net or Contabo ($5-10/mo)","visual":"VPS pricing pages"},{"action":"CONNECT","detail":"Remote Desktop > enter IP/password","visual":"RDP connection"},{"action":"INSTALL MT5","detail":"Same install process on VPS","visual":"MT5 on VPS"},{"action":"SETUP EA","detail":"Copy EA, attach, enter PIN, enable","visual":"Same setup, on VPS"},{"action":"DONE","detail":"Close RDP. Bot runs forever!","visual":"24/7 trading"}]}]}
+    version = (_current_ea_release() or {}).get("version", "current release")
+    return {"title":"Verified EX5 Installation Walkthrough","subtitle":f"Screen-by-screen {version} deployment checks","scenes":[{"scene":1,"title":"DOWNLOAD","duration":"2 min","frames":[{"action":"SIGN IN","detail":"Open Command Center and link the active license","visual":"Licensed download panel"},{"action":"DOWNLOAD EX5","detail":f"Download the compiled {version} artifact","visual":"Version and checksum shown together"},{"action":"VERIFY","detail":"Compare the artifact checksum with the release manifest","visual":"Matching SHA-256 values"}]},{"scene":2,"title":"INSTALL","duration":"2 min","frames":[{"action":"DATA FOLDER","detail":"MT5: File > Open Data Folder","visual":"Terminal data directory"},{"action":"COPY","detail":"Place the EX5 in MQL5 > Experts","visual":"Compiled artifact in Experts"},{"action":"REFRESH","detail":"Refresh Expert Advisors in Navigator","visual":"EA appears without customer-side compilation"}]},{"scene":3,"title":"CHART AND INPUTS","duration":"3 min","frames":[{"action":"OPEN GOLD","detail":"Open the broker's XAUUSD symbol on M10","visual":"Completed M10 candles"},{"action":"ATTACH","detail":"Attach XAUUSD AI Sniper","visual":"EA input dialog"},{"action":"LICENSE","detail":"Enter PIN and verify account binding","visual":"License input"},{"action":"MODE","detail":"Confirm the published release's active Decision Mode","visual":"M10 legacy decision mode confirmation"}]},{"scene":4,"title":"PROVE THE RUNTIME","duration":"2 min","frames":[{"action":"JOURNAL","detail":f"Confirm {version}, build hash, source/input hashes, and active Decision Mode","visual":"MT5 journal startup evidence"},{"action":"COMMAND CENTER","detail":"Confirm fresh heartbeat and matching mode/evidence","visual":"Online monitored instance"},{"action":"DEMO FIRST","detail":"Verify signal, broker execution, SL/TP, and exits on demo before live approval","visual":"Audited demo lifecycle"}]}]}
 
 # -------------------------------------------------------------------
 # ADMIN ROUTES (Protected)
@@ -1142,6 +1890,7 @@ async def get_admin_settings(admin: dict = Depends(get_current_admin)):
     # Mask sensitive keys
     pk = s.get("paystack_secret_key", "")
     sp = s.get("smtp_password", "")
+    osk = s.get("onesignal_api_key", "")
     return {
         "paystack_configured": bool(pk),
         "paystack_key_preview": f"{pk[:8]}...{pk[-4:]}" if len(pk) > 12 else ("set" if pk else "not set"),
@@ -1149,6 +1898,45 @@ async def get_admin_settings(admin: dict = Depends(get_current_admin)):
         "pin_price_naira": s.get("pin_price_kobo", 30000000) / 100,
         "smtp_email": s.get("smtp_email", ""),
         "smtp_configured": bool(sp),
+        "onesignal_app_id": s.get("onesignal_app_id", ""),
+        "onesignal_api_key_configured": bool(osk),
+        "onesignal_api_key_preview": f"{osk[:6]}...{osk[-4:]}" if len(osk) > 10 else ("set" if osk else "not set"),
+    }
+
+@api_router.get("/admin/notifications/health")
+async def admin_notifications_health(admin: dict = Depends(get_current_admin)):
+    """v6.25.3 owner directive 2026-07-17 -- real, live visibility into
+    OneSignal push notification health, in the admin dashboard, instead of
+    requiring a manual API check. Delivery now goes through OneSignal's
+    REST API (plain HTTPS POST via `requests`, already installed and
+    working) instead of self-hosted Web Push, which was permanently broken
+    by a missing Python package (pywebpush) that only a full backend
+    rebuild could fix -- see git history for that implementation. The only
+    thing that can now be "not configured" is the admin actually entering a
+    real OneSignal App ID + REST API Key in Settings, which the
+    onesignal.remediation field below states plainly when missing."""
+    import notifications as _notif
+    onesignal_status = await _notif.get_onesignal_status()
+    device_count = await db.cloud_push_subscriptions.count_documents({"opted_in": True})
+    last_sent = await db.cloud_notification_log.find_one(
+        {"delivery_status": "SENT"}, {"_id": 0, "scheduled_time": 1, "user_id": 1}, sort=[("scheduled_time", -1)])
+    last_failed = await db.cloud_notification_log.find_one(
+        {"delivery_status": {"$ne": "SENT"}}, {"_id": 0, "scheduled_time": 1, "delivery_status": 1, "failure_reason": 1},
+        sort=[("scheduled_time", -1)])
+    remediation = (
+        "Not configured. Create a free OneSignal account at onesignal.com, add a Web Push app, copy its "
+        "App ID and REST API Key from Settings -> Keys & IDs, and paste both into Settings on this admin "
+        "dashboard."
+        if not onesignal_status.get("configured") else
+        "Configured. If sends are still failing, check the failure reason on the last failed send below -- "
+        "AUTHENTICATION_FAILED means the REST API Key is wrong, NO_DEVICE_REGISTERED means no user has "
+        "granted browser permission yet."
+    )
+    return {
+        "onesignal": {**onesignal_status, "remediation": remediation},
+        "subscribed_devices": device_count,
+        "last_successful_send": last_sent,
+        "last_failed_send": last_failed,
     }
 
 @api_router.put("/admin/settings")
@@ -1158,9 +1946,167 @@ async def update_admin_settings(req: AdminSettingsUpdate, admin: dict = Depends(
     if req.pin_price_kobo is not None: updates["pin_price_kobo"] = req.pin_price_kobo
     if req.smtp_email is not None: updates["smtp_email"] = req.smtp_email
     if req.smtp_password is not None: updates["smtp_password"] = req.smtp_password
+    if req.onesignal_app_id is not None: updates["onesignal_app_id"] = req.onesignal_app_id.strip()
+    if req.onesignal_api_key is not None: updates["onesignal_api_key"] = req.onesignal_api_key.strip()
     if updates:
         await db.admin_settings.update_one({"key": "main"}, {"$set": updates}, upsert=True)
     return {"updated": True}
+
+
+# -------------------------------------------------------------------
+# NOMBA PAYMENT CONFIG (Admin Dashboard -> Settings -> Payments -> Nomba)
+# -------------------------------------------------------------------
+
+def _nomba_env_view(env_block: dict) -> dict:
+    import payment_crypto as _pc
+    def preview(key):
+        enc = env_block.get(key)
+        if not enc:
+            return {"configured": False, "preview": ""}
+        try:
+            plain = _pc.decrypt_secret(enc)
+        except Exception:
+            return {"configured": True, "preview": "‹decrypt error›"}
+        return {"configured": bool(plain), "preview": _pc.mask_preview(plain)}
+    return {
+        "client_id": preview("client_id_enc"),
+        "client_secret": preview("client_secret_enc"),
+        "account_id": preview("account_id_enc"),
+        "webhook_signature_key": preview("webhook_signature_key_enc"),
+        "last_validated_at": env_block.get("last_validated_at"),
+        "last_validation_ok": env_block.get("last_validation_ok"),
+        "last_validation_error": env_block.get("last_validation_error"),
+    }
+
+
+@api_router.get("/admin/settings/nomba")
+async def get_nomba_settings(admin: dict = Depends(get_current_admin)):
+    import payment_crypto as _pc
+    cfg = await get_nomba_config()
+    return {
+        "enabled": cfg.get("enabled", False),
+        "environment": cfg.get("environment", "sandbox"),
+        "sandbox": _nomba_env_view(cfg.get("sandbox") or {}),
+        "production": _nomba_env_view(cfg.get("production") or {}),
+        "allowed_payment_methods": cfg.get("allowed_payment_methods", _NOMBA_CONFIG_DEFAULT_METHODS),
+        "currency": cfg.get("currency", "NGN"),
+        "payment_description": cfg.get("payment_description", ""),
+        "callback_url": f"{PUBLIC_SITE_URL}/purchase/success",
+        "webhook_url": f"{PUBLIC_SITE_URL}/api/webhook/nomba",
+        "encryption_configured": _pc.is_configured(),
+    }
+
+
+@api_router.put("/admin/settings/nomba")
+async def update_nomba_settings(req: NombaConfigUpdate, admin: dict = Depends(get_current_admin)):
+    import payment_crypto as _pc
+    if not _pc.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="PAYMENT_CONFIG_ENCRYPTION_KEY is not set on the server -- Nomba credentials cannot be "
+                   "saved until it is. See audits/nomba_migration/ for setup instructions.",
+        )
+
+    cfg = await get_nomba_config()
+    changed_fields: List[str] = []
+    updates: Dict[str, Any] = {}
+
+    production_touched = any([
+        req.production_client_id is not None, req.production_client_secret is not None,
+        req.production_account_id is not None, req.production_webhook_signature_key is not None,
+        (req.environment == "production" and cfg.get("environment") != "production"),
+    ])
+    if production_touched:
+        # Fresh-auth requirement for production credential changes, same
+        # pattern as update_admin_account()'s current_password check.
+        if not req.current_password:
+            raise HTTPException(status_code=401, detail="Current admin password required to change production settings.")
+        full = await db.users.find_one({"email": admin["email"]})
+        if not full or not verify_password(req.current_password, full.get("password_hash", "")):
+            raise HTTPException(status_code=401, detail="Incorrect password.")
+
+    if req.enabled is not None:
+        updates["enabled"] = req.enabled
+        changed_fields.append("enabled")
+    if req.environment is not None:
+        if req.environment not in ("sandbox", "production"):
+            raise HTTPException(status_code=400, detail="environment must be 'sandbox' or 'production'")
+        updates["environment"] = req.environment
+        changed_fields.append("environment")
+    if req.allowed_payment_methods is not None:
+        updates["allowed_payment_methods"] = req.allowed_payment_methods
+        changed_fields.append("allowed_payment_methods")
+    if req.currency is not None:
+        updates["currency"] = req.currency
+        changed_fields.append("currency")
+    if req.payment_description is not None:
+        updates["payment_description"] = req.payment_description
+        changed_fields.append("payment_description")
+
+    def _apply_env_field(env_name: str, field_attr: str, sub_key: str, label: str):
+        val = getattr(req, field_attr)
+        if val is not None:
+            updates[f"{env_name}.{sub_key}"] = _pc.encrypt_secret(val)
+            changed_fields.append(f"{env_name}.{label}")
+
+    _apply_env_field("sandbox", "sandbox_client_id", "client_id_enc", "client_id")
+    _apply_env_field("sandbox", "sandbox_client_secret", "client_secret_enc", "client_secret")
+    _apply_env_field("sandbox", "sandbox_account_id", "account_id_enc", "account_id")
+    _apply_env_field("sandbox", "sandbox_webhook_signature_key", "webhook_signature_key_enc", "webhook_signature_key")
+    _apply_env_field("production", "production_client_id", "client_id_enc", "client_id")
+    _apply_env_field("production", "production_client_secret", "client_secret_enc", "client_secret")
+    _apply_env_field("production", "production_account_id", "account_id_enc", "account_id")
+    _apply_env_field("production", "production_webhook_signature_key", "webhook_signature_key_enc", "webhook_signature_key")
+
+    if updates:
+        await db.payment_nomba_config.update_one({"key": "main"}, {"$set": updates}, upsert=True)
+        await _log_nomba_config_audit(admin["email"], changed_fields, req.environment or cfg.get("environment", "sandbox"), test_passed=None)
+    return {"updated": True, "changed_fields": changed_fields}
+
+
+@api_router.post("/admin/settings/nomba/test-connection")
+async def test_nomba_connection(admin: dict = Depends(get_current_admin)):
+    """Validates the ACTIVE environment's credentials by attempting real
+    OAuth token issuance only -- never a checkout order, never a charge.
+    Records the result (pass/fail + redacted error) on the env block so
+    the admin UI can show 'last successful validation time' without a
+    second round-trip."""
+    cfg = await get_nomba_config()
+    environment = cfg.get("environment", "sandbox")
+    env_block = cfg.get(environment) or {}
+    creds = _decrypt_nomba_env_block(env_block, environment)
+    if not creds:
+        raise HTTPException(status_code=400, detail=f"{environment} credentials are not fully configured (client ID, client secret, and account ID are all required).")
+
+    import nomba_service as _nomba
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        await _nomba.get_access_token(creds, force_refresh=True)
+        ok, error_msg = True, None
+    except _nomba.NombaError as exc:
+        ok, error_msg = False, str(exc)
+
+    await db.payment_nomba_config.update_one(
+        {"key": "main"},
+        {"$set": {
+            f"{environment}.last_validated_at": now_iso,
+            f"{environment}.last_validation_ok": ok,
+            f"{environment}.last_validation_error": error_msg,
+        }},
+    )
+    await _log_nomba_config_audit(admin["email"], ["test_connection"], environment, test_passed=ok)
+    if not ok:
+        return {"success": False, "environment": environment, "message": f"Connection failed: {error_msg}"}
+    return {"success": True, "environment": environment, "message": "Successfully authenticated with Nomba.", "validated_at": now_iso}
+
+
+@api_router.get("/admin/settings/nomba/audit-log")
+async def get_nomba_audit_log(admin: dict = Depends(get_current_admin), limit: int = 50):
+    entries = await db.payment_config_audit_log.find(
+        {"provider": "NOMBA"}, {"_id": 0}
+    ).sort("at", -1).to_list(length=min(limit, 200))
+    return {"entries": entries}
+
 
 # v6.6.0 — global Gold/Index Mode platform switches (architecture phase).
 # These gate what the WEBSITE/DASHBOARD advertises and allows users to select
@@ -1198,8 +2144,11 @@ async def admin_generate_pins(req: PinGenerateRequest):
     count = min(req.count, 50)
     pins = []
     for _ in range(count):
-        pin = await _issue_pin_license(req.buyer_name or "", req.buyer_email or "", None, req.notes or "")
-        doc = await db.pin_licenses.find_one({"pin": pin}, {"_id": 0})
+        pin = generate_unique_pin()
+        while await db.pin_licenses.find_one({"pin": pin}): pin = generate_unique_pin()
+        doc = PinLicense(pin=pin, buyer_name=req.buyer_name or "", buyer_email=req.buyer_email or "", notes=req.notes or "").model_dump()
+        await db.pin_licenses.insert_one(doc)
+        doc.pop('_id', None)
         pins.append(doc)
     return {"pins_created": len(pins), "pins": pins}
 
@@ -1291,6 +2240,49 @@ async def admin_delete(pin: str):
     r = await db.pin_licenses.delete_one({"pin": pin})
     if r.deleted_count == 0: raise HTTPException(404, "Not found")
     return {"deleted": True}
+
+
+class AdminLicenseResetRequest(BaseModel):
+    admin_password: str
+    reason: str
+
+
+@api_router.post("/admin/pins/{pin}/reset-account", dependencies=[Depends(get_current_admin)])
+async def admin_reset_license_account(pin: str, req: AdminLicenseResetRequest, admin: dict = Depends(get_current_admin)):
+    """v6.25.3 owner directive 2026-07-17 (Phase 4 P0) -- the only sanctioned
+    way to move a license from one MT5 account to another (e.g. a customer's
+    genuine broker/account change), since _resolve_monitor_license() fails
+    closed on any account mismatch otherwise. Requires re-entering the
+    CURRENT admin password (not just an already-valid session -- a
+    destructive/security-sensitive action, same bar as changing the admin's
+    own account) and a reason, and records a full audit entry (previous
+    account, new account, admin, reason, timestamp) rather than just
+    silently clearing the field."""
+    user = await db.users.find_one({"email": admin["email"]})
+    if not user or not verify_password(req.admin_password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Admin password is incorrect")
+    if not req.reason or not req.reason.strip():
+        raise HTTPException(status_code=400, detail="A reason is required for a license account reset.")
+    lic = await db.pin_licenses.find_one({"pin": pin}, {"_id": 0})
+    if not lic:
+        raise HTTPException(status_code=404, detail="License not found")
+    previous_account = lic.get("mt5_account") or ""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.pin_licenses.update_one(
+        {"pin": pin},
+        {"$set": {"mt5_account": None, "is_used": False, "activated_at": None}})
+    audit_entry = {
+        "id": str(uuid.uuid4()), "pin": pin, "previous_account": previous_account, "new_account": None,
+        "reason": req.reason.strip(), "admin_email": admin["email"], "reset_at": now_iso,
+    }
+    await db.license_reset_audit_log.insert_one(audit_entry)
+    # A reset account also invalidates any in-flight direction reservation
+    # tied to the old binding -- a stale reservation under the old account
+    # must not silently keep blocking/claiming after a reset.
+    if previous_account:
+        await db.cloud_direction_reservations.delete_many({"account": previous_account, "licenseId": lic.get("id", "")})
+    logger.warning(f"LICENSE_ACCOUNT_RESET pin={pin} previous_account={previous_account} admin={admin['email']} reason={req.reason.strip()}")
+    return {"reset": True, "pin": pin, "previous_account": previous_account}
 
 @api_router.post("/admin/configs", response_model=EAConfig, dependencies=[Depends(get_current_admin)])
 async def admin_create_config(data: EAConfigCreate):
@@ -1437,7 +2429,7 @@ async def admin_dashboard():
     }
 
 @api_router.put("/admin/account")
-async def update_admin_account(req: AdminAccountUpdate, admin: dict = Depends(get_current_admin)):
+async def update_admin_account(req: AdminAccountUpdate, response: Response, admin: dict = Depends(get_current_admin)):
     """Change admin email and/or password"""
     user = await db.users.find_one({"email": admin["email"]})
     if not user:
@@ -1461,7 +2453,10 @@ async def update_admin_account(req: AdminAccountUpdate, admin: dict = Depends(ge
     await db.users.update_one({"email": admin["email"]}, {"$set": updates})
     new_email = updates.get("email", admin["email"])
     new_token = create_access_token(str(user["_id"]), new_email)
-    return {"updated": True, "email": new_email, "token": new_token, "message": "Account updated successfully"}
+    response.set_cookie(key="access_token", value=new_token, httponly=True,
+                        secure=os.environ.get('COOKIE_SECURE', 'true').lower() != 'false',
+                        samesite="strict", max_age=86400, path="/")
+    return {"updated": True, "email": new_email, "message": "Account updated successfully"}
 
 # -------------------------------------------------------------------
 # CENTRALIZED ML ENGINE - Global Pattern Learning
@@ -1494,110 +2489,33 @@ class MLConfidenceRequest(BaseModel):
     day_of_week: int
 
 @api_router.post("/ml/submit-pattern")
-async def ml_submit_pattern(req: MLPatternSubmit):
-    """EA submits trade outcome for global learning"""
-    # Verify PIN is valid
-    pin_doc = await db.pin_licenses.find_one({"pin": req.pin, "is_active": True})
-    if not pin_doc:
-        raise HTTPException(status_code=403, detail="Invalid PIN")
-
-    pattern = {
-        "pin": req.pin,
-        "market_state": req.market_state,
-        "strategy": req.strategy,
-        "ema_diff": req.ema_diff,
-        "rsi_value": req.rsi_value,
-        "atr_value": req.atr_value,
-        "bb_width": req.bb_width,
-        "hour_of_day": req.hour_of_day,
-        "day_of_week": req.day_of_week,
-        "candle_body_ratio": req.candle_body_ratio,
-        "was_winner": req.was_winner,
-        "profit_pips": req.profit_pips,
-        "confidence": req.confidence,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.ml_patterns.insert_one(pattern)
-
-    # Update global stats cache
-    await _update_ml_stats()
-
-    return {"received": True, "total_patterns": await db.ml_patterns.count_documents({})}
+async def ml_submit_pattern_retired():
+    """v6.25.4 owner directive 2026-07-17 (URGENT P0 -- Phase 10 audit
+    finding) -- retired. Not called by any EA version since at least
+    v6.25.0 (grepped backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 -- no caller),
+    a dead active endpoint reachable over HTTP with no real product behind
+    it. It also only ever required an active PIN (not the current caller's
+    OWN bound account/ticket), so it was writable by any customer's PIN
+    into a fully global, unsegmented db.ml_patterns collection -- the same
+    class of issue closed on /journal/log and /ml/hive/score above."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired.")
 
 @api_router.post("/ml/get-confidence")
-async def ml_get_confidence(req: MLConfidenceRequest):
-    """EA asks for ML confidence adjustment before trading"""
-    # Verify PIN
-    pin_doc = await db.pin_licenses.find_one({"pin": req.pin, "is_active": True})
-    if not pin_doc:
-        raise HTTPException(status_code=403, detail="Invalid PIN")
-
-    total_patterns = await db.ml_patterns.count_documents({})
-    if total_patterns < 20:
-        return {"adjustment": 0, "total_patterns": total_patterns, "reason": "Not enough data yet"}
-
-    # 1. Find similar patterns globally (same market + strategy)
-    match_filter = {"market_state": req.market_state, "strategy": req.strategy}
-    similar = await db.ml_patterns.find(match_filter, {"_id": 0, "was_winner": 1, "hour_of_day": 1, "day_of_week": 1, "rsi_value": 1, "profit_pips": 1}).limit(1000).to_list(1000)
-
-    if len(similar) < 5:
-        return {"adjustment": 0, "total_patterns": total_patterns, "reason": "Few similar patterns"}
-
-    wins = sum(1 for p in similar if p["was_winner"])
-    base_win_rate = wins / len(similar)
-
-    # 2. Narrow down: same hour range (+/-1) and day of week
-    time_matches = [p for p in similar if abs(p["hour_of_day"] - req.hour_of_day) <= 1 and p["day_of_week"] == req.day_of_week]
-    time_win_rate = None
-    if len(time_matches) >= 5:
-        time_wins = sum(1 for p in time_matches if p["was_winner"])
-        time_win_rate = time_wins / len(time_matches)
-
-    # 3. RSI similarity check
-    rsi_matches = [p for p in similar if abs(p["rsi_value"] - req.rsi_value) < 10]
-    rsi_win_rate = None
-    if len(rsi_matches) >= 5:
-        rsi_wins = sum(1 for p in rsi_matches if p["was_winner"])
-        rsi_win_rate = rsi_wins / len(rsi_matches)
-
-    # 4. Calculate weighted confidence adjustment
-    # Base: strategy+market win rate (weight 40%)
-    # Time: hour+day win rate (weight 35%)
-    # RSI: indicator similarity (weight 25%)
-    weighted_wr = base_win_rate * 0.4
-    if time_win_rate is not None:
-        weighted_wr += time_win_rate * 0.35
-    else:
-        weighted_wr += base_win_rate * 0.35
-    if rsi_win_rate is not None:
-        weighted_wr += rsi_win_rate * 0.25
-    else:
-        weighted_wr += base_win_rate * 0.25
-
-    # Convert to adjustment: 50% WR = 0, 80% = +24, 30% = -16
-    adjustment = int((weighted_wr - 0.5) * 80)
-    adjustment = max(-25, min(25, adjustment))
-
-    # 5. Loss time slot check
-    skip_trade = False
-    if time_win_rate is not None and time_win_rate < 0.30 and len(time_matches) >= 8:
-        skip_trade = True
-        adjustment = -30  # Strong penalty
-
-    return {
-        "adjustment": adjustment,
-        "skip_trade": skip_trade,
-        "total_patterns": total_patterns,
-        "similar_count": len(similar),
-        "base_win_rate": round(base_win_rate * 100, 1),
-        "time_win_rate": round(time_win_rate * 100, 1) if time_win_rate else None,
-        "rsi_win_rate": round(rsi_win_rate * 100, 1) if rsi_win_rate else None,
-        "weighted_win_rate": round(weighted_wr * 100, 1),
-    }
+async def ml_get_confidence_retired():
+    """v6.25.4 -- retired, see ml_submit_pattern_retired(). No EA caller;
+    formerly reachable by anyone holding any single active PIN."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired.")
 
 @api_router.get("/ml/stats")
-async def ml_global_stats():
-    """Global ML statistics (public)"""
+async def ml_stats_retired():
+    """v6.25.4 -- retired, see ml_submit_pattern_retired() above. No EA
+    caller; a dead active endpoint publicly exposing aggregate stats over
+    the same unauthenticated global db.ml_patterns collection. The
+    underlying computation is kept as _compute_ml_global_stats() for the
+    still-live, admin-only /admin/ml/stats."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired.")
+
+async def _compute_ml_global_stats():
     total = await db.ml_patterns.count_documents({})
     if total == 0:
         return {"total_patterns": 0, "global_win_rate": 0, "contributors": 0, "strategies": {}, "hourly_performance": [], "message": "No patterns yet. As users trade, the AI gets smarter."}
@@ -1648,7 +2566,7 @@ async def ml_global_stats():
 @api_router.get("/admin/ml/stats", dependencies=[Depends(get_current_admin)])
 async def admin_ml_stats():
     """Detailed ML stats for admin"""
-    stats = await ml_global_stats()
+    stats = await _compute_ml_global_stats()
     # Add recent patterns
     recent = await db.ml_patterns.find({}, {"_id": 0, "market_state": 1, "strategy": 1, "was_winner": 1, "created_at": 1, "confidence": 1}).sort("created_at", -1).limit(20).to_list(20)
     stats["recent_patterns"] = recent
@@ -1804,58 +2722,14 @@ async def get_session_config():
     }
 
 @api_router.post("/smart/check-trade")
-async def smart_check_trade(req: MLConfidenceRequest):
-    """All-in-one smart trade check: ML + News + DXY + Session + Recovery"""
-    result = {
-        "allow_trade": True,
-        "adjustments": [],
-        "final_adjustment": 0,
-        "warnings": [],
-    }
-
-    # 1. ML confidence (reuse existing logic)
-    ml_data = await ml_get_confidence(req)
-    ml_adj = ml_data.get("adjustment", 0)
-    if ml_data.get("skip_trade"):
-        result["allow_trade"] = False
-        result["warnings"].append("BLOCKED: Global ML says this setup historically loses")
-        return result
-    result["adjustments"].append({"source": "global_ml", "value": ml_adj})
-
-    # 2. DXY correlation
-    try:
-        dxy = await get_dxy_direction()
-        gold_bias = dxy.get("gold_bias", "neutral")
-        is_buy = req.market_state in [0, 3]  # trending up or breakout up
-
-        if (is_buy and gold_bias == "bearish") or (not is_buy and gold_bias == "bullish"):
-            result["adjustments"].append({"source": "dxy_conflict", "value": -10})
-            result["warnings"].append(f"DXY conflict: Gold bias is {gold_bias} but trade is {'BUY' if is_buy else 'SELL'}")
-        elif (is_buy and gold_bias == "bullish") or (not is_buy and gold_bias == "bearish"):
-            result["adjustments"].append({"source": "dxy_confirm", "value": 5})
-    except:
-        pass
-
-    # 3. Session tuning
-    hour = req.hour_of_day
-    if 13 <= hour < 16:  # overlap
-        result["adjustments"].append({"source": "session_overlap_boost", "value": 3})
-    elif 0 <= hour < 8:  # asian - be more selective
-        result["adjustments"].append({"source": "session_asian_penalty", "value": -8})
-        result["warnings"].append("Asian session: low liquidity, higher risk")
-
-    # 4. Weekend protection (Friday after 20:00)
-    dow = req.day_of_week
-    if dow == 5 and hour >= 20:
-        result["allow_trade"] = False
-        result["warnings"].append("BLOCKED: Weekend gap protection - no new trades after Friday 20:00")
-        return result
-
-    # Calculate final
-    total_adj = sum(a["value"] for a in result["adjustments"])
-    result["final_adjustment"] = max(-30, min(30, total_adj))
-
-    return result
+async def smart_check_trade_retired():
+    """v6.25.4 -- retired, see ml_submit_pattern_retired() above. No EA
+    caller; internally called the also-retired ml_get_confidence and the
+    live /smart/dxy and weekend-gap checks, none of which are exercised
+    by any current EA path (news/DXY/weekend gating is done independently
+    in EA-local logic -- see NEWS_GATE_STARTED/COMPLETED in the EA
+    source)."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired.")
 
 @api_router.get("/admin/monthly-report", dependencies=[Depends(get_current_admin)])
 async def admin_monthly_report():
@@ -1946,63 +2820,136 @@ async def startup():
         await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
         logger.info("Admin password updated")
     await db.users.create_index("email", unique=True)
+    # v6.25.3 owner directive 2026-07-17 (Phase 2 P0) -- exactly one PIN may
+    # ever exist per payment reference, enforced at the database level (not
+    # just by application logic, which the new atomic state machine in
+    # _fulfill_payment() already makes the primary guard -- this is
+    # defense-in-depth against any future code path that bypasses it).
+    # reference is already unique per initialize_purchase (uuid4-derived),
+    # but a unique index makes that guarantee real rather than assumed.
+    try:
+        await db.payment_transactions.create_index("reference", unique=True)
+    except Exception as e:
+        logger.warning(f"[payments] could not create payment_transactions.reference index: {e}")
+    try:
+        await db.pin_licenses.create_index(
+            "payment_ref", unique=True,
+            partialFilterExpression={"payment_ref": {"$type": "string"}})
+    except Exception as e:
+        logger.warning(f"[payments] could not create pin_licenses.payment_ref index: {e}")
     # Audit fix: cloud_notification_log's idempotency check was check-then-
     # insert with no DB-level guard -- safe today only because a single
     # backend process drives the outlook notification loops sequentially
     # (never concurrently). A unique index makes the guarantee real
     # regardless of process count: a duplicate insert now raises inside
     # send_outlook_notification's existing blanket try/except (notifications.py),
-    # which already logs and returns 0 rather than propagating -- so this
+    # which logs and leaves the persisted event retryable rather than
+    # propagating -- so this
     # closes the race without needing new error-handling code.
     try:
         await db.cloud_notification_log.create_index("idempotency_key", unique=True)
     except Exception as e:
         logger.warning(f"[outlook-notifications] could not create idempotency_key index: {e}")
-    # v1.4.7 — one-time backfill: copy closed_at from cloud_shadow_trades back
-    # into cloud_signals. Fixes legacy signals where master_close updated
-    # shadow trades but not the parent signal record. Idempotent.
     try:
-        legacy = await db.cloud_shadow_trades.aggregate([
-            {"$match": {"status": "shadow_closed", "closed_at": {"$ne": None}}},
-            {"$group": {"_id": "$signal_id", "closed_at": {"$min": "$closed_at"},
-                        "exit_price": {"$first": "$exit_price"},
-                        "reason": {"$first": "$reason"}}}
-        ]).to_list(50000)
-        bf = 0
-        for r in legacy:
-            sid = r.get("_id");
-            if not sid: continue
-            res = await db.cloud_signals.update_one(
-                {"id": sid, "$or": [{"closed_at": None}, {"closed_at": {"$exists": False}}]},
-                {"$set": {"closed_at": r.get("closed_at"),
-                          "exit_price": float(r.get("exit_price") or 0),
-                          "close_reason": r.get("reason", "")}}
-            )
-            if res.modified_count: bf += 1
-        if bf:
-            logger.info(f"[backfill] marked {bf} legacy cloud_signals as closed from shadow trades")
+        from local_ai.remote_relay import ensure_indexes as _ensure_local_ai_remote_indexes
+        await _ensure_local_ai_remote_indexes(db)
     except Exception as e:
-        logger.warning(f"[backfill] cloud_signals.closed_at backfill failed: {e}")
+        logger.warning(f"[local-ai-remote] could not create queue indexes: {e}")
+    try:
+        # Signal Outlook hot paths: tenant history/current lookups, the open
+        # lifecycle scan, restart quote replay, and one authoritative outcome
+        # row per outlook. These indexes affect monitoring latency only; they
+        # do not alter any trading or classification rule.
+        await db.cloud_market_outlooks.create_index([("account", 1), ("generated_at", -1)])
+        await db.cloud_market_outlooks.create_index([("monitoring_closed", 1), ("primary_direction", 1), ("account", 1)])
+        await db.cloud_market_outlook_outcomes.create_index("outlook_id", unique=True)
+        await db.cloud_bot_activity.create_index([("account", 1), ("ts", 1)])
+        await db.cloud_notification_prefs.create_index("user_id", unique=True)
+        await db.cloud_push_subscriptions.create_index([("user_id", 1), ("opted_in", 1)])
+        await db.cloud_outlook_signal_events.create_index(
+            [("account", 1), ("candidate_id", 1), ("event_type", 1), ("event_version", 1)],
+            unique=True,
+        )
+        await db.cloud_outlook_signal_events.create_index(
+            [("account", 1), ("symbol", 1), ("signal_bar_time", -1), ("event_time", -1)]
+        )
+    except Exception as e:
+        logger.warning(f"[signal-outlook] could not create lifecycle indexes: {e}")
+
+    # v6.25.6 XAU-027 (Codex handover) -- tenant-scoped remote-command
+    # idempotency. dedupe_key is "{user_id}:{action}:{client_key}"; the
+    # unique index is what makes cloud_command_request's DuplicateKeyError
+    # handling a real guarantee rather than a best-effort race. Sparse
+    # because every command queued before this release has no dedupe_key
+    # field at all -- a plain unique index would treat all of those missing
+    # values as a single duplicate "null" and fail to build against real
+    # existing production data.
+    try:
+        await db.cloud_bot_commands.create_index("dedupe_key", unique=True, sparse=True)
+    except Exception as e:
+        logger.warning(f"[remote-command] could not create dedupe_key index: {e}")
+
+    # v6.25.3 owner directive 2026-07-17 (Phase 6 P0 -- DB index audit) --
+    # these two were real gaps, not just missing hardening:
+    #   - cloud_signup() already catches DuplicateKeyError to close a
+    #     concurrent-signup race, but with no unique index on
+    #     cloud_users.email that exception could never actually be raised --
+    #     the race this code claims to close was still open.
+    #   - pin_licenses.pin is the license key itself; nothing in the
+    #     codebase previously enforced at the DB level that two documents
+    #     couldn't exist for the same PIN.
+    # Startup migration/index report: logged once per boot so an operator
+    # can see index state without querying MongoDB directly.
+    _index_report = []
+    try:
+        await db.cloud_users.create_index("email", unique=True)
+        _index_report.append("cloud_users.email: unique OK")
+    except Exception as e:
+        _index_report.append(f"cloud_users.email: FAILED ({e})")
+    try:
+        await db.pin_licenses.create_index("pin", unique=True)
+        _index_report.append("pin_licenses.pin: unique OK")
+    except Exception as e:
+        _index_report.append(f"pin_licenses.pin: FAILED ({e})")
+    try:
+        # login_audit_log grows unbounded otherwise -- 180-day retention is
+        # long enough for real abuse investigation, short enough not to
+        # become an unbounded collection.
+        await db.login_audit_log.create_index("ts", expireAfterSeconds=180 * 86400)
+        _index_report.append("login_audit_log.ts: TTL(180d) OK")
+    except Exception as e:
+        _index_report.append(f"login_audit_log.ts: FAILED ({e})")
+    try:
+        # Backs the password-reset single-use enforcement in
+        # cloud_reset_password(); TTL matches the token's own 30-minute
+        # expiry plus a safety buffer, so this collection never grows
+        # unbounded either.
+        await db.used_password_reset_tokens.create_index("jti", unique=True)
+        await db.used_password_reset_tokens.create_index("used_at", expireAfterSeconds=3600)
+        _index_report.append("used_password_reset_tokens: unique+TTL OK")
+    except Exception as e:
+        _index_report.append(f"used_password_reset_tokens: FAILED ({e})")
+    logger.info("[startup] index report: " + " | ".join(_index_report))
+    # v6.25.3 owner directive 2026-07-17 -- push notifications now go through
+    # OneSignal's REST API (backend/notifications.py), which reads its
+    # App ID/REST API Key live from db.admin_settings on every send -- no
+    # startup initialization needed (unlike the retired self-hosted VAPID
+    # keypair system, which required this exact startup step and was
+    # permanently blocked by a missing Python package that only a full
+    # backend rebuild could fix).
+    # v6.25.3 owner directive 2026-07-17 (Phase 5 P0) -- retired the one-time
+    # cloud_shadow_trades -> cloud_signals backfill migration; both
+    # collections belong to the deleted copy-trading subsystem (see
+    # backend/migrations/0001_delete_copy_trading.py).
     if os.environ.get("WRITE_TEST_CREDENTIALS") == "1":
         creds_path = Path("/app/memory/test_credentials.md")
         creds_path.parent.mkdir(exist_ok=True)
         creds_path.write_text(f"# Test Credentials\n\n## Admin\n- Email: {admin_email}\n- Password: {admin_password}\n- Role: admin\n\n## Endpoints\n- Login: POST /api/auth/login\n- Admin Portal: /admin\n")
 
-    # Background: auto-mark workers offline if heartbeat goes stale.
-    # Without this the dashboard lies that cloud is "online" when the VPS process died.
-    async def _decay_stale_workers():
-        while True:
-            try:
-                cutoff = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
-                res = await db.cloud_workers.update_many(
-                    {"status": "online", "last_heartbeat": {"$lt": cutoff}},
-                    {"$set": {"status": "offline"}})
-                if res.modified_count:
-                    logger.info(f"[worker-decay] flipped {res.modified_count} stale worker(s) offline")
-            except Exception as e:
-                logger.warning(f"[worker-decay] {e}")
-            await asyncio.sleep(60)
-    asyncio.create_task(_decay_stale_workers())
+    # v6.25.3 owner directive 2026-07-17 (Phase 5 P0) -- retired
+    # _decay_stale_workers() (copy-trading VPS worker online/offline decay
+    # loop, cloud_workers collection). See
+    # backend/migrations/0001_delete_copy_trading.py.
 
     # AI Market Outlook background loops -- advisory-only, see
     # market_outlook.py's own module docstring for the strict-separation
@@ -2054,13 +3001,26 @@ async def startup():
                 logger.warning(f"[outlook-lifecycle] {e}")
             await asyncio.sleep(60)
 
+    async def _outlook_history_repair_once():
+        # Idempotent v2 migration: actionable legacy records are rebuilt only
+        # from persisted broker quotes. Missing/sparse history is explicitly
+        # excluded rather than fabricated as a timeout loss.
+        try:
+            import market_outlook as _mo
+            report = await _mo.backfill_signal_outlook_history()
+            logger.info(f"[outlook-history-repair] {report}")
+        except Exception as e:
+            logger.warning(f"[outlook-history-repair] {e}")
+
     asyncio.create_task(_outlook_hourly_loop())
     asyncio.create_task(_outlook_lifecycle_loop())
+    asyncio.create_task(_outlook_history_repair_once())
 
 ########################################
 # CLAUDE AI POSITION MANAGER (Active Trade Reasoning)
 ########################################
 class PositionCheckRequest(BaseModel):
+    pin: str = ""
     account_id: str = ""  # multi-instance fix: per-account AI budget/throttle (falls back to a shared bucket when omitted by older EA builds)
     symbol: str = "XAUUSD"
     direction: str = ""
@@ -2092,12 +3052,15 @@ class PositionCheckRequest(BaseModel):
     open_positions: int = 1     # total open positions in basket
 
 @api_router.post("/ai/manage-position")
-async def ai_manage_position(req: PositionCheckRequest):
+async def ai_manage_position(req: PositionCheckRequest, request: Request):
+    if not req.account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    await _resolve_monitor_license(req.pin, req.account_id, request)
     try:
         if not LLM_KEY:
             return {"action": "HOLD", "reason": "AI not configured", "consensus_source": "local_only_cost_guard"}
 
-        payload = req.dict()
+        payload = req.model_dump(exclude={"pin"})
         cache_key = _ai_cost_state_hash("exit", payload)
         cached = _ai_cache_get(cache_key)
         if cached:
@@ -2120,7 +3083,7 @@ async def ai_manage_position(req: PositionCheckRequest):
         has_thesis = bool(req.thesis and len(req.thesis) > 20)
 
         if is_veto:
-            system_msg = f"""You are a XAUUSD M5 trade auditor. The bot's rule-based logic wants to CLOSE this position because of: {req.pending_exit_reason}.
+            system_msg = f"""You are a XAUUSD M10 trade auditor. The bot's rule-based logic wants to CLOSE this position because of: {req.pending_exit_reason}.
 
 Your job: VETO the close if the original thesis is still intact, OR confirm if the rule is right.
 
@@ -2134,7 +3097,7 @@ Rules:
 - BIAS toward HOLD/LOCK over CLOSE — give winners room. Only CLOSE if the original thesis is invalidated or trend has clearly flipped against position.
 - LOCK is your friend: if the trade is up but momentum is uncertain, LOCK $X (a fraction of current profit) to bank the win without giving up the runner."""
         else:
-            system_msg = """You are a XAUUSD M5 trade auditor for an open position. Decide HOLD, CLOSE, or LOCK.
+            system_msg = """You are a XAUUSD M10 trade auditor for an open position. Decide HOLD, CLOSE, or LOCK.
 
 RESPOND IN EXACTLY THIS JSON (no markdown fences):
 {"action":"HOLD","reason":"short reason"}
@@ -2168,7 +3131,7 @@ ORIGINAL CONFIDENCE: {req.confidence}/100
         # v6.3.5: richer structured exit prompt
         htf_line = f"HTF Consensus: {req.htf_consensus} | Regime: {req.regime or 'unknown'} | Session: {req.session or 'unknown'}"
         perf_line = f"R-Multiple: {req.r_mult:.1f}R | Giveback from peak: ${giveback:.0f} | Daily P/L: {req.daily_pct:+.1f}% | Positions: {req.open_positions}"
-        prompt = f"""OPEN {req.direction} POSITION — XAUUSD M5
+        prompt = f"""OPEN {req.direction} POSITION — XAUUSD M10
 
 POSITION STATE
 - Entry: {req.entry_price} | Now: {req.current_price} | Lots: {req.lots}
@@ -2236,6 +3199,7 @@ Decision (HOLD / CLOSE / LOCK)? JSON only."""
 # AI MARKET ANALYSIS (GPT-5.2)
 ########################################
 class AIAnalysisRequest(BaseModel):
+    pin: str = ""
     account_id: str = ""  # multi-instance fix: per-account AI budget/throttle (falls back to a shared bucket when omitted by older EA builds)
     symbol: str = "XAUUSD"
     ema_fast: float = 0
@@ -2268,14 +3232,15 @@ class AIAnalysisRequest(BaseModel):
 class TradeMemoryRecord(BaseModel):
     model_config = ConfigDict(extra="ignore")
     event: str = "CLOSE"
+    pin: str = ""
     time: str = ""
     account: str = ""
     broker: str = ""
-    ea_version: str = "v6.24.1"
+    ea_version: str = ""
     build_hash: str = ""
     input_hash: str = ""
     symbol: str = "XAUUSD"
-    timeframe: str = "M5"
+    timeframe: str = "M10"
     magic_number: int = 0
     session: str = ""
     strategy: str = ""
@@ -2446,7 +3411,7 @@ def _build_memory_recommendation(query: dict, matches: list[dict]) -> dict:
 
 # ------- shared helpers -------
 # v6.4.21: AI Director persona — advisor/score input; local EA Trade Mode owns veto strictness
-_ENTRY_SYSTEM_PROMPT = """You are the AI Director for an institutional XAUUSD M5 scalping system. You are an expert advisor and probability scorer. The local EA rule engine and Trade Mode own final execution authority. You review full market context and recommend ALLOW, BLOCK, or ADJUST, but only true danger should be treated as a hard veto.
+_ENTRY_SYSTEM_PROMPT = """You are the AI Director for an XAUUSD M10 evidence system with an optional three-snapshot M30 execution authority. You are an advisory probability scorer. The local EA rule engine and selected Decision Mode own final execution authority. You review full market context and recommend ALLOW, BLOCK, or ADJUST, but only true danger should be treated as a hard veto.
 
 You receive complete context: price, indicators, H1/HTF trend, session, open positions, basket P/L, account state, recent win/loss streak, trade grade, and setup scores. Use ALL of it.
 
@@ -2467,7 +3432,7 @@ Rules:
 - bearish_case: 30-60 words — genuine counter-argument. What would make this fail? What are you ignoring? MANDATORY even for 90%+ confidence.
 - skip_if: 15-25 words — specific pre-entry cancellation condition
 - invalidation: 15-25 words — post-entry thesis failure signal
-- target: realistic M5 target price or level
+- target: realistic target price or level grounded in the supplied completed M10 evidence
 - claude: your own vote as Claude (action + confidence)
 - gpt: simulate a GPT-style second opinion (action + confidence) — independent, can disagree
 - sl_adjust: -1 to 1 (negative=tighter, positive=wider, 0=default)
@@ -2509,8 +3474,8 @@ def _build_entry_prompt(req: AIAnalysisRequest) -> str:
                 label = "most recent closed" if bar_offset == 1 else f"{bar_offset} bars ago"
                 labeled.append(f"  [{label}]: O={o} H={h} L={l} C={cl} ({direction})")
         if labeled:
-            candles_section = "\nRECENT PRICE ACTION (M5, oldest→newest)\n" + "\n".join(labeled)
-    return f"""XAUUSD M5 — AI DIRECTOR REVIEW
+            candles_section = "\nRECENT PRICE ACTION (completed M10 bars, oldest→newest)\n" + "\n".join(labeled)
+    return f"""XAUUSD M10 — AI DIRECTOR REVIEW
 
 PRICE & INDICATORS
 - Price: {req.price} | ATR(14): {req.atr} | Spread: {req.spread:.0f} pts
@@ -2577,7 +3542,7 @@ async def _ask_entry_ai(provider: str, model: str, req: AIAnalysisRequest) -> di
             system_message=_ENTRY_SYSTEM_PROMPT,
         ).with_model(provider, model)
         msg = UserMessage(text=_build_entry_prompt(req))
-        # 8s hard timeout — M5 signals are time-sensitive
+        # 8s hard timeout — advisory calls must not add an entry timing layer
         response = await asyncio.wait_for(chat.send_message(msg), timeout=8.0)
         latency = time.time() - t0
         result = _parse_entry_json(response)
@@ -2664,7 +3629,9 @@ def _combined_entry_ai_status(claude: dict, gpt: dict, action: str, consensus_so
     return "AI Decision"
 
 @api_router.post("/ai/analyze")
-async def ai_analyze_market(req: AIAnalysisRequest):
+async def ai_analyze_market(req: AIAnalysisRequest, request: Request):
+    if not req.account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
     """Dual-AI entry analysis: Claude 4.5 + GPT-4o vote in parallel.
 
     Consensus rules (revised to NOT punish availability):
@@ -2674,8 +3641,9 @@ async def ai_analyze_market(req: AIAnalysisRequest):
       - One agrees, other UNAVAILABLE (error)    -> that side at 1.00x (no penalty)
       - Both SKIP or both unavailable            -> SKIP
     """
+    await _resolve_monitor_license(req.pin, req.account_id, request)
     try:
-        payload = req.dict()
+        payload = req.model_dump(exclude={"pin"})
         cache_key = _ai_cost_state_hash("entry", payload)
         cached = _ai_cache_get(cache_key)
         if cached:
@@ -2840,7 +3808,8 @@ async def ai_analyze_market(req: AIAnalysisRequest):
             _ai_cache_put(cache_key, result, "entry", sum(int(x.get("tokens", 0) or 0) for x in cost_entries))
         try:
             await db.ai_analyses.insert_one({
-                "symbol": req.symbol, "request": req.dict(), "response": result,
+                "symbol": req.symbol, "account": req.account_id,
+                "request": req.model_dump(exclude={"pin"}), "response": result,
                 "signature": req.signature, "created_at": datetime.now(timezone.utc).isoformat()
             })
         except Exception:
@@ -2862,9 +3831,14 @@ async def ai_cost_stats():
     return _ai_cost_snapshot()
 
 @api_router.post("/ai/memory/record")
-async def ai_memory_record(record: TradeMemoryRecord):
+async def ai_memory_record(record: TradeMemoryRecord, request: Request):
+    if not record.account:
+        raise HTTPException(status_code=400, detail="account is required")
+    lic = await _resolve_monitor_license(record.pin, record.account, request)
     try:
-        data = record.dict()
+        data = record.model_dump()
+        data.pop("pin", None)
+        data["license_id"] = lic.get("id", "")
         data["recorded_at"] = datetime.now(timezone.utc).isoformat()
         data["memory_hash"] = _trade_memory_state_hash(data)
         data["bad_data_ignored"] = False
@@ -2883,32 +3857,23 @@ async def ai_memory_record(record: TradeMemoryRecord):
         return {"status": "error", "detail": str(e)}
 
 @api_router.post("/ai/memory/query")
-async def ai_memory_query(query: TradeMemoryQuery):
-    try:
-        q = query.dict()
-        rows = _load_trade_memory(limit=max(100, min(query.limit, 5000)))
-        scored = []
-        for row in rows:
-            score = _score_memory_similarity(q, row)
-            if score >= 5.0:
-                scored.append((score, row))
-        scored.sort(key=lambda item: item[0], reverse=True)
-        matches = [row for _, row in scored[:250]]
-        rec = _build_memory_recommendation(q, matches)
-        return {
-            "status": "ok",
-            "query_hash": _trade_memory_state_hash(q),
-            **rec,
-            "matches": matches[:25],
-        }
-    except Exception as e:
-        logger.error("AI memory query error: %s", e)
-        return {"status": "error", "detail": str(e), "similar_memories": 0}
+async def ai_memory_query_retired():
+    """v6.25.4 owner directive 2026-07-17 (Phase 10 audit finding) --
+    retired. No EA caller (grepped backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+    -- only ai/memory/record is ever called, never this). Also
+    unauthenticated with no per-account scoping -- would have blended
+    every account's trade memory into one global similarity match. The
+    active write and report routes now authenticate the EA license and
+    store/query by the resolved non-secret license ID."""
+    raise HTTPException(status_code=410, detail="This endpoint is retired.")
 
 @api_router.get("/ai/memory/report")
-async def ai_memory_report(limit: int = 2000):
+async def ai_memory_report(request: Request, pin: str = "", account: str = "", limit: int = 2000):
+    lic = await _resolve_monitor_license(pin, account, request)
     try:
         rows = _load_trade_memory(limit=max(100, min(limit, 10000)))
+        rows = [row for row in rows if row.get("license_id") == lic.get("id", "") or
+                _normalize_license_key(row.get("pin", "")) == _normalize_license_key(pin)]
         buckets: dict[str, list[dict]] = {}
         for row in rows:
             key = "|".join([
@@ -2919,7 +3884,7 @@ async def ai_memory_report(limit: int = 2000):
             ])
             buckets.setdefault(key, []).append(row)
         lines = [
-            "# XAU AI Sniper Conscious Memory Report",
+            "# XauCloud Conscious Memory Report",
             "",
             f"Generated: {datetime.now(timezone.utc).isoformat()}",
             f"Records: {len(rows)}",
@@ -2954,11 +3919,18 @@ async def ai_memory_report(limit: int = 2000):
 ########################################
 
 @api_router.post("/ai/feedback")
-async def ai_feedback(data: dict):
+async def ai_feedback(data: dict, request: Request):
     """Record AI verdict outcome after every trade closes."""
+    pin = str(data.get("pin") or "")
+    account = str(data.get("account_id") or data.get("account") or "")
+    if not account:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    lic = await _resolve_monitor_license(pin, account, request)
     try:
         feedback_path = ROOT_DIR / "ai_feedback_log.jsonl"
-        record = {**data, "recorded_at": datetime.now(timezone.utc).isoformat()}
+        record = {**data, "license_id": lic.get("id", ""), "account_id": account,
+                  "recorded_at": datetime.now(timezone.utc).isoformat()}
+        record.pop("pin", None)
         with open(feedback_path, "a") as f:
             f.write(_json.dumps(record) + "\n")
         # Also persist to MongoDB for dashboard queries
@@ -2973,8 +3945,9 @@ async def ai_feedback(data: dict):
         return {"status": "error", "detail": str(e)}
 
 @api_router.get("/ai/feedback/stats")
-async def ai_feedback_stats():
+async def ai_feedback_stats(request: Request, pin: str = "", account: str = ""):
     """Compute accuracy by confidence band, strategy, session, direction from feedback log."""
+    lic = await _resolve_monitor_license(pin, account, request)
     try:
         feedback_path = ROOT_DIR / "ai_feedback_log.jsonl"
         if not feedback_path.exists():
@@ -2988,6 +3961,8 @@ async def ai_feedback_stats():
                     try: records.append(_json.loads(line))
                     except Exception: pass
 
+        records = [r for r in records if r.get("license_id") == lic.get("id", "") or
+                   _normalize_license_key(r.get("pin", "")) == _normalize_license_key(pin)]
         total = len(records)
         if total == 0:
             return {"total": 0, "message": "no feedback recorded yet"}
@@ -3113,7 +4088,13 @@ async def check_news_events():
         async with httpx.AsyncClient(timeout=5) as c:
             r = await c.get("https://nfs.faireconomy.media/ff_calendar_thisweek.json")
             if r.status_code != 200:
-                return {"safe_to_trade": True, "reason": "Calendar unavailable"}
+                return {
+                    "safe_to_trade": None,
+                    "reason": "Calendar provider unavailable; state is unknown, not safe",
+                    "status": "DEGRADED_UNKNOWN",
+                    "retryable": True,
+                    "global_block": False,
+                }
             events = r.json()
             now = datetime.now(timezone.utc)
             high_impact_soon = []
@@ -3126,11 +4107,17 @@ async def check_news_events():
                         high_impact_soon.append({"title": ev.get("title", "Unknown"), "impact": ev.get("impact", ""), "currency": ev.get("country", ""), "minutes": int(diff_mins)})
                 except: continue
             if high_impact_soon:
-                return {"safe_to_trade": False, "reason": f"High impact: {high_impact_soon[0]['title']} in {high_impact_soon[0]['minutes']}min", "events": high_impact_soon}
-            return {"safe_to_trade": True, "reason": "No high-impact events nearby"}
+                return {"safe_to_trade": False, "reason": f"High impact: {high_impact_soon[0]['title']} in {high_impact_soon[0]['minutes']}min", "status": "CURRENT_RISK", "events": high_impact_soon}
+            return {"safe_to_trade": True, "reason": "No high-impact events nearby", "status": "AVAILABLE"}
     except Exception as e:
         logger.error(f"News check error: {e}")
-        return {"safe_to_trade": True, "reason": "Calendar check failed"}
+        return {
+            "safe_to_trade": None,
+            "reason": "Calendar check failed; state is unknown, not safe",
+            "status": "DEGRADED_UNKNOWN",
+            "retryable": True,
+            "global_block": False,
+        }
 
 ########################################
 # TRADE JOURNAL
@@ -3152,21 +4139,73 @@ class TradeJournalEntry(BaseModel):
     signature: str = ""
     setup: str = ""
     regime: str = ""
+    # v6.25.3 owner directive 2026-07-17 (Phase 7A) -- rich, verified trade-
+    # ledger fields. All Optional/defaulted so EA installs older than
+    # v6.25.3 (which only ever send the fields above) keep working
+    # unchanged against this same endpoint -- this is an additive schema
+    # change, not a breaking one. A record with ticket==0 is from a
+    # pre-v6.25.3 EA and is excluded from ledger-derived analytics (real
+    # risk/R/MFE/MAE data was never sent for it, so computing those fields
+    # would mean inventing numbers -- exactly what this phase forbids).
+    ticket: int = 0
+    entry_price: float = 0
+    opened_at: int = 0          # unix seconds, broker deal time
+    closed_at: int = 0          # unix seconds, broker deal time
+    commission: float = 0
+    swap: float = 0
+    original_risk_usd: float = 0
+    final_r: float = 0
+    mae_r: float = 0
+    mfe_r: float = 0
+    campaign_id: str = ""
+    ea_version: str = ""
+    account_login: str = ""
+    exit_reason: str = ""
+    exit_owner: str = ""
+    family: str = ""            # NORMAL / COUNTER_EXCURSION / LEGACY_EXHAUSTION_COUNTER
 
 @api_router.post("/journal/log")
-async def log_trade_journal(entry: TradeJournalEntry):
+async def log_trade_journal(entry: TradeJournalEntry, request: Request):
+    # v6.25.4 owner directive 2026-07-17 (URGENT P0 -- Phase 10 audit
+    # finding) -- this endpoint previously accepted ANY caller's win/loss
+    # report with no authentication at all, and fed it straight into
+    # db.hive_signatures, which /ml/hive/score's verdict (BOOST/VETO) uses
+    # to hard-block or favor trades for EVERY user sharing that setup
+    # signature -- a real, exploitable "anyone with no license at all can
+    # fabricate losses to VETO other customers' live trades, or fabricate
+    # wins to force BOOST and induce over-trading" vulnerability. Now
+    # requires the pin to resolve to a real active license (the same
+    # canonical, atomic, fail-closed check every other EA-facing endpoint
+    # already uses) before anything is written. Rate-limited per pin to
+    # bound abuse even from a genuinely licensed but compromised install.
+    # v6.25.6 fix -- restore the graceful {"status": "error"} response
+    # contract this endpoint has always used for a rejected caller (see the
+    # v6.25.4 comment above): the account_login requirement added on top of
+    # that must not bypass it with a raw, uncaught HTTPException, or every
+    # existing caller expecting a JSON error body instead of a bare 400/403
+    # regresses silently.
+    if not entry.account_login:
+        return {"status": "error", "detail": "account_login is required"}
+    try:
+        lic = await _resolve_monitor_license(entry.pin, entry.account_login, request)
+    except HTTPException:
+        return {"status": "error", "detail": "Invalid or inactive license."}
+    _rate_limit(f"journal_log_pin:{entry.pin}", max_requests=60, window_seconds=300)
     try:
         doc = entry.dict()
+        doc.pop("pin", None)
+        doc["license_id"] = lic.get("id", "")
         doc["created_at"] = datetime.now(timezone.utc).isoformat()
         doc["created_ts"] = time.time()
         doc["win_rate"] = round(entry.wins / entry.total_trades * 100, 1) if entry.total_trades > 0 else 0
+        doc["has_rich_ledger_data"] = entry.ticket > 0  # true only for v6.25.3+ EA reports
         await db.trade_journal.insert_one(doc)
         # Also index into hive_signatures for fast aggregate lookup
         if entry.signature:
             try:
                 await db.hive_signatures.insert_one({
                     "signature": entry.signature,
-                    "pin": entry.pin,
+                    "license_id": lic.get("id", ""),
                     "symbol": entry.symbol,
                     "result": entry.result,   # WIN / LOSS
                     "profit": entry.profit,
@@ -3262,9 +4301,10 @@ async def ml_hive_score(req: HiveScoreRequest):
                 "verdict": "NONE", "level": -1, "matched_signature": ""}
 
 @api_router.get("/journal/trades")
-async def get_trade_journal(pin: str = "", limit: int = 50):
+async def get_trade_journal(request: Request, pin: str = "", limit: int = 50):
+    lic = await _resolve_monitor_license(pin, "", request)
     try:
-        query = {"pin": pin} if pin else {}
+        query = {"$or": [{"license_id": lic.get("id", "")}, {"pin": _normalize_license_key(pin)}]}
         cursor = db.trade_journal.find(query, {"_id": 0}).sort("created_at", -1).limit(limit)
         trades = await cursor.to_list(length=limit)
         total = await db.trade_journal.count_documents(query)
@@ -3302,6 +4342,7 @@ async def get_trade_journal(pin: str = "", limit: int = 50):
 
 class WeeklyReportEntry(BaseModel):
     pin: str = ""
+    account_id: str = ""
     symbol: str = "XAUUSD"
     trades: int = 0
     wins: int = 0
@@ -3317,9 +4358,14 @@ class WeeklyReportEntry(BaseModel):
     worst_hour_profit: float = 0
 
 @api_router.post("/journal/weekly-report")
-async def save_weekly_report(entry: WeeklyReportEntry):
+async def save_weekly_report(entry: WeeklyReportEntry, request: Request):
+    if not entry.account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    lic = await _resolve_monitor_license(entry.pin, entry.account_id, request)
     try:
         doc = entry.dict()
+        doc.pop("pin", None)
+        doc["license_id"] = lic.get("id", "")
         doc["created_at"] = datetime.now(timezone.utc).isoformat()
         doc["week"] = datetime.now(timezone.utc).strftime("%Y-W%W")
         await db.weekly_reports.insert_one(doc)
@@ -3329,9 +4375,10 @@ async def save_weekly_report(entry: WeeklyReportEntry):
         return {"status": "error"}
 
 @api_router.get("/journal/weekly-reports")
-async def get_weekly_reports(pin: str = "", limit: int = 12):
+async def get_weekly_reports(request: Request, pin: str = "", limit: int = 12):
+    lic = await _resolve_monitor_license(pin, "", request)
     try:
-        query = {"pin": pin} if pin else {}
+        query = {"$or": [{"license_id": lic.get("id", "")}, {"pin": _normalize_license_key(pin)}]}
         cursor = db.weekly_reports.find(query, {"_id": 0}).sort("created_at", -1).limit(limit)
         reports = await cursor.to_list(length=limit)
         return {"reports": reports}
@@ -3344,16 +4391,21 @@ async def get_weekly_reports(pin: str = "", limit: int = 12):
 ########################################
 class PatternData(BaseModel):
     pin: str = ""
+    account_id: str = ""
     symbol: str = "XAUUSD"
     patterns: list = []
 
 @api_router.post("/ml/patterns/save")
-async def save_patterns_cloud(req: PatternData):
+async def save_patterns_cloud(req: PatternData, request: Request):
+    if not req.account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    lic = await _resolve_monitor_license(req.pin, req.account_id, request)
     try:
-        key = f"{req.pin}_{req.symbol}" if req.pin else req.symbol
+        owner_id = lic.get("id", "")
+        key = f"{owner_id}_{req.symbol}"
         await db.ml_cloud_patterns.update_one(
             {"key": key},
-            {"$set": {"key": key, "pin": req.pin, "symbol": req.symbol, "patterns": req.patterns, "count": len(req.patterns), "updated_at": datetime.now(timezone.utc).isoformat()}},
+            {"$set": {"key": key, "license_id": owner_id, "symbol": req.symbol, "patterns": req.patterns, "count": len(req.patterns), "updated_at": datetime.now(timezone.utc).isoformat()}},
             upsert=True
         )
         return {"status": "ok", "saved": len(req.patterns)}
@@ -3362,9 +4414,12 @@ async def save_patterns_cloud(req: PatternData):
         return {"status": "error", "saved": 0}
 
 @api_router.post("/ml/patterns/load")
-async def load_patterns_cloud(req: PatternData):
+async def load_patterns_cloud(req: PatternData, request: Request):
+    if not req.account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    lic = await _resolve_monitor_license(req.pin, req.account_id, request)
     try:
-        key = f"{req.pin}_{req.symbol}" if req.pin else req.symbol
+        key = f"{lic.get('id', '')}_{req.symbol}"
         doc = await db.ml_cloud_patterns.find_one({"key": key}, {"_id": 0})
         if doc and doc.get("patterns"):
             return {"status": "ok", "patterns": doc["patterns"], "count": len(doc["patterns"])}
@@ -3431,28 +4486,6 @@ class CloudSignupReq(BaseModel):
 class CloudLoginReq(BaseModel):
     email: str; password: str
 
-class MT5ConnectReq(BaseModel):
-    broker_server: str
-    mt5_login: str
-    mt5_password: str
-    risk_tier: Optional[str] = "balanced"   # conservative | balanced | aggressive
-
-class MT5BrokerCheckReq(BaseModel):
-    broker_server: Optional[str] = ""
-
-class PaymentSubmitReq(BaseModel):
-    plan: str                   # "starter" ($50) or "pro" ($100)
-    method: str                 # "crypto" | "bank"
-    amount_usd: float
-    reference: Optional[str] = ""   # tx hash / bank ref
-    notes: Optional[str] = ""
-    proof_image: Optional[str] = ""  # base64 data URL of bank-transfer screenshot
-    paid_currency: Optional[str] = "USD"      # currency user actually paid in (NGN, USD, etc.)
-    paid_amount_local: Optional[float] = 0.0  # amount in that currency
-
-class CloudPauseReq(BaseModel):
-    paused: bool
-
 class TradingUniverseSettings(BaseModel):
     """v6.6.0 — architecture-phase storage for Command Center trading-universe
     controls. NOTE: the EA does not currently poll/consume these settings —
@@ -3477,6 +4510,14 @@ class CloudCommandReq(BaseModel):
     pin: str
     confirm: bool = False
     payload: Optional[Dict] = None
+    # v6.25.6 XAU-027 (Codex handover) -- client-generated, stable across
+    # retries of the SAME user action (e.g. one confirm-dialog click), so a
+    # network retry or double-click returns the already-queued command
+    # instead of creating a duplicate. Optional for backward compatibility
+    # with older frontend builds; when omitted, this request gets its own
+    # unique dedupe key and therefore no real duplicate protection -- a
+    # disclosed limitation for un-updated clients, not a silent gap.
+    idempotency_key: Optional[str] = None
 
 class CloudLicenseLinkReq(BaseModel):
     license_key: str
@@ -3489,6 +4530,24 @@ class CloudCommandAckReq(BaseModel):
     license_key: Optional[str] = ""
     account: Optional[str] = ""
     details: Optional[Dict] = None
+
+# v6.25.6 XAU-027 (Codex handover) -- explicit command state machine.
+# Terminal statuses are immutable: once a command reaches one of these, no
+# further acknowledgement may change it, regardless of what a late/replayed/
+# cross-terminal EA request claims. The allowed-source map is the single
+# source of truth for which transitions may ever be attempted; anything not
+# listed here is rejected by cloud_command_ack's atomic conditional update.
+_COMMAND_TERMINAL_STATUSES = {"EXECUTED", "FAILED", "SKIPPED", "EXPIRED"}
+_COMMAND_ALLOWED_SOURCE_STATUSES = {
+    "ACKED": {"PENDING"},
+    # A direct PENDING -> terminal transition is permitted (the EA may
+    # legitimately report a terminal result in one request, e.g. an
+    # immediate FAILED for an invalid force-open) alongside the normal
+    # ACKED -> terminal path.
+    "EXECUTED": {"PENDING", "ACKED"},
+    "FAILED": {"PENDING", "ACKED"},
+    "SKIPPED": {"PENDING", "ACKED"},
+}
 
 SAFE_REMOTE_COMMANDS = {
     "PAUSE_NEW_TRADES": "Pause new trades",
@@ -3670,10 +4729,153 @@ async def _get_user_license(user: dict) -> Optional[dict]:
         return None
     return await db.pin_licenses.find_one(query, {"_id": 0})
 
+# v6.25.3 owner directive 2026-07-17 (Phase 7A P0) -- Command Center
+# Analytics page truthfulness. Replaces the frontend's synthetic 5-point
+# "equity curve" (literally `[base-d*1.4, base-d, base-d*0.55, base-d*0.2,
+# equity]` -- a made-up interpolation, not real history) with real
+# aggregates computed from actual closed-trade records reported by the EA
+# at close (see TradeJournalEntry's rich fields, v6.25.3+ EA only).
+# MINIMUM_VERIFIED_TRADES_FOR_ANALYTICS: below this count, the numbers are
+# too noisy/sparse to present as real analytics -- return sufficient_data
+# = false and let the frontend show "Not enough verified data" rather than
+# a misleadingly precise win-rate/profit-factor off of 1-2 trades.
+MINIMUM_VERIFIED_TRADES_FOR_ANALYTICS = 5
+
+@api_router.get("/cloud/performance/analytics")
+async def cloud_performance_analytics(user: dict = Depends(get_cloud_user)):
+    lic = await _get_user_license(user)
+    if not lic or not lic.get("pin"):
+        raise HTTPException(status_code=404, detail="No active license linked to this account.")
+    license_id = lic.get("id", "")
+
+    # Only records with real per-trade data (ticket>0, sent by v6.25.3+ EA)
+    # feed analytics -- older thin records (result/profit/price only) have
+    # no risk/R/MFE/MAE/campaign data and would force fabricating it.
+    #
+    # v6.25.6 fix -- this was querying by "pin", a field log_trade_journal()
+    # has deliberately never stored since the v6.25.4 P0 security fix (the
+    # raw PIN is popped before storage; only the resolved license_id is
+    # kept). That mismatch meant this endpoint had returned
+    # sufficient_data=false for every account since that fix landed,
+    # regardless of real trade volume -- a real, silent production
+    # regression, not a display nuance. Query by license_id, matching what
+    # is actually persisted.
+    query = {"license_id": license_id, "has_rich_ledger_data": True}
+    trades = await db.trade_journal.find(query, {"_id": 0}).sort("closed_at", 1).to_list(length=5000)
+    total = len(trades)
+
+    if total < MINIMUM_VERIFIED_TRADES_FOR_ANALYTICS:
+        return {
+            "sufficient_data": False,
+            "verified_trade_count": total,
+            "minimum_required": MINIMUM_VERIFIED_TRADES_FOR_ANALYTICS,
+            "message": "NOT ENOUGH VERIFIED DATA",
+        }
+
+    closed_wins = [t for t in trades if t.get("result") == "WIN"]
+    closed_losses = [t for t in trades if t.get("result") == "LOSS"]
+    profits = [float(t.get("profit") or 0) for t in trades]
+    gross_profit = sum(p for p in profits if p > 0)
+    gross_loss = abs(sum(p for p in profits if p < 0))
+
+    # Real equity curve: running cumulative realized profit ordered by the
+    # actual broker close time of each trade -- not an interpolation.
+    equity_curve = []
+    running = 0.0
+    peak = 0.0
+    max_drawdown = 0.0
+    for t in trades:
+        running += float(t.get("profit") or 0)
+        peak = max(peak, running)
+        max_drawdown = max(max_drawdown, peak - running)
+        equity_curve.append({
+            "closed_at": t.get("closed_at", 0),
+            "ticket": t.get("ticket", 0),
+            "cumulative_profit": round(running, 2),
+        })
+
+    r_values = [float(t.get("final_r") or 0) for t in trades if float(t.get("original_risk_usd") or 0) > 0]
+    mae_values = [float(t.get("mae_r") or 0) for t in trades if t.get("mae_r")]
+    mfe_values = [float(t.get("mfe_r") or 0) for t in trades if t.get("mfe_r")]
+
+    def _breakdown(key: str) -> dict:
+        buckets: Dict[str, Dict[str, float]] = {}
+        for t in trades:
+            k = str(t.get(key) or "UNKNOWN")
+            b = buckets.setdefault(k, {"trades": 0, "wins": 0, "profit": 0.0})
+            b["trades"] += 1
+            if t.get("result") == "WIN": b["wins"] += 1
+            b["profit"] += float(t.get("profit") or 0)
+        for b in buckets.values():
+            b["profit"] = round(b["profit"], 2)
+            b["win_rate"] = round(b["wins"] / b["trades"] * 100, 1) if b["trades"] else 0
+        return buckets
+
+    def _session_tag(hour: int) -> str:
+        if 0 <= hour < 8: return "ASIAN"
+        if 8 <= hour < 13: return "LONDON"
+        if 13 <= hour < 17: return "LONDON_NY_OVERLAP"
+        if 17 <= hour < 21: return "NEW_YORK"
+        return "LATE_NY"
+
+    session_buckets: Dict[str, Dict[str, float]] = {}
+    for t in trades:
+        tag = _session_tag(int(t.get("hour") or 0))
+        b = session_buckets.setdefault(tag, {"trades": 0, "wins": 0, "profit": 0.0})
+        b["trades"] += 1
+        if t.get("result") == "WIN": b["wins"] += 1
+        b["profit"] += float(t.get("profit") or 0)
+    for b in session_buckets.values():
+        b["profit"] = round(b["profit"], 2)
+        b["win_rate"] = round(b["wins"] / b["trades"] * 100, 1) if b["trades"] else 0
+
+    winning_profits = [p for p in profits if p > 0]
+    losing_profits = [p for p in profits if p < 0]
+
+    return {
+        "sufficient_data": True,
+        "verified_trade_count": total,
+        "realized_pnl": round(sum(profits), 2),
+        "win_rate": round(len(closed_wins) / total * 100, 1),
+        "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else (round(gross_profit, 2) if gross_profit > 0 else 0),
+        "avg_r": round(sum(r_values) / len(r_values), 3) if r_values else None,
+        "avg_mae_r": round(sum(mae_values) / len(mae_values), 3) if mae_values else None,
+        "avg_mfe_r": round(sum(mfe_values) / len(mfe_values), 3) if mfe_values else None,
+        "max_drawdown": round(max_drawdown, 2),
+        "avg_win": round(sum(winning_profits) / len(winning_profits), 2) if winning_profits else 0,
+        "avg_loss": round(sum(losing_profits) / len(losing_profits), 2) if losing_profits else 0,
+        "equity_curve": equity_curve,
+        "setup_breakdown": _breakdown("setup"),
+        "family_breakdown": _breakdown("family"),
+        "machine_breakdown": _breakdown("account_login"),
+        "session_breakdown": session_buckets,
+    }
+
+
+@api_router.post("/download/request-token")
+async def request_ea_download_token(user: dict = Depends(get_cloud_user)):
+    """Authenticated Command Center user + an active license belonging to
+    them -> a short-lived, single-purpose signed token for the compiled
+    EX5. Revoked/inactive/unowned licenses cannot obtain a token at all."""
+    lic = await _get_user_license(user)
+    if not lic:
+        raise HTTPException(status_code=403, detail="No active license linked to this account.")
+    release = _current_ea_release()
+    if not release:
+        raise HTTPException(status_code=503, detail="No release currently published.")
+    token = jwt.encode({
+        "sub": "ea_download", "user_id": user["id"], "license_id": lic.get("id", ""),
+        "version": release["version"],
+        "exp": datetime.now(timezone.utc) + timedelta(seconds=DOWNLOAD_TOKEN_TTL_SECONDS),
+    }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return {"download_token": token, "expires_in": DOWNLOAD_TOKEN_TTL_SECONDS,
+            "download_url": f"/api/download/ea-release?token={token}"}
+
+
 async def _verify_command_license(user: dict, key: str) -> dict:
     raw = _normalize_license_key(key)
     if not raw.startswith("ASE-") or len(raw) < 10:
-        raise HTTPException(status_code=400, detail="Enter your XAU AI Sniper license key, for example ASE-D4Q9-SUFW.")
+        raise HTTPException(status_code=400, detail="Enter your XauCloud license key, for example ASE-D4Q9-SUFW.")
     lic = await db.pin_licenses.find_one({"pin": raw, "is_active": True}, {"_id": 0})
     if not lic:
         raise HTTPException(status_code=403, detail="License key not found or inactive.")
@@ -3692,7 +4894,25 @@ async def _verify_command_license(user: dict, key: str) -> dict:
     return lic
 
 async def _resolve_monitor_license(pin: str = "", account: str = "", request: Optional[Request] = None) -> dict:
-    """Authenticate EA monitor traffic by license PIN first; agent token remains only a fallback."""
+    """THE canonical license authentication + binding service -- every EA-
+    facing or license-gated endpoint must call this, not roll its own check
+    (v6.25.3 owner directive 2026-07-17, Phase 4 P0: unifies
+    /pins/validate, heartbeat, activity, thesis status, direction
+    reservation, command polling, Outlook evidence, and download
+    authorization onto one implementation, closing a real gap where
+    /pins/validate had its own separate, incomplete logic that only bound
+    on first use and never re-checked the account on every later call --
+    meaning a PIN could be replayed on an unlimited number of MT5 accounts
+    after its first activation).
+
+    Rules: unbound license -> the first valid MT5 account to present it
+    claims it ATOMICALLY (the update's filter re-checks mt5_account is
+    still empty at write time, so two different accounts racing to
+    first-claim the same never-used PIN cannot both win -- exactly one
+    does, the other gets a real mismatch rejection against the winner's
+    account, not a silent overwrite). Bound license -> every future request
+    must match the bound account exactly, or fails closed with
+    LICENSE_BOUND_TO_DIFFERENT_MT5_ACCOUNT."""
     raw = _normalize_license_key(pin)
     account = str(account or "").strip()
     if raw:
@@ -3707,6 +4927,29 @@ async def _resolve_monitor_license(pin: str = "", account: str = "", request: Op
                 "account": account,
             })
         bound = str(lic.get("mt5_account") or "").strip()
+        if not bound and account:
+            # Atomic first-claim: the filter requires mt5_account to STILL
+            # be empty/missing at the moment of this write -- if another
+            # request already won the race (even microseconds earlier),
+            # this update matches zero documents and we fall through to
+            # reread + re-validate against whatever actually got bound.
+            now_iso = datetime.now(timezone.utc).isoformat()
+            claim_result = await db.pin_licenses.update_one(
+                {"pin": raw, "is_active": True, "mt5_account": {"$in": [None, ""]}},
+                {"$set": {"mt5_account": account, "is_used": True, "activated_at": now_iso}},
+            )
+            if claim_result.modified_count == 1:
+                lic["mt5_account"] = account
+                lic["is_used"] = True
+                lic["activated_at"] = now_iso
+                bound = account
+                logger.info("[monitor-auth] FIRST_CLAIM pin=%s account=%s", raw, account)
+            else:
+                reread = await db.pin_licenses.find_one({"pin": raw, "is_active": True}, {"_id": 0})
+                lic = reread or lic
+                bound = str(lic.get("mt5_account") or "").strip()
+                logger.warning("[monitor-auth] FIRST_CLAIM_RACE_LOST pin=%s our_account=%s winner_account=%s",
+                               raw, account, bound)
         if bound and account and bound != account:
             logger.warning("[monitor-auth] reject account mismatch pin=%s bound=%s account=%s", raw, bound, account)
             raise HTTPException(status_code=403, detail={
@@ -3721,14 +4964,13 @@ async def _resolve_monitor_license(pin: str = "", account: str = "", request: Op
                     raw, lic.get("id", ""), account, lic.get("buyer_email", ""))
         return lic
 
-    if request is not None:
-        try:
-            await _require_agent_async(request)
-            logger.info("[monitor-auth] accepted fallback agent token account=%s", account)
-            return {}
-        except HTTPException as exc:
-            logger.warning("[monitor-auth] reject missing pin/token account=%s detail=%s", account, exc.detail)
-
+    # v6.25.3 owner directive 2026-07-17 (Phase 5 P0) -- the agent-token
+    # fallback here used to authenticate copy-trading VPS workers
+    # (_require_agent_async, X-Agent-Token), which is retired along with
+    # the rest of the worker-agent subsystem. The licensed local EA always
+    # sends a real license_pin (InpLicensePIN is a required EA input across
+    # this entire codebase) -- fail closed on a missing PIN rather than
+    # falling back to a mechanism that no longer exists.
     raise HTTPException(status_code=403, detail={
         "ok": False,
         "reason": "MISSING_LICENSE_PIN",
@@ -3736,161 +4978,79 @@ async def _resolve_monitor_license(pin: str = "", account: str = "", request: Op
         "account": account,
     })
 
-# -------- Plans (admin-configurable via cloud_settings.plans; defaults below) --------
-CLOUD_PLANS = {
-    "starter": {"name": "Starter", "price_usd": 50.0, "max_balance_usd": 5000,
-                "description": "For accounts up to $5,000. All features. Email support."},
-    "pro":     {"name": "Pro",     "price_usd": 100.0, "max_balance_usd": 999999,
-                "description": "For accounts $5,000+. Priority execution. Telegram alerts. Priority support."},
-}
-CLOUD_TRIAL_DAYS = 7
-
-# Default FX rates (USD = 1.0). Admin can override via /admin/cloud/settings.
-# Used for showing bank-transfer amounts in local currency on the billing page.
-DEFAULT_FX_RATES = {
-    "USD": 1.0,
-    "NGN": 1650.0,    # Nigeria
-    "KES": 130.0,     # Kenya
-    "ZAR": 18.5,      # South Africa
-    "GHS": 15.0,      # Ghana
-    "EUR": 0.92,      # Europe
-    "GBP": 0.79,      # UK
-    "INR": 84.0,      # India
-    "CAD": 1.40,      # Canada
-    "AUD": 1.55,      # Australia
-}
-
-# Country → preferred currency mapping for IP-based detection.
-COUNTRY_TO_CURRENCY = {
-    "NG": "NGN", "KE": "KES", "ZA": "ZAR", "GH": "GHS",
-    "GB": "GBP", "UK": "GBP", "IN": "INR", "CA": "CAD", "AU": "AUD",
-    # default everything else to USD
-}
-
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-async def _get_effective_plans():
-    """Returns admin-overridden plans if set in cloud_settings.plans, else defaults."""
-    s = await _get_cloud_settings()
-    plans = s.get("plans") or {}
-    if not plans:
-        return CLOUD_PLANS
-    # merge with defaults so missing keys still resolve
-    merged = {k: dict(v) for k, v in CLOUD_PLANS.items()}
-    for pid, override in plans.items():
-        if pid not in merged: merged[pid] = {}
-        merged[pid].update(override)
-    return merged
-
-async def _get_fx_rates():
-    s = await _get_cloud_settings()
-    rates = s.get("fx_rates") or {}
-    out = dict(DEFAULT_FX_RATES); out.update({k: float(v) for k, v in rates.items() if isinstance(v, (int, float))})
-    return out
-
-def _detect_country_from_request(request: Request) -> str:
-    """Best-effort country detection from common CDN headers."""
-    for h in ("CF-IPCountry", "X-Vercel-IP-Country", "X-Country-Code"):
-        v = request.headers.get(h, "").upper().strip()
-        if v and len(v) == 2: return v
-    al = request.headers.get("Accept-Language", "")
-    if al:
-        # 'en-NG,en;q=0.9' → 'NG'
-        for piece in al.split(","):
-            if "-" in piece:
-                cc = piece.split("-")[1].split(";")[0].strip().upper()
-                if len(cc) == 2: return cc
-    return ""
-
-# -------- Admin-configured Cloud settings (payment methods, etc.) --------
-async def _get_cloud_settings():
-    s = await db.cloud_settings.find_one({"key": "main"}, {"_id": 0})
-    if not s:
-        s = {"key": "main",
-             "crypto_wallets": [],       # [{network,address,asset}]
-             "bank_accounts": [],        # [{bank_name,account_name,account_number,swift,country}]
-             "fiat_paystack_enabled": False,
-             "telegram_alerts_enabled": False,
-             "master_ea_status": "unknown",
-             "master_last_heartbeat": None,
-             "shadow_mode": True,        # v1.2 — default ON so admin can sell before VPS
-             "agent_token": ""}
-        await db.cloud_settings.insert_one(s)
-        s.pop("_id", None)
-    return s
-
-# -------- Public config endpoint (users need payment instructions) --------
-@api_router.get("/cloud/config")
-async def cloud_public_config(request: Request):
-    s = await _get_cloud_settings()
-    plans = await _get_effective_plans()
-    rates = await _get_fx_rates()
-    country = _detect_country_from_request(request)
-    user_currency = COUNTRY_TO_CURRENCY.get(country, "USD")
-    # Worker (executor) status — how many VPS workers have heartbeat in last 3 min
-    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
-    workers_online = await db.cloud_workers.count_documents(
-        {"status": "online", "last_heartbeat": {"$gt": cutoff}})
-    workers_total = await db.cloud_workers.count_documents({})
-    return {"plans": plans, "trial_days": CLOUD_TRIAL_DAYS,
-            "crypto_wallets": s.get("crypto_wallets", []),
-            "bank_accounts":  s.get("bank_accounts", []),
-            "fx_rates":       rates,
-            "user_country":   country,
-            "user_currency":  user_currency,
-            "master_status":  s.get("master_ea_status", "online"),
-            "executor_workers_online": workers_online,
-            "executor_workers_total":  workers_total,
-            "shadow_mode":    s.get("shadow_mode", True)}
-
 # -------- Signup / Login / Me --------
 @api_router.post("/cloud/auth/signup")
-async def cloud_signup(req: CloudSignupReq, response: Response):
+async def cloud_signup(req: CloudSignupReq, response: Response, request: Request):
+    _rate_limit(f"cloud_signup_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
     req.email = req.email.lower().strip()
     # basic email format check (no regex lib dependency — simple sanity)
     if "@" not in req.email or "." not in req.email.split("@")[-1] or len(req.email) < 5:
         raise HTTPException(status_code=400, detail="Invalid email format")
     if await db.cloud_users.find_one({"email": req.email}):
         raise HTTPException(status_code=400, detail="Email already registered")
+    # v6.25.3 owner directive 2026-07-17 (Phase 6 P0) -- require stronger
+    # passwords: length alone (the old 8-char-minimum) doesn't stop
+    # "password1"/"12345678". Require at least one letter AND one digit,
+    # in addition to the length floor.
     if len(req.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be 8+ characters")
+    if not any(c.isalpha() for c in req.password) or not any(c.isdigit() for c in req.password):
+        raise HTTPException(status_code=400, detail="Password must include at least one letter and one number")
     uid = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
-    trial_ends = now + timedelta(days=CLOUD_TRIAL_DAYS)
     doc = {"id": uid, "email": req.email, "password_hash": hash_password(req.password),
            "full_name": (req.full_name or "").strip(), "country": (req.country or "").strip(),
-           "created_at": now.isoformat(), "status": "trial",
-           "plan": "starter", "subscription_ends_at": trial_ends.isoformat(),
-           "trial_used": True, "paused": False,
-           "mt5_connected": False, "last_login_at": now.isoformat()}
-    await db.cloud_users.insert_one(doc.copy())
+           "created_at": now.isoformat(), "last_login_at": now.isoformat()}
+    try:
+        await db.cloud_users.insert_one(doc.copy())
+    except DuplicateKeyError:
+        # The unique index (created at startup) caught a genuine race
+        # between two concurrent signups for the same email that the
+        # find_one check above couldn't see yet.
+        raise HTTPException(status_code=400, detail="Email already registered")
     token = _cloud_token(uid, req.email)
-    response.set_cookie("cloud_token", token, httponly=True, secure=True, samesite="lax", max_age=60*60*24*30)
-    return {"ok": True, "token": token, "user": {k: v for k, v in doc.items() if k != "password_hash"}}
+    response.set_cookie("cloud_token", token, httponly=True,
+                        secure=os.environ.get('COOKIE_SECURE', 'true').lower() != 'false',
+                        samesite="strict", max_age=60*60*24*30, path="/")
+    return {"ok": True, "user": {k: v for k, v in doc.items() if k != "password_hash"}}
 
 @api_router.post("/cloud/auth/login")
-async def cloud_login(req: CloudLoginReq, response: Response):
+async def cloud_login(req: CloudLoginReq, response: Response, request: Request):
+    ip = _client_ip(request)
     req.email = req.email.lower().strip()
+    _rate_limit(f"cloud_login_ip:{ip}", max_requests=10, window_seconds=300)
+    _rate_limit(f"cloud_login_email:{req.email}", max_requests=5, window_seconds=300)
     u = await db.cloud_users.find_one({"email": req.email})
     if not u or not verify_password(req.password, u.get("password_hash", "")):
+        await db.login_audit_log.insert_one({
+            "id": str(uuid.uuid4()), "email": req.email, "ip": ip, "ok": False,
+            "role": "cloud_user", "ts": datetime.now(timezone.utc),
+        })
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    await db.login_audit_log.insert_one({
+        "id": str(uuid.uuid4()), "email": u["email"], "ip": ip, "ok": True,
+        "role": "cloud_user", "ts": datetime.now(timezone.utc),
+    })
     await db.cloud_users.update_one({"id": u["id"]}, {"$set": {"last_login_at": datetime.now(timezone.utc).isoformat()}})
     token = _cloud_token(u["id"], u["email"])
-    response.set_cookie("cloud_token", token, httponly=True, secure=True, samesite="lax", max_age=60*60*24*30)
+    response.set_cookie("cloud_token", token, httponly=True,
+                        secure=os.environ.get('COOKIE_SECURE', 'true').lower() != 'false',
+                        samesite="strict", max_age=60*60*24*30, path="/")
     u.pop("_id", None); u.pop("password_hash", None)
-    return {"ok": True, "token": token, "user": u}
+    return {"ok": True, "user": u}
 
 @api_router.post("/cloud/auth/logout")
 async def cloud_logout(response: Response):
-    response.delete_cookie("cloud_token")
+    response.delete_cookie("cloud_token", path="/")
     return {"ok": True}
 
 @api_router.get("/cloud/auth/me")
 async def cloud_me(user: dict = Depends(get_cloud_user)):
-    # hide mt5 creds from self lookup too
     u = dict(user)
-    u.pop("mt5_login_enc", None); u.pop("mt5_password_enc", None); u.pop("_id", None)
+    u.pop("_id", None)
     # compute subscription status live
     ends = u.get("subscription_ends_at")
     if ends:
@@ -3903,8 +5063,127 @@ async def cloud_me(user: dict = Depends(get_cloud_user)):
             u["days_remaining"] = 0; u["subscription_active"] = False
     return u
 
+# ---------------------------------------------------------------------
+# v6.25.3 owner directive 2026-07-17 (Phase 6 P0) -- Cloud user password
+# reset, account deletion, and data export.
+# ---------------------------------------------------------------------
+
+class CloudForgotPasswordReq(BaseModel):
+    email: str
+
+class CloudResetPasswordReq(BaseModel):
+    token: str
+    new_password: str
+
+class CloudDeleteAccountReq(BaseModel):
+    password: str
+    confirm: bool = False
+
+def _password_reset_token(user_id: str, jti: str) -> str:
+    return jwt.encode(
+        {"sub": user_id, "type": "password_reset", "jti": jti,
+         "exp": datetime.now(timezone.utc) + timedelta(minutes=30)},
+        JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+@api_router.post("/cloud/auth/forgot-password")
+async def cloud_forgot_password(req: CloudForgotPasswordReq, request: Request):
+    ip = _client_ip(request)
+    email = req.email.lower().strip()
+    _rate_limit(f"forgot_password_ip:{ip}", max_requests=5, window_seconds=600)
+    _rate_limit(f"forgot_password_email:{email}", max_requests=3, window_seconds=600)
+    user = await db.cloud_users.find_one({"email": email})
+    # Always return the same generic response whether or not the account
+    # exists -- a different response here would let an attacker enumerate
+    # registered emails.
+    if user:
+        jti = str(uuid.uuid4())
+        token = _password_reset_token(user["id"], jti)
+        reset_url = f"{PUBLIC_SITE_URL}/command/reset-password?token={token}"
+        html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+<h2 style="color:#B8860B;">Reset your XauCloud Command Center password</h2>
+<p>Click the link below to set a new password. This link expires in 30 minutes and can only be used once.</p>
+<p><a href="{reset_url}" style="display:inline-block;background:#B8860B;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;">Reset password</a></p>
+<p style="color:#888;font-size:12px;">If you didn't request this, you can safely ignore this email -- your password will not be changed.</p>
+</div>"""
+        await _send_email(email, "Reset your XauCloud password", html)
+    return {"ok": True, "message": "If an account exists for that email, a reset link has been sent."}
+
+@api_router.post("/cloud/auth/reset-password")
+async def cloud_reset_password(req: CloudResetPasswordReq, request: Request):
+    ip = _client_ip(request)
+    _rate_limit(f"reset_password_ip:{ip}", max_requests=10, window_seconds=600)
+    try:
+        payload = jwt.decode(req.token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=400, detail="Reset link has expired. Request a new one.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=400, detail="Invalid reset link.")
+    if payload.get("type") != "password_reset":
+        raise HTTPException(status_code=400, detail="Invalid reset link.")
+    jti = payload.get("jti", "")
+    # Single-use enforcement: a JWT alone stays valid until it expires even
+    # after use, so a leaked/logged link could be replayed. A unique index
+    # on jti (created at startup) makes the second insert_one for the same
+    # token raise DuplicateKeyError, closing that window.
+    try:
+        await db.used_password_reset_tokens.insert_one({"jti": jti, "used_at": datetime.now(timezone.utc)})
+    except DuplicateKeyError:
+        raise HTTPException(status_code=400, detail="This reset link has already been used.")
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be 8+ characters")
+    if not any(c.isalpha() for c in req.new_password) or not any(c.isdigit() for c in req.new_password):
+        raise HTTPException(status_code=400, detail="Password must include at least one letter and one number")
+    result = await db.cloud_users.update_one(
+        {"id": payload["sub"]}, {"$set": {"password_hash": hash_password(req.new_password)}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Account no longer exists.")
+    return {"ok": True, "message": "Password updated. You can now log in with your new password."}
+
+@api_router.get("/cloud/account/export")
+async def cloud_account_export(user: dict = Depends(get_cloud_user)):
+    """Real, non-fabricated data-export: everything this account's identity
+    actually touches, as it exists right now -- not a synthetic sample."""
+    u = dict(user); u.pop("_id", None); u.pop("password_hash", None)
+    lic = await _get_user_license(user)
+    if lic: lic.pop("_id", None)
+    login_history = await db.login_audit_log.find(
+        {"email": user["email"], "role": "cloud_user"}, {"_id": 0}
+    ).sort("ts", -1).limit(200).to_list(length=200)
+    for entry in login_history:
+        if isinstance(entry.get("ts"), datetime):
+            entry["ts"] = entry["ts"].isoformat()
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "account": u,
+        "linked_license": lic,
+        "login_history": login_history,
+    }
+
+@api_router.post("/cloud/account/delete")
+async def cloud_account_delete(req: CloudDeleteAccountReq, response: Response, user: dict = Depends(get_cloud_user)):
+    if not req.confirm:
+        raise HTTPException(status_code=400, detail="Confirmation is required to delete your account.")
+    if not verify_password(req.password, user.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Incorrect password.")
+    # Hard-deletes the Command Center account identity only -- the
+    # underlying purchased PIN license and its trade history are NOT
+    # deleted (they're the product the owner sold and real financial/
+    # trading records, not this account's personal data), matching the
+    # scope of every other real "delete my account" flow: your login stops
+    # working, your purchase/trade history doesn't get destroyed.
+    await db.account_deletion_audit_log.insert_one({
+        "id": str(uuid.uuid4()), "user_id": user["id"], "email": user["email"],
+        "deleted_at": datetime.now(timezone.utc),
+    })
+    await db.cloud_users.delete_one({"id": user["id"]})
+    response.delete_cookie("cloud_token")
+    return {"ok": True, "message": "Account deleted."}
+
 @api_router.post("/cloud/license/link")
 async def cloud_license_link(req: CloudLicenseLinkReq, user: dict = Depends(get_cloud_user)):
+    # Rate-limited by the authenticated user id -- prevents a compromised/
+    # malicious Command Center session from brute-forcing license keys.
+    _rate_limit(f"license_link_user:{user['id']}", max_requests=10, window_seconds=300)
     lic = await _verify_command_license(user, req.license_key)
     return {"ok": True, "license": {
         "license_id": lic.get("id", ""),
@@ -3942,512 +5221,17 @@ async def cloud_license_status(user: dict = Depends(get_cloud_user)):
         "expiry": lic.get("expires_at") or lic.get("subscription_ends_at") or "Lifetime / manual",
     }}
 
-# -------- MT5 Connection --------
-@api_router.post("/cloud/mt5/connect")
-async def cloud_connect_mt5(req: MT5ConnectReq, user: dict = Depends(get_cloud_user)):
-    if req.risk_tier not in ("conservative", "balanced", "aggressive"):
-        raise HTTPException(status_code=400, detail="Invalid risk tier")
-    # ---- Shape validation (we cannot truly verify until a VPS executor is online) ----
-    server = req.broker_server.strip()
-    login_raw = req.mt5_login.strip()
-    pwd = req.mt5_password
-    # Server: "Broker-Live", "Broker-Demo", "Broker-Real", "Broker-Trial..." etc.
-    # Allow alnum + dot/hyphen, must contain a hyphen.
-    import re
-    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{2,40}-[A-Za-z0-9]{2,30}$", server):
-        raise HTTPException(status_code=400,
-            detail="Broker server must look like 'Broker-Live' or 'Broker-Demo' (e.g. Exness-MT5Real16).")
-    if not login_raw.isdigit() or not (4 <= len(login_raw) <= 12):
-        raise HTTPException(status_code=400,
-            detail="MT5 login must be a 4–12 digit account number (no letters/spaces).")
-    if len(pwd) < 4:
-        raise HTTPException(status_code=400,
-            detail="MT5 password must be at least 4 characters.")
-    profile = _broker_profile_for_server(server)
-    update = {
-        "broker_server":     server,
-        "broker_name":       profile.get("broker", ""),
-        "broker_platform":   profile.get("platform", "MT5"),
-        "broker_support_status": profile.get("support_status", "custom_review"),
-        "mt5_login":         login_raw,
-        "mt5_password_enc":  _cloud_encrypt(pwd),
-        "risk_tier":         req.risk_tier,
-        # NEW: never claim "connected" without a real broker login. Shape-valid creds
-        # land in pending_verification until the VPS worker successfully logs in.
-        "mt5_connected":          False,
-        "mt5_verification_status":"pending",     # pending | verified | rejected
-        "mt5_verification_error": "",
-        "mt5_credentials_at":     datetime.now(timezone.utc).isoformat(),
-        "broker_last_health":     {},
-    }
-    await db.cloud_users.update_one({"id": user["id"]}, {"$set": update})
-    await _log_broker_event(user["id"], user.get("email", ""), "credentials_saved", True, server, {
-        "broker": profile.get("broker"),
-        "platform": profile.get("platform"),
-        "support_status": profile.get("support_status"),
-        "risk_tier": req.risk_tier,
-    })
-    # Auto-assign to a worker with capacity (silently no-ops if no workers yet → shadow mode picks up)
-    wid = await _auto_assign_worker(user["id"])
-    s = await _get_cloud_settings()
-    workers_online = await db.cloud_workers.count_documents({"status": "online"})
-    if workers_online == 0:
-        msg = ("Credentials saved & encrypted. Verification will complete the moment our executor "
-               "agent logs in to your broker — usually within 60 seconds of going live.")
-        mode = "pending_executor"
-    elif s.get("shadow_mode", True):
-        msg = ("Credentials saved. SHADOW MODE is on — simulated trades will appear in your dashboard. "
-               "Real-broker login verification will run when admin flips Shadow OFF.")
-        mode = "shadow"
-    else:
-        msg = "Credentials saved. Worker agent will verify the broker login within 60 seconds."
-        mode = "live_pending_verify"
-    return {"ok": True, "message": msg, "mode": mode, "assigned_worker": wid,
-            "verification_status": "pending"}
-
-# -------- Curated broker server list (searchable on UI like MT5's broker picker) --------
-# Sourced from each broker's published MT5 server list + the public TradeVPS broker
-# directory (https://broker-servers.apis.tradevps.net/). "Custom..." path on the UI
-# allows free-typed servers for unlisted brokers. Update this list as needed.
-CLOUD_BROKER_SERVERS = [
-    # MetaQuotes (the universal default-demo)
-    {"broker": "MetaQuotes",       "server": "MetaQuotes-Demo",            "type": "demo"},
-    # Exness
-    {"broker": "Exness",           "server": "Exness-MT5Real",             "type": "live"},
-    {"broker": "Exness",           "server": "Exness-MT5Real2",            "type": "live"},
-    {"broker": "Exness",           "server": "Exness-MT5Real8",            "type": "live"},
-    {"broker": "Exness",           "server": "Exness-MT5Real16",           "type": "live"},
-    {"broker": "Exness",           "server": "Exness-MT5Real26",           "type": "live"},
-    {"broker": "Exness",           "server": "Exness-MT5Trial",            "type": "demo"},
-    {"broker": "Exness",           "server": "Exness-MT5Trial4",           "type": "demo"},
-    {"broker": "Exness",           "server": "Exness-MT5Trial14",          "type": "demo"},
-    # IC Markets (SC + EU)
-    {"broker": "IC Markets",       "server": "ICMarketsSC-MT5",            "type": "live"},
-    {"broker": "IC Markets",       "server": "ICMarketsSC-MT5-2",          "type": "live"},
-    {"broker": "IC Markets",       "server": "ICMarketsSC-MT5-4",          "type": "live"},
-    {"broker": "IC Markets",       "server": "ICMarketsSC-Demo",           "type": "demo"},
-    {"broker": "IC Markets",       "server": "ICMarketsSC-Demo03",         "type": "demo"},
-    {"broker": "IC Markets EU",    "server": "ICMarketsEU-MT5",            "type": "live"},
-    {"broker": "IC Markets EU",    "server": "ICMarketsEU-MT5-2",          "type": "live"},
-    {"broker": "IC Markets EU",    "server": "ICMarketsEU-Demo",           "type": "demo"},
-    # Pepperstone
-    {"broker": "Pepperstone",      "server": "Pepperstone-MT5-Live",       "type": "live"},
-    {"broker": "Pepperstone",      "server": "Pepperstone-MT5-Live02",     "type": "live"},
-    {"broker": "Pepperstone",      "server": "Pepperstone-Demo",           "type": "demo"},
-    # FBS
-    {"broker": "FBS",              "server": "FBS-Real",                   "type": "live"},
-    {"broker": "FBS",              "server": "FBS-Demo",                   "type": "demo"},
-    # XM
-    {"broker": "XM",               "server": "XMGlobal-MT5",               "type": "live"},
-    {"broker": "XM",               "server": "XMGlobal-MT5 2",             "type": "live"},
-    {"broker": "XM",               "server": "XMGlobal-MT5 3",             "type": "live"},
-    {"broker": "XM",               "server": "XMGlobal-Demo",              "type": "demo"},
-    {"broker": "XM",               "server": "XMTrading-MT5",              "type": "live"},
-    {"broker": "XM",               "server": "XMTrading-MT5 2",            "type": "live"},
-    {"broker": "XM",               "server": "XMTrading-Demo",             "type": "demo"},
-    # OctaFX / Octa
-    {"broker": "OctaFX",           "server": "OctaFX-Real",                "type": "live"},
-    {"broker": "OctaFX",           "server": "OctaFX-Demo",                "type": "demo"},
-    {"broker": "Octa",             "server": "Octa-Real",                  "type": "live"},
-    {"broker": "Octa",             "server": "Octa-Demo",                  "type": "demo"},
-    # FxPro
-    {"broker": "FxPro",            "server": "FxPro-MT5",                  "type": "live"},
-    {"broker": "FxPro",            "server": "FxPro-MT5 Live02",           "type": "live"},
-    {"broker": "FxPro",            "server": "FxPro-MT5 Demo",             "type": "demo"},
-    # FTMO
-    {"broker": "FTMO",             "server": "FTMO-Server",                "type": "live"},
-    {"broker": "FTMO",             "server": "FTMO-Server2",               "type": "live"},
-    {"broker": "FTMO",             "server": "FTMO-Demo",                  "type": "demo"},
-    # FundedNext
-    {"broker": "FundedNext",       "server": "FundedNext-Server",          "type": "live"},
-    {"broker": "FundedNext",       "server": "FundedNext-Server 2",        "type": "live"},
-    {"broker": "FundedNext",       "server": "FundedNext-Server 3",        "type": "live"},
-    {"broker": "FundedNext",       "server": "FundedNext-Server 4",        "type": "live"},
-    # FundingPips
-    {"broker": "FundingPips",      "server": "FundingPips2-SIM",           "type": "live"},
-    # RoboForex
-    {"broker": "RoboForex",        "server": "RoboForex-ECN",              "type": "live"},
-    {"broker": "RoboForex",        "server": "RoboForex-Pro",              "type": "live"},
-    {"broker": "RoboForex",        "server": "RoboForex-Demo",             "type": "demo"},
-    # Tickmill (UK + EU + global)
-    {"broker": "Tickmill",         "server": "Tickmill-Demo",              "type": "demo"},
-    {"broker": "Tickmill UK",      "server": "TickmillUK-Live",            "type": "live"},
-    {"broker": "Tickmill UK",      "server": "TickmillUK-Demo",            "type": "demo"},
-    {"broker": "Tickmill EU",      "server": "TickmillEU-Live",            "type": "live"},
-    {"broker": "Tickmill EU",      "server": "TickmillEU-Demo",            "type": "demo"},
-    # Admirals
-    {"broker": "Admirals",         "server": "AdmiralsGroup-Live",         "type": "live"},
-    {"broker": "Admirals",         "server": "AdmiralsGroup-Demo",         "type": "demo"},
-    {"broker": "Admiral Markets",  "server": "AdmiralMarkets-Live",        "type": "live"},
-    {"broker": "Admiral Markets",  "server": "AdmiralMarkets-Demo",        "type": "demo"},
-    # HFM (HotForex)
-    {"broker": "HFM",              "server": "HFMarketsGlobal-Live",       "type": "live"},
-    {"broker": "HFM",              "server": "HFMarketsGlobal-Demo",       "type": "demo"},
-    {"broker": "HFM",              "server": "HFMarketsSV-Live",           "type": "live"},
-    {"broker": "HFM",              "server": "HFMarketsSV-Demo",           "type": "demo"},
-    # ThinkMarkets
-    {"broker": "ThinkMarkets",     "server": "ThinkMarkets-Live",          "type": "live"},
-    {"broker": "ThinkMarkets",     "server": "ThinkMarkets-Demo",          "type": "demo"},
-    # Vantage
-    {"broker": "Vantage",          "server": "VantageInternational-Live",  "type": "live"},
-    {"broker": "Vantage",          "server": "VantageInternational-Demo",  "type": "demo"},
-    # Eightcap
-    {"broker": "Eightcap",         "server": "Eightcap-Live",              "type": "live"},
-    {"broker": "Eightcap",         "server": "Eightcap-Demo",              "type": "demo"},
-    # Deriv
-    {"broker": "Deriv",            "server": "Deriv-Server",               "type": "live"},
-    {"broker": "Deriv",            "server": "Deriv-Demo",                 "type": "demo"},
-    # BlackBull Markets
-    {"broker": "BlackBull",        "server": "BlackBullMarkets-Live",      "type": "live"},
-    {"broker": "BlackBull",        "server": "BlackBullMarkets-Demo",      "type": "demo"},
-    # Trade.com / Leadcapital
-    {"broker": "Trade.com",        "server": "Trade-Live",                 "type": "live"},
-    {"broker": "Trade.com",        "server": "Trade-Demo",                 "type": "demo"},
-    {"broker": "Trade.com",        "server": "LeadCapitalMarkets-Live",    "type": "live"},
-    {"broker": "Trade.com",        "server": "LeadCapitalMarkets-Demo",    "type": "demo"},
-    {"broker": "Trade.com",        "server": "TradeCapitalMarkets-Live",   "type": "live"},
-    {"broker": "Trade.com",        "server": "TradeCapitalMarkets-Demo",   "type": "demo"},
-    {"broker": "Trade.com / TCH",   "server": "TradeCapitalHolding-Live",  "type": "live"},
-    {"broker": "Trade.com / TCH",   "server": "TradeCapitalHolding-Demo",  "type": "demo"},
-    # OneRoyal
-    {"broker": "OneRoyal",         "server": "OneRoyal-Live",              "type": "live"},
-    {"broker": "OneRoyal",         "server": "OneRoyal-Demo",              "type": "demo"},
-    {"broker": "OneRoyal",         "server": "RoyalMtPro-Live",            "type": "live"},
-    {"broker": "OneRoyal",         "server": "RoyalMtPro-Live01",          "type": "live"},
-    {"broker": "OneRoyal",         "server": "RoyalMtPro-Demo",            "type": "demo"},
-    # 4XC / 4xCube
-    {"broker": "4XC",              "server": "4XC-Live",                   "type": "live"},
-    {"broker": "4XC",              "server": "4XC-Demo",                   "type": "demo"},
-    {"broker": "4XC",              "server": "4xCube-Live",                "type": "live"},
-    {"broker": "4XC",              "server": "4xCube-Demo",                "type": "demo"},
-    # AvaTrade / ActivTrades
-    {"broker": "AvaTrade",         "server": "AvaTrade-Real",              "type": "live"},
-    {"broker": "AvaTrade",         "server": "AvaTrade-Demo",              "type": "demo"},
-    {"broker": "ActivTrades",      "server": "ActivTrades-Server",         "type": "live"},
-    {"broker": "ActivTrades",      "server": "ActivTrades-Demo",           "type": "demo"},
-    # Just2Trade
-    {"broker": "Just2Trade",       "server": "Just2Trade-MT5",             "type": "live"},
-    {"broker": "Just2Trade",       "server": "Just2Trade-Demo",            "type": "demo"},
-    # FXTM (ForexTime)
-    {"broker": "FXTM",             "server": "ForexTime-Live01",           "type": "live"},
-    {"broker": "FXTM",             "server": "ForexTime-Live02",           "type": "live"},
-    {"broker": "FXTM",             "server": "ForexTime-Demo01",           "type": "demo"},
-    {"broker": "FXTM",             "server": "ForexTime-Demo02",           "type": "demo"},
-    {"broker": "FXTM",             "server": "ForexTimeFXTM-Live01",       "type": "live"},
-    {"broker": "FXTM",             "server": "ForexTimeFXTM-Demo01",       "type": "demo"},
-    # Alpari
-    {"broker": "Alpari",           "server": "Alpari-MT5",                 "type": "live"},
-    {"broker": "Alpari",           "server": "Alpari-MT5-Demo",            "type": "demo"},
-    # AMarkets
-    {"broker": "AMarkets",         "server": "AMarkets-Real",              "type": "live"},
-    {"broker": "AMarkets",         "server": "AMarkets-Demo",              "type": "demo"},
-    # FusionMarkets
-    {"broker": "FusionMarkets",    "server": "FusionMarkets-Live",         "type": "live"},
-    {"broker": "FusionMarkets",    "server": "FusionMarkets-Demo",         "type": "demo"},
-    # LiteFinance
-    {"broker": "LiteFinance",      "server": "LiteFinance-MT5-Live",       "type": "live"},
-    {"broker": "LiteFinance",      "server": "LiteFinance-MT5-Demo",       "type": "demo"},
-    # Errante
-    {"broker": "Errante",          "server": "ErranteSC-Live",             "type": "live"},
-    {"broker": "Errante",          "server": "ErranteSC-Demo",             "type": "demo"},
-    {"broker": "Errante",          "server": "ErranteTrading-Live",        "type": "live"},
-    {"broker": "Errante",          "server": "ErranteTrading-Demo",        "type": "demo"},
-    # AronMarkets
-    {"broker": "AronMarkets",      "server": "AronMarkets-MT5",            "type": "live"},
-    {"broker": "AronMarkets",      "server": "AronMarkets-Demo",           "type": "demo"},
-    # FIBO Group
-    {"broker": "FIBO Group",       "server": "FIBOGroup-MT5 Server",       "type": "live"},
-    # Orbex
-    {"broker": "Orbex",            "server": "OrbexGlobal-Server",         "type": "live"},
-    # Combat / Investment Castle / TspFxb / others (single-server brokers)
-    {"broker": "Combat Capital",   "server": "CombatCapitalMarkets-Server","type": "live"},
-    {"broker": "Investment Castle","server": "InvestmentCastle-Server",    "type": "live"},
-    {"broker": "EpicPips",         "server": "EpicPips-Trade",             "type": "live"},
-    {"broker": "ePlanet",          "server": "ePlanet-MT5",                "type": "live"},
-    {"broker": "GTC Global",       "server": "GTCGlobalTrade-Server",      "type": "live"},
-    {"broker": "Omega Finex",      "server": "OmegaFinex-Real",            "type": "live"},
-    {"broker": "Pivot Broker",     "server": "PivotBroker-Live",           "type": "live"},
-    {"broker": "Propridge",        "server": "PropridgeCapitalMarkets-Server", "type": "live"},
-    {"broker": "RavexGlobal",      "server": "RavexGlobal-Live",           "type": "live"},
-    {"broker": "MondTrades",       "server": "Mondtrades-Server",          "type": "live"},
-    {"broker": "TspFxb",           "server": "TspFxb-Server",              "type": "live"},
-    {"broker": "WM Markets",       "server": "WMMarkets-Real1",            "type": "live"},
-    {"broker": "WM Markets",       "server": "WMMarkets-Demo",             "type": "demo"},
-    {"broker": "UNFXB",            "server": "UNFXB-Real",                 "type": "live"},
-    {"broker": "xChief",           "server": "xChief-MT5",                 "type": "live"},
-    {"broker": "ZoraCapital",      "server": "ZoraCapital-Server",         "type": "live"},
-]
-
-def _broker_server_index() -> Dict[str, dict]:
-    return {str(b.get("server", "")).lower(): b for b in CLOUD_BROKER_SERVERS}
-
-def _broker_profile_for_server(server: str) -> dict:
-    server = (server or "").strip()
-    row = _broker_server_index().get(server.lower())
-    if row:
-        out = dict(row)
-        out.update({
-            "platform": "MT5",
-            "support_status": "curated",
-            "compatibility": "full_pending_login",
-            "requires_exact_server": True,
-            "notes": "Listed server. Final compatibility is confirmed by worker login, symbol, and trading-permission checks. If login fails, copy the exact server string from MT5/account email and use Custom server.",
-        })
-        return out
-    return {
-        "broker": "Custom / unlisted broker",
-        "server": server,
-        "type": "custom",
-        "platform": "MT5",
-        "support_status": "custom_review",
-        "compatibility": "partial_until_verified",
-        "requires_exact_server": True,
-        "notes": "Custom MT5 server. This is often required for brokers like Trade.com/TCH where the live server shown in MT5 can differ by account. The worker must verify login, symbol mapping, and trading permissions before copying.",
-    }
-
-def _broker_error_hint(raw_error: str) -> str:
-    text = str(raw_error or "").lower()
-    if not text:
-        return ""
-    if "initialize" in text or "terminal" in text:
-        return "MT5 terminal is not reachable on the executor VPS. Start MT5, install MetaTrader5 Python package, and confirm the terminal can log in."
-    if "authorization" in text or "invalid account" in text or "invalid credentials" in text or "authentication" in text:
-        return "Invalid MT5 login/password or broker server mismatch. Use the trading password, not investor/read-only password."
-    if "server" in text and ("timeout" in text or "not found" in text or "unreachable" in text):
-        return "MT5 server not reachable. Check exact live/demo server name and region restrictions."
-    if "investor" in text or "read-only" in text or "trade disabled" in text or "trading disabled" in text:
-        return "Account connected but trading permission is disabled. Use the master/trading password and enable Algo Trading in MT5."
-    if "symbol" in text or "xau" in text or "gold" in text:
-        return "Broker uses a different gold symbol or does not stream XAUUSD. Add/select the correct gold symbol in Market Watch."
-    if "margin" in text or "money" in text:
-        return "Broker/account rejected execution because margin or leverage is insufficient for the requested lot."
-    return "Broker rejected the connection or execution. Check exact server, MT5/MT4 mismatch, password type, and account trading permission."
-
-async def _log_broker_event(user_id: str, email: str, event: str, ok: bool,
-                            server: str = "", details: Optional[dict] = None):
-    try:
-        doc = {
-            "id": str(uuid.uuid4()),
-            "user_id": user_id,
-            "email": email,
-            "event": event,
-            "ok": bool(ok),
-            "broker_server": server,
-            "details": details or {},
-            "ts": _utc_now_iso(),
-        }
-        await db.cloud_broker_logs.insert_one(doc.copy())
-        await db.cloud_broker_logs.delete_many({
-            "ts": {"$lt": (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()}
-        })
-    except Exception:
-        logger.exception("[cloud-broker-log] failed")
-
-@api_router.get("/cloud/mt5/brokers")
-async def cloud_list_brokers():
-    """Public: returns curated broker→servers list for the UI search dropdown."""
-    servers = []
-    seen = set()
-    for b in CLOUD_BROKER_SERVERS:
-        key = str(b.get("server", "")).lower()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        row = dict(b)
-        row.setdefault("platform", "MT5")
-        row.setdefault("support_status", "curated")
-        row.setdefault("compatibility", "full_pending_login")
-        servers.append(row)
-    brokers = sorted({b["broker"] for b in servers if b.get("broker")})
-    return {"servers": servers, "brokers": brokers, "total": len(servers),
-            "notes": "Only MT5-compatible servers are executable today. Broker server names change by account and region; if a listed server fails, use the exact server string from the user's MT5 login screen/account email via Custom server. MT4/cTrader/API brokers must use an MT5 account/server or are unsupported for cloud copy."}
-
-@api_router.get("/cloud/mt5/compatibility")
-async def cloud_mt5_compatibility(server: str = ""):
-    profile = _broker_profile_for_server(server)
-    return {"ok": True, "profile": profile,
-            "checks": [
-                "MT5 terminal reachable on executor VPS",
-                "Exact server name accepted by mt5.login",
-                "Trading password is valid, not investor/read-only password",
-                "Account trade_allowed and terminal trade_allowed are true",
-                "XAUUSD/gold symbol can be resolved and selected",
-                "Broker reports lot step/min/max, filling mode, stop level, and live tick",
-            ]}
-
-@api_router.post("/cloud/mt5/test-connection")
-async def cloud_mt5_test_connection(req: MT5BrokerCheckReq, user: dict = Depends(get_cloud_user)):
-    server = (req.broker_server or user.get("broker_server") or "").strip()
-    if not user.get("mt5_password_enc") or not user.get("mt5_login") or not server:
-        raise HTTPException(status_code=400, detail="Save MT5 credentials before running a broker test.")
-    now = _utc_now_iso()
-    profile = _broker_profile_for_server(server)
-    await db.cloud_users.update_one({"id": user["id"]}, {"$set": {
-        "broker_server": server,
-        "mt5_verification_status": "pending",
-        "mt5_verification_error": "",
-        "mt5_connected": False,
-        "broker_support_status": profile.get("support_status"),
-        "broker_platform": profile.get("platform"),
-        "broker_last_check_requested_at": now,
-    }})
-    await _log_broker_event(user["id"], user.get("email", ""), "manual_test_requested", True, server, profile)
-    return {"ok": True, "message": "Broker test queued. The worker will verify login, trading permission, symbol mapping, and latency.", "profile": profile}
-
-@api_router.get("/cloud/mt5/logs")
-async def cloud_mt5_logs(limit: int = 30, user: dict = Depends(get_cloud_user)):
-    n = max(1, min(int(limit), 100))
-    rows = await db.cloud_broker_logs.find(
-        {"user_id": user["id"]}, {"_id": 0}
-    ).sort("ts", -1).to_list(n)
-    return {"logs": rows, "total": len(rows)}
-
-@api_router.post("/cloud/mt5/refresh-balance")
-async def cloud_refresh_balance(user: dict = Depends(get_cloud_user)):
-    """User-initiated immediate balance refresh. Sets a flag the worker
-       picks up on its next poll (≤10s) and pushes a fresh equity-snapshot."""
-    if not user.get("mt5_connected") or user.get("mt5_verification_status") != "verified":
-        raise HTTPException(status_code=400,
-            detail="Connect & verify your MT5 account first — go to the MT5 tab and link your broker login.")
-
-    # Verify a worker is actually alive — otherwise refresh request will sit forever.
-    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
-    online_workers = await db.cloud_workers.count_documents(
-        {"status": "online", "last_heartbeat": {"$gt": cutoff}})
-    if online_workers == 0:
-        raise HTTPException(status_code=503,
-            detail="No cloud worker is currently online — your trades + balance updates will resume the moment a worker reconnects. We've been notified.")
-
-    # Light cooldown — prevent spam-clicking from hammering the broker
-    last = user.get("last_refresh_request_at")
-    now = datetime.now(timezone.utc)
-    if last:
-        try:
-            since = (now - datetime.fromisoformat(last)).total_seconds()
-            if since < 10:
-                raise HTTPException(status_code=429,
-                    detail=f"Please wait {int(10 - since)}s before another refresh.")
-        except (ValueError, TypeError): pass
-    await db.cloud_users.update_one({"id": user["id"]},
-        {"$set": {"force_equity_refresh": True,
-                  "last_refresh_request_at": now.isoformat()}})
-    return {"ok": True, "message": "Refresh requested. Your balance will update within 10 seconds."}
-
-@api_router.post("/cloud/mt5/disconnect")
-async def cloud_disconnect_mt5(user: dict = Depends(get_cloud_user)):
-    await db.cloud_users.update_one({"id": user["id"]},
-        {"$set": {"mt5_connected": False, "mt5_verification_status": "none"},
-         "$unset": {"mt5_password_enc": "", "mt5_login": "", "broker_server": "",
-                    "mt5_verification_error": "", "mt5_verified_at": "",
-                    "force_equity_refresh": "", "last_refresh_request_at": "",
-                    "last_balance": "", "last_equity": "", "last_balance_updated_at": "",
-                    "last_equity_ts": "", "account_currency": ""}})
-    return {"ok": True, "message": "MT5 credentials removed. Trade execution paused."}
-
-@api_router.post("/cloud/pause")
-async def cloud_pause(req: CloudPauseReq, user: dict = Depends(get_cloud_user)):
-    await db.cloud_users.update_one({"id": user["id"]}, {"$set": {"paused": bool(req.paused)}})
-    return {"ok": True, "paused": bool(req.paused)}
-
-# -------- Dashboard Data --------
-@api_router.get("/cloud/dashboard")
-async def cloud_dashboard(user: dict = Depends(get_cloud_user)):
-    trades_raw = await db.cloud_trades.find({"user_id": user["id"]}, {"_id": 0}).sort("opened_at", -1).limit(500).to_list(500)
-
-    def _num(v, default=0.0):
-        try:
-            return float(v if v is not None else default)
-        except (TypeError, ValueError):
-            return float(default)
-
-    def _trade_ts(t):
-        return t.get("closed_at") or t.get("opened_at") or ""
-
-    def _calc_profit(t):
-        profit = _num(t.get("profit"), 0.0)
-        if abs(profit) > 1e-9:
-            return profit
-        if not (t.get("status") == "closed" or t.get("closed_at")):
-            return profit
-        lots = _num(t.get("lots"), 0.0)
-        entry = _num(t.get("entry"), 0.0)
-        exit_px = _num(t.get("exit_price"), 0.0)
-        side = str(t.get("side") or "").upper()
-        if lots > 0 and entry > 0 and exit_px > 0 and side in ("BUY", "SELL"):
-            direction = 1 if side == "BUY" else -1
-            return (exit_px - entry) * lots * 100.0 * direction
-        return profit
-
-    trades = []
-    for t in trades_raw:
-        row = dict(t)
-        row["lots"] = _num(row.get("lots"), 0.0)
-        row["entry"] = _num(row.get("entry"), 0.0)
-        row["exit_price"] = _num(row.get("exit_price"), 0.0)
-        row["profit"] = _calc_profit(row)
-        trades.append(row)
-    trades.sort(key=_trade_ts, reverse=True)
-    completed = [t for t in trades if t.get("status") == "closed" or t.get("closed_at")]
-    totals = {"total_trades": len(trades),
-              "completed_trades": len(completed),
-              "wins": sum(1 for t in completed if float(t.get("profit") or 0) > 0),
-              "losses": sum(1 for t in completed if float(t.get("profit") or 0) < 0),
-              "net_pnl": sum(float(t.get("profit") or 0) for t in completed)}
-
-    # v6.6.0: Gold / Index / Combined performance split, derived from each
-    # trade's own `symbol` field — no schema change, no EA-side change.
-    def _market_totals(rows):
-        wins = sum(1 for t in rows if float(t.get("profit") or 0) > 0)
-        losses = sum(1 for t in rows if float(t.get("profit") or 0) < 0)
-        net = sum(float(t.get("profit") or 0) for t in rows)
-        n = len(rows)
-        return {"trades": n, "wins": wins, "losses": losses, "net_pnl": round(net, 2),
-                "win_rate": round((wins / n * 100.0), 1) if n > 0 else 0.0}
-
-    gold_completed = [t for t in completed if classify_market_mode(t.get("symbol")) == "GOLD_MODE"]
-    index_completed = [t for t in completed if classify_market_mode(t.get("symbol")) == "INDEX_MODE"]
-    totals["by_market_mode"] = {
-        "gold": _market_totals(gold_completed),
-        "index": _market_totals(index_completed),
-        "combined": _market_totals(completed),
-    }
-    trades = trades[:50]
-    # equity curve data (last 30 days aggregated daily)
-    equity = []
-    try:
-        since = datetime.now(timezone.utc) - timedelta(days=30)
-        cursor = db.cloud_equity_snapshots.find({"user_id": user["id"], "ts": {"$gte": since.isoformat()}}, {"_id": 0}).sort("ts", 1)
-        equity = await cursor.to_list(2000)
-    except Exception: pass
-    # Live executor status — surface to user so they can SEE if cloud is reachable
-    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
-    workers_online = await db.cloud_workers.count_documents(
-        {"status": "online", "last_heartbeat": {"$gt": cutoff}})
-    # When was this user's balance last actually pushed by a worker?
-    last_eq_at = ""
-    try:
-        latest = await db.cloud_equity_snapshots.find_one(
-            {"user_id": user["id"]}, {"_id": 0, "ts": 1}, sort=[("ts", -1)])
-        if latest: last_eq_at = latest.get("ts", "")
-    except Exception: pass
-
-    return {"trades": trades, "totals": totals, "equity": equity,
-            "mt5_connected": user.get("mt5_connected", False),
-            "mt5_verification_status": user.get("mt5_verification_status", "none"),
-            "mt5_verification_error":  user.get("mt5_verification_error", ""),
-            "mt5_verified_at":         user.get("mt5_verified_at", ""),
-            "broker_server": user.get("broker_server", ""),
-            "mt5_login": user.get("mt5_login", ""),
-            "risk_tier": user.get("risk_tier", "balanced"),
-            "last_balance": user.get("last_balance", 0),
-            "last_equity":  user.get("last_equity", 0),
-            "last_balance_updated_at": last_eq_at,   # NEW
-            "executor_online": workers_online > 0,    # NEW
-            "executor_count":  workers_online,        # NEW
-            "account_currency": user.get("account_currency", ""),
-            "paused": user.get("paused", False),
-            "plan": user.get("plan", "starter"),
-            "status": user.get("status", "trial")}
+# v6.25.3 owner directive 2026-07-17 (Phase 5 P0, final pre-launch hardening)
+# -- DELETE RETIRED CLOUD COPY-TRADING. The MT5-connect/broker-list/pause/
+# dashboard block that used to live here (cloud_connect_mt5, CLOUD_BROKER_SERVERS,
+# _broker_profile_for_server, _broker_error_hint, _log_broker_event,
+# cloud_list_brokers, cloud_mt5_compatibility, cloud_mt5_test_connection,
+# cloud_mt5_logs, cloud_refresh_balance, cloud_disconnect_mt5, cloud_pause,
+# cloud_dashboard) is removed entirely -- this product is a licensed local EA
+# + remote monitor/control, not a master/slave copy-trading service. See
+# backend/migrations/0001_delete_copy_trading.py for the data-side backup
+# + deletion of the encrypted MT5 credentials and copy-trading collections
+# this code used to read/write.
 
 # -------- Trading Universe settings (v6.6.0 — architecture phase) --------
 @api_router.get("/cloud/trading-universe")
@@ -4472,713 +5256,16 @@ async def set_trading_universe(req: TradingUniverseSettings, user: dict = Depend
     return {"ok": True, "settings": doc}
 
 # -------- Payments (user submits proof; admin approves) --------
-@api_router.post("/cloud/payments/submit")
-async def cloud_submit_payment(req: PaymentSubmitReq, user: dict = Depends(get_cloud_user)):
-    plans = await _get_effective_plans()
-    if req.plan not in plans:
-        raise HTTPException(status_code=400, detail="Unknown plan")
-    if req.method not in ("crypto", "bank"):
-        raise HTTPException(status_code=400, detail="Invalid method (use crypto or bank)")
-    ref = (req.reference or "").strip()
-    if len(ref) < 4:
-        raise HTTPException(status_code=400, detail="Transaction reference is required (min 4 chars)")
-    # Bank-transfer payments must include an image proof
-    if req.method == "bank":
-        proof = (req.proof_image or "").strip()
-        if not proof.startswith("data:image/"):
-            raise HTTPException(status_code=400, detail="Bank transfer requires a screenshot of your transfer (image upload).")
-        # rough size limit ~5 MB after base64 (~6.7 MB string)
-        if len(proof) > 7_000_000:
-            raise HTTPException(status_code=400, detail="Proof image too large (max 5 MB).")
-    # Expected price validation — prevent tampered low amounts (admin-overridable plans)
-    expected_price = float(plans[req.plan].get("price_usd", 0))
-    if abs(float(req.amount_usd) - expected_price) > 0.01:
-        raise HTTPException(status_code=400, detail=f"Amount must be ${expected_price} for {req.plan} plan")
-    # Block a second pending payment from the same user (prevent spam)
-    existing_pending = await db.cloud_payments.find_one({"user_id": user["id"], "status": "pending"})
-    if existing_pending:
-        raise HTTPException(status_code=400, detail="You already have a payment pending review. Please wait or contact support.")
-    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "email": user["email"],
-           "plan": req.plan, "method": req.method, "amount_usd": float(req.amount_usd),
-           "paid_currency": (req.paid_currency or "USD").upper(),
-           "paid_amount_local": float(req.paid_amount_local or 0.0),
-           "reference": ref, "notes": (req.notes or "").strip(),
-           "proof_image": req.proof_image or "",
-           "status": "pending", "submitted_at": datetime.now(timezone.utc).isoformat(),
-           "approved_at": None, "approved_by": None}
-    await db.cloud_payments.insert_one(doc.copy())
-    doc.pop("_id", None)
-    return {"ok": True, "payment_id": doc["id"], "message": "Payment submitted. Admin will verify and activate your subscription within 24 hours."}
+# v6.25.3 owner directive 2026-07-17 (Phase 5 P0) -- retired copy-trading
+# billing/worker-infrastructure/agent-pairing block removed (payments,
+# admin cloud users/stats, admin cloud settings CRUD, worker registration,
+# agent-token rotation, pair-code exchange, shadow-mode toggle, test-signal
+# fanout). See backend/migrations/0001_delete_copy_trading.py for the
+# data-side backup+deletion this code used to serve.
 
-@api_router.get("/cloud/payments/my")
-async def cloud_my_payments(user: dict = Depends(get_cloud_user)):
-    rows = await db.cloud_payments.find({"user_id": user["id"]}, {"_id": 0}).sort("submitted_at", -1).to_list(50)
-    return {"payments": rows}
-
-# -------- Admin endpoints --------
-@api_router.get("/admin/cloud/users", dependencies=[Depends(get_current_admin)])
-async def admin_cloud_users():
-    rows = await db.cloud_users.find(
-        {}, {"_id": 0, "password_hash": 0, "mt5_password_enc": 0}
-    ).sort("created_at", -1).limit(500).to_list(500)
-    return {"users": rows, "total": len(rows)}
-
-@api_router.get("/admin/cloud/stats", dependencies=[Depends(get_current_admin)])
-async def admin_cloud_stats():
-    plans = await _get_effective_plans()
-    total = await db.cloud_users.count_documents({})
-    trial = await db.cloud_users.count_documents({"status": "trial"})
-    active = await db.cloud_users.count_documents({"status": "active"})
-    connected = await db.cloud_users.count_documents({"mt5_connected": True})
-    pending_pays = await db.cloud_payments.count_documents({"status": "pending"})
-    # MRR estimate, honoring per-user custom_price_usd overrides
-    active_users = await db.cloud_users.find({"status": "active"},
-        {"_id": 0, "plan": 1, "custom_price_usd": 1}).to_list(10000)
-    mrr = 0.0
-    for u in active_users:
-        cp = u.get("custom_price_usd")
-        mrr += float(cp) if cp else float(plans.get(u.get("plan", "starter"), {}).get("price_usd", 0))
-    return {"total_users": total, "trial_users": trial, "active_users": active,
-            "mt5_connected": connected, "pending_payments": pending_pays, "mrr_usd": mrr}
-
-@api_router.get("/admin/cloud/payments", dependencies=[Depends(get_current_admin)])
-async def admin_cloud_payments(status: Optional[str] = None):
-    q = {} if not status else {"status": status}
-    rows = await db.cloud_payments.find(q, {"_id": 0}).sort("submitted_at", -1).limit(500).to_list(500)
-    return {"payments": rows}
-
-@api_router.post("/admin/cloud/payments/{payment_id}/approve")
-async def admin_approve_payment(payment_id: str, admin: dict = Depends(get_current_admin)):
-    pay = await db.cloud_payments.find_one({"id": payment_id}, {"_id": 0})
-    if not pay: raise HTTPException(status_code=404, detail="Payment not found")
-    if pay["status"] != "pending": raise HTTPException(status_code=400, detail=f"Already {pay['status']}")
-    plan = pay["plan"]
-    # extend subscription 30 days from NOW (or from current end if still active)
-    user = await db.cloud_users.find_one({"id": pay["user_id"]}, {"_id": 0})
-    if not user: raise HTTPException(status_code=404, detail="User not found")
-    now = datetime.now(timezone.utc)
-    curr_end = now
-    try:
-        ends = user.get("subscription_ends_at")
-        if ends:
-            ce = datetime.fromisoformat(ends.replace("Z", "+00:00"))
-            if ce > now: curr_end = ce
-    except Exception: pass
-    new_end = curr_end + timedelta(days=30)
-    await db.cloud_users.update_one({"id": pay["user_id"]},
-        {"$set": {"status": "active", "plan": plan,
-                  "subscription_ends_at": new_end.isoformat()}})
-    await db.cloud_payments.update_one({"id": payment_id},
-        {"$set": {"status": "approved", "approved_at": now.isoformat(), "approved_by": admin.get("email", "admin")}})
-    return {"ok": True, "new_subscription_ends_at": new_end.isoformat()}
-
-@api_router.post("/admin/cloud/payments/{payment_id}/reject")
-async def admin_reject_payment(payment_id: str, admin: dict = Depends(get_current_admin)):
-    r = await db.cloud_payments.update_one({"id": payment_id, "status": "pending"},
-        {"$set": {"status": "rejected", "approved_at": datetime.now(timezone.utc).isoformat(),
-                  "approved_by": admin.get("email", "admin")}})
-    if not r.matched_count: raise HTTPException(status_code=404, detail="Not found or already processed")
-    return {"ok": True}
-
-@api_router.get("/admin/cloud/settings", dependencies=[Depends(get_current_admin)])
-async def admin_cloud_get_settings():
-    s = await _get_cloud_settings()
-    # v5.1.4: always return MERGED effective plans + fx_rates so the admin form
-    # auto-populates with real defaults instead of empty fields. Without this,
-    # if a previous save partially overrode plans, the form shows blanks for
-    # the un-saved keys and the admin accidentally clobbers them to $0 on next save.
-    s["plans"] = await _get_effective_plans()
-    s["fx_rates"] = await _get_fx_rates()
-    return s
-
-# v5.1.4: validate plan saves so admin can't accidentally write a $0 price.
-def _validate_plans_payload(plans: dict):
-    if not isinstance(plans, dict): return
-    for pid, p in plans.items():
-        if not isinstance(p, dict): continue
-        price = p.get("price_usd")
-        if price is None: continue  # admin partial-update is OK
-        try: pf = float(price)
-        except Exception:
-            raise HTTPException(status_code=400, detail=f"{pid}: price_usd must be a number")
-        if pf <= 0:
-            raise HTTPException(status_code=400, detail=f"{pid} plan price must be > $0 (got ${pf}). Refusing to save.")
-        name = p.get("name")
-        if name is not None and not str(name).strip():
-            raise HTTPException(status_code=400, detail=f"{pid} plan name cannot be empty.")
-
-class CloudSettingsUpdate(BaseModel):
-    crypto_wallets: Optional[list] = None
-    bank_accounts: Optional[list] = None
-    fiat_paystack_enabled: Optional[bool] = None
-    telegram_alerts_enabled: Optional[bool] = None
-    master_ea_status: Optional[str] = None
-    plans: Optional[dict] = None        # {"starter":{"price_usd":50,...}, ...}
-    fx_rates: Optional[dict] = None     # {"NGN":1650, "KES":130, ...}
-
-@api_router.put("/admin/cloud/settings", dependencies=[Depends(get_current_admin)])
-async def admin_cloud_update_settings(req: CloudSettingsUpdate):
-    upd = {k: v for k, v in req.model_dump().items() if v is not None}
-    if not upd: return {"ok": True, "unchanged": True}
-    if "plans" in upd:
-        _validate_plans_payload(upd["plans"])
-    await db.cloud_settings.update_one({"key": "main"}, {"$set": upd}, upsert=True)
-    return {"ok": True}
-
-# -------- Admin: per-user pricing override --------
-class UserPlanOverrideReq(BaseModel):
-    user_id: str
-    plan: Optional[str] = None          # change plan for this user
-    custom_price_usd: Optional[float] = None  # 0 or null = use plan default
-    extend_days: Optional[int] = None   # +N days onto subscription_ends_at
-
-@api_router.post("/admin/cloud/users/override", dependencies=[Depends(get_current_admin)])
-async def admin_user_override(req: UserPlanOverrideReq):
-    user = await db.cloud_users.find_one({"id": req.user_id}, {"_id": 0})
-    if not user: raise HTTPException(status_code=404, detail="User not found")
-    set_doc: dict = {}
-    if req.plan:
-        plans = await _get_effective_plans()
-        if req.plan not in plans:
-            raise HTTPException(status_code=400, detail=f"Unknown plan '{req.plan}'")
-        set_doc["plan"] = req.plan
-    if req.custom_price_usd is not None:
-        set_doc["custom_price_usd"] = float(req.custom_price_usd) if req.custom_price_usd > 0 else None
-    if req.extend_days and req.extend_days > 0:
-        now = datetime.now(timezone.utc)
-        curr = now
-        try:
-            ends = user.get("subscription_ends_at")
-            if ends:
-                ce = datetime.fromisoformat(ends.replace("Z", "+00:00"))
-                if ce > now: curr = ce
-        except Exception: pass
-        set_doc["subscription_ends_at"] = (curr + timedelta(days=int(req.extend_days))).isoformat()
-        set_doc["status"] = "active"
-    if not set_doc:
-        return {"ok": True, "unchanged": True}
-    await db.cloud_users.update_one({"id": req.user_id}, {"$set": set_doc})
-    return {"ok": True, "set": set_doc}
-
-# -------- Worker Agent Endpoints (used by VPS workers, protected by secret) --------
-#  Workers poll /cloud/agent/pending-users to get credentials for users they should
-#  manage, and push trade results to /cloud/agent/trade-close. Authenticated with
-#  a shared secret stored in cloud_settings (admin can rotate via UI).
-async def _get_agent_token():
-    s = await _get_cloud_settings()
-    # Fall back to env var for backwards compat
-    return s.get("agent_token") or os.environ.get("CLOUD_AGENT_TOKEN", "")
-
-async def _require_agent_async(request: Request):
-    tok = await _get_agent_token()
-    if not tok:
-        raise HTTPException(status_code=503, detail="Agent token not configured. Admin must generate one in /admin → Cloud → Infrastructure.")
-    hdr = request.headers.get("X-Agent-Token", "")
-    if hdr != tok:
-        raise HTTPException(status_code=403, detail="Bad agent token")
-
-# Legacy sync wrapper (deprecated, kept for internal callers)
-def _require_agent(request: Request):
-    hdr = request.headers.get("X-Agent-Token", "")
-    # This sync path only accepts env-configured token — async path is preferred
-    env_tok = os.environ.get("CLOUD_AGENT_TOKEN", "")
-    if env_tok and hdr == env_tok: return
-    raise HTTPException(status_code=403, detail="Use async agent path")
-
-# -------- Admin: Infrastructure (VPS workers) --------
-class WorkerRegisterReq(BaseModel):
-    name: str
-    endpoint: Optional[str] = ""      # optional URL if worker runs a reachable HTTP server
-    max_users: int = 1
-    notes: Optional[str] = ""
-
-@api_router.get("/admin/cloud/infrastructure", dependencies=[Depends(get_current_admin)])
-async def admin_infra_list():
-    workers = await db.cloud_workers.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
-    s = await _get_cloud_settings()
-    # compute per-worker usage
-    for w in workers:
-        w["current_users"] = await db.cloud_users.count_documents({"assigned_worker_id": w["id"], "mt5_connected": True})
-    total_capacity = sum(w.get("max_users", 30) for w in workers)
-    assigned = await db.cloud_users.count_documents({"assigned_worker_id": {"$exists": True, "$ne": None}, "mt5_connected": True})
-    unassigned = await db.cloud_users.count_documents({"mt5_connected": True, "assigned_worker_id": {"$in": [None, ""]}})
-    return {"workers": workers, "total_capacity": total_capacity, "assigned_users": assigned,
-            "unassigned_users": unassigned,
-            "shadow_mode": s.get("shadow_mode", True),
-            "agent_token_preview": (s.get("agent_token", "") or "")[:8] + "…" if s.get("agent_token") else "",
-            "master_ea_status": s.get("master_ea_status", "unknown"),
-            "master_last_heartbeat": s.get("master_last_heartbeat")}
-
-@api_router.post("/admin/cloud/infrastructure/workers", dependencies=[Depends(get_current_admin)])
-async def admin_infra_add_worker(req: WorkerRegisterReq):
-    wid = str(uuid.uuid4())
-    doc = {"id": wid, "name": req.name.strip(), "endpoint": (req.endpoint or "").strip(),
-           "max_users": max(1, int(req.max_users)), "notes": req.notes or "",
-           "status": "offline", "last_heartbeat": None,
-           "created_at": datetime.now(timezone.utc).isoformat()}
-    await db.cloud_workers.insert_one(doc.copy())
-    return {"ok": True, "worker_id": wid}
-
-@api_router.delete("/admin/cloud/infrastructure/workers/{worker_id}", dependencies=[Depends(get_current_admin)])
-async def admin_infra_remove_worker(worker_id: str):
-    # Unassign any users on this worker
-    await db.cloud_users.update_many({"assigned_worker_id": worker_id}, {"$unset": {"assigned_worker_id": ""}})
-    r = await db.cloud_workers.delete_one({"id": worker_id})
-    if not r.deleted_count: raise HTTPException(status_code=404, detail="Worker not found")
-    return {"ok": True}
-
-@api_router.post("/admin/cloud/infrastructure/rotate-token", dependencies=[Depends(get_current_admin)])
-async def admin_rotate_agent_token():
-    new_tok = secrets.token_hex(32)
-    await db.cloud_settings.update_one({"key": "main"}, {"$set": {"agent_token": new_tok}}, upsert=True)
-    return {"ok": True, "token": new_tok, "message": "New agent token generated. Paste into each VPS worker config."}
-
-# --- One-shot pairing code: admin generates code → worker exchanges for full config ---
-@api_router.post("/admin/cloud/infrastructure/pair-code", dependencies=[Depends(get_current_admin)])
-async def admin_generate_pair_code(body: dict = None):
-    """Generate a 6-digit pairing code (TTL 10 min). The worker enters this code
-       on first run and auto-receives agent_token + a fresh worker_id."""
-    body = body or {}
-    name = (body.get("name") or "Auto-paired worker").strip()[:60]
-    max_users = max(1, min(500, int(body.get("max_users") or 1)))
-    code = "".join([str(secrets.randbelow(10)) for _ in range(6)])
-    expires = datetime.now(timezone.utc) + timedelta(minutes=10)
-    await db.cloud_pair_codes.insert_one({
-        "code": code,
-        "expires_at": expires.isoformat(),
-        "consumed": False,
-        "worker_name": name,
-        "max_users": max_users,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    })
-    return {"code": code, "expires_at": expires.isoformat(),
-            "ttl_minutes": 10,
-            "message": f"Code: {code} (valid for 10 min). Run the installer and paste this code."}
-
-class PairExchangeReq(BaseModel):
-    code: str
-    hostname: Optional[str] = ""
-
-@api_router.post("/cloud/agent/pair")
-async def cloud_agent_pair(req: PairExchangeReq):
-    """Public — exchange a 6-digit pair code for full worker config.
-       This is the ONLY agent endpoint that doesn't require X-Agent-Token."""
-    code = (req.code or "").strip()
-    if not code or not code.isdigit() or len(code) != 6:
-        raise HTTPException(status_code=400, detail="Code must be 6 digits.")
-    rec = await db.cloud_pair_codes.find_one({"code": code, "consumed": False}, {"_id": 0})
-    if not rec:
-        raise HTTPException(status_code=404, detail="Invalid or already-used code.")
-    try:
-        exp = datetime.fromisoformat(rec["expires_at"])
-        if datetime.now(timezone.utc) > exp:
-            raise HTTPException(status_code=410, detail="Code expired. Ask admin for a new one.")
-    except (ValueError, KeyError):
-        raise HTTPException(status_code=500, detail="Code metadata corrupt")
-    # Make sure an agent_token exists (auto-rotate if missing)
-    s = await _get_cloud_settings()
-    agent_token = s.get("agent_token") or ""
-    if not agent_token:
-        agent_token = secrets.token_hex(32)
-        await db.cloud_settings.update_one({"key": "main"},
-            {"$set": {"agent_token": agent_token}}, upsert=True)
-    # Auto-create a worker
-    wid = str(uuid.uuid4())
-    name = rec.get("worker_name") or "Auto-paired worker"
-    if req.hostname:
-        name = f"{name} ({req.hostname[:30]})"
-    await db.cloud_workers.insert_one({
-        "id": wid, "name": name[:80], "endpoint": "",
-        "max_users": rec.get("max_users", 1), "notes": "Created via pair code",
-        "status": "offline", "last_heartbeat": None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    })
-    # Mark the code consumed
-    await db.cloud_pair_codes.update_one({"code": code},
-        {"$set": {"consumed": True, "consumed_at": datetime.now(timezone.utc).isoformat(),
-                  "consumed_worker_id": wid}})
-    # Determine the canonical cloud URL — must be the actual public URL clients hit
-    cloud_url = os.environ.get("CLOUD_PUBLIC_URL") or os.environ.get("REACT_APP_BACKEND_URL") or ""
-    return {"ok": True,
-            "cloud_url": cloud_url,
-            "agent_token": agent_token,
-            "worker_id": wid,
-            "worker_name": name,
-            "message": "Paired. Save the .env and start the worker."}
-
-@api_router.post("/admin/cloud/infrastructure/shadow-mode", dependencies=[Depends(get_current_admin)])
-async def admin_toggle_shadow(body: dict):
-    enabled = bool(body.get("enabled", True))
-    await db.cloud_settings.update_one({"key": "main"}, {"$set": {"shadow_mode": enabled}}, upsert=True)
-    return {"ok": True, "shadow_mode": enabled,
-            "message": ("SHADOW MODE ON — signals are simulated in dashboards, no real trades placed."
-                        if enabled else "LIVE MODE — workers will execute real trades on connected accounts.")}
-
-# --- Admin test: fire a synthetic signal and watch it fan out ---
-class TestSignalReq(BaseModel):
-    side: str = "BUY"
-    slDistDollars: float = 4.0
-    tpMultR: float = 4.0
-    auto_close_seconds: int = 5
-    exit_rMult: float = 3.0
-
-@api_router.post("/admin/cloud/infrastructure/test-signal", dependencies=[Depends(get_current_admin)])
-async def admin_test_signal(req: TestSignalReq):
-    """Manually fire a signal as if master EA had fired it. Fans out per-user
-       sized to THEIR balance + tier. Auto-closes after N seconds so admin can
-       see the full lifecycle end-to-end in the user dashboard."""
-    entry = 4567.50
-    side = req.side.upper()
-    if side not in ("BUY","SELL"):
-        raise HTTPException(status_code=400, detail="side must be BUY or SELL")
-    if req.slDistDollars <= 0:
-        raise HTTPException(status_code=400, detail="slDistDollars must be > 0")
-    sl = (entry - req.slDistDollars) if side == "BUY" else (entry + req.slDistDollars)
-    tp = (entry + req.slDistDollars * req.tpMultR) if side == "BUY" else (entry - req.slDistDollars * req.tpMultR)
-    now = datetime.now(timezone.utc)
-    await db.cloud_settings.update_one({"key":"main"},
-        {"$set":{"master_last_heartbeat": now.isoformat(), "master_ea_status": "online"}}, upsert=True)
-    sig_id = str(uuid.uuid4())
-    await db.cloud_signals.insert_one({"id": sig_id, "symbol":"XAUUSD","side":side,
-        "entry":entry,"sl":sl,"tp":tp,"grade":"A+","ts": now.isoformat(), "test": True})
-    users = await db.cloud_users.find(
-        {"mt5_connected": True, "paused": False, "status": {"$in": ["trial","active"]}},
-        {"_id": 0, "id": 1, "email": 1, "last_balance": 1, "risk_tier": 1}
-    ).to_list(2000)
-    risk_map = {"conservative": 0.6, "balanced": 1.2, "aggressive": 2.0}
-    fanout = []
-    for u in users:
-        bal = float(u.get("last_balance") or 1000)
-        rpct = risk_map.get(u.get("risk_tier","balanced"), 1.2)
-        riskUSD = bal * rpct / 100
-        lots = max(0.01, round(riskUSD / (req.slDistDollars * 100), 2))
-        trade = {"id": str(uuid.uuid4()), "user_id": u["id"], "signal_id": sig_id,
-                 "symbol":"XAUUSD","side":side,"lots":lots,"entry":entry,
-                 "exit_price":0,"profit":0,"status":"shadow_open",
-                 "opened_at":now.isoformat(),"closed_at":None,
-                 "shadow":True,"grade":"A+","test":True}
-        await db.cloud_shadow_trades.insert_one(trade.copy())
-        fanout.append({"email": u["email"], "balance": bal,
-                       "tier": u.get("risk_tier","balanced"),
-                       "risk_usd": round(riskUSD, 2), "lots": lots})
-    if req.auto_close_seconds > 0:
-        import asyncio
-        async def _auto_close():
-            await asyncio.sleep(req.auto_close_seconds)
-            move = req.slDistDollars * req.exit_rMult
-            exit_price = (entry + move) if side == "BUY" else (entry - move)
-            trades = await db.cloud_shadow_trades.find({"signal_id": sig_id, "status":"shadow_open"},
-                                                       {"_id":0}).to_list(5000)
-            t_now = datetime.now(timezone.utc)
-            for t in trades:
-                diff = (exit_price - t["entry"]) if side == "BUY" else (t["entry"] - exit_price)
-                profit = round(diff * t["lots"] * 100, 2)
-                await db.cloud_shadow_trades.update_one({"id": t["id"]},
-                    {"$set":{"status":"shadow_closed","exit_price":exit_price,
-                             "profit":profit,"closed_at":t_now.isoformat(),
-                             "reason":f"TEST @{req.exit_rMult}R"}})
-                doc = dict(t); doc["id"] = str(uuid.uuid4()); doc["exit_price"] = exit_price
-                doc["profit"] = profit; doc["closed_at"] = t_now.isoformat()
-                doc["reason"] = f"TEST @{req.exit_rMult}R"
-                await db.cloud_trades.insert_one(doc)
-        asyncio.create_task(_auto_close())
-    return {"ok": True, "signal_id": sig_id, "fanout": fanout,
-            "entry": entry, "sl": sl, "tp": tp,
-            "message": f"Test signal fired — {len(fanout)} users received it, each sized to THEIR OWN balance + tier. Auto-close in {req.auto_close_seconds}s at +{req.exit_rMult}R."}
-
-
-# Auto-assign a user to the first worker with free capacity
-async def _auto_assign_worker(user_id: str):
-    workers = await db.cloud_workers.find({}, {"_id": 0}).sort("created_at", 1).to_list(200)
-    for w in workers:
-        count = await db.cloud_users.count_documents({"assigned_worker_id": w["id"], "mt5_connected": True})
-        if count < w.get("max_users", 30):
-            await db.cloud_users.update_one({"id": user_id}, {"$set": {"assigned_worker_id": w["id"]}})
-            return w["id"]
-    return None
-
-# -------- SHADOW MODE: master signals fan out to all subscribers as simulated trades --------
-class MasterSignalReq(BaseModel):
-    symbol: str
-    side: str                    # BUY | SELL
-    entry: float
-    sl: float
-    tp: float
-    grade: Optional[str] = ""    # A+ / A / B
-    risk_hint_pct: Optional[float] = 1.2   # master-side risk %, bot-provided
-    # v1.3 — STRICT MIRROR fields. The master EA now ships its own actual lots
-    # + account balance so cloud users mirror the master 1:1, scaled only by
-    # balance ratio. No independent risk math on the cloud side anymore.
-    master_lots: Optional[float] = 0.0
-    master_balance: Optional[float] = 0.0
-    master_ticket: Optional[str] = ""   # optional future EA idempotency anchor
-
-def _safe_float(value, default: float = 0.0) -> float:
-    try:
-        if value is None:
-            return default
-        if isinstance(value, str):
-            value = value.replace(",", "").replace(" ", "").strip()
-            if not value:
-                return default
-        return float(value)
-    except Exception:
-        return default
-
-def _cloud_signal_dedupe_key(req: MasterSignalReq) -> str:
-    symbol = (req.symbol or "XAUUSD").upper().strip()
-    side = (req.side or "").upper().strip()
-    ticket = str(req.master_ticket or "").strip()
-    if ticket:
-        return f"ticket:{symbol}:{ticket}"
-    entry = round(_safe_float(req.entry), 1)
-    sl = round(_safe_float(req.sl), 1)
-    tp = round(_safe_float(req.tp), 1)
-    lots = round(_safe_float(req.master_lots), 2)
-    grade = (req.grade or "").upper().strip()
-    return f"sig:{symbol}:{side}:e{entry}:sl{sl}:tp{tp}:l{lots}:g{grade}"
-
-@api_router.post("/cloud/master/signal")
-async def cloud_master_signal(req: MasterSignalReq, request: Request):
-    """Called by the master EA (or bot) whenever a new signal fires.
-       If shadow_mode is ON → create simulated trade rows for every active user.
-       If OFF → also broadcast to workers for real execution (workers poll)."""
-    await _require_agent_async(request)
-    now = datetime.now(timezone.utc)
-    try:
-        s = await _get_cloud_settings()
-        raw_shadow = s.get("shadow_mode", True)
-        shadow = raw_shadow if isinstance(raw_shadow, bool) else str(raw_shadow).lower() not in ("0", "false", "off", "no")
-        await db.cloud_settings.update_one({"key": "main"},
-            {"$set": {"master_last_heartbeat": now.isoformat(), "master_ea_status": "online"}}, upsert=True)
-        dedupe_key = _cloud_signal_dedupe_key(req)
-        retry_cutoff = (now - timedelta(seconds=90)).isoformat()
-        existing_signal = await db.cloud_signals.find_one(
-            {"dedupe_key": dedupe_key, "ts": {"$gt": retry_cutoff}, "closed_at": {"$in": [None, ""]}},
-            {"_id": 0}
-        )
-        if existing_signal:
-            logger.warning("[cloud-master-signal] duplicate retry suppressed key=%s existing=%s",
-                           dedupe_key, existing_signal.get("id"))
-            return {"ok": True, "signal_id": existing_signal.get("id"), "shadow": shadow,
-                    "fanout_users": 0, "deduped": True,
-                    "message": "duplicate master signal suppressed"}
-        sig_id = str(uuid.uuid4())
-        signal_doc = {"id": sig_id, "symbol": req.symbol, "side": req.side, "entry": _safe_float(req.entry),
-                      "sl": _safe_float(req.sl), "tp": _safe_float(req.tp), "grade": req.grade, "ts": now.isoformat(),
-                      "dedupe_key": dedupe_key, "master_ticket": str(req.master_ticket or ""),
-                      # v1.3 STRICT MIRROR — propagate master lots + balance so workers
-                      # compute linkedLot = (userBalance / masterBalance) × masterLot.
-                      "master_lots": _safe_float(req.master_lots),
-                      "master_balance": _safe_float(req.master_balance)}
-        await db.cloud_signals.insert_one(signal_doc.copy())
-    except Exception as e:
-        logger.exception("[cloud-master-signal] CRITICAL: failed before signal could be stored")
-        raise HTTPException(status_code=500, detail=f"master signal store failed: {type(e).__name__}: {e}")
-
-    fanout = 0
-    fanout_errors = []
-    if shadow:
-        # For every active, non-paused, connected user: create a simulated trade
-        try:
-            users = await db.cloud_users.find(
-                {"mt5_connected": True, "paused": False, "status": {"$in": ["trial","active"]}},
-                {"_id": 0, "id": 1, "last_balance": 1, "risk_tier": 1}
-            ).to_list(2000)
-        except Exception as e:
-            users = []
-            fanout_errors.append(f"user query failed: {type(e).__name__}: {e}")
-            logger.exception("[cloud-master-signal] shadow user query failed for signal %s", sig_id)
-        master_lots = _safe_float(req.master_lots)
-        master_bal  = _safe_float(req.master_balance)
-        risk_map = {"conservative": 0.6, "balanced": 1.2, "aggressive": 2.0}
-        for u in users:
-            try:
-                user_id = u.get("id")
-                if not user_id:
-                    fanout_errors.append("user row missing id")
-                    continue
-                bal = _safe_float(u.get("last_balance"), 1000.0)
-                if master_lots > 0 and master_bal > 0:
-                    # STRICT MIRROR — exact copy when balances match, scaled when they differ.
-                    lots = max(0.01, round((bal / master_bal) * master_lots, 2))
-                else:
-                    # Legacy fallback for old EAs that don't ship master_lots.
-                    rpct = risk_map.get(u.get("risk_tier","balanced"), 1.2)
-                    slDist = abs(_safe_float(req.entry) - _safe_float(req.sl))
-                    if slDist <= 0:
-                        fanout_errors.append(f"{user_id}: zero SL distance")
-                        continue
-                    riskUSD = bal * rpct / 100
-                    lots = max(0.01, round(riskUSD / (slDist * 100), 2))
-                trade = {"id": str(uuid.uuid4()), "user_id": user_id, "signal_id": sig_id,
-                         "symbol": req.symbol, "side": req.side, "lots": lots,
-                         "entry": _safe_float(req.entry), "exit_price": 0, "profit": 0,
-                         "status": "shadow_open",
-                         "opened_at": now.isoformat(), "closed_at": None,
-                         "shadow": True, "grade": req.grade}
-                await db.cloud_shadow_trades.insert_one(trade.copy())
-                fanout += 1
-            except Exception as e:
-                fanout_errors.append(f"{u.get('id','unknown')}: {type(e).__name__}: {e}")
-                logger.exception("[cloud-master-signal] shadow fanout failed for signal %s user=%s", sig_id, u.get("id"))
-    return {"ok": True, "signal_id": sig_id, "shadow": shadow, "fanout_users": fanout,
-            "fanout_errors": fanout_errors[:10]}
-
-class MasterSignalCloseReq(BaseModel):
-    signal_id: str
-    exit_price: float
-    reason: Optional[str] = ""
-
-class MasterSignalPartialReq(BaseModel):
-    signal_id: str
-    exit_price: float
-    close_percent: float = 50.0
-    reason: Optional[str] = ""
-
-@api_router.post("/cloud/master/signal-close")
-async def cloud_master_close(req: MasterSignalCloseReq, request: Request):
-    await _require_agent_async(request)
-    sig = await db.cloud_signals.find_one({"id": req.signal_id}, {"_id": 0})
-    if not sig: raise HTTPException(status_code=404, detail="Signal not found")
-    now = datetime.now(timezone.utc)
-    # v1.4.7 — UPDATE cloud_signals FIRST. This is the single source of truth
-    # for "is the master signal closed?". The worker's reconciler reads this,
-    # the orphan-detector reads this, the closed-signals feed reads this.
-    # Previously we only touched shadow_trades, which led to disappearing
-    # closes if no shadow row existed (race A: close before fan-out).
-    await db.cloud_signals.update_one(
-        {"id": req.signal_id},
-        {"$set": {"closed_at": now.isoformat(),
-                  "exit_price": req.exit_price,
-                  "close_reason": req.reason or ""}}
-    )
-    # Close all shadow trades attached to this signal
-    trades = await db.cloud_shadow_trades.find({"signal_id": req.signal_id, "status": "shadow_open"},
-                                               {"_id": 0}).to_list(5000)
-    closed = 0
-    for t in trades:
-        # P&L math: (exit - entry) for buy, (entry - exit) for sell; $100/lot/pt (XAUUSD)
-        diff = (req.exit_price - t["entry"]) if t["side"].upper() == "BUY" else (t["entry"] - req.exit_price)
-        profit = round(diff * t["lots"] * 100, 2)
-        await db.cloud_shadow_trades.update_one({"id": t["id"]},
-            {"$set": {"status": "shadow_closed", "exit_price": req.exit_price,
-                      "profit": profit, "closed_at": now.isoformat(), "reason": req.reason}})
-        # ALSO write into cloud_trades so the user dashboard shows it
-        doc = dict(t); doc["id"] = str(uuid.uuid4()); doc["exit_price"] = req.exit_price
-        doc["profit"] = profit; doc["closed_at"] = now.isoformat(); doc["reason"] = req.reason or "Shadow close"
-        await db.cloud_trades.insert_one(doc)
-        closed += 1
-    return {"ok": True, "closed": closed, "signal_marked_closed": True}
-
-@api_router.post("/cloud/master/signal-partial")
-async def cloud_master_partial(req: MasterSignalPartialReq, request: Request):
-    await _require_agent_async(request)
-    sig = await db.cloud_signals.find_one({"id": req.signal_id}, {"_id": 0})
-    if not sig:
-        raise HTTPException(status_code=404, detail="Signal not found")
-    pct = max(1.0, min(float(req.close_percent or 0.0), 99.0))
-    now = datetime.now(timezone.utc)
-    event = {
-        "id": str(uuid.uuid4()),
-        "signal_id": req.signal_id,
-        "exit_price": float(req.exit_price or 0.0),
-        "close_percent": pct,
-        "reason": req.reason or "master partial close",
-        "ts": now.isoformat(),
-    }
-    await db.cloud_signal_partials.insert_one(event.copy())
-    await db.cloud_signals.update_one(
-        {"id": req.signal_id},
-        {"$set": {"last_partial_at": now.isoformat(), "last_partial_percent": pct,
-                  "last_partial_exit_price": float(req.exit_price or 0.0)}}
-    )
-    return {"ok": True, "partial_id": event["id"], "signal_id": req.signal_id, "close_percent": pct}
-
-# Master heartbeat (so admin can see if the master EA is alive even without signals)
-@api_router.post("/cloud/master/heartbeat")
-async def cloud_master_heartbeat(request: Request):
-    await _require_agent_async(request)
-    await db.cloud_settings.update_one({"key": "main"},
-        {"$set": {"master_last_heartbeat": datetime.now(timezone.utc).isoformat(),
-                  "master_ea_status": "online"}}, upsert=True)
-    return {"ok": True}
-
-# v5.1.8 — Bot trading-mode preset (admin switcher).
-# Master EA polls /cloud/master/config every minute; admin can change which mode
-# is active from the admin panel without touching MT5 inputs.
-BOT_MODE_PRESETS = {
-    "conservative": {
-        "label": "Conservative",
-        "description": "Fewer but cleaner trades. Higher win-rate, smaller drawdowns. Best for quiet markets or after losses.",
-        "gradeB": 3.0,
-        "scoreFloor": 0.55,
-        "contextTF": 16388,      # PERIOD_H4 (MQL5 enum value)
-        "useHTFBias": True,
-        "adaptiveTighten": True,
-    },
-    "balanced": {
-        "label": "Balanced",
-        "description": "Default mode. M30 trend alignment, mid-range score threshold. Today's v5.1.7 baseline.",
-        "gradeB": 2.5,
-        "scoreFloor": 0.65,
-        "contextTF": 30,         # PERIOD_M30
-        "useHTFBias": True,
-        "adaptiveTighten": False,
-    },
-    "aggressive": {
-        "label": "Aggressive",
-        "description": "Trade more often. Lower threshold, no HTF alignment required. Best for trending sessions.",
-        "gradeB": 2.0,
-        "scoreFloor": 0.75,
-        "contextTF": 30,
-        "useHTFBias": False,
-        "adaptiveTighten": False,
-    },
-}
-
-class BotModeReq(BaseModel):
-    mode: str  # conservative | balanced | aggressive
-
-@api_router.get("/admin/cloud/bot-mode", dependencies=[Depends(get_current_admin)])
-async def admin_get_bot_mode():
-    s = await _get_cloud_settings()
-    current = s.get("bot_mode", "balanced")
-    return {"current": current, "presets": BOT_MODE_PRESETS,
-            "set_at": s.get("bot_mode_set_at", "")}
-
-@api_router.post("/admin/cloud/bot-mode", dependencies=[Depends(get_current_admin)])
-async def admin_set_bot_mode(req: BotModeReq):
-    if req.mode not in BOT_MODE_PRESETS:
-        raise HTTPException(status_code=400, detail=f"Unknown mode '{req.mode}'. Valid: {list(BOT_MODE_PRESETS)}")
-    await db.cloud_settings.update_one({"key": "main"},
-        {"$set": {"bot_mode": req.mode,
-                  "bot_mode_set_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
-    return {"ok": True, "mode": req.mode, "preset": BOT_MODE_PRESETS[req.mode]}
-
-# Master EA polls this every ~60s to pick up admin-changed mode without restart.
-@api_router.get("/cloud/master/config")
-async def cloud_master_config(request: Request):
-    await _require_agent_async(request)
-    s = await _get_cloud_settings()
-    mode = s.get("bot_mode", "balanced")
-    preset = BOT_MODE_PRESETS.get(mode, BOT_MODE_PRESETS["balanced"])
-    return {"mode": mode, "preset": preset,
-            "set_at": s.get("bot_mode_set_at", "")}
-
-# v5.1.5 — Bot Reasoning feed: master EA pushes "TRADE BLOCKED BECAUSE …" /
-# "FIRED BUY/SELL …" events here so cloud subscribers can see live why their
-# copy account is or isn't trading. Capped at 500 rows (TTL-style trim on insert).
-class MasterReasoningReq(BaseModel):
-    event_type: str             # "BLOCK" | "FIRE"
-    reason: str
-    regime: Optional[str] = ""
-    setup: Optional[str] = ""
-    setup_score: Optional[float] = 0.0
-    combined_score: Optional[float] = 0.0
-    grade: Optional[str] = ""
-    signal_dir: Optional[int] = 0
-    severity: Optional[str] = ""
+# v6.25.3 owner directive 2026-07-17 (Phase 5 P0) -- retired copy-trading
+# bot-mode presets (master EA trading-mode control) + master reasoning feed
+# model removed. See backend/migrations/0001_delete_copy_trading.py.
 
 class BotHeartbeatReq(BaseModel):
     pin: Optional[str] = ""
@@ -5269,6 +5356,16 @@ class BotActivityReq(BaseModel):
     market_thesis: Optional[Dict[str, Any]] = None
     post_trade_state: Optional[Dict[str, Any]] = None
     entry_readiness: Optional[Dict[str, Any]] = None
+    # v6.25.0 — M10 Intelligent Signal Engine evidence/decision block. Same
+    # "add the field or Pydantic silently drops it" lesson as the three
+    # above — this is what lets the Command Center show the EA's own real
+    # M10 buy/sell case scores instead of nothing.
+    m10_signal: Optional[Dict[str, Any]] = None
+    # v6.25.5 — M30 three-M10-evidence consensus mode transparency (mode_active,
+    # decision_mode, the three most recent stored M10 evidence records, and the
+    # current slot's consensus decision). Same "add the field or Pydantic
+    # silently drops it" lesson as m10_signal/market_thesis above.
+    m30_consensus: Optional[Dict[str, Any]] = None
 
 # v6.9.0 — purpose-built payload for XAU_LogTradeThesisStatus's cloud post.
 # Kept separate from BotActivityReq's generic event schema since this is a
@@ -5518,7 +5615,11 @@ def _ai_classify_card_type(ev: dict) -> str:
     final_allowed = ev.get("final_execution_allowed")
     allowed = ev.get("allowed")
     ticket = str(ev.get("ticket") or "").strip()
-    if event_type == "M5_DECISION":
+    # v6.25.1 owner directive 2026-07-17 -- renamed from "M5_DECISION" on the
+    # EA side (timeframe identity must not live inside the event name;
+    # primary_timeframe is a separate field now). Both names are accepted
+    # here so already-queued/cached legacy events still classify correctly.
+    if event_type in ("PRIMARY_DECISION", "M5_DECISION"):
         if final_decision in {"EXECUTED", "FILLED"} or final_allowed is True:
             return "TRADE_EXECUTED"
         if final_decision == "BLOCKED" or final_allowed is False and str(ev.get("candidate_allowed") or "").lower() != "true":
@@ -5758,27 +5859,9 @@ def _ai_would_enter_again(latest_card: dict) -> dict:
         return {"answer": "WAIT", "reason": why + "; wait for a clearer read before acting."}
     return {"answer": "YES", "reason": "Thesis still holds at current confidence."}
 
-@api_router.post("/cloud/master/reasoning")
-async def cloud_master_reasoning(req: MasterReasoningReq, request: Request):
-    await _require_agent_async(request)
-    try:
-        doc = req.model_dump()
-        doc["id"] = str(uuid.uuid4())
-        doc["ts"] = datetime.now(timezone.utc).isoformat()
-        await db.cloud_reasoning.insert_one(doc.copy())
-        sev = (req.severity or _monitor_severity(req.event_type, req.reason)).upper()
-        await _store_bot_activity(req.event_type, sev, req.reason,
-                                  symbol="", details=doc)
-        # keep only the most recent 500 events to bound storage
-        total = await db.cloud_reasoning.estimated_document_count()
-        if total > 600:
-            oldest = await db.cloud_reasoning.find({}, {"_id": 1, "ts": 1}).sort("ts", 1).to_list(total - 500)
-            if oldest:
-                await db.cloud_reasoning.delete_many({"_id": {"$in": [o["_id"] for o in oldest]}})
-        return {"ok": True}
-    except Exception as e:
-        logger.exception("[cloud-master-reasoning] failed")
-        raise HTTPException(status_code=500, detail=f"reasoning store failed: {type(e).__name__}: {e}")
+# v6.25.3 owner directive 2026-07-17 (Phase 5 P0) -- retired /cloud/master/reasoning
+# (copy-trading master EA "why blocked/fired" feed, cloud_reasoning collection).
+# See backend/migrations/0001_delete_copy_trading.py.
 
 @api_router.post("/cloud/monitor/heartbeat")
 async def cloud_monitor_heartbeat(req: BotHeartbeatReq, request: Request):
@@ -5861,7 +5944,8 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
         "position_direction", "candidate_allowed", "final_execution_allowed",
         "final_decision", "final_blocker", "open_trade_called", "trade_buy_called",
         "trade_sell_called", "broker_retcode", "broker_error", "pipeline_stage",
-        "market_thesis", "post_trade_state", "entry_readiness",
+        "market_thesis", "post_trade_state", "entry_readiness", "m10_signal",
+        "m30_consensus",
     ):
         value = getattr(req, field, None)
         if value is not None and value != "":
@@ -5876,7 +5960,472 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
         "monitor_last_activity_at": doc["ts"],
         "monitor_last_activity": doc,
     }}, upsert=True)
+    # Push dispatch is observational and isolated from the EA response. Only
+    # broker-confirmed trade lifecycle events pass the notification classifier.
+    async def _dispatch_activity_push_event():
+        try:
+            from notifications import send_trade_activity_notification
+            await send_trade_activity_notification(doc)
+        except Exception as exc:
+            logger.warning(f"[activity-push] account={req.account} event={req.event_type} error={exc}")
+    asyncio.create_task(_dispatch_activity_push_event())
+
+    # Signal Outlook monitoring consumes the same immutable broker Bid/Ask
+    # snapshot already posted by the EA. A fresh explicit M10 candidate is
+    # published immediately with a deterministic bar-level key; the ordinary
+    # hourly informational publisher remains as the fallback cadence.
+    import market_outlook as _outlook_quote_mapper
+    normalized_quote = _outlook_quote_mapper.extract_evidence_quote_from_details(details, doc["ts"])
+    quote_bid = float(normalized_quote.get("bid") or 0.0)
+    quote_ask = float(normalized_quote.get("ask") or 0.0)
+    if quote_bid > 0.0 and quote_ask >= quote_bid and (req.account or ""):
+        async def _monitor_outlook_quote_event():
+            try:
+                import market_outlook as _mo
+                await _mo.track_outlook_lifecycle_tick(
+                    account=req.account or "", bid=quote_bid, ask=quote_ask, quote_at=doc["ts"])
+                m10_signal = details.get("m10_signal") or {}
+                m10_decision = str(m10_signal.get("decision") or m10_signal.get("final_decision") or "").upper()
+                if m10_decision in {"BUY_CANDIDATE", "SELL_CANDIDATE", "ALLOW_CORE"}:
+                    await _mo.publish_m10_signal_from_activity(
+                        license_key=license_key,
+                        account=req.account or "",
+                        source_event_id=doc["id"],
+                    )
+                await _mo.hourly_generation_tick(account=req.account or "")
+            except Exception as exc:
+                logger.warning(f"[outlook-event-monitor] account={req.account} error={exc}")
+        asyncio.create_task(_monitor_outlook_quote_event())
     return {"ok": True, "event_id": doc["id"]}
+
+# v6.25.1 owner directive 2026-07-17 -- CROSS-INSTANCE ATOMIC DIRECTION
+# RESERVATION. The EA's own GlobalVariableSetOnCondition-based lock
+# (XAU_TryClaimEntryLock) only protects two chart instances WITHIN THE SAME
+# terminal -- MT5 global variables are per-terminal, not shared across
+# machines. Mac and VPS are two entirely separate terminal installations
+# with no shared memory, so that lock cannot prevent them from racing each
+# other. This is the real shared coordination point: both terminals already
+# call this backend for heartbeat/activity, so it is the only place true
+# cross-machine atomicity is possible. Atomicity is enforced by MongoDB's
+# unique _id constraint on the reservation key (broker_server:account:symbol)
+# -- see the DuplicateKeyError handling below, not a read-then-write race.
+class DirectionReservationClaimReq(BaseModel):
+    pin: Optional[str] = ""
+    license_key: Optional[str] = ""
+    broker_server: str = ""
+    account: str = ""
+    symbol: str = ""
+    direction: int = 0  # 1=BUY, -1=SELL
+    requesting_family: str = ""
+    # Immutable identity of the exact execution opportunity. Even a repeat
+    # request for the same key is blocked while the first claim is live:
+    # otherwise two terminals evaluating one candidate can both send it.
+    execution_key: str = ""
+    terminal_identity: str = ""
+    ttl_seconds: Optional[int] = 30
+
+class DirectionReservationReleaseReq(BaseModel):
+    pin: Optional[str] = ""
+    license_key: Optional[str] = ""
+    broker_server: str = ""
+    account: str = ""
+    symbol: str = ""
+    reservation_id: str = ""
+
+def _reservation_key(broker_server: str, account: str, symbol: str) -> str:
+    return f"{(broker_server or '').strip()}:{(account or '').strip()}:{(symbol or '').strip()}"
+
+_RESERVATION_VALID_SYMBOLS = {"XAUUSD", "XAUUSDm", "XAUUSD.", "GOLD"}
+
+@api_router.post("/cloud/reservation/claim")
+async def cloud_reservation_claim(req: DirectionReservationClaimReq, request: Request):
+    """Atomically claim the requested direction for this broker_server+account+
+    symbol. Succeeds only if no reservation exists or the prior reservation
+    has expired. Every unexpired claim blocks every subsequent claimant,
+    including the same direction and the same execution key. There is no
+    claim renewal operation: a second success could authorize a second
+    terminal to send the same real-money order.
+
+    v6.25.2 owner directive 2026-07-17 -- SECURITY FIX. This endpoint used to
+    accept pin/license_key/broker_server/account/symbol WITHOUT ever
+    validating them: any unauthenticated caller who could guess or observe a
+    real broker_server+account+symbol combination (not secret -- it appears
+    in Command Center URLs and log lines) could claim a direction and block
+    the real bot from trading, indefinitely, just by renewing before TTL
+    expiry. Now authenticated the exact same way every other EA-facing
+    endpoint in this file is (_resolve_monitor_license -- the existing
+    canonical helper, no second auth system): the PIN must resolve to an
+    active license, and if that license is already bound to an MT5 account,
+    the requested account must match it. An outsider without a valid,
+    active, correctly-bound license PIN can no longer claim or block
+    anything here."""
+    if req.direction not in (1, -1):
+        raise HTTPException(status_code=400, detail="direction must be 1 or -1")
+    key = _reservation_key(req.broker_server, req.account, req.symbol)
+    if not req.broker_server or not req.account or not req.symbol:
+        raise HTTPException(status_code=400, detail="broker_server, account, and symbol are required")
+    if req.symbol.upper() not in {s.upper() for s in _RESERVATION_VALID_SYMBOLS}:
+        logger.warning("[reservation-claim] reject invalid symbol=%s account=%s", req.symbol, req.account)
+        raise HTTPException(status_code=400, detail={"ok": False, "reason": "INVALID_SYMBOL", "symbol": req.symbol})
+    lic = await _resolve_monitor_license(req.pin or req.license_key, req.account, request)
+    execution_key = (req.execution_key or "").strip()
+    if not execution_key or len(execution_key) > 240:
+        raise HTTPException(status_code=400, detail="execution_key is required and must be at most 240 characters")
+    now = datetime.now(timezone.utc)
+    ttl = max(5, min(int(req.ttl_seconds or 30), 120))
+    expires_at = now + timedelta(seconds=ttl)
+    reservation_id = str(uuid.uuid4())
+    try:
+        await db.cloud_direction_reservations.find_one_and_update(
+            {"_id": key, "expiresAt": {"$lte": now.isoformat()}},
+            {"$set": {
+                "direction": req.direction,
+                "requestingFamily": req.requesting_family,
+                "executionKey": execution_key,
+                "reservationId": reservation_id,
+                "createdAt": now.isoformat(),
+                "expiresAt": expires_at.isoformat(),
+                "terminalIdentity": req.terminal_identity,
+                "brokerServer": req.broker_server,
+                "account": req.account,
+                "symbol": req.symbol,
+                # v6.25.2 owner directive -- ownership identity, so release
+                # can verify the releasing caller's license genuinely owns
+                # this reservation, not just knows the right reservationId.
+                "licenseId": lic.get("id", ""),
+            }},
+            upsert=True,
+        )
+        logger.info("[reservation-claim] key=%s direction=%s family=%s reservationId=%s CLAIMED",
+                    key, req.direction, req.requesting_family, reservation_id)
+        return {"claimed": True, "reservationId": reservation_id, "expiresAt": expires_at.isoformat()}
+    except DuplicateKeyError:
+        existing = await db.cloud_direction_reservations.find_one({"_id": key}, {"_id": 0})
+        logger.info("[reservation-claim] key=%s direction=%s family=%s BLOCKED existing=%s",
+                    key, req.direction, req.requesting_family, existing)
+        return {
+            "claimed": False,
+            "reason": "ACTIVE_EXECUTION_RESERVED",
+            "existingDirection": existing.get("direction") if existing else None,
+            "existingFamily": existing.get("requestingFamily") if existing else None,
+            "existingTerminal": existing.get("terminalIdentity") if existing else None,
+            "sameExecution": bool(existing and existing.get("executionKey") == execution_key),
+        }
+
+@api_router.post("/cloud/reservation/release")
+async def cloud_reservation_release(req: DirectionReservationReleaseReq, request: Request):
+    """Release (or let expire) a reservation this exact call claimed. Only
+    releases if reservation_id matches -- a stale/foreign release request can
+    never clear another instance's active claim.
+
+    v6.25.2 owner directive 2026-07-17 -- SECURITY FIX, same as claim: an
+    unauthenticated caller who merely observed a reservationId (not secret
+    -- it is returned in the claim response and appears in logs) could
+    previously release someone else's active reservation outright, clearing
+    the real bot's direction lock. Now requires the same authenticated,
+    account-bound license as claim, AND the resolved license must be the
+    SAME one (licenseId) that originally claimed this reservation -- a
+    correctly-authenticated but foreign license cannot clear another
+    license's reservation just by knowing its reservationId."""
+    lic = await _resolve_monitor_license(req.pin or req.license_key, req.account, request)
+    key = _reservation_key(req.broker_server, req.account, req.symbol)
+    result = await db.cloud_direction_reservations.delete_one(
+        {"_id": key, "reservationId": req.reservation_id, "licenseId": lic.get("id", "")})
+    released = result.deleted_count > 0
+    if not released:
+        # Distinguish "nothing to release" (already expired/never existed)
+        # from "a real reservation exists here but this caller doesn't own
+        # it" -- the latter must never silently succeed.
+        foreign = await db.cloud_direction_reservations.find_one(
+            {"_id": key, "reservationId": req.reservation_id}, {"_id": 0, "licenseId": 1})
+        if foreign is not None:
+            logger.warning("[reservation-release] key=%s reservationId=%s REJECTED foreign release attempt by licenseId=%s (owner=%s)",
+                            key, req.reservation_id, lic.get("id", ""), foreign.get("licenseId", ""))
+    logger.info("[reservation-release] key=%s reservationId=%s licenseId=%s released=%s", key, req.reservation_id, lic.get("id", ""), released)
+    return {"released": released}
+
+########################################
+# BOUNDED OFFLINE TRADING LEASE
+########################################
+# See audits/offline_lease/ for the full design. This does not replace
+# the reservation system above -- it is a fallback used by the EA only
+# when a genuine temporary connectivity failure prevents reaching
+# /cloud/reservation/claim at all (never on an explicit deny/auth/
+# validation failure). The backend remains the sole authoritative
+# cross-device duplicate-prevention system whenever it is reachable.
+
+class LeaseRequestReq(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    pin: str = ""
+    license_key: Optional[str] = ""
+    account: str = ""
+    broker_server: str = ""
+    symbol: str = ""
+    installation_id: str = ""
+    terminal_instance_id: str = ""
+    allowed_directions: List[int] = [1, -1]
+    allowed_entry_families: List[str] = ["CORE"]
+
+class LeaseSurrenderReq(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    pin: str = ""
+    license_key: Optional[str] = ""
+    account: str = ""
+    broker_server: str = ""
+    symbol: str = ""
+    installation_id: str = ""
+    terminal_instance_id: str = ""
+    lease_id: str = ""
+
+class LeaseReconcileEvent(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    execution_key: str
+    lease_id: str
+    lease_sequence: int
+    candidate_evidence_id: str = ""
+    opportunity_id: str = ""
+    direction: int
+    entry_family: str = "CORE"
+    broker_order_id: str = ""
+    broker_deal_id: str = ""
+    broker_position_id: str = ""
+    broker_ticket: int = 0
+    result: str = "CONFIRMED"  # CONFIRMED | AMBIGUOUS | REJECTED
+    executed_at: str = ""
+
+class LeaseReconcileReq(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    pin: str = ""
+    license_key: Optional[str] = ""
+    account: str = ""
+    broker_server: str = ""
+    symbol: str = ""
+    installation_id: str = ""
+    terminal_instance_id: str = ""
+    events: List[LeaseReconcileEvent] = []
+
+
+def _lease_authority_key(license_id: str, account: str, broker_server: str, symbol: str) -> str:
+    return f"{license_id}:{(broker_server or '').strip()}:{(account or '').strip()}:{(symbol or '').strip().upper()}"
+
+
+def get_lease_config() -> dict:
+    return {
+        "validity_seconds": int(os.environ.get("XAUCLOUD_LEASE_VALIDITY_SECONDS", "900")),
+        "renewal_seconds_before_expiry": int(os.environ.get("XAUCLOUD_LEASE_RENEWAL_SECONDS", "300")),
+        "max_offline_campaigns": int(os.environ.get("XAUCLOUD_LEASE_MAX_OFFLINE_CAMPAIGNS", "1")),
+    }
+
+
+async def _issue_lease(lic: dict, req_account: str, req_broker_server: str, req_symbol: str,
+                        installation_id: str, terminal_instance_id: str,
+                        allowed_directions: List[int], allowed_entry_families: List[str],
+                        is_renewal: bool) -> dict:
+    """Shared atomic issue/renew logic for /lease/request and /lease/renew.
+    Enforces: only one non-expired, non-surrendered primary terminal per
+    (license, account, server, symbol) at a time. A different terminal
+    cannot receive a new lease for the same key until the current one has
+    expired or been explicitly surrendered -- enforced by the MongoDB
+    filter itself (the compare-and-swap), never only checked in Python
+    after a plain read."""
+    if not installation_id or not terminal_instance_id:
+        raise HTTPException(status_code=400, detail="installation_id and terminal_instance_id are required")
+    symbol_norm = (req_symbol or "").strip().upper()
+    if symbol_norm not in {s.upper() for s in _RESERVATION_VALID_SYMBOLS}:
+        raise HTTPException(status_code=400, detail={"ok": False, "reason": "INVALID_SYMBOL", "symbol": req_symbol})
+
+    cfg = get_lease_config()
+    key = _lease_authority_key(lic.get("id", ""), req_account, req_broker_server, symbol_norm)
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    existing = await db.lease_terminal_authority.find_one({"_id": key})
+    if existing:
+        holder_terminal = existing.get("holder_terminal_id", "")
+        holder_expired = existing.get("lease_expires_at", "") <= now_iso
+        surrendered = existing.get("surrendered", False)
+        if holder_terminal != terminal_instance_id and not holder_expired and not surrendered:
+            raise HTTPException(status_code=403, detail={
+                "ok": False,
+                "reason": "PRIMARY_TERMINAL_ALREADY_ASSIGNED",
+                "message": "Another terminal already holds an active offline lease for this account/symbol.",
+                "holder_terminal_id": holder_terminal,
+                "lease_expires_at": existing.get("lease_expires_at"),
+            })
+        if is_renewal and holder_terminal != terminal_instance_id:
+            raise HTTPException(status_code=403, detail={
+                "ok": False,
+                "reason": "NOT_CURRENT_HOLDER",
+                "message": "Only the current primary terminal may renew this lease.",
+            })
+
+    try:
+        signing_key = lease_service.load_signing_key()
+    except lease_service.LeaseCryptoNotConfigured as e:
+        logger.error(f"[lease] signing key not configured: {e}")
+        raise HTTPException(status_code=503, detail="Lease signing is not configured on this server.")
+
+    next_sequence = int((existing or {}).get("lease_sequence", 0)) + 1
+    revocation_epoch = int((existing or {}).get("revocation_epoch", 1))
+    lease_id = str(uuid.uuid4())
+    expires_at = now + timedelta(seconds=cfg["validity_seconds"])
+    renewal_after = expires_at - timedelta(seconds=cfg["renewal_seconds_before_expiry"])
+
+    lease_fields = {
+        "schema_version": lease_service.LEASE_SCHEMA_VERSION,
+        "lease_id": lease_id,
+        "key_id": signing_key.key_id,
+        "tenant_id": lic.get("id", ""),
+        "license_id": lic.get("id", ""),
+        "account_login": req_account,
+        "account_server": req_broker_server,
+        "installation_id": installation_id,
+        "terminal_instance_id": terminal_instance_id,
+        "normalized_symbol": symbol_norm,
+        "allowed_directions": allowed_directions,
+        "allowed_entry_families": allowed_entry_families,
+        "issued_at_unix": int(now.timestamp()),
+        "not_before_unix": int(now.timestamp()),
+        "expires_at_unix": int(expires_at.timestamp()),
+        "renewal_after_unix": int(renewal_after.timestamp()),
+        "maximum_offline_new_campaigns": cfg["max_offline_campaigns"],
+        "remaining_offline_new_campaigns": cfg["max_offline_campaigns"],
+        "lease_sequence": next_sequence,
+        "revocation_epoch": revocation_epoch,
+        "nonce": lease_service.new_nonce(),
+    }
+    signature_hex = lease_service.sign_lease(signing_key, lease_fields)
+
+    # Atomic compare-and-swap: the filter re-requires the same holder
+    # condition checked above, at write time, so two concurrent requests
+    # from two different terminals can never both win this update.
+    filter_query = {
+        "_id": key,
+        "$or": [
+            {"holder_terminal_id": {"$exists": False}},
+            {"holder_terminal_id": terminal_instance_id},
+            {"lease_expires_at": {"$lte": now_iso}},
+            {"surrendered": True},
+        ],
+    }
+    update_result = await db.lease_terminal_authority.find_one_and_update(
+        filter_query,
+        {"$set": {
+            "holder_terminal_id": terminal_instance_id,
+            "holder_installation_id": installation_id,
+            "lease_sequence": next_sequence,
+            "revocation_epoch": revocation_epoch,
+            "current_lease_id": lease_id,
+            "lease_expires_at": expires_at.isoformat(),
+            "surrendered": False,
+            "updated_at": now_iso,
+        }},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    if update_result is None or update_result.get("current_lease_id") != lease_id:
+        # Lost a genuine race against another concurrent request -- fail
+        # closed rather than hand out a lease that isn't actually authoritative.
+        raise HTTPException(status_code=409, detail={"ok": False, "reason": "CONCURRENT_LEASE_ASSIGNMENT", "message": "Lease assignment raced with another request; retry."})
+
+    lease_doc = dict(lease_fields)
+    lease_doc["signature_algorithm"] = lease_service.LEASE_ALGORITHM_ID
+    lease_doc["detached_signature"] = signature_hex
+    lease_doc["_history_id"] = str(uuid.uuid4())
+    lease_doc["recorded_at"] = now_iso
+    # Display-only ISO strings for the admin UI -- NOT part of the signed
+    # canonical payload (that uses the *_unix integer fields above, which
+    # MQL5 can parse unambiguously). Never used by the EA's own logic.
+    lease_doc["issued_at_iso"] = now_iso
+    lease_doc["expires_at_iso"] = expires_at.isoformat()
+    lease_doc["renewal_after_iso"] = renewal_after.isoformat()
+    await db.lease_documents.insert_one(dict(lease_doc))
+    lease_doc.pop("_id", None)
+    logger.info(f"LEASE_ISSUED key={key} lease_id={lease_id} sequence={next_sequence} terminal={terminal_instance_id} renewal={is_renewal}")
+    return lease_doc
+
+
+@api_router.post("/cloud/lease/request")
+async def cloud_lease_request(req: LeaseRequestReq, request: Request):
+    lic = await _resolve_monitor_license(req.pin or req.license_key, req.account, request)
+    lease_doc = await _issue_lease(lic, req.account, req.broker_server, req.symbol,
+                                    req.installation_id, req.terminal_instance_id,
+                                    req.allowed_directions, req.allowed_entry_families, is_renewal=False)
+    return {"issued": True, "lease": lease_doc}
+
+
+@api_router.post("/cloud/lease/renew")
+async def cloud_lease_renew(req: LeaseRequestReq, request: Request):
+    lic = await _resolve_monitor_license(req.pin or req.license_key, req.account, request)
+    lease_doc = await _issue_lease(lic, req.account, req.broker_server, req.symbol,
+                                    req.installation_id, req.terminal_instance_id,
+                                    req.allowed_directions, req.allowed_entry_families, is_renewal=True)
+    return {"issued": True, "lease": lease_doc}
+
+
+@api_router.post("/cloud/lease/surrender")
+async def cloud_lease_surrender(req: LeaseSurrenderReq, request: Request):
+    lic = await _resolve_monitor_license(req.pin or req.license_key, req.account, request)
+    key = _lease_authority_key(lic.get("id", ""), req.account, req.broker_server, req.symbol)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    result = await db.lease_terminal_authority.update_one(
+        {"_id": key, "holder_terminal_id": req.terminal_instance_id, "current_lease_id": req.lease_id},
+        {"$set": {"surrendered": True, "updated_at": now_iso}},
+    )
+    surrendered = result.modified_count > 0
+    logger.info(f"LEASE_SURRENDER key={key} lease_id={req.lease_id} terminal={req.terminal_instance_id} surrendered={surrendered}")
+    return {"surrendered": surrendered}
+
+
+@api_router.get("/cloud/lease/status")
+async def cloud_lease_status(pin: str = "", account: str = "", broker_server: str = "", symbol: str = "", request: Request = None):
+    lic = await _resolve_monitor_license(pin, account, request)
+    key = _lease_authority_key(lic.get("id", ""), account, broker_server, symbol)
+    authority = await db.lease_terminal_authority.find_one({"_id": key}, {"_id": 0})
+    if not authority:
+        return {"has_authority_record": False}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    return {
+        "has_authority_record": True,
+        "holder_terminal_id": authority.get("holder_terminal_id"),
+        "lease_sequence": authority.get("lease_sequence"),
+        "lease_expires_at": authority.get("lease_expires_at"),
+        "is_expired": authority.get("lease_expires_at", "") <= now_iso,
+        "surrendered": authority.get("surrendered", False),
+        "revocation_epoch": authority.get("revocation_epoch"),
+    }
+
+
+@api_router.post("/cloud/lease/reconcile")
+async def cloud_lease_reconcile(req: LeaseReconcileReq, request: Request):
+    """Idempotent -- each event's execution_key is unique-indexed in
+    lease_offline_events; reconciling the same event twice (retry, two
+    terminals, replayed upload) is a no-op on the second+ attempt, never a
+    second position/duplicate record. Never creates a trade -- this only
+    records that an offline execution already happened (or may have
+    happened) so the backend's own view of history is complete; the real
+    trade record comes from the EA's normal /journal/log path."""
+    lic = await _resolve_monitor_license(req.pin or req.license_key, req.account, request)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    results = []
+    for ev in req.events:
+        doc = ev.model_dump()
+        doc["_id"] = ev.execution_key
+        doc["license_id"] = lic.get("id", "")
+        doc["account"] = req.account
+        doc["broker_server"] = req.broker_server
+        doc["symbol"] = req.symbol
+        doc["installation_id"] = req.installation_id
+        doc["terminal_instance_id"] = req.terminal_instance_id
+        doc["reconciled_at"] = now_iso
+        try:
+            await db.lease_offline_events.insert_one(doc)
+            results.append({"execution_key": ev.execution_key, "status": "reconciled"})
+            logger.info(f"LEASE_RECONCILE_NEW execution_key={ev.execution_key} lease_id={ev.lease_id} result={ev.result}")
+        except DuplicateKeyError:
+            results.append({"execution_key": ev.execution_key, "status": "already_reconciled"})
+    return {"reconciled": True, "events": results}
+
 
 @api_router.post("/cloud/monitor/thesis-status")
 async def cloud_monitor_thesis_status(req: TradeThesisStatusReq, request: Request):
@@ -5898,6 +6447,10 @@ async def cloud_monitor_thesis_status(req: TradeThesisStatusReq, request: Reques
 
 @api_router.post("/cloud/command/request")
 async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_cloud_user)):
+    # Rate-limited per user -- a compromised/malicious Command Center session
+    # should not be able to flood the EA's command queue (e.g. FORCE_CLOSE_TRADE
+    # spam) or brute-force the license PIN check inside _verify_command_license.
+    _rate_limit(f"command_request_user:{user['id']}", max_requests=20, window_seconds=300)
     action = str(req.action or "").upper().strip()
     if action not in SAFE_REMOTE_COMMANDS:
         raise HTTPException(status_code=400, detail="Unsupported Command Center action.")
@@ -5915,6 +6468,17 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
         payload = _normalize_manual_open_now_payload(payload)
     elif action == "FORCE_CLOSE_TRADE":
         payload = _normalize_force_close_payload(payload)
+
+    # v6.25.6 XAU-027 -- tenant-scoped idempotency. dedupe_key is unique per
+    # (user, action, client-supplied key); a client retry of the exact same
+    # confirm-click reuses the same idempotency_key and therefore hits the
+    # DuplicateKeyError branch below instead of queuing a second command.
+    # When the client omits idempotency_key (older build), command_id itself
+    # is used so the key is still always unique -- this preserves current
+    # behavior (no dedup) for un-updated clients rather than erroring them
+    # out, a disclosed limitation rather than a silent one.
+    client_key = (req.idempotency_key or "").strip()[:120] or command_id
+    dedupe_key = f"{user['id']}:{action}:{client_key}"
     doc = {
         "id": command_id,
         "user_id": user["id"],
@@ -5930,8 +6494,22 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
         "ack_status": "",
         "ack_message": "",
         "ack_details": {},
+        "dedupe_key": dedupe_key,
     }
-    await db.cloud_bot_commands.insert_one(doc.copy())
+    try:
+        await db.cloud_bot_commands.insert_one(doc.copy())
+    except DuplicateKeyError:
+        existing = await db.cloud_bot_commands.find_one({"dedupe_key": dedupe_key}, {"_id": 0})
+        if existing:
+            logger.info("[command-request] dedupe_key=%s DUPLICATE existing_command_id=%s",
+                        dedupe_key, existing.get("id"))
+            return {"ok": True, "command_id": existing.get("id"), "status": existing.get("status"),
+                    "action": existing.get("action"), "duplicate": True}
+        # Genuinely impossible under normal operation (the unique index
+        # guarantees a matching doc exists), but fail closed rather than
+        # silently swallow an inconsistent state.
+        raise HTTPException(status_code=409, detail="Duplicate command request could not be reconciled.")
+
     if action == "UPDATE_PROP_FIRM_CONFIG":
         await db.pin_licenses.update_one(
             {"pin": lic.get("pin", ""), "is_active": True},
@@ -5947,7 +6525,7 @@ async def cloud_command_request(req: CloudCommandReq, user: dict = Depends(get_c
                               f"{SAFE_REMOTE_COMMANDS[action]} queued for EA acknowledgement",
                               account=lic.get("mt5_account", ""),
                               details={"command_id": command_id, "action": action, "user": user.get("email", ""), "license_key": lic.get("pin", "")})
-    return {"ok": True, "command_id": command_id, "status": "PENDING", "action": action}
+    return {"ok": True, "command_id": command_id, "status": "PENDING", "action": action, "duplicate": False}
 
 @api_router.get("/cloud/command/pending")
 async def cloud_command_pending(request: Request, limit: int = 5,
@@ -5983,13 +6561,47 @@ async def cloud_command_ack(req: CloudCommandAckReq, request: Request):
             "message": "This command belongs to a different license.",
             "command_id": req.command_id,
         })
-    await db.cloud_bot_commands.update_one({"id": req.command_id}, {"$set": {
-        "status": status,
-        "ack_at": now.isoformat(),
-        "ack_status": status,
-        "ack_message": str(req.message or "")[:400],
-        "ack_details": req.details or {},
-    }})
+
+    # v6.25.6 XAU-027 -- atomic conditional transition. The filter requires
+    # the command's CURRENT status (at the moment MongoDB applies this exact
+    # operation) to be in the allowed-source set for the requested target
+    # status; terminal statuses (EXECUTED/FAILED/SKIPPED/EXPIRED) are never
+    # in any allowed-source set, so they can never be overwritten -- by a
+    # late/replayed ack, a second EA instance racing the first, or an
+    # already-expired command's owner finally responding. Two concurrent
+    # requests attempting the same transition can both reach this line, but
+    # MongoDB applies find_one_and_update atomically per-document: only the
+    # first to actually commit sees its filter still match; the loser's
+    # filter no longer matches (status already changed) and it correctly
+    # falls into the "not applied" branch below instead of double-applying.
+    allowed_from = _COMMAND_ALLOWED_SOURCE_STATUSES.get(status, set())
+    updated = await db.cloud_bot_commands.find_one_and_update(
+        {"id": req.command_id, "status": {"$in": list(allowed_from)}},
+        {"$set": {
+            "status": status,
+            "ack_at": now.isoformat(),
+            "ack_status": status,
+            "ack_message": str(req.message or "")[:400],
+            "ack_details": req.details or {},
+        }},
+        return_document=ReturnDocument.AFTER,
+        projection={"_id": 0},
+    )
+    if updated is None:
+        # Either the status transition is disallowed from wherever the
+        # command currently sits (most commonly: already terminal), or a
+        # concurrent request already won this exact transition. Report the
+        # real current status honestly rather than pretending this request
+        # applied -- the owner's explicit rule: an ack must never silently
+        # overwrite a terminal truth.
+        current = await db.cloud_bot_commands.find_one({"id": req.command_id}, {"_id": 0})
+        current_status = current.get("status") if current else "UNKNOWN"
+        reason = "TERMINAL_STATE_IMMUTABLE" if current_status in _COMMAND_TERMINAL_STATUSES else "INVALID_TRANSITION"
+        logger.info("[command-ack] command_id=%s requested_status=%s REJECTED reason=%s current_status=%s",
+                    req.command_id, status, reason, current_status)
+        return {"ok": True, "command_id": req.command_id, "status": current_status,
+                "applied": False, "reason": reason}
+
     if command.get("action") == "UPDATE_PROP_FIRM_CONFIG":
         prop_update = {
             "prop_firm_apply_status": status,
@@ -6009,7 +6621,7 @@ async def cloud_command_ack(req: CloudCommandAckReq, request: Request):
                               f"{label}: {req.message or status}",
                               account=command.get("mt5_account", "") or req.account or "",
                               details={"command_id": req.command_id, "action": command.get("action"), "status": status, "license_key": command.get("license_key", "")})
-    return {"ok": True, "command_id": req.command_id, "status": status}
+    return {"ok": True, "command_id": req.command_id, "status": status, "applied": True}
 
 @api_router.get("/cloud/command/recent")
 async def cloud_command_recent(limit: int = 20, user: dict = Depends(get_cloud_user)):
@@ -6164,11 +6776,19 @@ async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):
         {"_id": 0}, sort=[("ts", -1)]) if activity_scope else None
     last_error = await db.cloud_bot_activity.find_one(
         {**activity_scope, "severity": {"$in": ["ERROR", "CRITICAL"]}}, {"_id": 0}, sort=[("ts", -1)]) if activity_scope else None
+    release_display = build_public_release_display((hb or {}).get("ea_version", ""))
+    production_status = reconcile_production_timeframe(
+        (hb or {}).get("timeframe", ""), release_display["reported_build_recognized"],
+    )
     return {
         "status": status_label,
         "offline": offline,
         "heartbeat_age_sec": age_sec,
         "heartbeat": hb or {},
+        # Customer-facing identity -- always use these, never heartbeat.ea_version
+        # /heartbeat.timeframe directly, which are raw unvalidated EA telemetry.
+        "release": release_display,
+        "production_status": production_status,
         "license": {
             "linked": bool(lic),
             "activation_key": (lic or {}).get("pin", ""),
@@ -6283,7 +6903,7 @@ async def cloud_monitor_decision_feed(limit: int = 60, ticket: str = "",
     how to word it); the periodic status heartbeat lives in its own
     /cloud/monitor/bot-status endpoint instead of spamming this feed."""
     n = max(1, min(int(limit), 20))
-    empty_message = "No fresh AI decision yet. Waiting for next M5 evaluation."
+    empty_message = "No fresh AI decision yet. Waiting for the next completed M10 evaluation."
     fresh_cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     lic = await _get_user_license(user)
     license_key = _normalize_license_key((lic or {}).get("pin", ""))
@@ -6312,7 +6932,7 @@ async def cloud_monitor_decision_feed(limit: int = 60, ticket: str = "",
         "max_age_hours": 24,
         "source_priority": [
             "latest EA heartbeat/live decision JSON",
-            "latest M5 decision cycle",
+            "latest M10 decision cycle",
             "latest open trade thinking",
             "recent decision history fallback",
         ],
@@ -6442,7 +7062,7 @@ async def cloud_monitor_current_opinion(ticket: str = "", user: dict = Depends(g
     entry_reason = (thesis or {}).get("entry_reason") or ". ".join(entry_card.get("reason_bullets") or []) or entry_card.get("decision_text")
     current_bot_decision = (thesis or {}).get("next_action") or latest.get("decision_text") or "WAIT"
     what_would_close = (thesis or {}).get("exit_reason") or "Broker SL/TP, manual close, emergency margin protection, or confirmed thesis invalidation."
-    current_reason = (thesis or {}).get("hold_reason") or (thesis or {}).get("protect_reason") or latest.get("decision_text") or "Waiting for the next M5 management cycle."
+    current_reason = (thesis or {}).get("hold_reason") or (thesis or {}).get("protect_reason") or latest.get("decision_text") or "Waiting for the next M10 decision cycle."
 
     return {
         "open": True,
@@ -6489,652 +7109,21 @@ async def cloud_monitor_current_opinion(ticket: str = "", user: dict = Depends(g
         "updated_at": (thesis or {}).get("updated_at"),
     }
 
-@api_router.get("/cloud/me/reasoning")
-async def cloud_me_reasoning(limit: int = 30, _user: dict = Depends(get_cloud_user)):
-    """Public to ANY logged-in cloud user — they see the same master EA feed."""
-    n = max(1, min(int(limit), 100))
-    rows = await db.cloud_reasoning.find({}, {"_id": 0}).sort("ts", -1).to_list(n)
-    return {"events": rows, "count": len(rows)}
+# v6.25.3 owner directive 2026-07-17 (Phase 5 P0) -- retired /cloud/me/reasoning
+# (copy-trading master EA feed reader). See backend/migrations/0001_delete_copy_trading.py.
 
 AGENT_TOKEN = os.environ.get("CLOUD_AGENT_TOKEN", "")  # kept for backward compat
 
-@api_router.get("/cloud/agent/pending-users")
-async def cloud_agent_users(request: Request):
-    await _require_agent_async(request)
-    worker_id = (request.headers.get("X-Worker-Id") or "").strip()
-    query = {"mt5_connected": True,
-             "mt5_verification_status": "verified",
-             "paused": False,
-             "status": {"$in": ["trial", "active"]}}
-    if worker_id:
-        query["assigned_worker_id"] = worker_id
-    rows = await db.cloud_users.find(
-        query,
-        {"_id": 0, "password_hash": 0}
-    ).to_list(2000)
-    # decrypt passwords in-memory ONLY for the worker response (TLS-only transport)
-    for r in rows:
-        enc = r.pop("mt5_password_enc", None)
-        r["mt5_password"] = _cloud_decrypt(enc) if enc else ""
-    return {"users": rows, "total": len(rows)}
-
-# --- Worker feed: recent open + close events since a given ISO timestamp ---
-# Used by the Python VPS worker agent to mirror master signals into each
-# subscriber's MT5 terminal. Returns at most `limit` of each kind, newest first.
-@api_router.get("/cloud/agent/pending-signals")
-async def cloud_agent_pending_signals(request: Request, since: str = "", limit: int = 100):
-    await _require_agent_async(request)
-    q_open: dict = {}
-    if since:
-        q_open["ts"] = {"$gt": since}
-    opens = await db.cloud_signals.find(q_open, {"_id": 0}).sort("ts", -1).to_list(limit)
-    # v1.4.7 — closes come from cloud_signals.closed_at (TRUTH SOURCE).
-    # Previously read from cloud_shadow_trades, which produced disappearing
-    # closes when no shadow row existed (close-before-fanout race).
-    q_close: dict = {"closed_at": {"$ne": None}}
-    if since:
-        q_close["closed_at"] = {"$gt": since, "$ne": None}
-    closes_raw = await db.cloud_signals.find(
-        q_close,
-        {"_id": 0, "id": 1, "exit_price": 1, "closed_at": 1, "close_reason": 1}
-    ).sort("closed_at", -1).to_list(limit)
-    closes = [{"signal_id": c.get("id"), "exit_price": c.get("exit_price", 0),
-               "closed_at": c.get("closed_at"), "reason": c.get("close_reason", "")}
-              for c in closes_raw]
-    q_partial: dict = {}
-    if since:
-        q_partial["ts"] = {"$gt": since}
-    partials = await db.cloud_signal_partials.find(
-        q_partial, {"_id": 0}
-    ).sort("ts", -1).to_list(limit)
-    return {"opens": opens, "partials": partials, "closes": closes,
-            "server_time": datetime.now(timezone.utc).isoformat()}
-
-# --- Worker feed: users awaiting credential verification ---
-# Returns shape-valid creds that haven't been login-tested yet. The worker
-# attempts mt5.login() and POSTs the result to /cloud/agent/verify-credentials.
-@api_router.get("/cloud/agent/verify-queue")
-async def cloud_agent_verify_queue(request: Request):
-    await _require_agent_async(request)
-    rows = await db.cloud_users.find(
-        {"mt5_verification_status": "pending",
-         "status": {"$in": ["trial", "active"]},
-         "mt5_password_enc": {"$exists": True, "$ne": None}},
-        {"_id": 0, "password_hash": 0}
-    ).to_list(500)
-    for r in rows:
-        enc = r.pop("mt5_password_enc", None)
-        r["mt5_password"] = _cloud_decrypt(enc) if enc else ""
-    return {"users": rows, "total": len(rows)}
-
-# v1.4.7 — reconciliation feed: signals that have been CLOSED in the last
-# `hours` window. Workers use this to scan their MT5 terminal for orphan
-# positions whose master signal already closed (e.g. due to a transient
-# HTTP failure during the live close fan-out) and force-close them.
-# Source of truth: cloud_signals.closed_at (NOT cloud_shadow_trades — that
-# table is downstream and can race against close events).
-@api_router.get("/cloud/agent/closed-signals")
-async def cloud_agent_closed_signals(request: Request, hours: int = 6, limit: int = 200):
-    await _require_agent_async(request)
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, min(24, int(hours))))).isoformat()
-    rows = await db.cloud_signals.find(
-        {"closed_at": {"$gt": cutoff, "$ne": None}},
-        {"_id": 0, "id": 1, "exit_price": 1, "closed_at": 1, "close_reason": 1}
-    ).sort("closed_at", -1).to_list(min(int(limit), 500))
-    rows_out = [{"id": r.get("id"), "exit_price": r.get("exit_price", 0),
-                 "closed_at": r.get("closed_at"),
-                 "reason": r.get("close_reason", "")} for r in rows]
-    return {"signals": rows_out, "total": len(rows_out)}
-
-# v1.4.7 — Worker bullet-proof reconciler endpoint. The worker POSTs a list
-# of signal_ids it currently has open positions for. Backend returns, for
-# each ID: closed (true/false), exit_price, closed_at. The worker closes any
-# position whose signal is reported closed. This catches EVERY race:
-#  - close-before-fanout (no shadow row ever existed)
-#  - fanout-after-close (worker opened a trade for a signal that closed seconds earlier)
-#  - missed-close-event (worker was offline when the closed-signals feed served it)
-class SignalStatusReq(BaseModel):
-    signal_ids: List[str]
-
-@api_router.post("/cloud/agent/signal-status")
-async def cloud_agent_signal_status(req: SignalStatusReq, request: Request):
-    await _require_agent_async(request)
-    ids = [s for s in (req.signal_ids or []) if isinstance(s, str)][:2000]
-    if not ids:
-        return {"signals": {}}
-    rows = await db.cloud_signals.find(
-        {"id": {"$in": ids}},
-        {"_id": 0, "id": 1, "closed_at": 1, "exit_price": 1, "close_reason": 1}
-    ).to_list(len(ids))
-    out = {}
-    seen = set()
-    for r in rows:
-        sid = r.get("id")
-        if not sid: continue
-        seen.add(sid)
-        is_closed = bool(r.get("closed_at"))
-        out[sid] = {
-            "closed": is_closed,
-            "exit_price": float(r.get("exit_price") or 0),
-            "closed_at": r.get("closed_at") or "",
-            "reason": r.get("close_reason", ""),
-        }
-    # Any IDs the worker asked about that don't exist in cloud_signals at all
-    # — treat as "unknown signal, close it" (safety: better to close than leave
-    # an orphan worker-side trade with no master record).
-    for sid in ids:
-        if sid not in seen:
-            out[sid] = {"closed": True, "exit_price": 0.0, "closed_at": "",
-                        "reason": "signal not found in cloud_signals (orphan)"}
-    return {"signals": out}
-
-# v1.4.3 — Admin nuclear option: force-close ALL open positions for a specific
-# user (or all users). Used when orphan trades from a pre-v1.4 worker need to
-# be cleared without RDP'ing the user's MT5. The worker will receive this via
-# the existing close-signal poll mechanism using a sentinel signal_id.
-@api_router.post("/admin/cloud/force-close-user", dependencies=[Depends(get_current_admin)])
-async def admin_force_close_user(payload: dict):
-    user_id = (payload or {}).get("user_id", "").strip()
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id required")
-    # Insert a special "force-close-all" marker that the worker picks up on
-    # its next poll. Workers see this and call mt5.positions_get() filtered by
-    # magic=77007007 and close everything — regardless of signal_id mapping.
-    marker = {
-        "id": str(uuid.uuid4()),
-        "user_id": user_id,
-        "kind": "force_close_all",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "consumed": False,
-    }
-    await db.cloud_force_close_queue.insert_one(marker.copy())
-    return {"queued": True, "user_id": user_id, "marker_id": marker["id"]}
-
-@api_router.get("/cloud/agent/force-close-queue")
-async def cloud_agent_force_close_queue(request: Request):
-    await _require_agent_async(request)
-    items = await db.cloud_force_close_queue.find(
-        {"consumed": False}, {"_id": 0}
-    ).sort("created_at", 1).to_list(50)
-    return {"items": items}
-
-@api_router.post("/cloud/agent/force-close-ack")
-async def cloud_agent_force_close_ack(payload: dict, request: Request):
-    await _require_agent_async(request)
-    mid = (payload or {}).get("marker_id")
-    if not mid: raise HTTPException(status_code=400, detail="marker_id required")
-    await db.cloud_force_close_queue.update_one(
-        {"id": mid}, {"$set": {"consumed": True,
-                                "consumed_at": datetime.now(timezone.utc).isoformat(),
-                                "result": (payload or {}).get("result", "")}})
-    return {"ok": True}
-
-class VerifyCredentialsReq(BaseModel):
-    user_id: str
-    ok: bool
-    error: Optional[str] = ""        # broker error message if ok=False
-    balance: Optional[float] = None
-    equity: Optional[float] = None
-    currency: Optional[str] = ""
-    broker_name: Optional[str] = ""
-    server: Optional[str] = ""
-    account_type: Optional[str] = ""
-    trade_allowed: Optional[bool] = None
-    terminal_trade_allowed: Optional[bool] = None
-    symbol: Optional[str] = ""
-    symbol_mapping: Optional[str] = ""
-    latency_ms: Optional[int] = None
-    health: Optional[dict] = None
-
-class AgentAccountStatusReq(BaseModel):
-    user_id: str
-    worker_id: Optional[str] = ""
-    status: str = "CONNECTING"
-    logged_in: bool = False
-    algo_ok: bool = True
-    retry_count: int = 0
-    next_retry_at: Optional[str] = ""
-    last_success_at: Optional[str] = ""
-    last_error: Optional[str] = ""
-    server: Optional[str] = ""
-    login: Optional[int] = 0
-    resolved_symbol: Optional[str] = ""
-
-@api_router.post("/cloud/agent/account-status")
-async def cloud_agent_account_status(req: AgentAccountStatusReq, request: Request):
-    await _require_agent_async(request)
-    now = datetime.now(timezone.utc).isoformat()
-    status = (req.status or "CONNECTING").upper()
-    error = req.last_error or ""
-    set_doc = {
-        "copy_status": status,
-        "copy_logged_in": bool(req.logged_in),
-        "copy_algo_ok": bool(req.algo_ok),
-        "copy_retry_count": int(req.retry_count or 0),
-        "copy_next_retry_at": req.next_retry_at or "",
-        "copy_last_success_at": req.last_success_at or "",
-        "copy_last_error": error,
-        "copy_last_status_at": now,
-        "copy_worker_id": req.worker_id or "",
-        "broker_detected_server": req.server or "",
-        "broker_symbol": req.resolved_symbol or "",
-    }
-    # Do not flip mt5_connected / mt5_verification_status here. Those fields
-    # decide whether the worker keeps receiving this account from pending-users.
-    # Runtime copy health belongs in copy_status so a bad login can cool down,
-    # retry later, and remain visible without removing itself from the worker
-    # feed or affecting other healthy accounts.
-    r = await db.cloud_users.update_one({"id": req.user_id}, {"$set": set_doc})
-    if r.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Unknown user_id")
-    await db.cloud_account_status_logs.insert_one({
-        "id": str(uuid.uuid4()),
-        "ts": now,
-        **req.model_dump(),
-        "status": status,
-    })
-    user = await db.cloud_users.find_one({"id": req.user_id}, {"_id": 0, "email": 1})
-    await _log_broker_event(req.user_id, (user or {}).get("email", ""), "account_status",
-                            status in {"ACTIVE", "COPYING"}, req.server or "", {
-                                "status": status,
-                                "logged_in": bool(req.logged_in),
-                                "algo_ok": bool(req.algo_ok),
-                                "retry_count": int(req.retry_count or 0),
-                                "next_retry_at": req.next_retry_at or "",
-                                "last_error": error,
-                                "worker_id": req.worker_id or "",
-                            })
-    return {"ok": True, "status": status}
-
-@api_router.post("/cloud/agent/verify-credentials")
-async def cloud_agent_verify_credentials(req: VerifyCredentialsReq, request: Request):
-    await _require_agent_async(request)
-    now = datetime.now(timezone.utc).isoformat()
-    hint = _broker_error_hint(req.error or "")
-    health = req.health or {}
-    if req.symbol:
-        health.setdefault("resolved_symbol", req.symbol)
-    if req.symbol_mapping:
-        health.setdefault("symbol_mapping", req.symbol_mapping)
-    if req.latency_ms is not None:
-        health.setdefault("latency_ms", int(req.latency_ms))
-    if req.trade_allowed is not None:
-        health.setdefault("trade_allowed", bool(req.trade_allowed))
-    if req.terminal_trade_allowed is not None:
-        health.setdefault("terminal_trade_allowed", bool(req.terminal_trade_allowed))
-    if req.broker_name:
-        health.setdefault("broker_name", req.broker_name)
-    if req.server:
-        health.setdefault("server", req.server)
-    set_doc = {
-        "mt5_verification_status": "verified" if req.ok else "rejected",
-        "mt5_verification_error":  "" if req.ok else (hint or req.error or "Login failed"),
-        "mt5_raw_verification_error": "" if req.ok else (req.error or ""),
-        "mt5_verified_at":         now,
-        "mt5_connected":           bool(req.ok),
-        "broker_last_health":      health,
-        "broker_last_latency_ms":   int(req.latency_ms or 0),
-        "broker_last_check_at":     now,
-        "broker_detected_name":     req.broker_name or "",
-        "broker_detected_server":   req.server or "",
-        "broker_symbol":           req.symbol or "",
-        "broker_symbol_mapping":   req.symbol_mapping or "",
-    }
-    if req.ok:
-        if req.balance is not None: set_doc["last_balance"] = float(req.balance)
-        if req.equity  is not None: set_doc["last_equity"]  = float(req.equity)
-        if req.currency:            set_doc["account_currency"] = req.currency
-    r = await db.cloud_users.update_one({"id": req.user_id}, {"$set": set_doc})
-    if r.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Unknown user_id")
-    user = await db.cloud_users.find_one({"id": req.user_id}, {"_id": 0, "email": 1, "broker_server": 1})
-    await _log_broker_event(req.user_id, (user or {}).get("email", ""), "verification_result", bool(req.ok),
-                            req.server or (user or {}).get("broker_server", ""), {
-                                "error": req.error or "",
-                                "hint": hint,
-                                "health": health,
-                            })
-    return {"ok": True, "verification_status": set_doc["mt5_verification_status"]}
-
-# --- Worker feed: users that hit "Refresh balance" — return + clear in one shot ---
-@api_router.get("/cloud/agent/refresh-queue")
-async def cloud_agent_refresh_queue(request: Request):
-    await _require_agent_async(request)
-    rows = await db.cloud_users.find(
-        {"force_equity_refresh": True,
-         "mt5_connected": True,
-         "mt5_verification_status": "verified"},
-        {"_id": 0, "id": 1, "email": 1}
-    ).to_list(500)
-    user_ids = [r["id"] for r in rows]
-    if user_ids:
-        await db.cloud_users.update_many(
-            {"id": {"$in": user_ids}},
-            {"$unset": {"force_equity_refresh": ""}})
-    return {"user_ids": user_ids, "total": len(user_ids)}
-
-class AgentTradeLog(BaseModel):
-    user_id: str; ticket: int; symbol: str; side: str
-    lots: float; entry: float; exit_price: float; profit: float
-    opened_at: str; closed_at: str; reason: Optional[str] = ""
-    signal_id: Optional[str] = ""
-
-class AgentTradePartialLog(BaseModel):
-    user_id: str
-    signal_id: str
-    ticket: int
-    symbol: str = "XAUUSD"
-    side: str = ""
-    closed_lots: float = 0.0
-    remaining_lots: float = 0.0
-    close_percent: float = 0.0
-    entry: float = 0.0
-    exit_price: float = 0.0
-    profit: float = 0.0
-    ok: bool = False
-    error: Optional[str] = ""
-    closed_at: str = ""
-    reason: Optional[str] = ""
-
-@api_router.post("/cloud/agent/trade-close")
-async def cloud_agent_trade_close(req: AgentTradeLog, request: Request):
-    await _require_agent_async(request)
-    doc = req.model_dump()
-    doc["status"] = "closed"
-    existing = await db.cloud_trades.find_one(
-        {"user_id": req.user_id, "ticket": req.ticket},
-        {"_id": 0}
-    )
-    if not existing and req.signal_id:
-        existing = await db.cloud_trades.find_one(
-            {"user_id": req.user_id, "signal_id": req.signal_id, "status": "open"},
-            {"_id": 0}
-        )
-    if not existing and req.signal_id:
-        existing = await db.cloud_trades.find_one(
-            {"user_id": req.user_id, "signal_id": req.signal_id},
-            {"_id": 0},
-            sort=[("opened_at", -1)]
-        )
-
-    def _num(v, default=0.0):
-        try:
-            return float(v if v is not None else default)
-        except (TypeError, ValueError):
-            return float(default)
-
-    def _keep(existing_value, incoming_value):
-        if incoming_value in ("", None):
-            return existing_value
-        if isinstance(incoming_value, (int, float)) and abs(float(incoming_value)) < 1e-12:
-            return existing_value if existing_value not in ("", None, 0, 0.0) else incoming_value
-        return incoming_value
-
-    def _fallback_profit(row):
-        profit = _num(row.get("profit"), 0.0)
-        if abs(profit) > 1e-9:
-            return profit
-        lots = _num(row.get("lots"), 0.0)
-        entry = _num(row.get("entry"), 0.0)
-        exit_px = _num(row.get("exit_price"), 0.0)
-        side = str(row.get("side") or "").upper()
-        if lots > 0 and entry > 0 and exit_px > 0 and side in ("BUY", "SELL"):
-            direction = 1 if side == "BUY" else -1
-            return (exit_px - entry) * lots * 100.0 * direction
-        return profit
-
-    if existing:
-        merged = dict(existing)
-        for k, v in doc.items():
-            merged[k] = _keep(existing.get(k), v)
-        merged["status"] = "closed"
-        merged["ticket"] = int(req.ticket or existing.get("ticket") or 0)
-        merged["closed_at"] = req.closed_at or existing.get("closed_at") or datetime.now(timezone.utc).isoformat()
-        merged["profit"] = _fallback_profit(merged)
-        set_doc = {k: v for k, v in merged.items() if k != "_id"}
-        await db.cloud_trades.update_one({"id": existing["id"]}, {"$set": set_doc})
-    else:
-        doc["profit"] = _fallback_profit(doc)
-        doc["id"] = str(uuid.uuid4())
-        await db.cloud_trades.insert_one(doc.copy())
-    return {"ok": True}
-
-@api_router.post("/cloud/agent/trade-partial")
-async def cloud_agent_trade_partial(req: AgentTradePartialLog, request: Request):
-    await _require_agent_async(request)
-    doc = req.model_dump()
-    doc["id"] = str(uuid.uuid4())
-    doc["status"] = "partial" if req.ok else "partial_failed"
-    doc["closed_at"] = req.closed_at or datetime.now(timezone.utc).isoformat()
-    await db.cloud_trade_partials.insert_one(doc.copy())
-    await db.cloud_fanout_logs.insert_one(doc.copy())
-    if req.ok and req.ticket:
-        await db.cloud_trades.update_one(
-            {"user_id": req.user_id, "signal_id": req.signal_id, "ticket": req.ticket, "status": "open"},
-            {"$set": {"last_partial_at": doc["closed_at"],
-                      "last_partial_lots": float(req.closed_lots or 0.0),
-                      "last_partial_profit": float(req.profit or 0.0),
-                      "lots": float(req.remaining_lots or 0.0)}}
-        )
-    return {"ok": True}
-
-# Worker reports each trade-open attempt (success OR failure) so the admin
-# panel + user dashboard can see exactly what the VPS executor did per signal.
-class AgentTradeOpenReq(BaseModel):
-    user_id: str
-    signal_id: str
-    ticket: int = 0
-    symbol: str = "XAUUSD"
-    side: str = ""
-    lots: float = 0.0
-    entry: float = 0.0
-    sl: float = 0.0
-    tp: float = 0.0
-    ok: bool = False
-    error: Optional[str] = ""
-    opened_at: str = ""
-
-@api_router.post("/cloud/agent/trade-open")
-async def cloud_agent_trade_open(req: AgentTradeOpenReq, request: Request):
-    await _require_agent_async(request)
-    # v1.4.1 — DUPLICATE GUARD #2 (server-side). If a successful trade-open
-    # for this exact (user_id, signal_id) is ALREADY in the DB, reject the
-    # second worker's POST. Prevents two-worker races from creating duplicate
-    # cloud_trades rows. Sentinel rows ("(no-active-users)") and failed rows
-    # are exempt.
-    if req.ok and req.user_id and not req.user_id.startswith("("):
-        dup = await db.cloud_trades.find_one(
-            {"user_id": req.user_id, "signal_id": req.signal_id, "status": "open"},
-            {"_id": 0, "id": 1, "ticket": 1})
-        if dup:
-            return {"ok": True, "deduped": True,
-                    "existing_ticket": dup.get("ticket"),
-                    "message": "duplicate suppressed"}
-    doc = req.model_dump()
-    doc["id"] = str(uuid.uuid4())
-    doc["status"] = "open" if req.ok else "failed"
-    await db.cloud_fanout_logs.insert_one(doc.copy())
-    if req.ok:
-        # Insert a real (non-shadow) trade row so the user dashboard sees it.
-        trade = {
-            "id": str(uuid.uuid4()), "user_id": req.user_id,
-            "signal_id": req.signal_id, "ticket": req.ticket,
-            "symbol": req.symbol, "side": req.side, "lots": req.lots,
-            "entry": req.entry, "sl": req.sl, "tp": req.tp,
-            "exit_price": 0, "profit": 0,
-            "status": "open", "shadow": False,
-            "opened_at": req.opened_at or datetime.now(timezone.utc).isoformat(),
-            "closed_at": None,
-        }
-        await db.cloud_trades.insert_one(trade.copy())
-    return {"ok": True}
-
-# Admin diagnostic: recent command/monitor fanout outcomes (last 100) so
-# operators can debug delivery without SSH-into-VPS-to-tail-logs.
-@api_router.get("/admin/cloud/fanout-logs", dependencies=[Depends(get_current_admin)])
-async def cloud_admin_fanout_logs(limit: int = 100):
-    rows = await db.cloud_fanout_logs.find({}, {"_id": 0}).sort("opened_at", -1).to_list(min(int(limit), 500))
-    return {"logs": rows, "total": len(rows)}
-
-# Admin one-shot diagnostics: everything an operator needs to debug "trades not
-# copying" without SSH-ing the VPS. Combines workers (with active_users + version),
-# recent fanout log rows, recent master signals, and a per-user "ready to fan-out?"
-# checklist (mt5_connected + verification_status + paused + status). 99% of bugs
-# show up here as a single missing checkmark.
-@api_router.get("/admin/cloud/diagnostics", dependencies=[Depends(get_current_admin)])
-async def cloud_admin_diagnostics(fanout_limit: int = 50, signal_limit: int = 10):
-    now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(minutes=3)).isoformat()
-    workers_raw = await db.cloud_workers.find({}, {"_id": 0}).sort("last_heartbeat", -1).to_list(100)
-    workers = []
-    for w in workers_raw:
-        hb = w.get("last_heartbeat")
-        is_online = bool(hb and hb > cutoff)
-        workers.append({
-            "id": w.get("id"),
-            "name": w.get("name"),
-            "status": "online" if is_online else "offline",
-            "last_heartbeat": hb,
-            "active_users": int(w.get("active_users") or 0),
-            "version": w.get("version") or "",
-            "hostname": w.get("hostname") or "",
-        })
-    fanout = await db.cloud_fanout_logs.find({}, {"_id": 0}).sort("opened_at", -1).to_list(min(int(fanout_limit), 200))
-    signals = await db.cloud_signals.find({}, {"_id": 0}).sort("ts", -1).to_list(min(int(signal_limit), 50))
-    # Per-user fan-out readiness: surface anyone who looks like they should be
-    # mirroring trades but won't because of a missing flag.
-    users_raw = await db.cloud_users.find(
-        {"status": {"$in": ["trial", "active"]}},
-        {"_id": 0, "id": 1, "email": 1, "status": 1, "mt5_connected": 1,
-         "mt5_verification_status": 1, "mt5_verification_error": 1,
-         "paused": 1, "assigned_worker_id": 1, "last_balance": 1,
-         "copy_status": 1, "copy_logged_in": 1, "copy_algo_ok": 1,
-         "copy_retry_count": 1, "copy_next_retry_at": 1,
-         "copy_last_success_at": 1, "copy_last_error": 1,
-         "copy_last_status_at": 1, "copy_worker_id": 1}
-    ).to_list(500)
-    users = []
-    for u in users_raw:
-        connected = bool(u.get("mt5_connected"))
-        verified = u.get("mt5_verification_status") == "verified"
-        paused = bool(u.get("paused"))
-        ready = connected and verified and not paused
-        reason = ""
-        if not connected: reason = "mt5 not connected"
-        elif not verified: reason = f"mt5 not verified ({u.get('mt5_verification_status') or 'none'})"
-        elif paused: reason = "user paused"
-        copy_status = u.get("copy_status") or ("COPYING" if ready else "CONNECTING")
-        if copy_status in {"LOGIN_FAILED", "EA_DISABLED", "NEEDS_ATTENTION", "DISABLED"}:
-            ready = False
-            reason = u.get("copy_last_error") or copy_status
-        users.append({
-            "id": u.get("id"),
-            "email": u.get("email"),
-            "status": u.get("status"),
-            "mt5_connected": connected,
-            "mt5_verification_status": u.get("mt5_verification_status") or "",
-            "mt5_verification_error": u.get("mt5_verification_error") or "",
-            "paused": paused,
-            "assigned_worker_id": u.get("assigned_worker_id") or "",
-            "last_balance": float(u.get("last_balance") or 0),
-            "copy_status": copy_status,
-            "copy_logged_in": bool(u.get("copy_logged_in")),
-            "copy_algo_ok": bool(u.get("copy_algo_ok", True)),
-            "copy_retry_count": int(u.get("copy_retry_count") or 0),
-            "copy_next_retry_at": u.get("copy_next_retry_at") or "",
-            "copy_last_success_at": u.get("copy_last_success_at") or "",
-            "copy_last_error": u.get("copy_last_error") or "",
-            "copy_last_status_at": u.get("copy_last_status_at") or "",
-            "copy_worker_id": u.get("copy_worker_id") or "",
-            "fanout_ready": ready,
-            "blocked_reason": reason,
-        })
-    ready_count = sum(1 for u in users if u["fanout_ready"])
-    return {
-        "now": now.isoformat(),
-        "workers": workers,
-        "online_workers": sum(1 for w in workers if w["status"] == "online"),
-        "fanout_logs": fanout,
-        "signals": signals,
-        "users": users,
-        "fanout_ready_users": ready_count,
-        "total_users": len(users),
-    }
-
-class AgentEquitySnapshot(BaseModel):
-    user_id: str; balance: float; equity: float; margin: float; free_margin: float
-    cloud_positions_count: Optional[int] = None  # v1.4.3 — orphan detection
-
-@api_router.post("/cloud/agent/equity-snapshot")
-async def cloud_agent_equity(req: AgentEquitySnapshot, request: Request):
-    await _require_agent_async(request)
-    doc = req.model_dump()
-    doc["ts"] = datetime.now(timezone.utc).isoformat()
-    await db.cloud_equity_snapshots.insert_one(doc.copy())
-    set_doc = {"last_equity": req.equity, "last_balance": req.balance,
-               "last_equity_ts": doc["ts"], "last_balance_updated_at": doc["ts"]}
-    if req.cloud_positions_count is not None:
-        set_doc["cloud_positions_count"] = int(req.cloud_positions_count)
-        set_doc["cloud_positions_ts"] = doc["ts"]
-    await db.cloud_users.update_one({"id": req.user_id}, {"$set": set_doc})
-    return {"ok": True}
-
-# v1.4.3 — Orphan detector. Compares each cloud user's `cloud_positions_count`
-# (last reported by the worker) against the count of currently-open master
-# signals. Any user whose worker reports MORE open positions than the master has
-# is flagged — those extras are "orphans" (legacy trades from a pre-v1.4 worker
-# that never got an XAUAI|<sigid> comment, so reconcile can't see them).
-@api_router.get("/admin/cloud/orphans", dependencies=[Depends(get_current_admin)])
-async def admin_cloud_orphans():
-    # Master open count = signals with no closed_at (the master EA is still in)
-    master_open = await db.cloud_signals.count_documents({
-        "$or": [{"closed_at": None}, {"closed_at": {"$exists": False}}]
-    })
-    users = await db.cloud_users.find(
-        {"mt5_connected": True},
-        {"_id": 0, "id": 1, "email": 1, "cloud_positions_count": 1,
-         "cloud_positions_ts": 1, "last_equity_ts": 1}
-    ).to_list(2000)
-    flagged = []
-    for u in users:
-        pos = int(u.get("cloud_positions_count") or 0)
-        if pos <= master_open:
-            continue
-        flagged.append({
-            "user_id": u.get("id"),
-            "email": u.get("email"),
-            "cloud_positions": pos,
-            "master_open": master_open,
-            "orphan_estimate": pos - master_open,
-            "last_reported_at": u.get("cloud_positions_ts") or u.get("last_equity_ts"),
-        })
-    return {
-        "master_open_count": master_open,
-        "checked_users": len(users),
-        "flagged_users": flagged,
-        "ts": datetime.now(timezone.utc).isoformat(),
-    }
-
-# --- Worker heartbeat: VPS agent pings every N seconds so admin sees it online ---
-class WorkerHeartbeatReq(BaseModel):
-    worker_id: str
-    active_users: int = 0
-    version: Optional[str] = ""
-    hostname: Optional[str] = ""
-
-@api_router.post("/cloud/agent/heartbeat")
-async def cloud_agent_heartbeat(req: WorkerHeartbeatReq, request: Request):
-    await _require_agent_async(request)
-    now = datetime.now(timezone.utc).isoformat()
-    r = await db.cloud_workers.update_one(
-        {"id": req.worker_id},
-        {"$set": {"last_heartbeat": now, "status": "online",
-                  "active_users": req.active_users,
-                  "version": req.version or "",
-                  "hostname": req.hostname or ""}})
-    if r.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Unknown worker_id — register via /admin → Cloud → Infrastructure first.")
-    return {"ok": True, "server_time": now}
+# v6.25.3 owner directive 2026-07-17 (Phase 5 P0) -- retired the entire
+# worker-agent (VPS executor) endpoint block: pending-users/pending-signals
+# (decrypted MT5 credential handout), verify-queue/verify-credentials,
+# signal-status reconciler, force-close queue/ack, account-status,
+# refresh-queue, trade-close/trade-partial/trade-open reporting,
+# fanout-logs, diagnostics, equity-snapshot, orphan detector, and worker
+# heartbeat. This backend no longer executes trades on any account other
+# than through the licensed local EA the customer runs themselves. See
+# backend/migrations/0001_delete_copy_trading.py for the data-side
+# backup+deletion this code used to serve.
 
 # ===================================================================
 # END XauAi CLOUD
@@ -7149,6 +7138,16 @@ async def cloud_agent_heartbeat(req: WorkerHeartbeatReq, request: Request):
 # ===================================================================
 import market_outlook_routes as _mo_routes
 api_router.include_router(_mo_routes.build_router())
+
+# Customer EAs use this authenticated HTTPS relay.  The owner VPS claims
+# jobs outbound-only and keeps llama.cpp plus its gateway on loopback.
+from local_ai import remote_relay as _local_ai_remote
+api_router.include_router(_local_ai_remote.build_router(
+    db=db,
+    resolve_license=_resolve_monitor_license,
+    rate_limit=_rate_limit,
+    client_ip=_client_ip,
+))
 
 app.include_router(api_router)
 

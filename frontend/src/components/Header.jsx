@@ -3,15 +3,16 @@ import { TrendUp, TrendDown, Crosshair, List, X } from "@phosphor-icons/react";
 import XauAiLogo from "./cloud/XauAiLogo";
 
 const NAV = [
-  { id: "overview",    label: "Home"        },
-  { id: "performance", label: "Performance" },
-  { id: "purchase",    label: "Pricing"     },
-  { id: "faq",         label: "FAQ"         },
+  { id: "how-it-works", label: "How It Works" },
+  { id: "performance",  label: "Performance"   },
+  { id: "features",     label: "Features"      },
+  { id: "purchase",     label: "Pricing"       },
 ];
 
 export default function Header({ activeSection, onNavigate, goldPrice }) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const up = goldPrice?.change >= 0;
+  const quoteAvailable = goldPrice?.available === true && Number.isFinite(goldPrice?.bid);
+  const up = quoteAvailable && goldPrice?.change >= 0;
 
   return (
     <>
@@ -21,7 +22,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
           <button type="button" onClick={() => { onNavigate("overview"); setMobileOpen(false); }}
             className="flex min-w-0 items-center gap-2.5" data-testid="header-brand">
             <XauAiLogo size={30} className="flex-none" />
-            <span className="font-heading text-[15px] font-semibold tracking-tight">XauAI Sniper</span>
+            <span className="font-heading text-[15px] font-semibold tracking-tight">XauCloud</span>
           </button>
 
           <nav className="hidden items-center gap-0.5 rounded-full border border-white/[0.08] bg-white/[0.03] p-1 lg:flex">
@@ -37,7 +38,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
           </nav>
 
           <div className="flex items-center gap-2">
-            {goldPrice && (
+            {quoteAvailable && (
               <div className="hidden items-center gap-2 rounded-full border border-white/[0.08] bg-black/30 px-3 py-1.5 md:flex" data-testid="gold-ticker">
                 <Crosshair size={11} className="text-amber-300" weight="bold" />
                 <span className="font-mono text-[12px] font-bold" data-testid="gold-bid-price">{goldPrice.bid?.toFixed(2)}</span>

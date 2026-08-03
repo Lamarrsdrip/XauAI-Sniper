@@ -1,0 +1,13 @@
+{
+  "total_close_rows": 57,
+  "trustworthy_rows": 57,
+  "decisive_rows": 57,
+  "wins": 39,
+  "losses": 18,
+  "breakevens": 0,
+  "execution_gap_outliers": 0,
+  "data_incomplete_rows": 0,
+  "date_range_start": "2026-06-22T02:08:20",
+  "date_range_end": "2026-07-20T17:35:40",
+  "net_profit_all_close_rows": 6404.13
+}

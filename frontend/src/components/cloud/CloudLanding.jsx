@@ -33,8 +33,8 @@ export default function CloudLanding() {
           <Link to="/" className="flex min-w-0 items-center gap-2.5" data-testid="cloud-logo-link">
             <XauAiLogo size={32} className="flex-none" />
             <span className="min-w-0">
-              <span className="block truncate text-[15px] font-semibold">XAU AI Sniper Command Center</span>
-              <span className="block truncate font-mono text-[9px] uppercase tracking-[0.22em] text-white/35">v6.24.1 · Aligned Entry Engine</span>
+              <span className="block truncate text-[15px] font-semibold">XauCloud Command Center</span>
+              <span className="block truncate font-mono text-[9px] uppercase tracking-[0.22em] text-white/35">Published release · M10 production</span>
             </span>
           </Link>
           <div className="flex items-center gap-2">
@@ -49,13 +49,13 @@ export default function CloudLanding() {
         <section className="mx-auto grid max-w-7xl gap-10 px-4 py-12 md:px-8 md:py-16 lg:grid-cols-2 lg:items-center">
           <div>
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-emerald-300" data-testid="hero-badge">
-              <RadioTower className="h-3 w-3" /> Live bot monitor · v6.24.1
+              <RadioTower className="h-3 w-3" /> Command Center
             </div>
             <h1 className="max-w-2xl font-heading text-4xl font-semibold leading-[1.08] tracking-tight sm:text-5xl lg:text-6xl" data-testid="hero-title">
               Monitor and control your gold bot from anywhere.
             </h1>
             <p className="mt-5 max-w-xl text-[15px] leading-7 text-white/55" data-testid="hero-subtitle">
-              Buy the licensed XAU AI Sniper EA, run it on your own MT5 or VPS, then use the Command Center for live heartbeat, AI Director decisions, ML state, trade activity, and PIN-protected remote commands.
+              Buy the licensed XauCloud EA, run it on your own MT5 or VPS, then use the Command Center for live heartbeat, AI Director decisions, ML state, trade activity, and PIN-protected remote commands.
             </p>
             <div className="mt-7 flex flex-col gap-3 sm:flex-row">
               <Link to="/command/signup"
@@ -75,11 +75,14 @@ export default function CloudLanding() {
           {/* Dashboard preview */}
           <div>
             <div className="rounded-[28px] border border-white/[0.09] bg-[#0c0d11] p-4 shadow-2xl shadow-black/50">
+              <div className="mb-3 rounded-lg border border-sky-300/20 bg-sky-300/[0.06] px-3 py-2 font-mono text-[9px] uppercase tracking-[0.2em] text-sky-200">
+                Illustrative interface preview · not live account data
+              </div>
               <div className="mb-4 flex items-center justify-between">
                 <div>
                   <div className="font-mono text-[9px] uppercase tracking-[0.24em] text-white/30">Bot status</div>
                   <div className="mt-0.5 flex items-center gap-2 font-mono text-xl font-black text-emerald-300">
-                    <span className="h-2 w-2 rounded-full bg-emerald-400" /> ONLINE
+                    <span className="h-2 w-2 rounded-full bg-sky-300" /> DEMO PREVIEW
                   </div>
                 </div>
                 <div className="rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1.5 text-[11px] font-bold text-amber-200">
@@ -88,7 +91,7 @@ export default function CloudLanding() {
               </div>
 
               <div className="grid grid-cols-3 gap-2 mb-3">
-                {[["Equity","$12,847"],["AI conf.","87%"],["State","Managing"]].map(([k,v]) => (
+                {[["Equity","—"],["AI conf.","—"],["State","Example"]].map(([k,v]) => (
                   <div key={k} className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-2.5 py-2">
                     <div className="font-mono text-[9px] uppercase tracking-widest text-white/30">{k}</div>
                     <div className="mt-1 font-mono text-[12px] font-bold">{v}</div>
@@ -99,18 +102,18 @@ export default function CloudLanding() {
               <div className="rounded-xl border border-white/[0.07] bg-black/25 p-3 mb-3">
                 <div className="mb-2 flex items-center justify-between">
                   <span className="font-mono text-[9px] uppercase tracking-widest text-white/30">AI Director feed</span>
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-sky-300" />
                 </div>
                 <div className="space-y-2 text-[11px] leading-5 text-white/52">
-                  <p><span className="font-mono text-violet-300">AI</span> · Claude ALLOW · confidence 87%</p>
-                  <p><span className="font-mono text-amber-200">BLOCK</span> · Spread guard delayed entry</p>
-                  <p><span className="font-mono text-sky-300">ML</span> · 18 matching samples WR 67%</p>
+                  <p><span className="font-mono text-violet-300">EXAMPLE</span> · advisory AI status appears here</p>
+                  <p><span className="font-mono text-amber-200">CANDIDATE</span> · one entry timer lifecycle</p>
+                  <p><span className="font-mono text-sky-300">RESULT</span> · cancelled or broker-confirmed</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-xl bg-emerald-400 px-3 py-2.5 text-center text-[12px] font-bold text-black">Resume</div>
-                <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 text-center text-[12px] font-semibold">Force sync</div>
+                <div className="rounded-xl bg-sky-300 px-3 py-2.5 text-center text-[12px] font-bold text-black">Control preview</div>
+                <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 text-center text-[12px] font-semibold">Sync preview</div>
               </div>
             </div>
           </div>
@@ -136,7 +139,7 @@ export default function CloudLanding() {
               <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-200 mb-2">How it works</div>
               <h2 className="text-2xl font-semibold tracking-tight mb-5">Buy, install, activate, monitor.</h2>
               <div className="space-y-2.5">
-                {["Buy a license and download the EA v6.24.1", "Install it on MT5 or your VPS, add your PIN", "Open /command — see heartbeat, AI decisions, trades, blocks, and errors"].map((step, i) => (
+                {["Buy a license and download the currently published verified EX5", "Install it on MT5 or your VPS, add your PIN, and verify Decision Mode", "Open /command — see heartbeat, M10 evidence, M30 consensus when active, trades, blocks, and errors"].map((step, i) => (
                   <div key={step} className="flex items-center gap-3 rounded-xl bg-black/[0.18] px-3 py-3">
                     <span className="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-emerald-400 font-mono text-[11px] font-black text-black">{i + 1}</span>
                     <span className="text-[13px] text-white/75">{step}</span>

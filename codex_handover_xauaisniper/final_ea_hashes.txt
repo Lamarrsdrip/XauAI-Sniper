@@ -1,0 +1,16 @@
+XAUAI Sniper v6.25.5 final source-aligned proof
+Generated 2026-07-17
+
+Root MQ5
+43628e1a040a6811be8bf4e3980f4368425df8e83f09c006f0ba3be49ddf5c44  XAUUSD_AI_Sniper_EA.mq5
+
+Backend MQ5 (byte-identical)
+43628e1a040a6811be8bf4e3980f4368425df8e83f09c006f0ba3be49ddf5c44  backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+
+Final canonical EX5 for the current source (not yet deployed)
+88335e79b24756c613528fb3f9e04da0eaceed96eca8042bb601c229bbddb728  /tmp/xauai-v6255-final-compile/XAUUSD_AI_Sniper_EA_v6.25.5.ex5
+
+Interim published/copied test candidate (not final)
+95dfa7fda4bab287d9fb46dcef1a557374933b154c8c3f489ec1429e9ea694ea  backend/ea_releases/v6.25.5/XAUUSD_AI_Sniper_EA_v6.25.5.ex5
+
+Final and interim differ because final source adds authenticated account/PIN payloads across the EA/backend data contract.

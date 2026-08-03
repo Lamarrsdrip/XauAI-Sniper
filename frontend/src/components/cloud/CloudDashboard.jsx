@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
 import {
-  Activity, AreaChart, BarChart3, Bot, Brain, CheckCircle2, CircleDollarSign,
+  Activity, AreaChart, BarChart3, Bot, Brain, CheckCircle2, ChevronDown, CircleDollarSign,
   Clock3, Copy, Flame, Gauge, History, Home, KeyRound, LineChart, Loader2,
   Lock, LogOut, Menu, Pause, Play, RefreshCw, Settings, Shield,
   SlidersHorizontal, Square, TerminalSquare, TrendingUp, TrendingDown, Wifi, XCircle, AlertTriangle, Search, Zap,
@@ -11,15 +11,12 @@ import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
 import AIThoughtFeed from "./AIThoughtFeed";
 import AIMarketOutlookCard from "./AIMarketOutlookCard";
+import M10VsOutlookCard from "./M10VsOutlookCard";
 import { API } from "@/lib/api";
+import { logoutOneSignalUser } from "@/lib/onesignal";
 
 // ─── Axios ───────────────────────────────────────────────────────────────────
 const commandAxios = axios.create({ baseURL: API, withCredentials: true });
-commandAxios.interceptors.request.use((cfg) => {
-  const token = localStorage.getItem("cloud_token");
-  if (token) cfg.headers.Authorization = `Bearer ${token}`;
-  return cfg;
-});
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const NAV = [
@@ -118,6 +115,23 @@ const eventMatchesSearch = (event, term) => {
   ].filter(Boolean).some(v => String(v).toLowerCase().includes(q));
 };
 const latestDecisionEvent = (events=[]) => events.find(e => /entries|blocks|exits|risk|ai|errors|overrides/.test(eventCategory(e))) || events[0];
+// v6.25.2 owner directive 2026-07-17 -- AI confidence/market bias/verdict are
+// posted by the EA on /cloud/monitor/activity (BotActivityReq.ai_confidence /
+// .market_bias), never on the heartbeat payload (BotHeartbeatReq has no such
+// fields, and the EA's heartbeat WebRequest body never sends them either) --
+// heartbeat.ai_confidence was therefore always undefined and every "AI" tile
+// permanently showed 0/"Neutral"/"Waiting" with nothing telling the operator
+// this was a wiring gap rather than the AI still warming up. Find the newest
+// activity event that actually carries a real ai_confidence value instead.
+// 30 min: generous vs. the EA's ~10 min M10 decision cadence, but bounded --
+// an ai_confidence value from hours/days ago must never display as current.
+const AI_FIELDS_STALE_MIN = 30;
+const latestAiFieldsEvent = (events=[]) => events.find(e => {
+  const v = getEventField(e, "ai_confidence", null);
+  if (v === null || v === undefined || v === "") return false;
+  const ageMin = e.ts ? (Date.now() - new Date(e.ts).getTime()) / 60000 : Infinity;
+  return ageMin <= AI_FIELDS_STALE_MIN;
+}) || null;
 const weightedEventCount = (events=[]) => events.reduce((sum,e)=>sum + Number(e.repeat_count||1), 0);
 
 // ─── Design tokens ───────────────────────────────────────────────────────────
@@ -312,7 +326,7 @@ function DecisionSummaryCard({ events=[], heartbeat={}, setActive, title="Latest
   return (
     <Card
       title={title}
-      subtitle="Clean M5 decision feed from the EA, deduplicated before it reaches this screen."
+      subtitle="Clean M10 decision feed from the EA, deduplicated before it reaches this screen."
       action={setActive && <button onClick={()=>setActive("activity")} className="rounded-full border border-white/[0.08] px-3 py-1.5 text-[11px] font-semibold text-white/55 hover:text-white">Open feed</button>}
     >
       {event ? (
@@ -334,7 +348,7 @@ function DecisionSummaryCard({ events=[], heartbeat={}, setActive, title="Latest
           {eventRepeatText(event) && <div className="rounded-xl border border-violet-300/15 bg-violet-300/[0.05] p-3 text-[12px] text-violet-100">{eventRepeatText(event)}</div>}
         </div>
       ) : (
-        <Empty title="Waiting for decision feed" body="The EA will publish one clean M5 decision event once the next scan cycle runs." icon={Activity} />
+        <Empty title="Waiting for decision feed" body="The EA will publish one clean M10 decision event after the next completed M10 scan." icon={Activity} />
       )}
     </Card>
   );
@@ -479,8 +493,8 @@ function CommandModal({ command, onCancel, onSubmit, busy, message, licenseKey }
 
 // ─── App shell ────────────────────────────────────────────────────────────────
 function useAuthGuard() {
-  const navigate = useNavigate();
-  useEffect(()=>{ if(!localStorage.getItem("cloud_token")) navigate("/command/login"); },[navigate]);
+  // Authentication is checked by the HttpOnly-cookie-backed /auth/me call
+  // in fetchAll. No script-readable bearer token is used.
 }
 
 function AppShell({ active, setActive, children, logout, statusText, online, eaVersion }) {
@@ -501,7 +515,7 @@ function AppShell({ active, setActive, children, logout, statusText, online, eaV
           <Link to="/command" className="flex min-w-0 items-center gap-2.5">
             <XauAiLogo size={30} className="flex-none" />
             <div className="min-w-0">
-              <div className="truncate text-[14px] font-bold leading-none">XAU AI Sniper</div>
+              <div className="truncate text-[14px] font-bold leading-none">XauCloud</div>
               <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · {eaVersion || "Waiting"}</div>
             </div>
           </Link>
@@ -591,25 +605,38 @@ export default function CloudDashboard() {
   const [propFirmConfirmed, setPropFirmConfirmed] = useState(false);
   const [propFirmBusy, setPropFirmBusy] = useState(false);
   const propFirmDirty = useRef(false);
+  const [analytics, setAnalytics] = useState(null);
+  // v6.25.6 XAU-027 (Codex handover) -- stable idempotency key per confirm-
+  // dialog instance. Regenerates only when modalCommand itself changes
+  // (a genuinely new action/dialog open), so a double-click on the same
+  // open confirmation reuses the same key and the backend dedupes it into
+  // one queued command instead of two.
+  const modalIdempotencyKey = useMemo(
+    () => (modalCommand ? (window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random()}`) : null),
+    [modalCommand]
+  );
+  const propFirmIdempotencyKey = useRef(null);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [meR, stR, actR, cmdR, licR, pfR] = await Promise.all([
+      const [meR, stR, actR, cmdR, licR, pfR, anR] = await Promise.all([
         commandAxios.get("/cloud/auth/me"),
         commandAxios.get("/cloud/monitor/status"),
         commandAxios.get("/cloud/monitor/activity", { params:{ kind:filter, limit:100 } }),
         commandAxios.get("/cloud/command/recent",   { params:{ limit:20 } }),
         commandAxios.get("/cloud/license/status"),
         commandAxios.get("/cloud/prop-firm/config"),
+        commandAxios.get("/cloud/performance/analytics").catch(()=>({ data:null })),
       ]);
       setMe(meR.data); setStatus(stR.data);
       setEvents(actR.data.events||[]); setCommands(cmdR.data.commands||[]);
       setLicense(licR.data); setPropFirm(pfR.data);
+      setAnalytics(anR.data);
       if (!propFirmDirty.current && pfR.data?.requested)
         setPropFirmForm({ ...DEFAULT_PROP, ...pfR.data.requested });
       if (licR.data?.license?.activation_key) setLicenseInput(licR.data.license.activation_key);
     } catch (err) {
-      if (err.response?.status===401) { localStorage.removeItem("cloud_token"); navigate("/command/login"); }
+      if (err.response?.status===401) navigate("/command/login");
     } finally { setLoading(false); }
   }, [filter, navigate]);
 
@@ -625,10 +652,12 @@ export default function CloudDashboard() {
     if (!modalCommand) return;
     setCommandBusy(true); setCommandMsg("");
     try {
-      const body = { action:modalCommand.action, pin:licenseKey, confirm:true };
+      const body = { action:modalCommand.action, pin:licenseKey, confirm:true, idempotency_key: modalIdempotencyKey };
       if (modalCommand.payload) body.payload = modalCommand.payload;
       const r = await commandAxios.post("/cloud/command/request", body);
-      setCommandMsg(`Queued ${modalCommand.label}: ${r.data.command_id}`);
+      setCommandMsg(r.data.duplicate
+        ? `Already queued ${modalCommand.label}: ${r.data.command_id}`
+        : `Queued ${modalCommand.label}: ${r.data.command_id}`);
       setModalCommand(null); fetchAll();
     } catch (e) { setCommandMsg(e.response?.data?.detail||"Command failed"); }
     finally { setCommandBusy(false); }
@@ -637,17 +666,25 @@ export default function CloudDashboard() {
   const applyPropFirm = async () => {
     if (!propFirmConfirmed) { setCommandMsg("Confirm you've checked these values against your prop firm's rules."); return; }
     setPropFirmBusy(true); setCommandMsg("");
+    // Stable across a double-click of this exact confirmed submission; a
+    // fresh key is only minted once this attempt actually completes (or
+    // the form is marked dirty again below), so a genuinely new edit gets
+    // its own dedupe identity rather than colliding with a stale one.
+    if (!propFirmIdempotencyKey.current) {
+      propFirmIdempotencyKey.current = window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    }
     try {
-      const r = await commandAxios.post("/cloud/command/request",{ action:"UPDATE_PROP_FIRM_CONFIG", pin:licenseInfo.activation_key, confirm:true, payload:propFirmForm });
-      setCommandMsg(`Prop Firm Mode queued: ${r.data.command_id}`);
-      setPropFirmConfirmed(false); propFirmDirty.current=false; fetchAll();
+      const r = await commandAxios.post("/cloud/command/request",{ action:"UPDATE_PROP_FIRM_CONFIG", pin:licenseInfo.activation_key, confirm:true, payload:propFirmForm, idempotency_key: propFirmIdempotencyKey.current });
+      setCommandMsg(r.data.duplicate ? `Prop Firm Mode already queued: ${r.data.command_id}` : `Prop Firm Mode queued: ${r.data.command_id}`);
+      setPropFirmConfirmed(false); propFirmDirty.current=false; propFirmIdempotencyKey.current=null; fetchAll();
     } catch (e) { setCommandMsg(e.response?.data?.detail||"Update failed"); }
     finally { setPropFirmBusy(false); }
   };
 
   const logout = async () => {
+    try { await logoutOneSignalUser(commandAxios); } catch {}
     try { await commandAxios.post("/cloud/auth/logout"); } catch {}
-    localStorage.removeItem("cloud_token"); navigate("/command");
+    navigate("/command");
   };
 
   const heartbeat   = status?.heartbeat || {};
@@ -655,13 +692,27 @@ export default function CloudDashboard() {
   const online      = Boolean(status && !status.offline && heartbeat.account_number);
   const tradingOk   = Boolean(heartbeat.algo_trading && heartbeat.trading_allowed && heartbeat.mt5_connected);
   const statusText  = online ? heartbeat.bot_state||"ONLINE" : "NO HEARTBEAT";
-  const eaVersion   = heartbeat.ea_version || licenseInfo.ea_version || status?.license?.ea_version || "Waiting";
-  const equityPoints = useMemo(()=>{
-    const base = Number(heartbeat.balance||heartbeat.equity||0);
-    if (!base) return [];
-    const d = Number(heartbeat.daily_pnl||0);
-    return [base-d*1.4, base-d, base-d*0.55, base-d*0.2, Number(heartbeat.equity||base)];
-  },[heartbeat.balance,heartbeat.daily_pnl,heartbeat.equity]);
+  // Customer-facing product identity -- ALWAYS from the authoritative
+  // release manifest via status.release, never the raw heartbeat.ea_version
+  // (an internal EA build/experiment string, e.g.
+  // "V6.25.24_M10_FIXED10SL_EXPERIMENT"). The raw value remains available
+  // as internalBuildName for Support Diagnostics only (SettingsPage).
+  const eaVersion         = status?.release?.public_display_name || "XauCloud";
+  const internalBuildName = heartbeat.ea_version || licenseInfo.ea_version || status?.license?.ea_version || "";
+  const productionStatus  = status?.production_status || null;
+  // v6.25.3 owner directive 2026-07-17 (Phase 7A P0) -- this used to be
+  // `[base-d*1.4, base-d, base-d*0.55, base-d*0.2, equity]`, a made-up
+  // 5-point interpolation from the CURRENT balance/equity/daily_pnl, not
+  // real trade history. Now sourced from GET /cloud/performance/analytics'
+  // real cumulative equity curve (built from actual EA-reported closed
+  // trades). Empty until enough verified trades exist -- Sparkline renders
+  // a flat line rather than a fabricated shape, and hasSufficientAnalytics
+  // below lets pages show "Not enough verified data" explicitly.
+  const equityPoints = useMemo(() => {
+    if (!analytics?.sufficient_data || !Array.isArray(analytics.equity_curve)) return [];
+    return analytics.equity_curve.map((p) => Number(p.cumulative_profit || 0));
+  }, [analytics]);
+  const hasSufficientAnalytics = Boolean(analytics?.sufficient_data);
 
   if (loading||!me) return (
     <div className="flex min-h-screen items-center justify-center bg-[#050507] text-white">
@@ -674,13 +725,13 @@ export default function CloudDashboard() {
 
   return (
     <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online} eaVersion={eaVersion}>
-      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} events={events} setActive={setActive} refresh={fetchAll} />}
+      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} />}
       {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} linked={Boolean(license?.linked||status?.license?.linked)} openCommand={setModalCommand} />}
-      {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} />}
+      {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} analytics={analytics} />}
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
       {active==="activity"     && <ActivityPage events={events} filter={filter} setFilter={setFilter} onForceOpen={setModalCommand} />}
-      {active==="control"      && <ControlPage commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} />}
-      {active==="license"      && <LicensePage license={license} licenseInput={licenseInput} setLicenseInput={setLicenseInput} linkLicense={linkLicense} commandMsg={commandMsg} heartbeat={heartbeat} me={me} />}
+      {active==="control"      && <ControlPage commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true; propFirmIdempotencyKey.current=null;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} />}
+      {active==="license"      && <LicensePage license={license} licenseInput={licenseInput} setLicenseInput={setLicenseInput} linkLicense={linkLicense} commandMsg={commandMsg} heartbeat={heartbeat} me={me} status={status} />}
       {active==="settings"     && <SettingsPage me={me} heartbeat={heartbeat} licenseInfo={licenseInfo} logout={logout} status={status} />}
       <CommandModal command={modalCommand} onCancel={()=>setModalCommand(null)} onSubmit={queueCommand} busy={commandBusy} message={commandMsg} licenseKey={licenseInfo.activation_key} />
     </AppShell>
@@ -697,8 +748,12 @@ function getSession() {
   return                         { label:"After Hours",  tone:"neutral" };
 }
 
-function getMarketBias(hb) {
-  const s = (hb.htf_consensus||hb.market_bias||hb.bot_state||"").toUpperCase();
+// v6.25.2 -- reads market_bias from the EA's own latest AI-confidence-bearing
+// activity event (see latestAiFieldsEvent below), not from the heartbeat
+// object, which never carries this field. Falls back to the raw bot_state
+// only as a last resort so this never regresses to a hard crash on no data.
+function getMarketBias(aiEvent, hb) {
+  const s = String(getEventField(aiEvent, "market_bias", "") || hb?.bot_state || "").toUpperCase();
   if (s.includes("BULL") || s.includes("LONG"))  return { label:"Bullish", tone:"green" };
   if (s.includes("BEAR") || s.includes("SHORT")) return { label:"Bearish", tone:"red"   };
   return                                                 { label:"Neutral", tone:"neutral"};
@@ -715,17 +770,329 @@ function humanBotState(raw, openTrades, tradingOk, online) {
 }
 
 // ─── Home ─────────────────────────────────────────────────────────────────────
-function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, events, setActive, refresh }) {
+// v6.25.0 — M10 Intelligent Signal Engine + exhaustion-evidence-only +
+// smart re-entry transparency. Every value here comes straight from the
+// EA's own m10_signal JSON block (backend/server.py BotActivityReq.m10_signal
+// -> details.m10_signal on the latest /cloud/monitor/activity event) --
+// nothing is recomputed client-side, so this can never show a value the EA
+// itself did not actually compute.
+function latestM10Signal(events, heartbeat) {
+  const candidates = (events || []).filter(e => e?.details?.m10_signal);
+  const newest = candidates.reduce((best, e) => {
+    const ts = new Date(e.ts || e.timestamp || 0).getTime();
+    if (!best || ts > best._ts) return { ...e, _ts: ts };
+    return best;
+  }, null);
+  const latest = newest?.details?.m10_signal;
+  if (!latest) return null;
+
+  const accountMatches = !heartbeat?.account_number || !latest.account || String(heartbeat.account_number) === String(latest.account);
+  const symbolMatches = !heartbeat?.symbol || !latest.symbol || heartbeat.symbol === latest.symbol;
+  return accountMatches && symbolMatches ? latest : null;
+}
+
+function M10SignalCard({ events, heartbeat }) {
+  // v6.25.1 owner directive 2026-07-17 -- explicit newest-by-timestamp
+  // selection (not "first match in whatever order events arrived"), and
+  // verify the event actually belongs to the currently-connected
+  // account+symbol before trusting it -- a stale event from a previous
+  // session/build must never be silently displayed as current.
+  const latest = latestM10Signal(events, heartbeat);
+  if (!latest) return null;
+
+  const decision = latest.decision || "DATA_UNAVAILABLE";
+  const preferredDir = latest.preferred_direction || "NONE";
+  const freshnessState = latest.freshness_state || "UNKNOWN";
+  const isStaleOrUnknown = freshnessState === "STALE" || freshnessState === "UNKNOWN";
+  const decisionTone = isStaleOrUnknown ? "neutral"
+    : decision === "BUY_CANDIDATE" ? "green"
+    : decision === "SELL_CANDIDATE" ? "red"
+    : decision.startsWith("WAIT_FOR") ? "amber"
+    : decision === "TRANSITION_WATCH" ? "blue"
+    : "neutral";
+  const freshnessTone = freshnessState === "FRESH" ? "green" : freshnessState === "DEGRADED" ? "amber" : "red";
+
+  // Scores are already 0-100 -- show the RAW percentage for each side, not
+  // one normalized to the larger of the two (that used to make a 30-vs-20
+  // score render as a full bar vs a 2/3 bar instead of the true 30%/20%).
+  const buyScore = Number(latest.buy_case_score || 0);
+  const sellScore = Number(latest.sell_case_score || 0);
+  const leadingScore = Math.max(buyScore, sellScore);
+  const leadingSide = buyScore >= sellScore ? "BUY" : "SELL";
+  const isActionable = ["BUY_CANDIDATE", "SELL_CANDIDATE"].includes(decision);
+  const confidenceLabel = isActionable ? "Signal confidence" : "Evidence strength";
+  const rawReason = String(latest.reason || "");
+  const reasonLooksContradictory =
+    /neither case cleared/i.test(rawReason) && leadingScore >= 55;
+  const displayReason = reasonLooksContradictory
+    ? `${leadingSide} evidence reached ${leadingScore.toFixed(1)}, but no actionable candidate was authorized because direction, structure, location and confirmation did not all pass.`
+    : rawReason;
+
+  return (
+    <div className={`${CARD} p-5`} data-testid="m10-signal-card">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className={MONO_LABEL}>M10 Signal Engine · Evidence #{latest.evidence_id ?? "—"}</div>
+        <div className="flex items-center gap-2">
+          <span className={pill(freshnessTone)}>{freshnessState}{latest.age_seconds != null ? ` · ${latest.age_seconds}s old` : ""}</span>
+          <span className={pill(decisionTone)}>{isStaleOrUnknown ? "DATA STALE" : decision.replace(/_/g, " ")}</span>
+        </div>
+      </div>
+
+      {isStaleOrUnknown ? (
+        <p className="mt-3 text-[11px] leading-4 text-white/45">
+          This evidence is {freshnessState.toLowerCase()} ({latest.age_seconds != null ? `${latest.age_seconds}s old` : "age unknown"}) -- not shown as a live signal.
+        </p>
+      ) : (
+        <>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div>
+              <div className="flex items-center justify-between text-[11px] text-white/50">
+                <span>Buy evidence</span><span className="font-mono">{buyScore.toFixed(0)}</span>
+              </div>
+              <div className="mt-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                <div className="h-full bg-emerald-400/70" style={{ width: `${Math.max(0, Math.min(100, buyScore))}%` }} />
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between text-[11px] text-white/50">
+                <span>Sell evidence</span><span className="font-mono">{sellScore.toFixed(0)}</span>
+              </div>
+              <div className="mt-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                <div className="h-full bg-red-400/70" style={{ width: `${Math.max(0, Math.min(100, sellScore))}%` }} />
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 text-[11px]">
+            <div><div className="text-white/35">Trend</div><div className="mt-0.5 font-mono text-white/80">{latest.trend_state || "—"}</div></div>
+            <div><div className="text-white/35">Structure</div><div className="mt-0.5 font-mono text-white/80">{latest.structure_state || "—"}</div></div>
+            <div><div className="text-white/35">Location</div><div className="mt-0.5 font-mono text-white/80">{latest.location_state || "—"}</div></div>
+            <div><div className="text-white/35">{confidenceLabel}</div><div className="mt-0.5 font-mono text-white/80">{Number(latest.confidence || 0).toFixed(0)}%</div></div>
+          </div>
+
+          <p className="mt-3 text-[11px] leading-4 text-white/45">
+            Preferred direction: <span className="text-white/70 font-semibold">{preferredDir}</span>
+            {latest.retracement_required ? " · location evidence noted inside the single entry timer" : ""}
+            {" — "}{displayReason}
+          </p>
+
+          <p className="mt-3 rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 text-[10px] leading-4 text-white/40">
+            Evidence scores describe the current setup; they are not next-candle probabilities. High evidence at a late or exhausted location can describe a move that is already mature.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
+            <span className={pill("neutral")}>Exhaustion evidence-only: {(latest.exhaustion_decision || "—").replace(/_/g, " ")}</span>
+            {latest.post_profit_buy_pending && <span className={pill("amber")}>Buy location evidence: extended</span>}
+            {latest.post_profit_sell_pending && <span className={pill("amber")}>Sell location evidence: extended</span>}
+          </div>
+        </>
+      )}
+
+      <div className="mt-3 text-[10px] text-white/25 font-mono">
+        M10 bar {latest.bar_time || "—"} · {latest.ea_version || ""} · {latest.build_hash || ""}
+      </div>
+    </div>
+  );
+}
+
+// v6.25.5 — M30 three-M10-evidence consensus mode transparency. Same
+// convention as M10SignalCard directly above: every value comes straight
+// from the EA's own m30_consensus JSON block (backend/server.py
+// BotActivityReq.m30_consensus -> details.m30_consensus), nothing
+// recomputed client-side. Renders nothing at all when the EA is running in
+// M10-legacy mode (mode_active=false) or has never posted the field --
+// this card only ever appears for an account actually running M30 mode.
+function M30ConsensusCard({ events, heartbeat }) {
+  const candidates = (events || []).filter(e => e?.details?.m30_consensus?.mode_active);
+  const newest = candidates.reduce((best, e) => {
+    const ts = new Date(e.ts || e.timestamp || 0).getTime();
+    if (!best || ts > best._ts) return { ...e, _ts: ts };
+    return best;
+  }, null);
+  const latest = newest?.details?.m30_consensus;
+  if (!latest || !latest.mode_active) return null;
+
+  const c = latest.consensus || {};
+  const decision = c.decision || "DATA_PENDING";
+  const preferredDir = c.preferred_direction || "NONE";
+  const decisionTone = decision === "BUY_CANDIDATE" ? "green"
+    : decision === "SELL_CANDIDATE" ? "red"
+    : decision.startsWith("WAIT_FOR") ? "amber"
+    : decision === "DATA_PENDING" ? "blue"
+    : "neutral";
+
+  const evidenceRows = [
+    ["Newest", latest.m10_evidence_newest],
+    ["Middle", latest.m10_evidence_middle],
+    ["Oldest", latest.m10_evidence_oldest],
+  ].filter(([, ev]) => ev && ev.evidence_id != null);
+
+  return (
+    <div className={`${CARD} p-5`} data-testid="m30-consensus-card">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className={MONO_LABEL}>M30 Consensus Mode · {latest.decision_mode || "—"}</div>
+        <span className={pill(decisionTone)}>{decision.replace(/_/g, " ")}</span>
+      </div>
+
+      <p className="mt-3 text-[11px] leading-4 text-white/45">
+        Slot {c.slot_close_time || "—"} · preferred direction <span className="text-white/70 font-semibold">{preferredDir}</span>
+        {" — "}{c.reason || "waiting for three consecutive complete M10 snapshots"}
+      </p>
+
+      {c.data_complete && (
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 text-[11px]">
+          <div><div className="text-white/35">Weighted buy</div><div className="mt-0.5 font-mono text-white/80">{Number(c.weighted_buy_score || 0).toFixed(1)}</div></div>
+          <div><div className="text-white/35">Weighted sell</div><div className="mt-0.5 font-mono text-white/80">{Number(c.weighted_sell_score || 0).toFixed(1)}</div></div>
+          <div><div className="text-white/35">Observation wins</div><div className="mt-0.5 font-mono text-white/80">{c.buy_observation_wins ?? 0} buy / {c.sell_observation_wins ?? 0} sell</div></div>
+          <div><div className="text-white/35">Persistence</div><div className="mt-0.5 font-mono text-white/80">{Number(c.directional_persistence_pct || 0).toFixed(0)}%</div></div>
+        </div>
+      )}
+
+      {evidenceRows.length > 0 && (
+        <div className="mt-4 space-y-1.5 text-[11px]">
+          {evidenceRows.map(([label, ev]) => (
+            <div key={label} className="flex items-center justify-between gap-2 text-white/45">
+              <span className="text-white/35 w-14 shrink-0">{label}</span>
+              <span className="font-mono text-white/70 truncate">#{ev.evidence_id} · buy {Number(ev.buy_case_score || 0).toFixed(0)} / sell {Number(ev.sell_case_score || 0).toFixed(0)} · {ev.decision || "—"}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* v6.25.6 XAU-026 (Codex handover) -- real candidate/timer lifecycle.
+          Every value below comes straight from the EA's own m30_consensus.consensus
+          block; has_active_candidate is the authoritative gate (0-valued
+          timer/price fields are real possible values, not "no candidate"). */}
+      <div className="mt-4 pt-4 border-t border-white/[0.06]">
+        <div className={MONO_LABEL}>Candidate Lifecycle</div>
+        {c.has_active_candidate ? (
+          <>
+            <div className="mt-2 flex items-center gap-2 flex-wrap">
+              <span className={pill(c.lifecycle_state === "ENTRY_TIMER_ACTIVE" ? "amber" : "blue")}>
+                {(c.lifecycle_state || "UNKNOWN").replace(/_/g, " ")}
+              </span>
+              <span className="text-[10px] text-white/35 font-mono truncate">{c.candidate_id || "—"}</span>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 text-[11px]">
+              <div><div className="text-white/35">Timer</div><div className="mt-0.5 font-mono text-white/80">{Math.round(c.timer_elapsed_seconds ?? 0)}s / {Math.round(c.timer_duration_seconds ?? 0)}s</div></div>
+              <div><div className="text-white/35">Remaining</div><div className="mt-0.5 font-mono text-white/80">{Math.round(c.timer_remaining_seconds ?? 0)}s</div></div>
+              <div><div className="text-white/35">Origin price</div><div className="mt-0.5 font-mono text-white/80">{c.origin_price != null ? Number(c.origin_price).toFixed(2) : "—"}</div></div>
+              <div><div className="text-white/35">Move since origin</div><div className="mt-0.5 font-mono text-white/80">{c.move_r_since_origin != null ? `${Number(c.move_r_since_origin).toFixed(2)}R` : "—"}</div></div>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-white/35">
+              <span className={pill("neutral")}>Structural SL: {(c.structural_sl_status || "").replace(/_/g, " ").toLowerCase() || "unavailable"}</span>
+              <span className={pill("neutral")}>Reservation: {(c.reservation_key_status || "").replace(/_/g, " ").toLowerCase() || "unavailable"}</span>
+            </div>
+          </>
+        ) : (
+          <p className="mt-2 text-[11px] leading-4 text-white/45">
+            No active candidate{c.lifecycle_state ? ` — ${c.lifecycle_state.replace(/_/g, " ").toLowerCase()}` : ""}.
+          </p>
+        )}
+        {c.last_outcome_result && (
+          <p className="mt-2 text-[10px] text-white/35">
+            Last resolved: <span className="text-white/60 font-mono">{c.last_outcome_result}</span>
+            {c.last_outcome_at ? ` at ${c.last_outcome_at}` : ""}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Compact Home "open-position summary" -- owner spec removed the full "Open
+// Trade Thinking" dashboard (ticket/entry/SL/TP/peak-profit/hold-probability
+// grid + Force Close) from Home entirely. Full detail + Force Close now live
+// only under Trading -> Open Trades -> Trade Details (AIThoughtFeed's
+// CurrentTradePanel, still mounted there unchanged). This reuses the same
+// genuine /cloud/monitor/current-opinion evidence -- no new data source --
+// but renders only symbol/direction/P&L/protected status, never the removed
+// fields, and never a Force Close control.
+function HomeOpenPositionSummary({ linked, online, setActive }) {
+  const [opinion, setOpinion] = useState(null);
+
+  const fetchOpinion = useCallback(async () => {
+    if (!linked || !online) return;
+    try {
+      const r = await commandAxios.get("/cloud/monitor/current-opinion", { params: { _t: Date.now() } });
+      setOpinion(r.data);
+    } catch { /* keep last-known state on transient failure */ }
+  }, [linked, online]);
+
+  useEffect(() => { fetchOpinion(); const id = setInterval(fetchOpinion, 8000); return () => clearInterval(id); }, [fetchOpinion]);
+
+  if (!linked || !online || !opinion?.open) return null;
+  const direction = String(opinion.direction || "").toUpperCase();
+  const pnl = Number(opinion.floating_pl || 0);
+  const isProtected = Number(opinion.protected_profit || 0) > 0;
+
+  return (
+    <div className={`${CARD} p-4`} data-testid="home-open-position-summary">
+      <div className="flex items-center justify-between">
+        <span className={MONO_LABEL}>Open Position</span>
+        {isProtected && (
+          <span className="rounded-full border border-emerald-400/25 bg-emerald-300/[0.08] px-2 py-0.5 text-[10px] font-bold text-emerald-300">Protected</span>
+        )}
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`font-mono text-[13px] font-bold ${direction === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{direction || "—"}</span>
+          <span className="truncate text-[13px] text-white/70">{opinion.symbol || "XAUUSD"}</span>
+        </div>
+        <span className={`flex-none font-mono text-[13px] font-bold ${pnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{money(pnl)}</span>
+      </div>
+      <button onClick={() => setActive("trading")} className="mt-3 w-full rounded-xl border border-white/[0.08] bg-white/[0.03] py-2 text-[11px] font-semibold text-white/70 transition hover:border-amber-300/25 hover:text-amber-200">
+        View Trade
+      </button>
+    </div>
+  );
+}
+
+// Compact Home "recent activity" -- owner spec: Home must show genuine
+// recent activity without the removed raw AI-reasoning/blocker feed. Reuses
+// the same `events` data HomePage already receives (no new API call),
+// filtered to plain-language trade lifecycle events only.
+function HomeRecentActivity({ events = [], onOpenFull }) {
+  const meaningful = (events || [])
+    .filter((e) => ["entries", "exits"].includes(eventCategory(e)))
+    .slice(0, 3);
+  if (!meaningful.length) return null;
+  return (
+    <div className={`${CARD} p-4`} data-testid="home-recent-activity">
+      <div className="flex items-center justify-between">
+        <span className={MONO_LABEL}>Recent Activity</span>
+        <button onClick={onOpenFull} className="text-[10px] font-semibold text-amber-300/70 transition hover:text-amber-300">View all</button>
+      </div>
+      <div className="mt-3 space-y-2">
+        {meaningful.map((e, i) => {
+          const cat = eventCategory(e);
+          const label = cat === "entries" ? "Trade opened" : "Trade closed";
+          return (
+            <div key={e.id || i} className="flex items-center justify-between gap-3 text-[12px]">
+              <span className="truncate text-white/70">{label} · {e.symbol || getEventField(e, "symbol", "XAUUSD")}</span>
+              <span className="flex-none font-mono text-[10px] text-white/30">{relativeTime(e.ts)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, hasSufficientAnalytics, events, setActive, refresh }) {
+  const [homeOutlook, setHomeOutlook] = useState(null);
+  const [outlookStatus, setOutlookStatus] = useState({ loading:true, requestFailed:false });
   const openTrades = online ? Number(status?.open_trades||heartbeat.open_positions||0) : 0;
   const ddNum      = Number(heartbeat.drawdown||0);
   const riskTone   = ddNum>5?"red":ddNum>2?"amber":"green";
   const pnlNum     = Number(heartbeat.daily_pnl||0);
   const pnlPos     = pnlNum >= 0;
-  const conf       = Number(heartbeat.ai_confidence||heartbeat.last_ai_confidence||0);
+  const aiEvent    = latestAiFieldsEvent(events);
+  const conf       = Number(getEventField(aiEvent, "ai_confidence", 0)) || 0;
   const session    = getSession();
-  const bias       = getMarketBias(heartbeat);
+  const bias       = getMarketBias(aiEvent, heartbeat);
   const botState   = humanBotState(heartbeat.bot_state, openTrades, tradingOk, online);
   const stateTone  = openTrades>0?"amber":tradingOk?"green":"neutral";
+  const m10Signal  = latestM10Signal(events, heartbeat);
 
   const offlineCopy = licenseInfo?.activation_key
     ? "License linked. Waiting for EA heartbeat from your MT5 terminal."
@@ -739,7 +1106,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
           <div className="min-w-0">
             <div className={`mb-2 flex items-center gap-2 ${MONO_LABEL}`}>
               {online
-                ? <><span className={`h-1.5 w-1.5 rounded-full animate-pulse ${openTrades>0?"bg-amber-300":"bg-emerald-400"}`} />{heartbeat.symbol||"XAUUSD"} · {heartbeat.timeframe||"M5"} · {heartbeat.market_mode==="INDEX_MODE"?`Index Mode (${heartbeat.index_profile||"GENERIC_INDEX"})`:"Gold Mode"} · Live</>
+                ? <><span className={`h-1.5 w-1.5 rounded-full animate-pulse ${openTrades>0?"bg-amber-300":"bg-emerald-400"}`} />{heartbeat.symbol||"XAUUSD"} · {status?.production_status?.display_timeframe||"M10"} · {heartbeat.market_mode==="INDEX_MODE"?`Index Mode (${heartbeat.index_profile||"GENERIC_INDEX"})`:"Gold Mode"} · Live</>
                 : <><Wifi className="h-3 w-3" />No connection</>}
             </div>
             <h1 className="text-[2rem] font-black tracking-tight leading-none">{botState}</h1>
@@ -755,47 +1122,80 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
         </div>
         <div className="mt-4">
           <Sparkline points={equityPoints} tone={online?(openTrades>0?"#fbbf24":"#34d399"):"#d4af37"} height="h-[72px]" />
+          {online && !hasSufficientAnalytics && (
+            <p className="mt-1.5 text-[10px] text-white/30">Equity curve fills in once the EA reports enough real closed trades — see Analytics.</p>
+          )}
         </div>
       </div>
 
-      {/* 4 core account metrics */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Equity"      value={online?money(heartbeat.equity):"—"}       detail={online?`Balance ${money(heartbeat.balance)}`:"Not live"}     icon={CircleDollarSign} tone={online?"green":"neutral"} />
-        <Metric label="Today's P&L" value={online?money(pnlNum):"—"}                 detail={pnlNum&&heartbeat.balance?`${((pnlNum/Number(heartbeat.balance))*100).toFixed(2)}% of balance`:"Today"} icon={TrendingUp} tone={pnlPos?"green":"red"} />
-        <Metric label="Open trades" value={online?openTrades:"—"}                    detail={online?`${heartbeat.spread??"-"} pts spread`:"No data"}        icon={History}          tone={openTrades>0?"amber":"neutral"} />
-        <Metric label="Open risk"   value={online?pct(heartbeat.drawdown):"—"}       detail="Current drawdown"                                              icon={Gauge}            tone={riskTone} />
+      {/* Mobile hierarchy (owner spec): equity/P&L get top billing right
+          under status, ahead of every other metric -- they answer "how am I
+          doing" before anything else does. */}
+      <div className="grid grid-cols-2 gap-3" data-testid="home-equity-pnl-row">
+        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-4">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.15em] text-white/35"><CircleDollarSign className="h-3 w-3" />Equity</div>
+          <div className="mt-1.5 text-[1.35rem] font-bold tracking-tight">{online?money(heartbeat.equity):"—"}</div>
+          <div className="mt-0.5 text-[11px] text-white/40">{online?`Balance ${money(heartbeat.balance)}`:"Not live"}</div>
+        </div>
+        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-4">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.15em] text-white/35"><TrendingUp className="h-3 w-3" />Today's P&L</div>
+          <div className={`mt-1.5 text-[1.35rem] font-bold tracking-tight ${online?(pnlPos?"text-emerald-300":"text-rose-300"):""}`}>{online?money(pnlNum):"—"}</div>
+          <div className="mt-0.5 text-[11px] text-white/40">{online&&pnlNum&&heartbeat.balance?`${((pnlNum/Number(heartbeat.balance))*100).toFixed(2)}% of balance`:"Today"}</div>
+        </div>
       </div>
 
-      {/* 4 market intelligence cards — trader-facing, no internal strings */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className={`${cardTone(bias.tone)} p-4 rounded-2xl min-w-0`}>
-          <div className={MONO_LABEL}>Market bias</div>
-          <div className="mt-2 font-mono text-xl font-black leading-none">{online?bias.label:"—"}</div>
-          <div className="mt-1.5 text-[11px] text-white/40">HTF consensus</div>
-        </div>
-        <div className={`${cardTone(conf>=70?"green":conf>0?"amber":"neutral")} p-4 rounded-2xl min-w-0`}>
-          <div className={MONO_LABEL}>AI confidence</div>
-          <div className="mt-2 font-mono text-xl font-black leading-none">{online&&conf>0?`${conf}%`:"—"}</div>
-          <div className="mt-1.5 text-[11px] text-white/40">{conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"}</div>
-        </div>
-        <div className={`${cardTone(session.tone)} p-4 rounded-2xl min-w-0`}>
-          <div className={MONO_LABEL}>Session</div>
-          <div className="mt-2 font-mono text-xl font-black leading-none">{session.label}</div>
-          <div className="mt-1.5 text-[11px] text-white/40">UTC {new Date().getUTCHours().toString().padStart(2,"0")}:00</div>
-        </div>
-        <div className={`${cardTone(stateTone)} p-4 rounded-2xl min-w-0`}>
-          <div className={MONO_LABEL}>Trading status</div>
-          <div className="mt-2 font-mono text-xl font-black leading-none">{botState}</div>
-          <div className="mt-1.5 text-[11px] text-white/40">{online?"EA connected":"No heartbeat"}</div>
-        </div>
-      </div>
+      <AIMarketOutlookCard
+        linked={Boolean(licenseInfo.activation_key)}
+        online={online}
+        onOutlookChange={setHomeOutlook}
+        onStatusChange={setOutlookStatus}
+      />
+
+      {online && <M10SignalCard events={events} heartbeat={heartbeat} />}
+
+      <M10VsOutlookCard
+        m10={m10Signal}
+        outlook={homeOutlook}
+        online={online}
+        loading={outlookStatus.loading}
+        requestFailed={outlookStatus.requestFailed}
+      />
+
+      {/* Compact open-position summary: only appears when a trade is
+          genuinely open. Full detail + Force Close now live only under
+          Trading -> Open Trades -> Trade Details -- this never recreates
+          the removed Open Trade Thinking dashboard. */}
+      <HomeOpenPositionSummary linked={Boolean(licenseInfo.activation_key)} online={online} setActive={setActive} />
+
+      {/* Recent activity: genuine trade-lifecycle events only, plain
+          language -- the removed raw AI-reasoning/blocker feed lives on
+          under Trading (full AIThoughtFeed), not on Home. */}
+      <HomeRecentActivity events={events} onOpenFull={() => setActive("activity")} />
 
       {/* No license CTA */}
       {!licenseInfo.activation_key && (
         <Empty title="Connect your license" body="Link your ASE license key once and live data from your MT5 account will stream here automatically." icon={KeyRound} />
       )}
 
-      <AIMarketOutlookCard linked={Boolean(licenseInfo.activation_key)} />
+      {online && <M30ConsensusCard events={events} heartbeat={heartbeat} />}
+
+      {/* Advanced details: secondary technical metrics kept out of the
+          primary above-the-fold hierarchy, available on demand rather than
+          competing for attention with equity/P&L/open-trade/outlook. */}
+      <details className="group rounded-2xl border border-white/[0.07] bg-white/[0.02] open:bg-white/[0.03]">
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-[12px] font-semibold text-white/60 select-none">
+          Advanced details
+          <ChevronDown className="h-4 w-4 text-white/35 transition group-open:rotate-180" />
+        </summary>
+        <div className="grid grid-cols-2 gap-2 px-4 pb-4 sm:grid-cols-4" data-testid="home-summary-grid">
+          <Metric label="Open trades" value={online?openTrades:"—"} detail={online?`${heartbeat.spread??"-"} pts spread`:"No data"} icon={History} tone={openTrades>0?"amber":"neutral"} />
+          <Metric label="Open risk" value={online?pct(ddNum):"—"} detail="Current floating drawdown" icon={Shield} tone={online?riskTone:"neutral"} />
+          <Metric label="Market bias" value={online?bias.label:"—"} detail="Latest fresh EA evidence" icon={Activity} tone={online?bias.tone:"neutral"} />
+          <Metric label="AI confidence" value={online&&conf>0?`${conf}%`:"—"} detail={conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"} icon={Brain} tone={conf>=70?"green":conf>0?"amber":"neutral"} />
+          <Metric label="Session" value={online?session.label:"—"} detail="Device UTC session" icon={Clock3} tone={online?session.tone:"neutral"} />
+          <Metric label="Trading status" value={online?botState:"Offline"} detail={tradingOk?"Broker trading enabled":"No new-trade authority"} icon={Bot} tone={online?stateTone:"neutral"} />
+        </div>
+      </details>
 
       {/* Quick nav — 3 cards */}
       <div className="grid grid-cols-3 gap-3">
@@ -820,25 +1220,39 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
 }
 
 function SetupHealth({ checks=[] }) {
-  if (!checks.length) return null;
   const ok = checks.filter(c=>c.ok).length;
   return (
-    <Card title="Setup health" subtitle={`${ok}/${checks.length} checks passing`}>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {checks.map(c=>{
-          const Icon = c.ok ? CheckCircle2 : XCircle;
-          return (
-            <div key={c.key||c.label} className={`flex items-start gap-3 rounded-xl border p-3 ${c.ok?"border-emerald-400/15 bg-emerald-300/[0.04]":"border-amber-300/15 bg-amber-300/[0.04]"}`}>
-              <Icon className={`mt-0.5 h-4 w-4 flex-none ${c.ok?"text-emerald-400":"text-amber-400"}`} />
-              <div className="min-w-0">
-                <div className="text-[13px] font-semibold">{c.label}</div>
-                <div className="mt-0.5 text-[11px] leading-4 text-white/40">{c.detail}</div>
-              </div>
-            </div>
-          );
-        })}
+    <div data-testid="setup-health">
+      <div className="mb-3 flex items-end justify-between gap-3">
+        <div>
+          <h3 className="text-[14px] font-semibold">Setup Health</h3>
+          <p className="mt-0.5 text-[11px] text-white/40">
+            {checks.length ? `${ok}/${checks.length} checks passing` : "Waiting for setup status"}
+          </p>
+        </div>
+        {checks.length > 0 && <span className={pill(ok===checks.length?"green":"amber")}>{ok}/{checks.length}</span>}
       </div>
-    </Card>
+      {checks.length ? (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {checks.map(c=>{
+            const Icon = c.ok ? CheckCircle2 : XCircle;
+            return (
+              <div key={c.key||c.label} className={`flex items-start gap-3 rounded-xl border p-3 ${c.ok?"border-emerald-400/15 bg-emerald-300/[0.04]":"border-amber-300/15 bg-amber-300/[0.04]"}`}>
+                <Icon className={`mt-0.5 h-4 w-4 flex-none ${c.ok?"text-emerald-400":"text-amber-400"}`} />
+                <div className="min-w-0">
+                  <div className="text-[13px] font-semibold">{c.label}</div>
+                  <div className="mt-0.5 break-words text-[11px] leading-4 text-white/40">{c.detail}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 text-[11px] text-white/40">
+          Setup checks will appear after the authenticated status request completes.
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -848,7 +1262,7 @@ function TradingPage({ heartbeat, events, online, linked, openCommand }) {
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Metric label="Open trades" value={online?heartbeat.open_positions||0:0} detail="EA-reported" icon={History} tone="amber" />
-        <Metric label="Symbol"      value={online?heartbeat.symbol||"XAUUSD":"—"} detail={heartbeat.timeframe||"M5"} icon={TerminalSquare} tone="blue" />
+        <Metric label="Symbol"      value={online?heartbeat.symbol||"XAUUSD":"—"} detail={heartbeat.timeframe||"UNKNOWN"} icon={TerminalSquare} tone="blue" />
         <Metric label="Spread"      value={online?`${heartbeat.spread??"-"}pts`:"—"} detail="Current quote" icon={Activity} tone="amber" />
         <Metric label="Bot state"   value={heartbeat.bot_state||"Waiting"} detail={heartbeat.last_action||"No action yet"} icon={Bot} tone={online?"green":"neutral"} />
       </div>
@@ -861,22 +1275,40 @@ function TradingPage({ heartbeat, events, online, linked, openCommand }) {
 }
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
-function AnalyticsPage({ heartbeat, events, equityPoints }) {
+function AnalyticsPage({ heartbeat, events, equityPoints, analytics }) {
   const trades = weightedEventCount(events.filter(e=>eventCategory(e)==="entries"));
   const blocks = weightedEventCount(events.filter(e=>eventCategory(e)==="blocks"));
   const errors = weightedEventCount(events.filter(e=>eventCategory(e)==="errors"));
+  const sufficient = Boolean(analytics?.sufficient_data);
   return (
     <div className="space-y-4">
+      {/* v6.25.3 owner directive 2026-07-17 (Phase 7A P0) -- this curve and
+          the metrics below it are now built from real closed-trade records
+          the EA reports at close (GET /cloud/performance/analytics), not a
+          made-up interpolation of the current balance/equity/daily_pnl. */}
       <Card title="Equity curve">
         <div className="mb-2 flex items-center justify-between">
-          <span className={MONO_LABEL}>Session estimate</span>
-          <span className="font-mono text-[13px] font-bold text-amber-200">{money(heartbeat.equity)}</span>
+          <span className={MONO_LABEL}>Realized P&L (verified trades)</span>
+          <span className="font-mono text-[13px] font-bold text-amber-200">
+            {sufficient ? money(analytics.realized_pnl) : "—"}
+          </span>
         </div>
         <Sparkline points={equityPoints} tone="#d4af37" height="h-28" />
+        {!sufficient && (
+          <p className="mt-2 text-[11px] leading-4 text-white/40">
+            Not enough verified data yet ({analytics?.verified_trade_count ?? 0} of {analytics?.minimum_required ?? 5} closed trades reported by the EA). This fills in automatically as your EA reports real trade closes.
+          </p>
+        )}
       </Card>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Daily P&L"     value={money(heartbeat.daily_pnl)} detail="EA heartbeat"       icon={CircleDollarSign} tone={Number(heartbeat.daily_pnl||0)>=0?"green":"red"} />
-        <Metric label="Drawdown"      value={pct(heartbeat.drawdown)}    detail="Current"             icon={Gauge}            tone={Number(heartbeat.drawdown||0)>5?"red":"amber"} />
+        <Metric label="Win rate"      value={sufficient?pct(analytics.win_rate):"—"}         detail={sufficient?`${analytics.verified_trade_count} verified trades`:"Not enough data"} icon={TrendingUp}       tone={sufficient&&analytics.win_rate>=50?"green":"amber"} />
+        <Metric label="Profit factor" value={sufficient?analytics.profit_factor.toFixed(2):"—"} detail="Gross profit / gross loss"                                                       icon={CircleDollarSign} tone={sufficient&&analytics.profit_factor>=1?"green":"red"} />
+        <Metric label="Avg R"         value={sufficient&&analytics.avg_r!=null?`${analytics.avg_r.toFixed(2)}R`:"—"} detail="Average realized R-multiple"                                icon={Gauge}            tone="neutral" />
+        <Metric label="Max drawdown"  value={sufficient?money(analytics.max_drawdown):"—"}    detail="Peak-to-trough, verified history"                                                icon={Shield}           tone={sufficient&&analytics.max_drawdown>0?"amber":"neutral"} />
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Metric label="Live P&L"      value={money(heartbeat.daily_pnl)} detail="EA heartbeat (today, unverified)" icon={CircleDollarSign} tone={Number(heartbeat.daily_pnl||0)>=0?"green":"red"} />
+        <Metric label="Floating DD"   value={pct(heartbeat.drawdown)}    detail="Current live floating"            icon={Gauge}            tone={Number(heartbeat.drawdown||0)>5?"red":"amber"} />
         <Metric label="Trade events"  value={trades}                     detail="Recent feed"         icon={TrendingUp}       tone="green" />
         <Metric label="Blocks/errors" value={`${blocks}/${errors}`}      detail="Protection vs faults" icon={Shield}          tone={errors?"red":"amber"} />
       </div>
@@ -911,10 +1343,21 @@ function IntelligencePage({ heartbeat, events, status }) {
   const aiEvents  = events.filter(e=>/AI|DIRECTOR|CLAUDE|GPT|CONFIDENCE/i.test(`${e.event_type} ${e.message}`));
   const mlEvents  = events.filter(e=>/ML|HIVE|PATTERN|LEARNING|WARM/i.test(`${e.event_type} ${e.message}`));
   const latest    = events.find(e=>/BLOCK|VETO|SIGNAL|AI|ML|EXIT|SYNC/i.test(`${e.event_type} ${e.message}`));
-  const conf      = heartbeat.ai_confidence||heartbeat.last_ai_confidence||0;
-  const verdict   = heartbeat.ai_verdict||heartbeat.last_action||"";
-  const mlSamples = heartbeat.ml_samples||heartbeat.pattern_count||0;
-  const mlTrusted = heartbeat.ml_trusted||(mlSamples>=10);
+  // v6.25.2 owner directive 2026-07-17 -- ai_confidence/market_bias are real
+  // EA-posted fields on activity events (BotActivityReq), never on the
+  // heartbeat object; heartbeat.ai_confidence was always undefined. See
+  // latestAiFieldsEvent above.
+  const aiEvent   = latestAiFieldsEvent(events);
+  const conf      = Number(getEventField(aiEvent, "ai_confidence", 0)) || 0;
+  const verdict   = aiEvent ? (getEventField(aiEvent, "decision", "") || aiEvent.message || "") : "";
+  // v6.25.2 -- ml_samples/pattern_count/ml_trusted/hive_verdict have never
+  // existed on ANY backend model or EA payload (verified: not in
+  // BotHeartbeatReq, not in BotActivityReq, not sent anywhere in the EA's
+  // WebRequest bodies) -- there is no real ML/Hive subsystem wired to this
+  // dashboard yet. Showing 0/"Learning"/"Neutral" here previously looked
+  // like real (if unremarkable) data; that was misleading. Disclose the gap
+  // honestly instead of fabricating a value.
+  const mlWired   = false;
 
   return (
     <div className="space-y-4">
@@ -944,9 +1387,9 @@ function IntelligencePage({ heartbeat, events, status }) {
         </div>
         <div className="grid grid-cols-3 gap-4">
           {[
-            ["Patterns", mlSamples||"—", "text-white"],
-            ["Authority", mlTrusted?"Active":"Learning", mlTrusted?"text-emerald-300":"text-amber-300"],
-            ["Hive",     heartbeat.hive_verdict||"Neutral", "text-sky-200"],
+            ["Patterns", mlWired?"—":"Not wired yet", "text-white/35"],
+            ["Authority", mlWired?"Learning":"Not wired yet", "text-white/35"],
+            ["Hive",     mlWired?"Neutral":"Not wired yet", "text-white/35"],
           ].map(([l,v,c])=>(
             <div key={l}>
               <div className={MONO_LABEL}>{l}</div>
@@ -1006,7 +1449,7 @@ function ActivityPage({ events, filter, setFilter, onForceOpen }) {
         </label>
       </div>
       <DecisionStats events={visibleEvents} />
-      <Card title="Bot Decision Feed" subtitle="Clean M5 decision timeline: entries, blocks, exits, risk, AI, errors, and overrides. Repeated noise is compressed.">
+      <Card title="Bot Decision Feed" subtitle="Clean M10/M30 decision timeline: evidence, candidates, entries, cancellations, exits, risk, AI telemetry, errors, and overrides. Repeated noise is compressed.">
         {visibleEvents.length
           ? <div className="space-y-2">{visibleEvents.map((e,i)=><EventRow key={e.id||i} event={e} onForceOpen={onForceOpen} />)}</div>
           : <Empty title="No matching activity yet" body="Only meaningful decisions from your linked license and MT5 account will appear here. Old cloud records are hidden." icon={Activity} />}
@@ -1062,7 +1505,7 @@ function TradingUniverseCard({ linked, setActive }) {
             <div className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
               <div>
                 <div className="text-[14px] font-semibold">Gold trading</div>
-                <div className="mt-0.5 text-[12px] text-white/40">Live — full entry + exit strategy.</div>
+                <div className="mt-0.5 text-[12px] text-white/40">Gold Mode strategy is live today.</div>
               </div>
               <Toggle value={settings.enable_gold} onChange={v => upd("enable_gold", v)} />
             </div>
@@ -1075,9 +1518,22 @@ function TradingUniverseCard({ linked, setActive }) {
             </div>
           </div>
 
+          {/* v6.25.2 owner directive 2026-07-17 -- audit found these controls
+              were stored (POST /cloud/trading-universe) but never read back by
+              anything, including /cloud/master/config (the only config the EA
+              actually polls) -- they looked identical in weight to genuinely
+              enforced controls elsewhere on this page (e.g. Prop Firm Mode)
+              but did nothing. Disclosing honestly, matching the Index card's
+              existing "Detection-only" convention, rather than implying real
+              enforcement that doesn't exist yet. Do not remove this note when
+              real EA-side enforcement ships -- replace it. */}
+          <div className="mt-3 rounded-xl border border-amber-300/15 bg-amber-300/[0.04] p-3 text-[11px] leading-4 text-amber-200/80">
+            Not yet enforced by the live EA — these values are saved here but the bot does not read them back yet. Use the EA's own MT5 inputs to actually cap open trades until this ships.
+          </div>
+
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <NumField label="Max open trades — Gold" value={settings.max_open_trades_gold} onChange={v => upd("max_open_trades_gold", v)} suffix="trades" min={0} max={20} step="1" note="0 = use EA input default" />
-            <NumField label="Max open trades — Index" value={settings.max_open_trades_index} onChange={v => upd("max_open_trades_index", v)} suffix="trades" min={0} max={20} step="1" note="0 = use EA input default" />
+            <NumField label="Max open trades — Gold" value={settings.max_open_trades_gold} onChange={v => upd("max_open_trades_gold", v)} suffix="trades" min={0} max={20} step="1" note="Not yet enforced — see note above" />
+            <NumField label="Max open trades — Index" value={settings.max_open_trades_index} onChange={v => upd("max_open_trades_index", v)} suffix="trades" min={0} max={20} step="1" note="Not yet enforced — see note above" />
           </div>
 
           {msg && <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.07] p-3 text-[12px] text-amber-200">{msg}</div>}
@@ -1205,7 +1661,61 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
 }
 
 // ─── License ──────────────────────────────────────────────────────────────────
-function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, commandMsg, heartbeat, me }) {
+// Licensed EA download -- relocated here from the public marketing homepage
+// (2026-07-25 homepage redesign) so the only functional download flow lives
+// where a signed-in, licensed customer actually looks for it, instead of on
+// the anonymous public page where it always 401'd for a first-time visitor
+// anyway. Same backend contract as before: POST /download/request-token
+// (cookie-authenticated) -> short-lived signed URL -> GET /download/ea-release.
+function EaDownloadCard({ hasLicense }) {
+  const [info, setInfo] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    commandAxios.get("/download/info").then(r => setInfo(r.data)).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  const requestDownload = async () => {
+    setDownloading(true); setError("");
+    try {
+      const { data } = await commandAxios.post("/download/request-token");
+      window.location.href = `${API}${data.download_url}`;
+    } catch (e) {
+      setError(e.response?.status === 403
+        ? "No active license linked to your account yet. Link your license above first."
+        : (e.response?.data?.detail || "Could not start download. Please try again."));
+    }
+    setDownloading(false);
+  };
+
+  const available = info?.available !== false;
+  const version = info?.version || "Published release";
+
+  return (
+    <Card title="Download EA">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-mono text-[13px] font-bold text-white/85">{loading ? "Loading release info…" : `${version}${info?.edition ? ` · ${info.edition}` : ""}`}</div>
+          <p className="mt-1 text-[12px] leading-5 text-white/45">Signed, license-gated compiled .ex5. Operator cloud tokens and fanout settings are stripped before download.</p>
+        </div>
+        {!loading && (
+          <span className={`flex-none rounded-full px-2.5 py-1 font-mono text-[10px] font-black uppercase tracking-widest ${info?.stable ? "bg-emerald-300 text-[#06110c]" : "bg-amber-300/80 text-[#1a1400]"}`}>
+            {info?.stable ? "Stable" : "Release candidate"}
+          </span>
+        )}
+      </div>
+      {error && <div className="mt-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-[12px] text-rose-300">{error}</div>}
+      <button onClick={requestDownload} disabled={downloading || loading || !available || !hasLicense}
+        className="mt-4 w-full rounded-xl bg-amber-300 px-5 py-3 text-[13px] font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-40">
+        {downloading ? "Preparing download…" : !hasLicense ? "Link a license to download" : available ? `Download ${version} .EX5` : "No release available"}
+      </button>
+    </Card>
+  );
+}
+
+function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, commandMsg, heartbeat, me, status }) {
   const info = license?.license;
   return (
     <div className="space-y-4">
@@ -1244,8 +1754,10 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
         </div>
         <Metric label="MT5 binding"    value={info?.account_binding||heartbeat.account_number||"Not bound"} detail={heartbeat.broker_server||"Waiting for EA"} icon={TerminalSquare} tone={heartbeat.account_number?"green":"amber"} />
         <Metric label="VPS binding"    value={info?.vps_binding||"Not bound"} detail="Optional" icon={Wifi} tone="blue" />
-        <Metric label="EA version"     value={heartbeat.ea_version||info?.ea_version||"Waiting"} detail={`Heartbeat ${relativeTime(heartbeat.last_heartbeat||heartbeat.ts)}`} icon={Bot} tone={heartbeat.ea_version?"green":"neutral"} />
+        <Metric label="XauCloud version" value={status?.release?.public_display_name||"Waiting"} detail={`Heartbeat ${relativeTime(heartbeat.last_heartbeat||heartbeat.ts)}`} icon={Bot} tone={heartbeat.ea_version?"green":"neutral"} />
       </div>
+
+      <EaDownloadCard hasLicense={Boolean(info?.activation_key)} />
     </div>
   );
 }
@@ -1253,8 +1765,26 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
 // ─── Settings ─────────────────────────────────────────────────────────────────
 function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
   const [diagOpen, setDiagOpen] = useState(false);
+  const settingsOnline = Boolean(status && !status.offline && heartbeat.account_number);
   return (
     <div className="space-y-4">
+      <Card title="EA Setup & Connection" subtitle="Live setup details for this licensed Command Center account." className="scroll-mt-20">
+        <div data-testid="ea-setup-connection">
+          <div className={`mb-4 flex items-start gap-3 rounded-xl border p-3 ${settingsOnline?"border-emerald-400/15 bg-emerald-300/[0.04]":"border-amber-300/15 bg-amber-300/[0.04]"}`}>
+            {settingsOnline ? <CheckCircle2 className="mt-0.5 h-4 w-4 flex-none text-emerald-400" /> : <Wifi className="mt-0.5 h-4 w-4 flex-none text-amber-300" />}
+            <div className="min-w-0">
+              <div className="text-[13px] font-semibold">{settingsOnline?"EA connected":"EA offline"}</div>
+              <div className="mt-0.5 break-words text-[11px] leading-4 text-white/40">
+                Heartbeat {relativeTime(heartbeat.last_heartbeat||heartbeat.ts)}
+                {heartbeat.account_number ? ` · MT5 account ${heartbeat.account_number}` : " · waiting for MT5 account"}
+                {heartbeat.ea_version ? ` · ${heartbeat.ea_version}` : " · version waiting"}
+              </div>
+            </div>
+          </div>
+          <SetupHealth checks={status?.setup_checks||[]} />
+        </div>
+      </Card>
+
       <Card title="Account">
         <div className="space-y-3">
           <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
@@ -1292,7 +1822,10 @@ function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
               ["ML trusted",       String(heartbeat.ml_trusted||"false")],
               ["Hive verdict",     heartbeat.hive_verdict||"—"],
               ["EPF state",        heartbeat.epf_state||"—"],
-              ["EA version",       heartbeat.ea_version||"—"],
+              ["EA build (internal)", heartbeat.ea_version||"—"],
+              ["Build recognized",    String(status?.release?.reported_build_recognized ?? "—")],
+              ["Reported timeframe",  status?.production_status?.reported_timeframe||"—"],
+              ["Timeframe mismatch",  String(status?.production_status?.timeframe_mismatch ?? "—")],
               ["Account",          heartbeat.account_number||"—"],
               ["License status",   licenseInfo?.status||"—"],
               ["License key",      licenseInfo?.activation_key||"—"],

@@ -1,0 +1,33 @@
+{
+  "model_version": "TRADEBRAIN_KNOWLEDGE_MODEL_V1",
+  "schema_version": "TB_LEARN_V1",
+  "source_ea_version": "V62524_M10_FIXEDSL_EXPERIMENT",
+  "training_start": "2026-06-22T02:08:20",
+  "training_end": "2026-07-20T17:35:40",
+  "feature_list": [
+    "dir",
+    "setup",
+    "grade",
+    "regime",
+    "session",
+    "thesisLocation",
+    "thesisExhaustion",
+    "thesisTiming",
+    "thesisHTF",
+    "thesisStructure",
+    "thesisPressure",
+    "tradeRole"
+  ],
+  "fingerprint_count": 50,
+  "sample_count": 57,
+  "creation_time": "2026-07-23T16:16:51.111671Z",
+  "source_data_sha256": "5084ecb788a1c67e22fa5bbcf19349ccbf2f7e6e53d52b9fcfdedcf208cd9a33",
+  "config_hash": "a6c29e90c70da2048d2d7a91b4c88f13a75d6a31dfe618c13a57eaa66e3d899f",
+  "config": {
+    "min_decisive_matches": 10,
+    "min_similarity": 0.75,
+    "hard_block_pct": 50.0,
+    "lot_reduction_pct": 30.0,
+    "similarity_fields": null
+  }
+}

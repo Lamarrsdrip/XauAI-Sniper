@@ -1,7 +1,7 @@
 {
-  "name": "XAU AI Sniper Command Center",
-  "short_name": "XAU Sniper",
-  "description": "Monitor and control your licensed XAU AI Sniper MT5 bot from a mobile-first Command Center.",
+  "name": "XauCloud Command Center",
+  "short_name": "XauCloud",
+  "description": "Monitor and control your licensed XauCloud MT5 bot from a mobile-first Command Center.",
   "start_url": "/command/dashboard?source=pwa",
   "scope": "/",
   "display": "standalone",

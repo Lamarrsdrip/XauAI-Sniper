@@ -16,10 +16,82 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import market_outlook as mo
 import notifications as notif
+
+
+def group_meaningful_history(rows: list) -> list:
+    """Keep signal lifecycle rows; collapse repetitive informational noise."""
+    grouped = []
+    buckets = {}
+    for row in rows:
+        directional = row.get("primary_direction") in ("BUY", "SELL")
+        if directional or row.get("analytics_outcome") in (mo.ANALYTICS_WIN, mo.ANALYTICS_LOSS):
+            grouped.append(row)
+            continue
+        stamp = str(row.get("generated_at") or row.get("published_at") or "")
+        day = stamp[:10]
+        reason = row.get("no_valid_outlook_reason") or row.get("primary_direction") or "INFORMATIONAL"
+        key = (day, reason)
+        if key not in buckets:
+            collapsed = dict(row)
+            collapsed["collapsed_count"] = 1
+            collapsed["history_kind"] = "INFORMATIONAL_GROUP"
+            buckets[key] = collapsed
+            grouped.append(collapsed)
+        else:
+            buckets[key]["collapsed_count"] += 1
+    return grouped
+
+
+def compute_outlook_stats(rows: list) -> dict:
+    """Derive performance only from persisted authoritative outcomes."""
+    stats_rows = [o for o in rows if not o.get("excluded_from_stats")]
+    unavailable = [o for o in stats_rows if o.get("historical_repair_status") == mo.ANALYTICS_UNAVAILABLE
+                   or o.get("analytics_outcome") == mo.ANALYTICS_UNAVAILABLE]
+    actionable = [o for o in stats_rows
+                  if o.get("primary_direction") in ("BUY", "SELL")
+                  and not o.get("excluded_from_signal_analytics")
+                  and o not in unavailable]
+    completed = [o for o in actionable if o.get("analytics_outcome") in (mo.ANALYTICS_WIN, mo.ANALYTICS_LOSS)]
+    wins = [o for o in completed if o.get("analytics_outcome") == mo.ANALYTICS_WIN]
+    losses = [o for o in completed if o.get("analytics_outcome") == mo.ANALYTICS_LOSS]
+    active_unresolved = [o for o in actionable if o.get("analytics_outcome") is None]
+    informational = [o for o in stats_rows if o.get("primary_direction") not in ("BUY", "SELL")]
+    tp1_count = sum(1 for o in completed if int(o.get("highest_tp_reached") or 0) >= 1)
+    tp2_count = sum(1 for o in completed if int(o.get("highest_tp_reached") or 0) >= 2)
+    tp3_count = sum(1 for o in completed if int(o.get("highest_tp_reached") or 0) >= 3)
+    resolved_rs = [float(o["analytics_r"]) for o in completed if o.get("analytics_r") is not None]
+    win_rate = round(len(wins) / len(wins + losses), 3) if (wins or losses) else None
+    win_rs = [float(o["analytics_r"]) for o in wins if o.get("analytics_r") is not None]
+    loss_rs = [float(o["analytics_r"]) for o in losses if o.get("analytics_r") is not None]
+    gross_win = sum(win_rs) if win_rs else 0.0
+    gross_loss = abs(sum(loss_rs)) if loss_rs else 0.0
+    return {
+        "total_outlooks": len(stats_rows), "actionable_outlooks": len(actionable),
+        "activated_outlooks": len(actionable), "informational_outlooks": len(informational),
+        "green_results": len(wins), "red_results": len(losses), "no_entry_results": 0,
+        "tp1_hit_rate": round(tp1_count / len(completed), 3) if completed else 0,
+        "tp2_hit_rate": round(tp2_count / len(completed), 3) if completed else 0,
+        "tp3_hit_rate": round(tp3_count / len(completed), 3) if completed else 0,
+        "average_r": round(sum(resolved_rs) / len(resolved_rs), 3) if resolved_rs else None,
+        "average_mfe": round(sum(float(o.get("mfe_r", 0) or 0) for o in actionable) / len(actionable), 3) if actionable else None,
+        "average_mae": round(sum(float(o.get("mae_r", 0) or 0) for o in actionable) / len(actionable), 3) if actionable else None,
+        "resolved_count": len(completed), "wins": len(wins), "losses": len(losses), "breakeven": 0,
+        "no_entry_count": 0, "active_unresolved_count": len(active_unresolved),
+        "unavailable_historical_count": len(unavailable), "win_rate": win_rate,
+        "total_r": round(sum(resolved_rs), 3) if resolved_rs else 0.0,
+        "average_win_r": round(sum(win_rs) / len(win_rs), 3) if win_rs else None,
+        "average_loss_r": round(sum(loss_rs) / len(loss_rs), 3) if loss_rs else None,
+        # JSON has no portable Infinity value. An all-win filtered subset
+        # has an undefined/unbounded profit factor, so return null rather
+        # than crashing the entire History endpoint during serialization.
+        "profit_factor": round(gross_win / gross_loss, 3) if gross_loss > 0 else None,
+        "best_result_r": max(resolved_rs) if resolved_rs else None,
+        "worst_result_r": min(resolved_rs) if resolved_rs else None,
+    }
 
 
 def build_router() -> APIRouter:
@@ -40,6 +112,14 @@ def build_router() -> APIRouter:
         scope = {"$or": [{"account": account}, {"license_key": license_key}]} if account and license_key \
             else ({"account": account} if account else {"license_key": license_key})
         doc = await db.cloud_market_outlooks.find_one(scope, {"_id": 0}, sort=[("generated_at", -1)])
+        hourly_doc = await db.cloud_market_outlooks.find_one(
+            {"$and": [scope, {"$or": [{"publication_mode": "HOURLY"}, {"publication_mode": {"$exists": False}}]}]},
+            {"_id": 0}, sort=[("generated_at", -1)],
+        )
+        signal_doc = await db.cloud_market_outlooks.find_one(
+            {"$and": [scope, {"primary_direction": {"$in": ["BUY", "SELL"]}}]},
+            {"_id": 0}, sort=[("generated_at", -1)],
+        )
         # Phase 9 diagnostics: lets the frontend show real evidence/generation
         # state instead of guessing from the outlook doc alone -- in
         # particular so it never renders "connect your EA" while recent
@@ -53,6 +133,15 @@ def build_router() -> APIRouter:
             except Exception:
                 evidence_age_seconds = None
         next_slot = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        latest_notification = None
+        if signal_doc:
+            latest_notification = await db.cloud_notification_log.find_one(
+                {"outlook_id": signal_doc.get("id")}, {"_id": 0}, sort=[("scheduled_time", -1)]
+            )
+        contract = mo.build_authoritative_outlook_contract(
+            evidence, evidence_reason, hourly_doc=hourly_doc, signal_doc=signal_doc,
+            notification=latest_notification, now=now,
+        )
         diagnostics = {
             "last_ea_evidence_at": evidence.get("ts") if evidence else None,
             "evidence_age_seconds": evidence_age_seconds,
@@ -62,7 +151,12 @@ def build_router() -> APIRouter:
             "next_outlook_at": next_slot.isoformat(),
             "generation_status": "OK" if evidence else evidence_reason,
         }
-        return {"outlook": doc, "diagnostics": diagnostics}
+        return {
+            "contract": contract,
+            "outlook": signal_doc or doc,
+            "hourly_context": hourly_doc,
+            "diagnostics": diagnostics,
+        }
 
     @r.get("/outlook/history")
     async def get_outlook_history(
@@ -70,7 +164,7 @@ def build_router() -> APIRouter:
         tp: Optional[str] = Query(None), result: Optional[str] = Query(None),
         min_confidence: Optional[int] = Query(None),
         max_confidence: Optional[int] = Query(None), from_date: Optional[str] = Query(None),
-        to_date: Optional[str] = Query(None), limit: int = Query(50),
+        to_date: Optional[str] = Query(None), limit: int = Query(50, ge=1, le=200),
         user: dict = Depends(srv.get_cloud_user),
     ):
         db = srv.db
@@ -78,7 +172,7 @@ def build_router() -> APIRouter:
         account = str((lic or {}).get("mt5_account") or "").strip()
         license_key = srv._normalize_license_key((lic or {}).get("pin", "")) if lic else ""
         if not account and not license_key:
-            return {"outlooks": [], "stats": {}, "reason": "license_not_linked"}
+            return {"outlooks": [], "timeline": [], "signal_events": [], "stats": {}, "reason": "license_not_linked"}
         scope = {"$or": [{"account": account}, {"license_key": license_key}]} if account and license_key \
             else ({"account": account} if account else {"license_key": license_key})
         conditions = [scope]
@@ -96,17 +190,8 @@ def build_router() -> APIRouter:
             # Now $gte, matching the displayed rate's own definition.
             conditions.append({"highest_tp_reached": {"$gte": int(tp.replace("TP", ""))}} if tp.startswith("TP") else {"status": tp})
         if result:
-            # Audit fix: "Stopped" used to be sent as tp="INVALIDATED",
-            # which the branch above turned into {"status": "INVALIDATED"} --
-            # but that literal status string is shared by TWO unrelated
-            # outcomes (see market_outlook.py's _advance_outlook_state):
-            # a setup invalidating BEFORE any entry was ever taken
-            # (GRAY_INVALIDATED_BEFORE_ENTRY, a "no entry" result) and a
-            # real trade that activated and then hit SL with no TP reached
-            # (RED_STOPPED). "Stopped" was silently including never-entered
-            # setups. This new `result` param filters on the precise,
-            # unambiguous final_result field instead of the lifecycle
-            # status string.
+            # Filter the authoritative state-machine result, never display
+            # text or a generic lifecycle label.
             conditions.append({"final_result": result})
         if min_confidence is not None:
             conditions.append({"confidence_pct": {"$gte": min_confidence}})
@@ -116,68 +201,29 @@ def build_router() -> APIRouter:
             conditions.append({"generated_at": {"$gte": from_date}})
         if to_date:
             conditions.append({"generated_at": {"$lte": to_date}})
-        rows = await db.cloud_market_outlooks.find({"$and": conditions}, {"_id": 0}).sort("generated_at", -1).to_list(min(limit, 200))
+        query = {"$and": conditions}
+        rows = await db.cloud_market_outlooks.find(query, {"_id": 0}).sort("generated_at", -1).to_list(limit)
 
-        # v6.24.17 price-integrity repair: a record marked excluded_from_stats
-        # (see market_outlook.repair_price_integrity_incidents) stays visible
-        # in the returned `outlooks` list for audit, but must never count
-        # toward win/loss/no-entry/TP-rate/confidence stats.
-        stats_rows = [o for o in rows if not o.get("excluded_from_stats")]
-
-        activated = [o for o in stats_rows if (o.get("activation") or {}).get("activated")]
-        greens = [o for o in stats_rows if o.get("color_state") == "GREEN"]
-        reds = [o for o in stats_rows if o.get("color_state") == "RED"]
-        grays = [o for o in stats_rows if o.get("color_state") == "GRAY"]
-        tp1_count = sum(1 for o in stats_rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 1)
-        tp2_count = sum(1 for o in stats_rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 2)
-        tp3_count = sum(1 for o in stats_rows if o.get("highest_tp_reached") and o["highest_tp_reached"] >= 3)
-        resolved_rs = [o.get("final_r") for o in stats_rows if o.get("final_r") is not None]
-
-        # v6.24.18 owner directive 2026-07-16 -- genuine win-rate system.
-        # "Resolved" = activated AND has a final_r (a real, closed outcome).
-        # No-entry/invalidated-before-entry/still-active/invalid-data rows
-        # never appear in this set, so they cannot dilute or fabricate a
-        # win rate. wins/losses/breakeven are mutually exclusive partitions
-        # of resolved_rows by the SIGN of the real final_r, not by the
-        # color_state label (color_state can legitimately diverge from the
-        # raw sign once a protected-floor exit policy is defined -- see the
-        # win_rate computation below, which is deliberately sign-of-final_r
-        # based, the one definition that can never be gamed by a display
-        # color).
-        resolved_rows = [o for o in stats_rows if (o.get("activation") or {}).get("activated") and o.get("final_r") is not None]
-        wins = [o for o in resolved_rows if o["final_r"] > 0]
-        losses = [o for o in resolved_rows if o["final_r"] < 0]
-        breakeven = [o for o in resolved_rows if o["final_r"] == 0]
-        no_entry = [o for o in stats_rows if (o.get("final_result") or "").startswith("GRAY")]
-        active_unresolved = [o for o in stats_rows if o.get("final_result") is None and not (o.get("final_result") or "").startswith("GRAY")]
-        win_rate = round(len(wins) / len(wins + losses), 3) if (wins or losses) else None
-        win_rs = [o["final_r"] for o in wins]
-        loss_rs = [o["final_r"] for o in losses]
-        gross_win = sum(win_rs) if win_rs else 0.0
-        gross_loss = abs(sum(loss_rs)) if loss_rs else 0.0
-
-        stats = {
-            "total_outlooks": len(stats_rows), "activated_outlooks": len(activated),
-            "green_results": len(greens), "red_results": len(reds), "no_entry_results": len(grays),
-            "tp1_hit_rate": round(tp1_count / max(1, len(activated)), 3) if activated else 0,
-            "tp2_hit_rate": round(tp2_count / max(1, len(activated)), 3) if activated else 0,
-            "tp3_hit_rate": round(tp3_count / max(1, len(activated)), 3) if activated else 0,
-            "average_r": round(sum(resolved_rs) / len(resolved_rs), 3) if resolved_rs else None,
-            "average_mfe": round(sum(o.get("mfe", 0) for o in stats_rows) / len(stats_rows), 3) if stats_rows else None,
-            "average_mae": round(sum(o.get("mae", 0) for o in stats_rows) / len(stats_rows), 3) if stats_rows else None,
-            # Genuine win-rate block -- wins/(wins+losses), never wins/total.
-            "resolved_count": len(resolved_rows),
-            "wins": len(wins), "losses": len(losses), "breakeven": len(breakeven),
-            "no_entry_count": len(no_entry), "active_unresolved_count": len(active_unresolved),
-            "win_rate": win_rate,  # None (display "—") when no resolved signals exist yet
-            "total_r": round(sum(resolved_rs), 3) if resolved_rs else 0.0,
-            "average_win_r": round(sum(win_rs) / len(win_rs), 3) if win_rs else None,
-            "average_loss_r": round(sum(loss_rs) / len(loss_rs), 3) if loss_rs else None,
-            "profit_factor": round(gross_win / gross_loss, 3) if gross_loss > 0 else (None if gross_win == 0 else float("inf")),
-            "best_result_r": max(resolved_rs) if resolved_rs else None,
-            "worst_result_r": min(resolved_rs) if resolved_rs else None,
+        # Cards are paged, but analytics must cover the full tenant-scoped
+        # filtered history. Computing stats from only the newest 50/200 rows
+        # silently changed win rate as older records fell off the page.
+        stats_projection = {
+            "_id": 0, "excluded_from_stats": 1, "historical_repair_status": 1,
+            "analytics_outcome": 1, "primary_direction": 1,
+            "excluded_from_signal_analytics": 1, "highest_tp_reached": 1,
+            "analytics_r": 1, "mfe_r": 1, "mae_r": 1,
         }
-        return {"outlooks": rows, "stats": stats}
+        stats_rows = await db.cloud_market_outlooks.find(query, stats_projection).to_list(None)
+        stats = compute_outlook_stats(stats_rows)
+        signal_events = await db.cloud_outlook_signal_events.find(
+            scope, {"_id": 0}
+        ).sort("event_time", -1).to_list(limit)
+        return {
+            "outlooks": rows,
+            "timeline": group_meaningful_history(rows),
+            "signal_events": signal_events,
+            "stats": stats,
+        }
 
     @r.get("/outlook/{outlook_id}")
     async def get_outlook_by_id(outlook_id: str, user: dict = Depends(srv.get_cloud_user)):
@@ -215,6 +261,11 @@ def build_router() -> APIRouter:
         db = srv.db
         if body.tier not in mo.NOTIFICATION_TIERS:
             raise HTTPException(status_code=400, detail=f"tier must be one of {mo.NOTIFICATION_TIERS}")
+        if body.tier != "OFF" and await notif.count_complete_active_devices(user["id"]) < 1:
+            raise HTTPException(status_code=409, detail={
+                "code": "SUBSCRIPTION_MISSING",
+                "message": "Register and verify this device before enabling notification delivery.",
+            })
         lic = await srv._get_user_license(user)
         account = str((lic or {}).get("mt5_account") or "").strip()
         doc = {
@@ -226,29 +277,51 @@ def build_router() -> APIRouter:
         await db.cloud_notification_prefs.update_one({"user_id": user["id"]}, {"$set": doc}, upsert=True)
         return {"ok": True, "prefs": doc}
 
-    @r.get("/outlook/notifications/vapid-public-key")
-    async def get_vapid_public_key():
-        return {"public_key": notif.VAPID_PUBLIC_KEY, "configured": notif.vapid_configured()}
+    # v6.25.3 owner directive 2026-07-17 -- OneSignal App ID is not secret;
+    # the frontend SDK needs it directly to call OneSignal.init(). Replaces
+    # the retired VAPID public-key endpoint.
+    @r.get("/outlook/notifications/onesignal-app-id")
+    async def get_onesignal_app_id():
+        return await notif.get_onesignal_status()
 
+    # v6.25.3 -- the frontend needs the authenticated caller's own user id to
+    # pass to OneSignal.login(userId) client-side, tagging that browser's
+    # OneSignal device registration with our internal identity so later
+    # sends via include_aliases.external_id reach it.
+    @r.get("/outlook/notifications/my-user-id")
+    async def get_my_user_id(user: dict = Depends(srv.get_cloud_user)):
+        return {"user_id": user["id"]}
+
+    # Genuine OneSignal per-device registration. Browser permission is
+    # insufficient: the Subscription ID, token presence, OneSignal ID,
+    # and authenticated external ID must all be verified first.
     @r.post("/outlook/notifications/subscribe")
-    async def subscribe_push(body: mo.PushSubscriptionIn, user: dict = Depends(srv.get_cloud_user)):
-        db = srv.db
-        existing = await db.cloud_push_subscriptions.find_one({"user_id": user["id"], "endpoint": body.endpoint})
-        if existing:
-            return {"ok": True, "device_id": existing["id"], "already_subscribed": True}
-        device_id = str(uuid.uuid4())
-        await db.cloud_push_subscriptions.insert_one({
-            "id": device_id, "user_id": user["id"], "endpoint": body.endpoint, "keys": body.keys,
-            "device_label": body.device_label or "", "timezone_offset_minutes": body.timezone_offset_minutes or 0,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-        return {"ok": True, "device_id": device_id, "already_subscribed": False}
+    async def subscribe_push(body: mo.PushSubscriptionIn, request: Request, user: dict = Depends(srv.get_cloud_user)):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        result = await notif.upsert_device_registration(
+            user["id"], payload, request.headers.get("user-agent", ""),
+        )
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail={"code": result.get("code"), "message": result.get("message")})
+        return result
+
+    @r.post("/outlook/notifications/unsubscribe")
+    async def unsubscribe_current_push(body: mo.PushUnsubscribeIn, user: dict = Depends(srv.get_cloud_user)):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        supplied_external = str(payload.get("external_id") or "").strip()
+        if supplied_external and supplied_external != user["id"]:
+            raise HTTPException(status_code=400, detail={"code": "EXTERNAL_ID_MISMATCH", "message": "External ID does not match authenticated user."})
+        return await notif.deactivate_device_registration(user["id"], payload)
 
     @r.delete("/outlook/notifications/subscribe/{device_id}")
     async def unsubscribe_push(device_id: str, user: dict = Depends(srv.get_cloud_user)):
         db = srv.db
-        result = await db.cloud_push_subscriptions.delete_one({"id": device_id, "user_id": user["id"]})
-        return {"ok": True, "deleted": result.deleted_count > 0}
+        now_iso = datetime.now(timezone.utc).isoformat()
+        result = await db.cloud_push_subscriptions.update_one(
+            {"id": device_id, "user_id": user["id"]},
+            {"$set": {"active": False, "opted_in": False, "updated_at": now_iso, "deactivated_reason": "USER_REQUEST"}},
+        )
+        return {"ok": True, "deleted": result.modified_count > 0}
 
     @r.get("/outlook/notifications/history")
     async def get_notification_history(limit: int = Query(30), user: dict = Depends(srv.get_cloud_user)):
@@ -271,6 +344,10 @@ def build_router() -> APIRouter:
     # trading state.
     @r.post("/outlook/notifications/test")
     async def send_test_notification_route(user: dict = Depends(srv.get_cloud_user)):
+        # Rate-limited per user -- prevents a compromised/scripted Command
+        # Center session from hammering the OneSignal REST API (which is
+        # billed/rate-limited by OneSignal itself) via repeated test sends.
+        srv._rate_limit(f"notification_test_user:{user['id']}", max_requests=5, window_seconds=300)
         return await notif.send_test_notification(user["id"])
 
     return r

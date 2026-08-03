@@ -6,11 +6,6 @@ import { API } from "@/lib/api";
 
 // Mirrors AIThoughtFeed's local axios convention -- self-contained, droppable panel.
 const outlookAxios = axios.create({ baseURL: API, withCredentials: true });
-outlookAxios.interceptors.request.use((cfg) => {
-  const token = localStorage.getItem("cloud_token");
-  if (token) cfg.headers.Authorization = `Bearer ${token}`;
-  return cfg;
-});
 
 const CARD = "rounded-2xl border border-white/[0.07] bg-[#0d0e13]";
 const MONO_LABEL = "font-mono text-[10px] uppercase tracking-[0.2em] text-white/35";
@@ -33,53 +28,105 @@ function directionStyle(dir) {
  * separate data source from the trading engine (see backend/market_outlook.py
  * docstring for the strict-separation guarantee this card's data ultimately
  * relies on). */
-export default function AIMarketOutlookCard({ linked = true }) {
+export default function AIMarketOutlookCard({ linked = true, online = true, onOutlookChange, onStatusChange }) {
   const [outlook, setOutlook] = useState(null);
   const [prefs, setPrefs] = useState(null);
+  const [verifiedStatus, setVerifiedStatus] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [requestFailed, setRequestFailed] = useState(false);
 
   const load = useCallback(async () => {
-    if (!linked) { setLoading(false); return; }
+    if (!linked) {
+      setOutlook(null);
+      setLoading(false);
+      setRequestFailed(false);
+      onOutlookChange?.(null);
+      onStatusChange?.({ loading:false, requestFailed:false });
+      return;
+    }
     try {
-      const [{ data: cur }, { data: pr }] = await Promise.all([
+      const [{ data: cur }, { data: pr }, statusResult] = await Promise.all([
         outlookAxios.get("/outlook/current"),
         outlookAxios.get("/outlook/notifications/prefs"),
+        outlookAxios.get("/outlook/notifications/status").catch(() => ({ data: { final_status: "UNKNOWN" } })),
       ]);
-      setOutlook(cur?.outlook || null);
+      const nextOutlook = cur?.outlook || null;
+      setOutlook(nextOutlook);
       setPrefs(pr?.prefs || null);
-    } catch (_) { /* silent — advisory feature, must never disrupt the dashboard */ }
+      setVerifiedStatus(statusResult?.data || null);
+      setRequestFailed(false);
+      onOutlookChange?.(nextOutlook);
+      onStatusChange?.({ loading:false, requestFailed:false });
+    } catch (_) {
+      setRequestFailed(true);
+      onStatusChange?.({ loading:false, requestFailed:true });
+    }
     setLoading(false);
-  }, [linked]);
+  }, [linked, onOutlookChange, onStatusChange]);
 
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [load]);
 
-  const toggleNotifications = useCallback(async (e) => {
+  // v6.25.2 owner directive 2026-07-17 -- this compact card reproduced the
+  // previously-fixed "false-ON" bug: it lit the bell gold on any successful
+  // tier-preference save, with no permission request, no device subscription,
+  // and no check against real delivery status. A user could see "notifications
+  // on" while push delivery was structurally impossible (e.g. production
+  // reporting DEPENDENCY_MISSING). The full Outlook page's fix for this
+  // exact bug only shows ON after final_status === "ON_VERIFIED" (see
+  // AIMarketOutlookPage.jsx) -- mirror that here instead of trusting the
+  // tier preference alone.
+  const notifOn = verifiedStatus?.final_status === "ON_VERIFIED";
+
+  const turnOffNotifications = useCallback(async (e) => {
     e.preventDefault(); e.stopPropagation();
-    const nextTier = prefs?.tier && prefs.tier !== "OFF" ? "OFF" : "HOURLY_PLUS_RESULTS";
     try {
-      const { data } = await outlookAxios.post("/outlook/notifications/prefs", { tier: nextTier, notify_all_devices: true });
-      setPrefs(data?.prefs || { tier: nextTier });
+      const { data } = await outlookAxios.post("/outlook/notifications/prefs", { tier: "OFF", notify_all_devices: true });
+      setPrefs(data?.prefs || { tier: "OFF" });
+      const statusResult = await outlookAxios.get("/outlook/notifications/status").catch(() => null);
+      if (statusResult) setVerifiedStatus(statusResult.data);
     } catch (_) { /* ignore — user can retry from the full page settings */ }
-  }, [prefs]);
+  }, []);
 
   const dir = outlook?.primary_direction || "NO_VALID_OUTLOOK";
   const style = directionStyle(dir);
-  const notifOn = prefs?.tier && prefs.tier !== "OFF";
+  const generatedAt = outlook?.generated_at || outlook?.published_at || outlook?.created_at || outlook?.ts;
+  const ageMinutes = generatedAt ? (Date.now() - new Date(generatedAt).getTime()) / 60000 : Infinity;
+  const stale = !Number.isFinite(ageMinutes) || ageMinutes > 75;
 
   return (
     <Link to="/ai-market-outlook" className={`${CARD} block p-4 hover:border-amber-300/20 transition`} data-testid="ai-market-outlook-card">
       <div className="flex items-center justify-between">
         <span className={MONO_LABEL}>AI Market Outlook</span>
-        <button onClick={toggleNotifications} title={notifOn ? "Notifications on" : "Enable hourly outlook alerts"}
-                className="rounded-full p-1.5 hover:bg-white/[0.06] transition" data-testid="outlook-bell">
-          {notifOn ? <Bell className="h-3.5 w-3.5 text-amber-300" /> : <BellOff className="h-3.5 w-3.5 text-white/30" />}
-        </button>
+        {notifOn ? (
+          <button onClick={turnOffNotifications} title="Phone alerts verified active — click to turn off"
+                  className="rounded-full p-1.5 hover:bg-white/[0.06] transition" data-testid="outlook-bell">
+            <Bell className="h-3.5 w-3.5 text-amber-300" />
+          </button>
+        ) : (
+          // Turning ON requires a real browser permission grant + device
+          // subscription, which this compact card can't safely do inline --
+          // let the click fall through to the card's own Link and land on
+          // the full settings page where that real flow runs.
+          <span title="Not verified — open full settings to enable" className="rounded-full p-1.5" data-testid="outlook-bell">
+            <BellOff className="h-3.5 w-3.5 text-white/30" />
+          </span>
+        )}
       </div>
+
+      {(!online || stale) && (
+        <p className="mt-3 rounded-lg border border-rose-400/25 bg-rose-400/[0.06] px-3 py-2 text-[11px] font-semibold text-rose-300">
+          {!online
+            ? "EA offline — showing no live outlook until a fresh heartbeat arrives."
+            : "DATA STALE — do not rely on this outlook until fresh EA evidence arrives."}
+        </p>
+      )}
 
       {!linked ? (
         <p className="mt-3 text-[12px] text-white/40">Connect your license to receive hourly outlooks.</p>
       ) : loading ? (
         <p className="mt-3 text-[12px] text-white/40">Loading outlook…</p>
+      ) : requestFailed && !outlook ? (
+        <p className="mt-3 text-[12px] text-rose-300">Outlook request failed — no current outlook is being claimed.</p>
       ) : !outlook ? (
         <p className="mt-3 text-[12px] text-white/40">No outlook published yet — first hourly analysis is generating.</p>
       ) : (
@@ -90,9 +137,18 @@ export default function AIMarketOutlookCard({ linked = true }) {
               <span className={`font-mono text-[12px] font-bold ${style.text}`}>{dir.replace(/_/g, " ")}</span>
             </div>
             {dir !== "NO_VALID_OUTLOOK" && (
-              <span className="font-mono text-[11px] text-white/40">{outlook.confidence_pct}% confidence</span>
+              <span className="font-mono text-[11px] text-white/40">
+                {(outlook.confidence_category || "").replace(/_/g, " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase()) || `${outlook.confidence_pct}%`} confidence
+              </span>
             )}
           </div>
+          {(dir === "BUY" || dir === "SELL") && (
+            <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
+              Manual advisory · not an automated XauCloud entry
+              {outlook.automated_entry_approved === false && " · Automated entry: not approved"}
+              {outlook.automated_entry_approved === true && " · Automated entry: approved"}
+            </p>
+          )}
           {/* Audit fix: was excluding NO_VALID_OUTLOOK/NEUTRAL/RANGE only,
               which INCLUDED TRANSITION -- inconsistent with the full page's
               `isDirectional = dir === "BUY" || dir === "SELL"` guard. The
@@ -109,6 +165,10 @@ export default function AIMarketOutlookCard({ linked = true }) {
             </div>
           )}
           <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-white/35">{outlook.reasoning}</p>
+          <p className="mt-2 text-[10px] text-white/25">
+            Updated {outlook.generated_at || outlook.published_at || outlook.created_at || outlook.ts || "time unavailable"}
+            {requestFailed ? " · refresh failed; showing last known data" : ""}
+          </p>
         </div>
       )}
     </Link>

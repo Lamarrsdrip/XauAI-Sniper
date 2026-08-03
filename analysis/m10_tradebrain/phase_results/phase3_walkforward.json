@@ -1,0 +1,68 @@
+{
+  "by_third": [
+    {
+      "n_trades": 19,
+      "n_reduced": 0,
+      "n_blocked": 0,
+      "n_evidence_valid": 0
+    },
+    {
+      "n_trades": 19,
+      "n_reduced": 2,
+      "n_blocked": 2,
+      "n_evidence_valid": 4
+    },
+    {
+      "n_trades": 19,
+      "n_reduced": 5,
+      "n_blocked": 3,
+      "n_evidence_valid": 8
+    }
+  ],
+  "confusion_matrix": {
+    "losers_blocked": 0,
+    "losers_reduced": 3,
+    "losers_untouched": 15,
+    "winners_blocked": 5,
+    "winners_reduced": 4,
+    "winners_untouched": 30,
+    "avoided_loss_usd": 0.0,
+    "missed_profit_usd": 1183.8400000000001,
+    "profit_sacrificed_from_reduction_usd": 497.685,
+    "loss_avoided_from_reduction_usd": 537.0000000000001,
+    "breakevens_seen": 0,
+    "non_trustworthy_seen": 0,
+    "asis_net_profit_usd": 6404.13,
+    "policy_net_profit_usd": 5259.6,
+    "asis_profit_factor": 1.6253483580544674,
+    "policy_profit_factor": 1.5420093982831642,
+    "total_decisive_losers": 18,
+    "loser_capture_rate_pct": 16.666666666666664,
+    "total_decisive_winners": 39,
+    "winner_false_block_rate_pct": 12.82051282051282
+  },
+  "equity_drawdown": {
+    "asis_ending_balance": 16404.13,
+    "policy_ending_balance": 15259.6,
+    "asis_max_drawdown_usd": 3523.71,
+    "policy_max_drawdown_usd": 3523.71,
+    "asis_max_drawdown_pct": 35.24,
+    "policy_max_drawdown_pct": 35.24
+  },
+  "role_breakdown": {
+    "CORE": {
+      "n_trades": 54,
+      "n_allow_normal": 42,
+      "n_reduced": 7,
+      "n_blocked": 5,
+      "n_manual_exemptions_applied": 0
+    },
+    "PYRAMID": {
+      "n_trades": 3,
+      "n_allow_normal": 3,
+      "n_reduced": 0,
+      "n_blocked": 0,
+      "n_manual_exemptions_applied": 0
+    }
+  }
+}

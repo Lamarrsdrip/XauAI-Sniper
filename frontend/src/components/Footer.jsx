@@ -10,8 +10,8 @@ export default function Footer() {
               <span className="font-mono text-[8px] font-bold text-amber-200">XA</span>
             </div>
             <div>
-              <span className="text-[13px] font-semibold text-white/70">XauAI Sniper</span>
-              <span className="ml-2 font-mono text-[10px] text-white/28">v6.24.1 · Aligned Entry Engine</span>
+              <span className="text-[13px] font-semibold text-white/70">XauCloud</span>
+              <span className="ml-2 font-mono text-[10px] text-white/28">Published release · M10 production</span>
             </div>
           </div>
 

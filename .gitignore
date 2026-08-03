@@ -128,6 +128,8 @@ frontend/node_modules/.cache/default-development/42.pack
 .env
 .env.*
 *.env
+!.env.example
+!*/.env.example
 credentials.json
 *.pem
 *.key

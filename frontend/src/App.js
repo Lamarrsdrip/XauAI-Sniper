@@ -4,13 +4,15 @@ import axios from "axios";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import Header from "@/components/Header";
 import HeroSection from "@/components/HeroSection";
+import TrustStrip from "@/components/TrustStrip";
 import FeaturesSection from "@/components/FeaturesSection";
 import PerformanceSection from "@/components/PerformanceSection";
-import PurchaseSection from "@/components/PurchaseSection";
-import BrokerSection from "@/components/BrokerSection";
-import SupportSection from "@/components/SupportSection";
 import HowItWorksSection from "@/components/HowItWorksSection";
-import DownloadSection from "@/components/DownloadSection";
+import ReassuranceSection from "@/components/ReassuranceSection";
+import PurchaseSection from "@/components/PurchaseSection";
+import FaqSection from "@/components/FaqSection";
+import FinalCtaSection from "@/components/FinalCtaSection";
+import ReleaseStrip from "@/components/ReleaseStrip";
 import PurchaseSuccessPage from "@/components/PurchaseSuccessPage";
 import AdminPortal from "@/components/AdminPortal";
 import Footer from "@/components/Footer";
@@ -18,6 +20,9 @@ import CloudLanding from "@/components/cloud/CloudLanding";
 import { CloudSignup, CloudLogin } from "@/components/cloud/CloudAuth";
 import CloudDashboard from "@/components/cloud/CloudDashboard";
 import AIMarketOutlookPage from "@/pages/AIMarketOutlookPage";
+import LabsPage from "@/pages/LabsPage";
+import PerformancePage from "@/pages/PerformancePage";
+import PerformanceHistoryPage from "@/pages/PerformanceHistoryPage";
 import { API } from "@/lib/api";
 
 function MainDashboard() {
@@ -58,14 +63,16 @@ function MainDashboard() {
     <div className="min-h-screen bg-[#060609]" data-testid="app-root">
       <Header activeSection={activeSection} onNavigate={scrollTo} goldPrice={goldPrice} />
       <main>
-        <section id="overview"><HeroSection performance={performance} /></section>
-        <section id="features"><FeaturesSection /></section>
+        <section id="overview"><HeroSection goldPrice={goldPrice} /></section>
+        <TrustStrip />
         <section id="performance"><PerformanceSection data={performance} /></section>
+        <section id="how-it-works"><HowItWorksSection /></section>
+        <section id="features"><FeaturesSection /></section>
+        <ReassuranceSection />
         <section id="purchase"><PurchaseSection api={API} /></section>
-        <section id="broker"><BrokerSection /></section>
-        <section id="support"><SupportSection /></section>
-        <section id="faq"><HowItWorksSection /></section>
-        <section id="download"><DownloadSection api={API} /></section>
+        <ReleaseStrip api={API} />
+        <section id="faq"><FaqSection /></section>
+        <FinalCtaSection />
       </main>
       <Footer />
     </div>
@@ -88,6 +95,9 @@ function App() {
         <Route path="/command/login" element={<CloudLogin />} />
         <Route path="/command/dashboard" element={<CloudDashboard />} />
         <Route path="/ai-market-outlook" element={<AIMarketOutlookPage />} />
+        <Route path="/labs" element={<LabsPage />} />
+        <Route path="/performance" element={<PerformancePage />} />
+        <Route path="/performance/history" element={<PerformanceHistoryPage />} />
         <Route path="/cloud" element={<Navigate to="/command" replace />} />
         <Route path="/cloud/signup" element={<Navigate to="/command/signup" replace />} />
         <Route path="/cloud/login" element={<Navigate to="/command/login" replace />} />
