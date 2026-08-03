@@ -60,8 +60,36 @@ def test_cooldown_skips_before_the_real_modify_and_is_checked_against_the_same_t
     assert cooldown_idx < modify_idx, "the cooldown skip must be checked before attempting the real broker request"
     window = fn[cooldown_idx:modify_idx]
     assert "MathAbs(g_lastRejectedModifySL - newSL) < slTol" in window
-    assert "TimeCurrent() - g_lastRejectedModifyAt < 5" in window
+    # Fourth pass: 5s wasn't long enough -- a position stuck in a broker
+    # freeze/stops-level rejection for tens of seconds of simulated time
+    # still produced several repeats before the window re-armed. Widened
+    # to 60s (matching this file's existing 60s benign-log-throttle
+    # convention) so each affected ticket produces at most one rejection
+    # per minute of real backoff instead of one every 5 seconds.
+    assert "TimeCurrent() - g_lastRejectedModifyAt < 60" in window
     assert "return false;" in window
+
+
+def test_position_close_authority_has_its_own_rejection_cooldown():
+    # Fourth pass: SafeModifySL() (SL/TP modify) had a cooldown, but
+    # OWNER_R_EXIT_CLOSE_ONLY() (the sole authority allowed to actually
+    # close a position) had none at all -- every tick the exit condition
+    # stayed true, it re-called trade.PositionClose() unconditionally.
+    # A MetaQuotes Market validation run showed this spamming identically
+    # ("failed market buy/sell ... close #N ...") whenever the broker
+    # rejected the close (e.g. price frozen near this level), completely
+    # unsuppressed. Same fix, same rationale, applied to this function.
+    fn = function(EA, "bool OWNER_R_EXIT_CLOSE_ONLY(", "bool SafePositionClose(")
+    cooldown_idx = fn.index("g_lastRejectedCloseTicket == ticket")
+    close_idx = fn.index("bool ok = trade.PositionClose(ticket);")
+    assert cooldown_idx < close_idx, "the cooldown skip must be checked before attempting the real broker close"
+    window = fn[cooldown_idx:close_idx]
+    assert "TimeCurrent() - g_lastRejectedCloseAt < 60" in window
+    assert "return false;" in window
+    # The write (recording a rejection) must happen in the failure branch,
+    # after the close attempt, so a *successful* close never gets throttled.
+    write_idx = fn.index("g_lastRejectedCloseTicket = ticket;")
+    assert close_idx < write_idx < fn.index("return false;", write_idx)
 
 
 def test_rejection_is_recorded_unconditionally_for_any_retcode():

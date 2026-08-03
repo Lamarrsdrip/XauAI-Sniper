@@ -10069,7 +10069,7 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
    {
       double slTol = MathMax(point * 2, 0.00001);
       if(g_lastRejectedModifyTicket == ticket && MathAbs(g_lastRejectedModifySL - newSL) < slTol &&
-         TimeCurrent() - g_lastRejectedModifyAt < 5)
+         TimeCurrent() - g_lastRejectedModifyAt < 60)
       {
          return false;
       }
@@ -26969,11 +26969,25 @@ bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = fal
    if(!externalManual && !initialStopIntegrity && !XAU_OwnerProtectedFloorAllowsClose(ticket, ctx))
       return false;
 
+   // Owner directive 2026-08-03 (fourth pass): this close authority had no
+   // resubmission cooldown at all -- unlike SafeModifySL() (third pass
+   // above), every tick where the exit condition stayed true re-called
+   // trade.PositionClose() unconditionally, even immediately after the
+   // broker rejected the exact same close request (e.g. price frozen near
+   // this level). Same fix, same rationale: don't resend an identical
+   // close request that was just rejected until the cooldown elapses.
+   static ulong    g_lastRejectedCloseTicket = 0;
+   static datetime g_lastRejectedCloseAt     = 0;
+   if(g_lastRejectedCloseTicket == ticket && TimeCurrent() - g_lastRejectedCloseAt < 60)
+      return false;
+
    PrintFormat("OWNER_R_EXIT_DECISION | ticket=%I64u | authority=%s | decision=APPROVE | external_manual=%s",
                ticket, ctx, externalManual ? "true" : "false");
    bool ok = trade.PositionClose(ticket);
    if(!ok)
    {
+      g_lastRejectedCloseTicket = ticket;
+      g_lastRejectedCloseAt     = TimeCurrent();
       PrintFormat("OWNER_R_EXIT_CLOSE_FAILED | ticket=%I64u | authority=%s | ret=%u | ret_text=%s | err=%d",
                   ticket, ctx, trade.ResultRetcode(), trade.ResultRetcodeDescription(), GetLastError());
       return false;
