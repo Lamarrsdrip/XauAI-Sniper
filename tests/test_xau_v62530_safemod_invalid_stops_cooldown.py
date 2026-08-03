@@ -114,3 +114,89 @@ def test_other_transient_retcode_handling_untouched():
     assert "if(err == 4756 || ret == 10016)" in fn
     assert "Sleep(150);" in fn
     assert "if(g_slModsThisSec >= 3)" in fn
+
+
+def test_safe_min_stop_distance_uses_a_real_floor_not_just_reported_levels():
+    # Fifth pass: the actual root cause of the still-failing MetaQuotes
+    # validation was that the pre-flight clamp/freeze checks only acted
+    # when the broker-reported SYMBOL_TRADE_STOPS_LEVEL/FREEZE_LEVEL was
+    # > 0 -- on the MetaQuotes-Demo validation account both report 0 for
+    # XAUUSD, silently disabling the pre-checks entirely, while the
+    # underlying broker/tester still rejected requests within roughly
+    # 100-150 points of a position's stop. The floor must apply
+    # unconditionally, not gated on the reported value being nonzero.
+    fn = function(EA, "double XAU_SafeMinStopDistance()", "double XAU_NormalizeToTick(")
+    assert "MathMax(reported, floorDist)" in fn
+    assert "150.0 * pt" in fn
+
+
+def test_normalize_to_tick_uses_tick_size_not_just_digits():
+    fn = function(EA, "double XAU_NormalizeToTick(", "bool SafeModifySL(")
+    assert "SYMBOL_TRADE_TICK_SIZE" in fn
+    assert "MathRound(price / tickSize) * tickSize" in fn
+
+
+def test_safemodifysl_checks_freeze_against_current_sl_not_just_new_target():
+    # The dominant remaining spam after the fourth pass was rejections
+    # where the position's EXISTING SL (not the newly requested target)
+    # was within the freeze band of price -- MT5 freezes all operations
+    # on a position once price nears its current stop, independent of
+    # what a new target would be. Checking only the new target (pre-
+    # fifth-pass behavior) missed this.
+    fn = function(EA, "bool SafeModifySL(", "double StrategyReferenceBalance()")
+    assert "double distCurSL = MathAbs(curPrice - curSL);" in fn
+    assert "double distNewSL = isBuy ? MathAbs(curPrice - newSL) : MathAbs(newSL - curPrice);" in fn
+    # Both checks must use the real floor, not the old reported-only distance.
+    assert fn.count("distCurSL < minSafeDist") == 1
+    assert fn.count("distNewSL < minSafeDist") == 1
+
+
+def test_safemodifysl_rereads_fresh_price_before_validating():
+    fn = function(EA, "bool SafeModifySL(", "double StrategyReferenceBalance()")
+    fresh_idx = fn.index("double freshPrice = isBuy ? SymbolInfoDouble(Symbol(), SYMBOL_BID)")
+    clamp_idx = fn.index("if(isBuy)\n   {\n      double maxAllowedSL")
+    assert fresh_idx < clamp_idx, "fresh price must be re-read before the clamp/freeze checks use it"
+
+
+def test_close_and_modify_share_a_trade_guard_to_prevent_racing_on_the_same_ticket():
+    # Fifth pass: OWNER_R_EXIT_CLOSE_ONLY() now marks close-intent BEFORE
+    # attempting the broker close; SafeModifySL() checks that same flag
+    # and defers rather than fighting an in-flight close for the same
+    # ticket. Both must reference the same shared XAU_TradeGuard_* API.
+    close_fn = function(EA, "bool OWNER_R_EXIT_CLOSE_ONLY(", "bool SafePositionClose(")
+    intent_idx = close_fn.index("g_tradeGuard[trgIdx].closeIntentActive = true;")
+    close_call_idx = close_fn.index("bool ok = trade.PositionClose(ticket);")
+    assert intent_idx < close_call_idx, "close-intent must be set before the broker call, not after"
+
+    modify_fn = function(EA, "bool SafeModifySL(", "double StrategyReferenceBalance()")
+    assert "g_tradeGuard[trgIdx].closeIntentActive && TimeCurrent() - g_tradeGuard[trgIdx].closeIntentAt < 30" in modify_fn
+
+
+def test_owner_r_exit_close_only_has_its_own_freeze_preflight_check():
+    fn = function(EA, "bool OWNER_R_EXIT_CLOSE_ONLY(", "bool SafePositionClose(")
+    preflight_idx = fn.index("MathAbs(freshPx - curSLNow) < minSafeDistClose")
+    close_call_idx = fn.index("bool ok = trade.PositionClose(ticket);")
+    assert preflight_idx < close_call_idx, "the freeze pre-check must run before ever attempting the broker close"
+
+
+def test_market_session_check_exists_before_new_entries():
+    # A MetaQuotes validation report showed one entry attempt sent while
+    # XAUUSD's actual trading session was closed ("[Market closed]").
+    # SYMBOL_TRADE_MODE_DISABLED only catches an administrative disable,
+    # not a daily session close -- must check SymbolInfoSessionTrade too.
+    assert "MARKET_SESSION_CLOSED" in EA
+    assert "SymbolInfoSessionTrade(Symbol(), (ENUM_DAY_OF_WEEK)dtNow.day_of_week, 0, sessFrom, sessTo)" in EA
+    # Must appear near the existing administrative-disable check, i.e. as
+    # part of the same entry gate, not some unrelated/unused function.
+    disabled_idx = EA.index('rejectReason = "SYMBOL_TRADING_DISABLED";')
+    session_idx = EA.index('rejectReason = "MARKET_SESSION_CLOSED";')
+    assert 0 < session_idx - disabled_idx < 2000
+
+
+def test_trade_guard_array_has_bounded_cleanup():
+    # Guards against the new g_tradeGuard[] array growing unbounded across
+    # a long run/backtest -- entries for tickets with no open position
+    # must be pruned, and that pruning must actually be invoked somewhere
+    # (not just defined and never called).
+    assert "void XAU_TradeGuard_PruneClosed()" in EA
+    assert "XAU_TradeGuard_PruneClosed();" in EA
