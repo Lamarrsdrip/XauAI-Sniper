@@ -9940,7 +9940,7 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
    {
       double slTol = MathMax(point * 2, 0.00001);
       if(g_lastRejectedModifyTicket == ticket && MathAbs(g_lastRejectedModifySL - newSL) < slTol &&
-         TimeCurrent() - g_lastRejectedModifyAt < 5)
+         TimeCurrent() - g_lastRejectedModifyAt < 60)
       {
          return false;
       }
@@ -26635,11 +26635,32 @@ bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = fal
    if(!externalManual && !initialStopIntegrity && !XAU_OwnerProtectedFloorAllowsClose(ticket, ctx))
       return false;
 
+   // Market Edition compliance fix (Phase 24): this close authority had no
+   // resubmission cooldown at all -- unlike SafeModifySL() (Phase 22/23),
+   // every tick where the exit condition stayed true (e.g. a losing
+   // position the broker's simulated freeze/stops level was rejecting a
+   // close for) re-called trade.PositionClose() unconditionally. A
+   // MetaQuotes Market validation run against the same historical window
+   // that flagged SafeModifySL()'s spam showed this path spamming
+   // identically ("failed market buy/sell ... close #N ...
+   // [Modification failed due to order or position being close to
+   // market]"), several times per affected ticket, completely
+   // unsuppressed. Same fix, same rationale: don't resend an identical
+   // close request that was just rejected until the cooldown elapses --
+   // a request that failed because price is frozen near this level will
+   // fail again immediately if nothing has changed.
+   static ulong    g_lastRejectedCloseTicket = 0;
+   static datetime g_lastRejectedCloseAt     = 0;
+   if(g_lastRejectedCloseTicket == ticket && TimeCurrent() - g_lastRejectedCloseAt < 60)
+      return false;
+
    PrintFormat("OWNER_R_EXIT_DECISION | ticket=%I64u | authority=%s | decision=APPROVE | external_manual=%s",
                ticket, ctx, externalManual ? "true" : "false");
    bool ok = trade.PositionClose(ticket);
    if(!ok)
    {
+      g_lastRejectedCloseTicket = ticket;
+      g_lastRejectedCloseAt     = TimeCurrent();
       PrintFormat("OWNER_R_EXIT_CLOSE_FAILED | ticket=%I64u | authority=%s | ret=%u | ret_text=%s | err=%d",
                   ticket, ctx, trade.ResultRetcode(), trade.ResultRetcodeDescription(), GetLastError());
       return false;
