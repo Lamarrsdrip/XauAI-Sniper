@@ -496,6 +496,7 @@ class PurchaseInitRequest(BaseModel):
     buyer_name: str
     buyer_email: str
     origin_url: str
+    display_currency: Optional[str] = None  # what /purchase/price last showed this buyer; audit only, never affects the actual charge
 
 class AdminSettingsUpdate(BaseModel):
     paystack_secret_key: Optional[str] = None
@@ -967,18 +968,107 @@ async def validate_pin(req: PinValidateRequest):
         return {"valid": False, "reason": detail.get("message") or detail.get("reason") or "License check failed"}
     return {"valid": True, "pin": lic.get("pin", req.pin), "message": "License verified"}
 
-# --- Purchase (public) ---
-@api_router.get("/purchase/price")
-async def get_pin_price():
+# --- Currency display (indicative only -- NGN 300,000 stays the sole
+# commercial source of truth and the sole currency Nomba actually charges;
+# every other currency shown here is a convenience conversion for the
+# visitor, never something the payment provider bills them in) ---
+EXCHANGE_RATE_API_KEY = os.environ.get("EXCHANGE_RATE_API_KEY", "")
+FX_RATE_CACHE_TTL_SECONDS = 3600  # exchangerate-api free tier is 1500 req/month; an hourly refresh is generous
+_fx_rate_cache: Dict = {}
+_fx_rate_cache_time: float = 0
+
+# Minimal, best-effort country->currency map for detection only -- display
+# currency is always overridable by the visitor and never gates or changes
+# what they're actually charged (always NGN today).
+_COUNTRY_TO_DISPLAY_CURRENCY = {
+    "NG": "NGN", "US": "USD", "GB": "GBP", "CA": "USD", "AU": "USD",
+    "DE": "EUR", "FR": "EUR", "ES": "EUR", "IT": "EUR", "NL": "EUR", "IE": "EUR",
+    "ZA": "USD", "KE": "USD", "GH": "USD", "IN": "USD", "AE": "USD",
+}
+
+async def _get_fx_rates() -> dict:
+    """Returns a dict of {currency_code: rate_from_ngn} or {} if the API
+    isn't configured or the fetch fails -- callers must treat an empty dict
+    as "no conversion available" and fall back to NGN-only display, never
+    fabricate a rate."""
+    global _fx_rate_cache, _fx_rate_cache_time
+    now = time.time()
+    if _fx_rate_cache and now - _fx_rate_cache_time < FX_RATE_CACHE_TTL_SECONDS:
+        return _fx_rate_cache
+    if not EXCHANGE_RATE_API_KEY:
+        return _fx_rate_cache  # last-known-good (possibly empty) rather than erroring
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as http:
+            resp = await http.get(f"https://v6.exchangerate-api.com/v6/{EXCHANGE_RATE_API_KEY}/latest/NGN")
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("result") == "success":
+                _fx_rate_cache = data.get("conversion_rates", {})
+                _fx_rate_cache_time = now
+    except Exception as e:
+        logger.warning(f"FX rate fetch failed: {e}")
+    return _fx_rate_cache
+
+def _detect_display_currency(request: Request, requested: Optional[str] = None) -> str:
+    """Precedence: explicit visitor selection > CDN-provided country header
+    > Accept-Language country subtag > NGN-for-Nigeria/USD-international
+    default. Never used to change what's actually charged."""
+    if requested:
+        return requested.upper()
+    country = (
+        request.headers.get("cf-ipcountry")
+        or request.headers.get("x-vercel-ip-country")
+        or request.headers.get("x-country-code")
+        or ""
+    ).upper()
+    if not country:
+        accept_lang = request.headers.get("accept-language", "")
+        # e.g. "en-NG,en;q=0.9" -> "NG"
+        m = re.search(r"-([A-Z]{2})\b", accept_lang.upper())
+        if m:
+            country = m.group(1)
+    if country == "NG":
+        return "NGN"
+    return _COUNTRY_TO_DISPLAY_CURRENCY.get(country, "USD")
+
+async def _build_price_display(display_currency: str) -> dict:
     s = await get_settings()
     kobo = s.get("pin_price_kobo", 30000000)
     naira = kobo / 100
-    nomba_cfg, nomba_creds = await get_active_nomba_credentials()
-    return {
+    result = {
         "price_kobo": kobo, "price_naira": naira, "currency": "NGN",
-        "payment_method": "nomba" if nomba_creds else "unavailable",
-        "formatted": f"\u20a6{naira:,.0f}",
+        "charge_currency": "NGN",  # what the customer is actually billed -- always NGN today
+        "formatted": f"₦{naira:,.0f}",
+        "display_currency": display_currency,
+        "display_amount": None,
+        "display_amount_formatted": None,
+        "fx_rate": None,
+        "fx_rate_indicative": True,
+        "fx_rate_as_of": None,
     }
+    if display_currency == "NGN":
+        result["display_amount"] = naira
+        result["display_amount_formatted"] = result["formatted"]
+        result["fx_rate_indicative"] = False  # NGN display IS the exact charge amount, not a conversion
+        return result
+    rates = await _get_fx_rates()
+    rate = rates.get(display_currency)
+    if rate:
+        converted = naira * rate
+        result["display_amount"] = round(converted, 2)
+        result["display_amount_formatted"] = f"{display_currency} {converted:,.2f}"
+        result["fx_rate"] = rate
+        result["fx_rate_as_of"] = datetime.fromtimestamp(_fx_rate_cache_time, tz=timezone.utc).isoformat() if _fx_rate_cache_time else None
+    return result
+
+# --- Purchase (public) ---
+@api_router.get("/purchase/price")
+async def get_pin_price(request: Request, display_currency: Optional[str] = None):
+    detected = _detect_display_currency(request, display_currency)
+    price_display = await _build_price_display(detected)
+    _nomba_cfg, nomba_creds = await get_active_nomba_credentials()
+    price_display["payment_method"] = "nomba" if nomba_creds else "unavailable"
+    return price_display
 
 @api_router.post("/purchase/initialize")
 async def initialize_purchase(req: PurchaseInitRequest, request: Request):
@@ -1002,10 +1092,19 @@ async def initialize_purchase(req: PurchaseInitRequest, request: Request):
     # origin_url would let any caller redirect the post-payment browser
     # flow to an arbitrary attacker-controlled domain.
     callback_url = f"{PUBLIC_SITE_URL}/purchase/success?reference={ref}"
+    # Audit trail of what was shown to the buyer at checkout -- purely
+    # informational (never affects amount_kobo/currency, which are always
+    # server-computed from admin settings above), recorded so a support
+    # dispute can see exactly what indicative conversion the buyer saw.
+    display_price = await _build_price_display(_detect_display_currency(request, req.display_currency))
     tx = {"id": str(uuid.uuid4()), "reference": ref, "amount_kobo": kobo, "currency": "NGN",
           "provider": "NOMBA", "nomba_order_reference": ref, "nomba_transaction_id": None,
           "buyer_name": req.buyer_name, "buyer_email": req.buyer_email,
           "payment_status": "PENDING", "pin_generated": None,
+          "display_currency": display_price["display_currency"],
+          "display_amount": display_price["display_amount"],
+          "fx_rate": display_price["fx_rate"],
+          "fx_rate_as_of": display_price["fx_rate_as_of"],
           "created_at": datetime.now(timezone.utc).isoformat(), "state_transitions": {}}
     await db.payment_transactions.insert_one(tx)
 
