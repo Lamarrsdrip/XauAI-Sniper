@@ -1461,17 +1461,51 @@ def _known_release_versions() -> set:
 def build_public_release_display(ea_version: str) -> dict:
     """Authoritative publicProductName/publicVersion/publicDisplayName. Adding
     a new release to manifest.json is the only thing that changes what this
-    renders -- no frontend component hardcodes a version string."""
+    renders -- no frontend component hardcodes a version string.
+
+    Also the single place that decides "is this customer's attached EA on
+    the latest approved build" -- compares the EA's self-reported version
+    (heartbeat telemetry) against the manifest's current stable release, not
+    against just "some version we've ever shipped" (that's what
+    reported_build_recognized already covers)."""
     release = _current_ea_release()
     public_version = _normalize_release_version((release or {}).get("version") or "")
     reported = _normalize_release_version(ea_version)
     recognized = bool(reported) and reported in _known_release_versions()
+    update_available = bool(public_version) and bool(reported) and reported != public_version
     return {
         "public_product_name": "XauCloud",
         "public_version": public_version or None,
         "public_display_name": f"XauCloud-{public_version}" if public_version else "XauCloud",
         "reported_build_recognized": recognized,
+        "installed_version": reported or None,
+        "latest_version": public_version or None,
+        "update_available": update_available,
+        "latest_release_notes": (release or {}).get("release_notes", ""),
+        "latest_build_timestamp": (release or {}).get("build_timestamp"),
     }
+
+
+def _resolve_update_status(manifest_has_current_pointer: bool, current_release_servable: bool,
+                            license_active: bool, installed_version: Optional[str],
+                            update_available: bool) -> str:
+    """Single customer-facing "what should the Command Center tell them
+    about updating" status, in a defined precedence order -- release
+    availability and license state both gate whether "update available"
+    even makes sense to show. Kept as a pure function (no DB/request access)
+    so it's directly unit-testable without standing up the full
+    /cloud/monitor/status endpoint."""
+    if not manifest_has_current_pointer:
+        return "download_unavailable"
+    if not current_release_servable:
+        return "release_verification_failed"
+    if not license_active:
+        return "license_inactive"
+    if not installed_version:
+        return "installed_version_unknown"
+    if update_available:
+        return "update_available"
+    return "up_to_date"
 
 
 def reconcile_production_timeframe(reported_timeframe: str, build_recognized: bool) -> dict:
@@ -6990,6 +7024,13 @@ async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):
     release_display = build_public_release_display((hb or {}).get("ea_version", ""))
     production_status = reconcile_production_timeframe(
         (hb or {}).get("timeframe", ""), release_display["reported_build_recognized"],
+    )
+    release_display["update_status"] = _resolve_update_status(
+        manifest_has_current_pointer=bool(_load_ea_release_manifest().get("current_version")),
+        current_release_servable=bool(_current_ea_release()),
+        license_active=bool((lic or {}).get("is_active")),
+        installed_version=release_display["installed_version"],
+        update_available=release_display["update_available"],
     )
     return {
         "status": status_label,
