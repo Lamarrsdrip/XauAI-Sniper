@@ -58,6 +58,28 @@ def _load_or_create_jwt_secret() -> str:
 JWT_SECRET = _load_or_create_jwt_secret()
 JWT_ALGORITHM = "HS256"
 PAYSTACK_BASE_URL = "https://api.paystack.co"
+
+# Order lifecycle states (XauCloud commerce upgrade). A payment_transactions
+# doc's "status" field always holds exactly one of these; "payment_status"
+# ("pending"/"success") is kept alongside for backward compatibility with
+# existing frontend code that reads it, but new logic should read "status".
+ORDER_CREATED = "ORDER_CREATED"
+PAYMENT_PENDING = "PAYMENT_PENDING"
+PROVIDER_PROCESSING = "PROVIDER_PROCESSING"
+PAYMENT_CONFIRMED = "PAYMENT_CONFIRMED"
+FULFILLED = "FULFILLED"
+PAYMENT_FAILED = "PAYMENT_FAILED"
+PAYMENT_CANCELLED = "PAYMENT_CANCELLED"
+PAYMENT_EXPIRED = "PAYMENT_EXPIRED"
+REFUNDED = "REFUNDED"
+CHARGEBACK = "CHARGEBACK"
+PAID_FULFILLMENT_PENDING = "PAID_FULFILLMENT_PENDING"
+BANK_TRANSFER_PENDING = "BANK_TRANSFER_PENDING"
+BANK_TRANSFER_SUBMITTED = "BANK_TRANSFER_SUBMITTED"
+UNDER_ADMIN_REVIEW = "UNDER_ADMIN_REVIEW"
+BANK_TRANSFER_APPROVED = "BANK_TRANSFER_APPROVED"
+BANK_TRANSFER_REJECTED = "BANK_TRANSFER_REJECTED"
+BANK_TRANSFER_EXPIRED = "BANK_TRANSFER_EXPIRED"
 LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 AI_COST_DAILY_CALL_LIMIT = int(os.environ.get("AI_COST_DAILY_CALL_LIMIT", "120"))
 AI_COST_MIN_SECONDS = int(os.environ.get("AI_COST_MIN_SECONDS", "45"))
@@ -515,8 +537,27 @@ async def _claim_transaction_fulfillment(reference: str) -> Optional[dict]:
     concurrently for the same reference)."""
     return await db.payment_transactions.find_one_and_update(
         {"reference": reference, "pin_generated": None},
-        {"$set": {"fulfillment_claimed_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {"fulfillment_claimed_at": datetime.now(timezone.utc).isoformat(), "status": PAYMENT_CONFIRMED}},
     )
+
+async def _fulfill_confirmed_payment(claimed: dict, reference: str, notes_prefix: str) -> str:
+    """Mint a license for an already-claimed (atomically confirmed) payment
+    and advance its status to FULFILLED — or to PAID_FULFILLMENT_PENDING if
+    the confirmation email fails to send, since the payment and license are
+    still valid and only delivery needs a retry, not a refund."""
+    pin = await _issue_pin_license(claimed.get("buyer_name",""), claimed.get("buyer_email",""), reference, f"{notes_prefix} - {reference}")
+    email_sent = await send_pin_email(claimed.get("buyer_email",""), claimed.get("buyer_name",""), pin)
+    final_status = FULFILLED if email_sent else PAID_FULFILLMENT_PENDING
+    await db.payment_transactions.update_one(
+        {"reference": reference},
+        {
+            "$set": {"pin_generated": pin, "payment_status": "success", "status": final_status},
+            "$push": {"fulfillment_attempts": {"at": datetime.now(timezone.utc).isoformat(), "email_sent": email_sent}},
+        },
+    )
+    if not email_sent:
+        logger.error(f"Fulfillment email failed for {reference} — order held at PAID_FULFILLMENT_PENDING, license {pin} already issued")
+    return pin
 
 def _paystack_amounts_match(provider_data: dict, tx: dict) -> bool:
     amount_ok = provider_data.get("amount") == tx.get("amount_kobo")
@@ -651,13 +692,24 @@ async def initialize_purchase(req: PurchaseInitRequest):
     kobo = s.get("pin_price_kobo", 30000000)
     ref = f"ASE-{uuid.uuid4().hex[:12].upper()}"
     callback_url = f"{req.origin_url}/purchase/success?reference={ref}"
-    tx = {"id": str(uuid.uuid4()), "reference": ref, "amount_kobo": kobo, "currency": "NGN", "buyer_name": req.buyer_name, "buyer_email": req.buyer_email, "payment_status": "pending", "pin_generated": None, "created_at": datetime.now(timezone.utc).isoformat()}
+    tx = {
+        "id": str(uuid.uuid4()), "reference": ref, "channel": "card",
+        "amount_kobo": kobo, "amount_ngn": kobo / 100, "currency": "NGN",
+        "buyer_name": req.buyer_name, "buyer_email": req.buyer_email,
+        "payment_status": "pending", "status": ORDER_CREATED, "pin_generated": None,
+        "fulfillment_attempts": [], "created_at": datetime.now(timezone.utc).isoformat(),
+    }
     await db.payment_transactions.insert_one(tx)
     async with httpx.AsyncClient(timeout=15.0) as http:
         resp = await http.post(f"{PAYSTACK_BASE_URL}/transaction/initialize", headers={"Authorization": f"Bearer {pk}", "Content-Type": "application/json"}, json={"email": req.buyer_email, "amount": kobo, "reference": ref, "callback_url": callback_url, "metadata": {"buyer_name": req.buyer_name}, "currency": "NGN"})
-    if resp.status_code != 200: raise HTTPException(status_code=502, detail="Payment init failed")
+    if resp.status_code != 200:
+        await db.payment_transactions.update_one({"reference": ref}, {"$set": {"status": PAYMENT_FAILED}})
+        raise HTTPException(status_code=502, detail="Payment init failed")
     data = resp.json()
-    if not data.get("status"): raise HTTPException(status_code=502, detail=data.get("message", "Failed"))
+    if not data.get("status"):
+        await db.payment_transactions.update_one({"reference": ref}, {"$set": {"status": PAYMENT_FAILED}})
+        raise HTTPException(status_code=502, detail=data.get("message", "Failed"))
+    await db.payment_transactions.update_one({"reference": ref}, {"$set": {"status": PAYMENT_PENDING}})
     return {"authorization_url": data["data"]["authorization_url"], "reference": ref}
 
 @api_router.get("/purchase/verify/{reference}")
@@ -682,9 +734,7 @@ async def verify_purchase(reference: str):
                         return {"status": "pending", "payment_status": "pending", "pin": None}
                     claimed = await _claim_transaction_fulfillment(reference)
                     if claimed:
-                        pin = await _issue_pin_license(claimed.get("buyer_name",""), claimed.get("buyer_email",""), reference, f"Paystack - {reference}")
-                        await db.payment_transactions.update_one({"reference": reference}, {"$set": {"pin_generated": pin, "payment_status": "success"}})
-                        await send_pin_email(claimed.get("buyer_email",""), claimed.get("buyer_name",""), pin)
+                        pin = await _fulfill_confirmed_payment(claimed, reference, "Paystack")
                         await _log_webhook_event("purchase_verify", "charge.success", reference, True, "fulfilled")
                         return {"status": "success", "payment_status": "success", "pin": pin, "buyer_name": claimed.get("buyer_name","")}
                     fresh = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
@@ -726,9 +776,7 @@ async def paystack_webhook(request: Request):
     if not claimed:
         await _log_webhook_event("paystack", event_type, ref, True, "duplicate_or_already_fulfilled")
         return {"status": "ok"}
-    pin = await _issue_pin_license(claimed.get("buyer_name",""), claimed.get("buyer_email",""), ref, f"Webhook - {ref}")
-    await db.payment_transactions.update_one({"reference": ref}, {"$set": {"pin_generated": pin, "payment_status": "success"}})
-    await send_pin_email(claimed.get("buyer_email",""), claimed.get("buyer_name",""), pin)
+    await _fulfill_confirmed_payment(claimed, ref, "Webhook")
     await _log_webhook_event("paystack", event_type, ref, True, "fulfilled")
     return {"status": "ok"}
 
