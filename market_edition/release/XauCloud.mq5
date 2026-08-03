@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                     XAUUSD_AI_Sniper_EA.mq5      |
-//|                                     XauAI Sniper — M10 Gold Edition|
+//|                                     XauAI Sniper - M10 Gold Edition|
 //|   v6.25.24 - 30-day replay consolidated root repair              |
 //|   Replay-proven fixes: 4807 requires persistence before targeted  |
 //|   rebuild (no per-bar handle churn); explicit WAIT thesis actions |
@@ -246,7 +246,7 @@
 //| (equity protection, prop-firm loss lock, weekend close, weekly        |
 //| target, remote close-all) the same as the normal strategy.            |
 //+------------------------------------------------------------------+
-// v6.20.5 CHANGES (2026-07-10) — RECOVERED TRADE EXPANSION MANAGER:
+// v6.20.5 CHANGES (2026-07-10) - RECOVERED TRADE EXPANSION MANAGER:
 //   1. Adds RECOVERED_TRADE_EXPANSION_MODE for trades that suffered
 //      meaningful own-R MAE, then recovered while structure/momentum still
 //      support the executed direction.
@@ -257,7 +257,7 @@
 //   4. Emits RECOVERY_EXPANSION_* telemetry so Command Center/Journals show
 //      exactly when a small-profit exit was suppressed or accepted.
 //
-// v6.20.4 CHANGES (2026-07-10) — ENTRY LOCK OFF BY DEFAULT:
+// v6.20.4 CHANGES (2026-07-10) - ENTRY LOCK OFF BY DEFAULT:
 //   InpCrossInstanceEntryLockEnable default flipped true -> false after live
 //   VPS+Mac audit found 0 trades executed on v6.20.3 for ~15h on both
 //   machines; investigation confirmed the entry lock never fired (0 events)
@@ -265,7 +265,7 @@
 //   confirmation gate, unchanged here), but the lock was disabled anyway
 //   per explicit request. Lock code untouched, just off by default.
 //
-// v6.20.3 CHANGES (2026-07-09) — TELEMETRY + RECOVERY GUARD + ENTRY LOCK + UNIVERSAL DELAY:
+// v6.20.3 CHANGES (2026-07-09) - TELEMETRY + RECOVERY GUARD + ENTRY LOCK + UNIVERSAL DELAY:
 //   1. Trade-brain rows include version/build/config identity and calibrated
 //      entry-quality fields, plus restart reconciliation and in-hold checkpoints.
 //   2. Stored recovery opportunities now consult the anti-repeat-loss guard before
@@ -275,7 +275,7 @@
 //   4. Immediate/A+ momentum delay bypass was removed; normal signals route through
 //      the full M5 entry-delay window and revalidate before execution.
 //
-// v6.20.2 CHANGES (2026-07-09) — COMMAND SAFETY + FORCE-CONTROL AUDIT:
+// v6.20.2 CHANGES (2026-07-09) - COMMAND SAFETY + FORCE-CONTROL AUDIT:
 //   1. FORCE_OPEN_TRADE payload now accepts original signal symbol, price,
 //      and score. EA logs original-vs-current execution price, missed move,
 //      and whether the forced entry is better/worse than the blocked signal.
@@ -285,7 +285,7 @@
 //   3. No entry rules, SmartGuard thresholds, AI mode, exit rules, or lot
 //      sizing math changed.
 //
-// v6.20.1 CHANGES (2026-07-09) — DELAYED-ENTRY OUTCOME TELEMETRY:
+// v6.20.1 CHANGES (2026-07-09) - DELAYED-ENTRY OUTCOME TELEMETRY:
 //   Owner-directed, explicit "do not change strategy again yet" -- pure
 //   instrumentation, no entry/exit decision logic touched.
 //
@@ -329,7 +329,7 @@
 //
 //   Compiled 0 errors / 0 warnings. Static tests in tests/test_xau_v6201_
 //   delayed_entry_outcome_telemetry_static.py.
-// v6.20.0 CHANGES (2026-07-09) — M5 ENTRY DELAY, PHASE B:
+// v6.20.0 CHANGES (2026-07-09) - M5 ENTRY DELAY, PHASE B:
 //   Owner-directed build, second half of the "adaptive entry-and-exit
 //   learning system" (Phase A, exit memory, shipped as v6.19.0). Explicit
 //   requirement: keep M5 as the signal timeframe; do not wait for the next
@@ -392,7 +392,7 @@
 //
 //   Compiled 0 errors / 0 warnings. Static tests in tests/test_xau_v6200_
 //   m5_entry_delay_static.py.
-// v6.19.0 CHANGES (2026-07-09) — ADAPTIVE EXIT MEMORY, PHASE A:
+// v6.19.0 CHANGES (2026-07-09) - ADAPTIVE EXIT MEMORY, PHASE A:
 //   Owner-directed build: "adaptive entry-and-exit learning system." User
 //   explicitly required Phase A (exit) to be implemented, audited, and
 //   tested BEFORE any Phase B (entry timing) instrumentation, and that
@@ -452,7 +452,7 @@
 //   instrumentation) explicitly NOT started this release per owner
 //   instruction -- observation-only build comes after this ships and is
 //   independently audited.
-// v6.18.1 CHANGES (2026-07-09) — GROWTH ENGINE: EXIT-ARM + PYRAMID MARGIN SAFETY:
+// v6.18.1 CHANGES (2026-07-09) - GROWTH ENGINE: EXIT-ARM + PYRAMID MARGIN SAFETY:
 //   Continuation of the v6.18.0 forensic audit (items 4-5 of the phased
 //   plan). Three fixes, all following the same "one authority, extend
 //   don't fork" pattern as v6.18.0:
@@ -516,7 +516,7 @@
 //   several relevant fixes and the current code already has three
 //   self-correction mechanisms the original audit didn't account for).
 //   Compiled 0 errors / 0 warnings.
-// v6.18.0 CHANGES (2026-07-09) — GROWTH ENGINE: UNIFIED ACCOUNT-RELATIVE SIZING:
+// v6.18.0 CHANGES (2026-07-09) - GROWTH ENGINE: UNIFIED ACCOUNT-RELATIVE SIZING:
 //   Owner-directed forensic audit: recover the real May19-June17 growth-run
 //   behavior (trade log verified: $100k starting balance, +$351,118 net by
 //   06-15, ~74% win rate, PF 3.07, almost entirely TREND_PULLBACK) for small
@@ -560,7 +560,7 @@
 //   sizing_static.py. Entry signal generation, direction selection, exit
 //   management, and pyramid/rescue logic are UNTOUCHED by this release --
 //   those are tracked separately per the forensic audit's phased plan.
-// v6.17.25 CHANGES (2026-07-08) — ENTRY-PATH CONSISTENCY: TIMING ENGINE COVERAGE:
+// v6.17.25 CHANGES (2026-07-08) - ENTRY-PATH CONSISTENCY: TIMING ENGINE COVERAGE:
 //   User traced the entry execution graph and found: (1) RE_ENTRY
 //   (CheckReEntryOpportunity) only checked Active Direction agreement + a
 //   "better price" retest before calling OpenTrade() directly -- a
@@ -604,7 +604,7 @@
 //   classification -- manual override still proceeds regardless, preserving
 //   its intentional-bypass semantics.
 //
-// v6.17.24 CHANGES (2026-07-08) — A-Z AUDIT: COUNTERTREND EVIDENCE-SIDE FIX:
+// v6.17.24 CHANGES (2026-07-08) - A-Z AUDIT: COUNTERTREND EVIDENCE-SIDE FIX:
 //   Full-file audit requested after v6.17.23 shipped ("know what you're doing,
 //   do it 100% complete, don't make me come back debugging"). Re-derived
 //   XAU_ClassifySetup by hand against a concrete oversold-in-downtrend
@@ -630,7 +630,7 @@
 //   LATE_CHASE. XAU_ExhaustionReversalGuard (v6.17.21) was not touched --
 //   confirmed independent per its own existing test.
 //
-// v6.17.23 CHANGES (2026-07-08) — ADAPTIVE TIMING + COUNTERTREND CLASSIFIER:
+// v6.17.23 CHANGES (2026-07-08) - ADAPTIVE TIMING + COUNTERTREND CLASSIFIER:
 //   User feedback on v6.17.22: a fixed one-bar wait risks missing a genuinely
 //   strong, already-confirmed signal's exact entry, and Gate 1's HTF-bias
 //   block hard-blocks EVERY countertrend attempt even when fresh chart
@@ -657,7 +657,7 @@
 //   4/6 still waits one bar like any uncertain signal, and the existing
 //   anti-chase/never-blindly-resume behavior from v6.17.22 is unchanged.
 //
-// v6.17.22 CHANGES (2026-07-08) — TIMING ENGINE (ONE-BAR ENTRY CONFIRMATION):
+// v6.17.22 CHANGES (2026-07-08) - TIMING ENGINE (ONE-BAR ENTRY CONFIRMATION):
 //   Forensic audit of 35 entries across 6 trading days and 12 EA version eras
 //   (v6.8.0-v6.17.20; both directions; BREAKOUT/TREND_PULLBACK/HTF_TREND_FOLLOW/
 //   MULTI_EXTREME; every grade; every session) found 0/35 (0%) were favorable
@@ -678,7 +678,7 @@
 //   inherits the old signal's direction, matching the explicit requirement
 //   that a reconsidered signal must be fully re-derived, not resumed.
 //
-// v6.17.21 CHANGES (2026-07-08) — SCAN-RECOVERY STATE FIX + EXHAUSTION/REVERSAL GUARD:
+// v6.17.21 CHANGES (2026-07-08) - SCAN-RECOVERY STATE FIX + EXHAUSTION/REVERSAL GUARD:
 //   User reported a live SCAN_STARTED/SCAN_ABORTED reason=INDICATOR_RECOVERY_BACKOFF
 //   loop that repeated every tick despite the backoff message itself saying to wait.
 //   Root cause: XAU_LogScanState's dedup only collapses REPEATS of the identical
@@ -714,7 +714,7 @@
 //   directly, bypassing deleted legacy context gate entirely -- exactly the path both
 //   flagged trades used.
 //
-// v6.17.20 CHANGES (2026-07-08) — EXIT ARM R-FLOOR (Mac vs VPS root cause):
+// v6.17.20 CHANGES (2026-07-08) - EXIT ARM R-FLOOR (Mac vs VPS root cause):
 //   User ran the same EA on two accounts: Mac ($3k, small lots, holds well,
 //   $187-193 wins) and VPS ($7k, bigger lots from the v6.17.17 account-lot-
 //   floor, exits at $28-53). Both sit in the SAME AccountSizeRiskMultiplier
@@ -742,7 +742,7 @@
 //   this one can be done directly from the JSONL/CSV telemetry going
 //   forward, without needing a live side-by-side repro.
 //+------------------------------------------------------------------+
-// v6.17.19 CHANGES (2026-07-08) — ACCOUNT-SIZE ADAPTIVE TP:
+// v6.17.19 CHANGES (2026-07-08) - ACCOUNT-SIZE ADAPTIVE TP:
 //   User: "the bigger the account size the bigger the lots, the bigger the
 //   exit profit target/TP... basically everything should trade based on
 //   account size." Lot size already scales with account size (v6.17.17
@@ -772,7 +772,7 @@
 // v6.14.0 regardless of any EA change underneath -- add "update this banner"
 // to RELEASE_CHECKLIST.md permanently.
 //
-// v6.17.18 CHANGES (2026-07-08) — PROFIT QUALITY EXIT GATE:
+// v6.17.18 CHANGES (2026-07-08) - PROFIT QUALITY EXIT GATE:
 //   Runtime-proven from live telemetry (XAUAI_TradingIntelligence_XAUUSD.jsonl,
 //   48 closes 07-02..07-08): 15/35 winners (43%) were self-tagged
 //   EXIT_EARLY_LEFT_PROFIT by the EA's own post-close tracker; 7 of those 15
@@ -803,7 +803,7 @@
 //   InpProfitQualityRunnerLockPct (22.0), InpProfitQualityBigWinRMultiple
 //   (2.50), InpProfitQualitySpreadImpactPct (30.0).
 //
-// v6.17.18 CHANGES (2026-07-08) — SCAN WARM-UP NOISE + SPEED FIX:
+// v6.17.18 CHANGES (2026-07-08) - SCAN WARM-UP NOISE + SPEED FIX:
 //   User-reported: "SCAN_ABORTED reason=INDICATOR_WARMUP" was noisy and slow
 //   to clear, and the M5 signal that used to be confirmed right at the exact
 //   5-minute bar close was landing late. Two confirmed bugs in
@@ -823,7 +823,7 @@
 //        data genuinely isn't ready yet (new INDICATOR_RECOVERED-before-
 //        ceiling log line marks when this early path fires).
 //
-// v6.14.0 CHANGES (2026-07-06) — 24H REPORT RUNNER QUALITY FIX:
+// v6.14.0 CHANGES (2026-07-06) - 24H REPORT RUNNER QUALITY FIX:
 //   Evidence from the latest 24h live report:
 //   - Day was profitable (+$212.51 / +7.79% in the forward report), but several
 //     winners closed before another 2-4 ATR of continuation.
@@ -846,18 +846,18 @@
 //   4. Forward report floating stats now update every tick, not only inside the
 //      entry scan, so max floating gain/loss/drawdown no longer print false zeros.
 //
-// v6.13.0 CHANGES (2026-07-03) — ANTI-REPEAT-LOSS GUARD + CLOUD FIX:
+// v6.13.0 CHANGES (2026-07-03) - ANTI-REPEAT-LOSS GUARD + CLOUD FIX:
 //   INCIDENT: 2026.07.03 15:23-17:08, six losing BUY entries stacked while
 //   XAUUSD fell 4182.42 -> 4159.10. Root cause: g_htfConsensusDir is a slow
 //   H1 EMA50/200 + M30 EMA50/200 structural measure that cannot flip within
-//   a couple of hours — a $23 fall over 105 minutes doesn't come close to
+//   a couple of hours - a $23 fall over 105 minutes doesn't come close to
 //   inverting it, so it stayed HTF=+1 (bullish) the entire time, which is
 //   the mathematically expected output for what this signal actually
 //   measures, not a bug in itself. HTF_TREND_FOLLOW/TREND_PULLBACK kept
 //   re-qualifying BUY off that stale reading every new M5 bar. The ONE gate
-//   that correctly saw the real M5/M15 downtrend — AdaptiveXAUConfirm
+//   that correctly saw the real M5/M15 downtrend - AdaptiveXAUConfirm
 //   inside SMART_GUARD_FAST_CONFIRM (fastAgainst=2, M5 AND M15 both against
-//   BUY) — issued a hard block exactly as designed, but
+//   BUY) - issued a hard block exactly as designed, but
 //   XAU_StrongContextForSoftBypass() unconditionally downgrades any hard
 //   block to a mere warning for A/A+ grade, with zero memory of how many
 //   times that had already fired this session. AI confidence read 0%
@@ -867,7 +867,7 @@
 //   this exact pattern but only applied a flat 0.65x lot reduction with no
 //   escalation for a catastrophic win rate, while a separate HTF-consensus-
 //   based memory floor could push the lot size back UP over that reduction
-//   — exactly backwards during an active loss streak.
+//   - exactly backwards during an active loss streak.
 //   FIX:
 //   1. New anti-repeat-loss guard (g_sameDirLossStreak/g_lastLossDir,
 //      XAU_AntiRepeatLossActive): once InpAntiRepeatLossStreak (default 2)
@@ -875,7 +875,7 @@
 //      price hasn't recovered half an ATR past where the last loss closed,
 //      the SMART_GUARD_FAST_CONFIRM / REMOVED_STI_REENTRY_DELAY / AI_LOW_CONF_SKIP
 //      soft-bypass sites no longer downgrade their hard block to a warning
-//      for that direction — the block stands regardless of grade. Adaptive,
+//      for that direction - the block stands regardless of grade. Adaptive,
 //      not a blanket ban: the moment price recovers, or the streak resets
 //      on a win, every bypass works exactly as before.
 //   2. Memory floor no longer raises lot size above the win-rate-driven
@@ -887,7 +887,7 @@
 //      share consecutive-failure tracking. After InpCloudOfflineFailThreshold
 //      (default 3) consecutive failures, logs CLOUD_OFFLINE_LOCAL_MODE once;
 //      logs CLOUD_RECONNECTED once when a call succeeds again. Confirmed:
-//      no trade-entry/exit logic anywhere reads cloud call success/failure —
+//      no trade-entry/exit logic anywhere reads cloud call success/failure -
 //      trading was already, and remains, fully local regardless of cloud
 //      reachability. Failure logs now include a running consecutive-failure
 //      count.
@@ -921,7 +921,7 @@
 //      and what must change before an entry is allowed.
 //   Preserves all v6.10.0 Adaptive News Momentum Engine fixes.
 //+------------------------------------------------------------------+
-// v6.10.0 CHANGES (2026-07-02) — ADAPTIVE NEWS MOMENTUM ENGINE:
+// v6.10.0 CHANGES (2026-07-02) - ADAPTIVE NEWS MOMENTUM ENGINE:
 //   1. Replaces binary post-news fear with a staged engine:
 //      NEWS_PROTECTION -> NEWS_RELEASE_COOLDOWN -> NEWS_OBSERVING ->
 //      NEWS_CONTINUATION_CONFIRMED / NEWS_ENTRY_ALLOWED.
@@ -937,10 +937,10 @@
 //      blindly full-sizing every spike.
 //   Preserves all v6.9.0 Command Center live-feed fixes.
 //+------------------------------------------------------------------+
-// v6.9.0 CHANGES (2026-07-02) — COMMAND CENTER LIVE FEED FIX:
+// v6.9.0 CHANGES (2026-07-02) - COMMAND CENTER LIVE FEED FIX:
 //   Root cause of the Command Center showing stale "7d ago" cards: every
 //   cloud post used to come from deep inside the gated entry-scan pipeline
-//   (XAU_RecordMarketSnapshot) — if ANY of 8+ higher-level gates (equity
+//   (XAU_RecordMarketSnapshot) - if ANY of 8+ higher-level gates (equity
 //   protect, weekly target hit, growth daily lock, weekend close, prop-firm
 //   loss lock, etc.) was active, literally nothing posted to the cloud for
 //   as long as that gate stayed active, however long that was.
@@ -948,9 +948,9 @@
 //      ALSO posts BOT_STATUS_HEARTBEAT to the cloud, unconditionally,
 //      before any of those gates run. Classifies into one of the Command
 //      Center's status categories (SCANNING/WAITING/BLOCKED/MANAGING_
-//      TRADE/PROTECTING_PROFIT/HOLDING/PREPARING_EXIT — ENTERING/EXITING
+//      TRADE/PROTECTING_PROFIT/HOLDING/PREPARING_EXIT - ENTERING/EXITING
 //      come from the trade-event posts themselves, which already worked).
-//   2. XAU_LogTradeThesisStatus (added v6.7.0/v6.8.0) was local-only — the
+//   2. XAU_LogTradeThesisStatus (added v6.7.0/v6.8.0) was local-only - the
 //      MT5 journal got full thesis health, hold/protect/exit reasoning,
 //      and TRI recovery-mode detail, but none of it ever reached the
 //      dashboard. It now also posts to /api/cloud/monitor/thesis-status
@@ -964,7 +964,7 @@
 //   decisions into one card instead of spamming duplicates. Also fixed a
 //   real bug found along the way: the "Trade Blocked" card always said the
 //   same generic "Waiting for higher quality setup" regardless of the
-//   actual reason — it now shows the specific, humanized reason (RR too
+//   actual reason - it now shows the specific, humanized reason (RR too
 //   low, AI confidence weak, structure conflict, etc.).
 //   Frontend: new dedicated "Live Bot Thought" panel (always-current
 //   status, refreshed every 8s); "Open Trade Thinking" panel extended with
@@ -973,79 +973,79 @@
 //   guess before).
 //|   bank the second chance at breakeven, failed ones ride to SL       |
 //+------------------------------------------------------------------+
-// v6.8.0 CHANGES (2026-07-02) — TRADE RECOVERY INTELLIGENCE (TRI):
-//   Purpose is NOT to avoid losses — it recognizes when an entry was
+// v6.8.0 CHANGES (2026-07-02) - TRADE RECOVERY INTELLIGENCE (TRI):
+//   Purpose is NOT to avoid losses - it recognizes when an entry was
 //   likely poor but the market gives a genuine second chance to escape
 //   or improve the position, and tells the difference from noise.
-//   1. STEP 1 — DETECT NEAR FAILURE: once adverse price movement reaches
+//   1. STEP 1 - DETECT NEAR FAILURE: once adverse price movement reaches
 //      InpTRI_NearSLPct (default 85%) of the original SL distance, the
-//      trade enters Recovery Mode. This never closes or reduces anything —
+//      trade enters Recovery Mode. This never closes or reduces anything -
 //      it only starts watching, recording MAE, momentum/HTF/AI-confidence
 //      snapshots at that moment.
-//   2. STEP 2 — WATCH THE RECOVERY: every subsequent tick tracks the worst
+//   2. STEP 2 - WATCH THE RECOVERY: every subsequent tick tracks the worst
 //      adverse point reached (true MAE) and whether/when price reclaims
 //      breakeven.
-//   3. STEP 3 — CLASSIFY: the decision point is the moment price actually
-//      reclaims breakeven (profit >= 0) — never before. A weighted score
+//   3. STEP 3 - CLASSIFY: the decision point is the moment price actually
+//      reclaims breakeven (profit >= 0) - never before. A weighted score
 //      (reclaim depth, momentum delta, HTF validity, structure health, AI
 //      confidence delta), threshold-adjusted for choppy regimes and
 //      self-tuned from historical outcomes, classifies STRONG (hold
-//      normally, no action) or WEAK (bank the second chance — close at
+//      normally, no action) or WEAK (bank the second chance - close at
 //      breakeven/small profit right there, before it can roll over into a
 //      full SL cycle again). A trade that never reclaims breakeven at all
-//      gets tagged FAILED after InpTRI_FailedAfterBars — purely for
+//      gets tagged FAILED after InpTRI_FailedAfterBars - purely for
 //      logging/re-entry memory. FAILED does NOT force an exit; the trade
 //      keeps riding its normal SL/other exit systems exactly as before.
 //      An ambiguous score between the weak floor and strong threshold does
-//      nothing — "never exit solely because price returned to breakeven."
-//   4. STEP 4 — SMART RE-ENTRY: a WEAK-recovery bailout arms a re-entry
+//      nothing - "never exit solely because price returned to breakeven."
+//   4. STEP 4 - SMART RE-ENTRY: a WEAK-recovery bailout arms a re-entry
 //      watch for that direction. The next same-direction entry doesn't get
 //      blocked outright, but does need a genuinely fresh trigger (new BOS,
 //      liquidity sweep, pullback, OB/FVG reaction, strong momentum candle)
-//      instead of the same quality of signal that just failed — reusing
+//      instead of the same quality of signal that just failed - reusing
 //      the v6.7.0 HTF trigger-requirement logic. Goal: improve average
 //      entry price instead of stubbornly re-fighting a damaged read.
 //   SAFETY: TRI's only close action (TRI_WEAK_RECOVERY_EXIT) is only ever
-//   reachable at profit >= 0 — it never needs the loss-close firewall and
+//   reachable at profit >= 0 - it never needs the loss-close firewall and
 //   never conflicts with No-Limit Trading Mode's "ride every trade to SL"
 //   default. Per explicit confirmation, FAILED recovery does NOT force an
-//   early loss-exit — "never end a trade unless it's SL, or it bounces
+//   early loss-exit - "never end a trade unless it's SL, or it bounces
 //   back to entry, in which case end at entry or small profit."
 //   SCOPING NOTE: the adaptive threshold self-tuning (XAU_TRI_
 //   RecordStrongOutcome) is implemented but not yet wired to a close
-//   callback — there is no single universal per-ticket "trade closed" hook
+//   callback - there is no single universal per-ticket "trade closed" hook
 //   in this file today, and retrofitting one across every exit path was
 //   judged too risky to do quickly. The threshold safely stays at its
 //   input default until that hook exists; nothing depends on it firing.
 //+------------------------------------------------------------------+
-// v6.7.0 CHANGES (2026-07-02) — ADAPTIVE ENTRY/EXIT ARBITER (full audit +
-// redesign of entry scoring and exit decision architecture — see
+// v6.7.0 CHANGES (2026-07-02) - ADAPTIVE ENTRY/EXIT ARBITER (full audit +
+// redesign of entry scoring and exit decision architecture - see
 // test_reports/ for the complete audit + report):
 //   ENTRY SIDE:
-//   1. HTF_TREND_FOLLOW no longer fires on H1+HTF consensus alone — now
+//   1. HTF_TREND_FOLLOW no longer fires on H1+HTF consensus alone - now
 //      requires at least one real trigger (pullback into value, confirmed
 //      BOS, OB/FVG reaction, or a genuinely strong momentum candle).
-//   2. SMC_GetScoreBonus was bonus-only; added SMC_GetConflictPenalty —
+//   2. SMC_GetScoreBonus was bonus-only; added SMC_GetConflictPenalty -
 //      opposing BOS + price inside the opposing OB/FVG now costs real
 //      score, and 2+ simultaneous structural conflicts hard-block the
 //      trade (downgrade to SKIP), respecting soft-block-warning mode.
 //   3. The A+/A full-size enforcement floor no longer restores size when
 //      the SMC hard-conflict flag is set (it already didn't restore for
-//      AI weak-agree — this closes the matching SMC gap).
+//      AI weak-agree - this closes the matching SMC gap).
 //   4. AI Committee gained real BLOCK authority over B-grade trades: a
 //      confidently-skipped B-grade (AI's own skip conviction clears the
 //      same bar used to hard-veto A+/A) now blocks instead of only ever
 //      reducing lot size to 0.50x.
 //   EXIT SIDE:
 //   5. XAU_ProtectPeakProfitFloor's arm threshold is no longer a single
-//      fixed USD figure — it's now the lesser of (fixed floor scaled by
+//      fixed USD figure - it's now the lesser of (fixed floor scaled by
 //      account size) or (this trade's own 1R times a configurable
 //      multiple), so protection arms proportionally for the account and
 //      the trade's own risk, not one hand-tuned number for one account size.
 //   6. The v6.6.1 loss-close firewall was silently blocking the EA's own
 //      objective-invalidation exits (EARLY_CONVICTION_CUT, CLEAN_INVALID,
 //      STRUCTURE_FAILFAST, a structurally-confirmed TTM exit) whenever the
-//      trade happened to be in a loss — exactly when a "cut a proven-wrong
+//      trade happened to be in a loss - exactly when a "cut a proven-wrong
 //      thesis fast" exit needs to fire. Per explicit confirmation, this
 //      only unblocks when No-Limit Trading Mode is OFF; the mode's default
 //      "ride every trade to SL" behavior is completely unchanged.
@@ -1055,23 +1055,23 @@
 //      precedence rule and TRADE_THESIS_STATUS logging both reference it
 //      instead of generic trailing math alone. AI's exit CLOSE call is now
 //      overridden into a protective SL move (not a panic close) whenever
-//      structure is still healthy — "if AI says exit but structure is
+//      structure is still healthy - "if AI says exit but structure is
 //      healthy, protect instead of panic close."
-//   LOGGING: XAU_LogBotDecision() — one clean, parseable line per entry
+//   LOGGING: XAU_LogBotDecision() - one clean, parseable line per entry
 //      decision (ENTER/BLOCK/WAIT/REDUCE_SIZE + full context). New:
-//      XAU_LogTradeThesisStatus() — one line per open position per
+//      XAU_LogTradeThesisStatus() - one line per open position per
 //      evaluation (healthy/pullback/warning/invalidated + hold/protect/
 //      exit reasons + peak/current/protected profit), pure observability,
 //      dashboard-ready.
 //   SCOPING NOTE: this is deliberately an additive orchestration layer over
-//   the existing (already quite sophisticated) exit stack — TTM, Growth
+//   the existing (already quite sophisticated) exit stack - TTM, Growth
 //   Guard, Protected Peak Floor, and ManageCleanExitsForPosition's own
 //   R-multiple/account%-based invalidation scoring were found, on audit, to
 //   already implement much of what a "unified exit brain" needs. Rebuilding
 //   them from scratch risked reintroducing bugs those systems already fixed
 //   across many prior releases; the real gaps were the specific items above.
 //
-// v6.6.1 CHANGES (2026-07-02) — NO-LIMIT TRADING MODE:
+// v6.6.1 CHANGES (2026-07-02) - NO-LIMIT TRADING MODE:
 //   1. Added InpNoLimitTradingMode=true, with InpDisableAllDailyLocks and
 //      InpNoDailyLimitMode aliases, to bypass daily/growth/profit lock systems.
 //   2. Daily Growth Lock can no longer force-close trades, pause entries, or
@@ -1083,7 +1083,7 @@
 //   4. Startup logs print the resolved no-limit/daily-lock state so the Journal
 //      shows NoLimitTradingMode=true and ForceCloseByDailyLock=false.
 //
-// v6.6.0 CHANGES (2026-07-02) — GOLD-ONLY STATIC REVIEW FIXES:
+// v6.6.0 CHANGES (2026-07-02) - GOLD-ONLY STATIC REVIEW FIXES:
 //   1. XAU_ReconstructOpenBasketPeakUSD now excludes the entry candle fully
 //      when reconstructing basket peak profit.
 //   2. BOS/HTF flip checks are direction-aware. Favorable flips no longer
@@ -1094,15 +1094,15 @@
 //   4. Startup sync version logging now uses XAUAI_EA_VERSION instead of a
 //      stale hardcoded version.
 //
-// v6.5.0 CHANGES (2026-07-01) — PHASES 2, 4, 5 OF THE FULL ECOSYSTEM
+// v6.5.0 CHANGES (2026-07-01) - PHASES 2, 4, 5 OF THE FULL ECOSYSTEM
 // AUDIT, BUNDLED INTO ONE RELEASE PER EXPLICIT OWNER REQUEST (see
 // test_reports/xau_v6_5_0_phases_2_4_5_2026-07-01.md for full detail).
-// Phase 3 (threshold calibration) is NOT included — it requires 2+ weeks of
+// Phase 3 (threshold calibration) is NOT included - it requires 2+ weeks of
 // real live-trading data that does not exist yet and cannot be substituted.
 // No new protection layers, no stricter entries, no lot reductions, no
 // B-grade blocking, no reduced trade frequency in any of the below.
 //
-//   PHASE 2 — reconcile Growth Guard with June-mode sizing, honest AI:
+//   PHASE 2 - reconcile Growth Guard with June-mode sizing, honest AI:
 //   5. GROWTH_HARD_LOSS_EXIT TAUTOLOGY (bug #5): the cap's "already tight
 //      enough to enforce without evidence" clause compared maxTradeLossUSD
 //      to the SAME 1.5% its own default equals, making it always true. In
@@ -1110,7 +1110,7 @@
 //      stop regardless of the trade's real SL risk (confirmed live: a
 //      +$77.91 winner survived by ~$2). Fixed the tautology and added
 //      InpGrowthJuneModeCapSLMultiple so the cap can never be tighter than
-//      the trade's actual SL-distance risk in June mode — the real broker
+//      the trade's actual SL-distance risk in June mode - the real broker
 //      SL becomes the operative stop, as intended.
 //   8. AI FALLBACK CONFIDENCE=50 (bug #8): backend returned confidence=50
 //      for BOTH a genuine dual-AI SKIP verdict AND a provider-unavailable/
@@ -1118,30 +1118,30 @@
 //      real one (88 hard entry vetoes fired in one day off the fallback
 //      constant). Backend now returns confidence=0 only when no provider
 //      actually answered; EA no longer applies the B-grade lot-halving when
-//      confidence=0 — no penalty for an AI that never weighed in.
+//      confidence=0 - no penalty for an AI that never weighed in.
 //   6. REMAINING MECHANICAL BASKET EXITS (bug #6): SECOND_CHANCE_PROFIT_EXIT
 //      had no gate at all, and both CYCLE_DECAY_EXIT branches auto-allowed
 //      on a still-profitable basket. All three now require confirmed
 //      reversal or genuine repeat-breach evidence, same as every other
 //      giveback-triggered close since v6.4.24.
 //
-//   PHASE 4 — unified Exit Arbiter (scoped to the CLOSE decision layer):
+//   PHASE 4 - unified Exit Arbiter (scoped to the CLOSE decision layer):
 //   New XAU_ReversalConfirmed() consolidates what the audit found as four
 //   different, sometimes-disagreeing "structure broken" definitions into
 //   one canonical check (M5 confirmed break, strong EMA+RSI+momentum
-//   against, or a per-ticket BOS/HTF flip since entry via TTM's snapshot —
+//   against, or a per-ticket BOS/HTF flip since entry via TTM's snapshot -
 //   the same flip logic the basket-level gate got in v6.4.25, now also
 //   available per-ticket for the first time). SMART_EXIT_GIVEBACK and
 //   SMART_EXIT_TREND now route through it instead of each computing its own
 //   ad hoc combination. Scope note: this unifies the close DECISION, not
-//   the independent SL-trailing math of AMPL/EV/A+ Shield/Chandelier —
+//   the independent SL-trailing math of AMPL/EV/A+ Shield/Chandelier -
 //   those remain separate reversible ratchets, which is fine; the actual
 //   problem was competing, unproven FULL CLOSE decisions, not multiple
 //   stops getting tighter.
 //
-//   PHASE 5 — platform cleanup and security hardening:
+//   PHASE 5 - platform cleanup and security hardening:
 //   - Removed the hardcoded "Admin@2026!" fallback admin password (was
-//     sitting in plaintext on a public repo) — generates and logs a random
+//     sitting in plaintext on a public repo) - generates and logs a random
 //     one-time password if ADMIN_PASSWORD isn't set.
 //   - JWT_SECRET now persists to backend/.jwt_secret (gitignored) instead of
 //     regenerating every process restart and invalidating every session.
@@ -1150,11 +1150,11 @@
 //   - Deleted confirmed-dead code: PinManagerSection.jsx (unmounted),
 //     backend_test.py (superseded standalone script from "Iteration 9").
 //   - README no longer hardcodes a version number (was stale at v6.4.21
-//     while backend served v6.4.24) — points at the live /api/download/info
+//     while backend served v6.4.24) - points at the live /api/download/info
 //     source of truth instead.
 //   - Fixed two site components (CloudLanding.jsx, CloudDashboard.jsx) that
 //     had been missed in every version bump since v6.4.22 and still showed
-//     v6.4.21 — caught by making the stale-label regression test dynamic
+//     v6.4.21 - caught by making the stale-label regression test dynamic
 //     instead of hardcoded, which also fixed the test itself going stale.
 //   - Repaired the regression suite: 71 of ~119 tests were failing before
 //     this release, entirely because of hardcoded references to EA
@@ -1166,17 +1166,17 @@
 //     the EA's own macro instead of a hardcoded literal, so this class of
 //     staleness cannot recur on future version bumps. Suite is now 118/118.
 //
-// v6.4.25 CHANGES (2026-07-01) — PHASE 1 OF THE FULL ECOSYSTEM AUDIT
+// v6.4.25 CHANGES (2026-07-01) - PHASE 1 OF THE FULL ECOSYSTEM AUDIT
 // (see test_reports/xau_v6_4_25_phase1_exit_defects_2026-07-01.md):
 // Fixes only the four CRITICAL/HIGH defects the audit proved with live-log
 // evidence. No new fear layers, no stricter entries, no lot reductions, no
-// B-grade blocking, no reduced trade frequency — every change below either
+// B-grade blocking, no reduced trade frequency - every change below either
 // removes a fabricated/miscalibrated signal or unblocks a partial-bank path
 // that was already designed but silently disabled by an unrelated default.
 //
 //   1. PHANTOM BASKET PEAK (bug #1, CRITICAL): XAU_ReconstructOpenBasketPeakUSD()
 //      used the current, still-forming M5 bar's high/low as a "proven peak"
-//      even for positions opened seconds earlier — that bar's range can
+//      even for positions opened seconds earlier - that bar's range can
 //      include price action from BEFORE the position existed. Live evidence:
 //      two same-day trades reconstructed peak=$78.96 and peak=$126.42 on
 //      positions ~1-2 seconds old with bestFloating=$0.00 per TradeBrain,
@@ -1186,7 +1186,7 @@
 //      bar (live per-tick tracking picks up the real peak from there).
 //   2. ABSOLUTE VS FLIP STRUCTURE TEST (bug #2, CRITICAL): XAU_BasketStructureBroken()
 //      treated a BOS/HTF state that was ALREADY against the position at
-//      entry as "confirmed invalidation" — but entries are explicitly
+//      entry as "confirmed invalidation" - but entries are explicitly
 //      allowed against a standing BOS (SMC opposition is log-only, never a
 //      block). Replayed against the flagship incident (entered with BOS=+1
 //      against a sell), the v6.4.22 gate would have returned ALLOWED and
@@ -1196,7 +1196,7 @@
 //      htfFlipped already did.
 //   3. BASKET SOFT-LOCK SILENTLY DISABLED (bug #3, CRITICAL): InpCloudSafeDisablePartials
 //      defaults true, which made every basket soft-lock (partial bank, keep
-//      runner) unreachable — CloseBasketPartial() bailed immediately. That
+//      runner) unreachable - CloseBasketPartial() bailed immediately. That
 //      left the full "BASKET LOCK" close firing on the FIRST floor/giveback
 //      breach with nothing banked (live: peak $76.11->$34.50 banked 45.3%,
 //      peak $77.88->$31.98 banked 41.1%), contradicting v6.4.24's own stated
@@ -1209,14 +1209,14 @@
 //      now requires either a genuine prior soft-lock or a confirmed
 //      structure break, same as Guard 1/Guard 2 already required.
 //   4. TTM COUNTING TICKS AS BARS (bug #4, HIGH): TTM_Evaluate() incremented
-//      barsHeld on every OnTick call with no new-bar guard — confirmed live
+//      barsHeld on every OnTick call with no new-bar guard - confirmed live
 //      at 39 "bars" in 30 seconds on one position. This collapsed
 //      InpTTM_MinHoldBars from its intended ~15 minutes of protection down
 //      to ~2 seconds, and let a few ticks of a transient dip satisfy
 //      InpTTM_PersistentBars. Fix: added TradeTTMRecord.lastEvalBarTime;
 //      TTM now only re-evaluates once per completed/new M5 bar.
 //
-// v6.4.24 CHANGES (2026-07-01) — PROFIT GIVEBACK GATE:
+// v6.4.24 CHANGES (2026-07-01) - PROFIT GIVEBACK GATE:
 //   Evidence pass across MQL5/Logs 20260624-20260701 found the SAME "act on
 //   giveback%/context alone, no reversal proof" bug from v6.4.22 also on the
 //   PROFIT side:
@@ -1230,45 +1230,45 @@
 //       Clean case: posId #9383190740 closed at $51.45 (34% below its
 //       $77.91 peak, giveback 36%>=35% allowed) on ADAPTIVE_CONTEXT_WEAK_TRADE
 //       alone; price then added another ~$229 (EXIT-BRAIN
-//       EXIT_EARLY_LEFT_PROFIT, 60m checkpoint) that was left on the table —
+//       EXIT_EARLY_LEFT_PROFIT, 60m checkpoint) that was left on the table -
 //       roughly 4.4x the banked amount, missed by treating a momentary
 //       momentum dip as proof of reversal.
 //   Fix: new input InpAllowGivebackPanicClose (default false) and an
 //   extension to XAU_GateEarlyLossClose (isGivebackTrigger=true) so a
 //   giveback%/context breach can no longer fully close a STILL-PROFITABLE
-//   position/basket without either (a) a confirmed reversal — structure
-//   break, or EMA+RSI+momentum genuinely against — or (b) this being a
+//   position/basket without either (a) a confirmed reversal - structure
+//   break, or EMA+RSI+momentum genuinely against - or (b) this being a
 //   repeat breach after the position/basket already took its first soft-
 //   lock/partial. Applied to SMART_EXIT_GIVEBACK, SMART_EXIT_TREND, and
 //   basket Guard 1/Guard 2 (which now attempt the existing
 //   InpBasketSoftLockFirst partial-bank on the first breach instead of a
 //   full close, exactly like the floor-trigger already did). The floor SL
-//   already ratcheted into place keeps protecting regardless — this only
+//   already ratcheted into place keeps protecting regardless - this only
 //   changes whether the EA proactively market-closes on TOP of that SL.
 //
-// v6.4.23 CHANGES (2026-07-01) — FULL BOS/HTF ENTRY DIAGNOSTICS:
+// v6.4.23 CHANGES (2026-07-01) - FULL BOS/HTF ENTRY DIAGNOSTICS:
 //   MANUAL_CLOSE_DIAGNOSTIC previously printed only the CURRENT BOS/HTF
 //   values. Now looks up the position's TTM entry snapshot (read-only,
-//   TTM_FindActiveSlot — no side effects) so every ticket-level close
+//   TTM_FindActiveSlot - no side effects) so every ticket-level close
 //   attempt logs "BOS(entry->cur)" and "HTF(entry->cur)", plus falls back to
 //   the position's live TTM score when the caller didn't pass one. Basket-
 //   level closes (no single ticket) still show current-only, since a
 //   multi-position basket has no single entry snapshot. No exit-decision
-//   logic changed — this is diagnostic completeness only.
+//   logic changed - this is diagnostic completeness only.
 //
-// v6.4.22 CHANGES (2026-07-01) — LET TRADES BREATHE / EARLY LOSS CLOSE GATE:
+// v6.4.22 CHANGES (2026-07-01) - LET TRADES BREATHE / EARLY LOSS CLOSE GATE:
 //   Forensic audit of live logs (basket peak +$126.42, then PROFIT_FLOOR_SET ->
 //   GIVEBACK_WARNING -> GIVEBACK_LIMIT_TRIGGERED -> CONTINUATION_HOLD_REJECTED ->
 //   FORCE CLOSE reason=THESIS_BROKEN_EXIT.BASKET -> CLOSED: LOSS -$2.10, followed
 //   by price resuming the original direction) showed the giveback/lifecycle/TTM/
 //   growth-guard protection stack was closing losing trades on pullback, score
-//   decay, or giveback % alone — mislabeling it THESIS_BROKEN_EXIT with no real
+//   decay, or giveback % alone - mislabeling it THESIS_BROKEN_EXIT with no real
 //   structural proof.
 //   1. New input InpAllowEarlyLossExit (default false). When a position or basket
 //      is at/below $0 P/L, the EA may not manually close it unless: broker SL,
 //      a margin/spread/news emergency, or a CONFIRMED structural invalidation
 //      (H1 BOS flip, HTF consensus flip, or a confirmed M5 close through the
-//      swing/invalidation level with ATR buffer) — via the new
+//      swing/invalidation level with ATR buffer) - via the new
 //      XAU_GateEarlyLossClose() choke point.
 //   2. Wired the gate into every discretionary loss-close path: basket giveback/
 //      lifecycle (XAU_BasketLifecycleManager, Guard1 fast-reversal, Guard2 hard
@@ -1285,11 +1285,11 @@
 //      (ticket, direction, entry/current price, P/L, peak, giveback %, reason,
 //      BOS, HTF, TTM score where known, structureBroken, emergency,
 //      InpAllowEarlyLossExit, ALLOWED/BLOCKED). Blocked attempts also print
-//      "EARLY LOSS CLOSE BLOCKED — letting trade breathe."
+//      "EARLY LOSS CLOSE BLOCKED - letting trade breathe."
 //   4. Preserves June 17-19 balance lot mode, B-grade allowance, AI-as-advisor
-//      growth mode, and the real broker SL — none of that changed.
+//      growth mode, and the real broker SL - none of that changed.
 //
-// v6.4.21 CHANGES (2026-07-01) — REMOVE FEAR CAGE / RESTORE CONTROLLED AGGRESSION:
+// v6.4.21 CHANGES (2026-07-01) - REMOVE FEAR CAGE / RESTORE CONTROLLED AGGRESSION:
 //   1. Adds explicit Trade Mode: SAFE_MODE, BALANCED_MODE, AGGRESSIVE_GROWTH_MODE.
 //      Balanced keeps real risk math but downgrades weak non-danger blockers to
 //      warnings; Aggressive Growth allows more B/context trades while preserving
@@ -1306,7 +1306,7 @@
 //      in Aggressive Growth; hard danger blocks remain for bad RR, failed impulse,
 //      real exhaustion, margin, spread, news, and exposure.
 //
-// v6.4.20 CHANGES (2026-07-01) — FULL BUILD INTEGRITY AUDIT:
+// v6.4.20 CHANGES (2026-07-01) - FULL BUILD INTEGRITY AUDIT:
 //
 //   1. Synchronizes release identity across header, runtime constants,
 //      dashboard, heartbeat, journals, reports, backend download metadata,
@@ -1317,7 +1317,7 @@
 //   4. Preserves v6.4.19 TTM behavior: entry thesis snapshots, per-candle
 //      live thesis scoring, and thesis-dead exits.
 //
-// v6.4.19 CHANGES (2026-07-01) — TRADE THESIS MONITOR:
+// v6.4.19 CHANGES (2026-07-01) - TRADE THESIS MONITOR:
 //
 //   1. Stores the original trade thesis at entry: setup, grade, score, BOS,
 //      HTF consensus, RSI, ATR, and entry price.
@@ -1326,75 +1326,75 @@
 //   3. Exits only when the thesis is objectively dead: score collapse,
 //      BOS reversal, HTF flip, or persistent low-score decay.
 //
-// v6.4.18 CHANGES (2026-07-01) — TRUE A/A+ FULL SIZE ENFORCEMENT:
+// v6.4.18 CHANGES (2026-07-01) - TRUE A/A+ FULL SIZE ENFORCEMENT:
 //
 // PHILOSOPHY: Quality control belongs BEFORE the entry gate and DURING exit
-// management — NOT in lot size reduction after losses.
+// management - NOT in lot size reduction after losses.
 //
-// When the EA loses → improve trade selection, not reduce position size.
-// When a valid setup is found → trade it with the correct account-mode risk.
-// When confidence is low → SKIP the trade entirely, not take it at 0.01 lots.
+// When the EA loses -> improve trade selection, not reduce position size.
+// When a valid setup is found -> trade it with the correct account-mode risk.
+// When confidence is low -> SKIP the trade entirely, not take it at 0.01 lots.
 //
 // MODULES PERMANENTLY DISABLED for lot reduction:
 //
-//   1. GetPerformanceMultiplier() — loss-streak performance penalty
-//      (was: 3+ losses→0.70x, 5+ losses→0.50x)  NOW: always returns 1.0
+//   1. GetPerformanceMultiplier() - loss-streak performance penalty
+//      (was: 3+ losses->0.70x, 5+ losses->0.50x)  NOW: always returns 1.0
 //
-//   2. patternMult in OpenTrade() — recent-win-rate lot penalty
-//      (was: 0/5 recent wins → 0.70x risk)  NOW: disabled entirely
+//   2. patternMult in OpenTrade() - recent-win-rate lot penalty
+//      (was: 0/5 recent wins -> 0.70x risk)  NOW: disabled entirely
 //
-//   3. drawdownActive risk cap — capped risk at InpDrawdownRisk% after N losses
+//   3. drawdownActive risk cap - capped risk at InpDrawdownRisk% after N losses
 //      (was: InpDrawdownRisk cap applied)  NOW: removed; blocks via gate if needed
 //
-//   4. InpCarefulMode lot reduction — halved risk near weekly profit target
+//   4. InpCarefulMode lot reduction - halved risk near weekly profit target
 //      (was: 0.25x/0.50x near target)  NOW: removal of lot effect
 //
-//   5. g_adaptiveRecoveryMode lot reduction — daily/weekly loss → 0.50x lots
+//   5. g_adaptiveRecoveryMode lot reduction - daily/weekly loss -> 0.50x lots
 //      (was: sizeMulti *= 0.50 on A/A+ after daily/weekly loss threshold)
 //      NOW: mode still gates B-grade (quality selection), lot unchanged
 //
-//   6. pgLotMult (EPF/SelectiveMode/SoftDD) — protection-cage lot stack
-//      (was: pg_selectiveActive×0.60 × softDD×0.70 × EPF×0.40-0.85)
+//   6. pgLotMult (EPF/SelectiveMode/SoftDD) - protection-cage lot stack
+//      (was: pg_selectiveActivex0.60 x softDDx0.70 x EPFx0.40-0.85)
 //      NOW: pgLotMult = 1.0 always; blocks still work via EPF_EntryBlockReason
 //
-//   7. EPF_LotMultiplier() — tier-based daily-drawdown lot reduction
+//   7. EPF_LotMultiplier() - tier-based daily-drawdown lot reduction
 //      (was: T1=0.85x, T2=0.65x, T3=0.40x)  NOW: always 1.0
 //
-//   8. PG_RiskMultiplier() — profit-guardian risk halving on big-profit days
-//      (was: up30%→0.50x, up50%→0.25x, up75%→block)
+//   8. PG_RiskMultiplier() - profit-guardian risk halving on big-profit days
+//      (was: up30%->0.50x, up50%->0.25x, up75%->block)
 //      NOW: lots unchanged (T3 hard block still active = acceptable skip-trade)
 //
-//   9. SmartGuard damage lot reduction — history-based damage-pattern penalty
-//      (was: sizeMulti × InpSmartGuardDamageLotMulti)  NOW: removed
+//   9. SmartGuard damage lot reduction - history-based damage-pattern penalty
+//      (was: sizeMulti x InpSmartGuardDamageLotMulti)  NOW: removed
 //
 // WHAT STILL CONTROLS LOT SIZE (by design):
 //   - Account mode preset (BALANCED=1.2%, CONSERVATIVE=0.6%, AGGRESSIVE=2.0%)
-//   - Balance × riskPct / slDollarPerLot (pure math)
-//   - Volatility cap (current ATR vs median) — current market, not history
-//   - Session scaling (Asia/London/NY) — current market, not history
-//   - AI Director (current analysis) — current market, not history
+//   - Balance x riskPct / slDollarPerLot (pure math)
+//   - Volatility cap (current ATR vs median) - current market, not history
+//   - Session scaling (Asia/London/NY) - current market, not history
+//   - AI Director (current analysis) - current market, not history
 //   - Broker min/max/step, margin, equity cap, basket cap
-//   - Proportional lot floor (v6.4.15) — keeps sizing proportional on small accounts
+//   - Proportional lot floor (v6.4.15) - keeps sizing proportional on small accounts
 //
-// v6.4.15 CHANGES (2026-07-01) — LOT SIZING ROOT-CAUSE FIX:
+// v6.4.15 CHANGES (2026-07-01) - LOT SIZING ROOT-CAUSE FIX:
 //
 // INVESTIGATION FINDINGS:
-//   ROOT CAUSE 1 — DISPLAY BUG: Startup log printed InpRiskPercent (0.4%) as
+//   ROOT CAUSE 1 - DISPLAY BUG: Startup log printed InpRiskPercent (0.4%) as
 //   "Risk:" but InpRiskPercent is ALWAYS OVERRIDDEN by account-mode presets
 //   (BALANCED=1.2%, CONSERVATIVE=0.6%, AGGRESSIVE=2.0%). Fixed: startup now
 //   shows the actual base risk that will be used for lot calculation.
 //
-//   ROOT CAUSE 2 — MULTIPLIER COLLAPSE ON SMALL ACCOUNTS: On a $3,000 account
+//   ROOT CAUSE 2 - MULTIPLIER COLLAPSE ON SMALL ACCOUNTS: On a $3,000 account
 //   with BALANCED mode (1.2% base = $36 risk budget), the combined B-grade
-//   multiplier (0.45x) × Asia session (0.55x) = 0.2475x total reduces the
+//   multiplier (0.45x) x Asia session (0.55x) = 0.2475x total reduces the
 //   effective risk to $8.91. With InpSLMultiplier=2.5 and typical ATR $3,
-//   slDollarPerLot ≈ $750/lot → rawLots = $8.91/$750 = 0.012 → clamps to 0.01.
+//   slDollarPerLot ~= $750/lot -> rawLots = $8.91/$750 = 0.012 -> clamps to 0.01.
 //   This is mathematically correct but NOT proportional: a $10k account would
-//   trade 0.04 lots (4×) under identical conditions, not 1× (0.01).
+//   trade 0.04 lots (4x) under identical conditions, not 1x (0.01).
 //
 //   FIX: Proportional Lot Floor (PROPORTIONAL_LOT_FLOOR): After all safety
-//   multipliers have applied, if the resulting rawLots is below 2.5× minLot
-//   on accounts < $25,000, apply a risk floor so at least 2.5× minLot is
+//   multipliers have applied, if the resulting rawLots is below 2.5x minLot
+//   on accounts < $25,000, apply a risk floor so at least 2.5x minLot is
 //   traded. The floor cannot exceed baseRisk% and never overrides drawdown
 //   mode, prop firm mode, or quality-scout entries. All downstream safety
 //   systems (GrowthGuard, equity cap, basket cap) still apply after the floor.
@@ -1403,7 +1403,7 @@
 //   multiplier stage, why the final lot was chosen, and displayed vs actual
 //   risk% for dashboard parity.
 //
-// v6.4.14 CHANGES (2026-06-30) — LOT SIZING AUDIT + MEMORY FLOOR:
+// v6.4.14 CHANGES (2026-06-30) - LOT SIZING AUDIT + MEMORY FLOOR:
 //
 //   1. Adds full LOT-SIZING-AUDIT logs showing base risk, balance, SL,
 //      ATR, raw lot, broker limits, risk-math lot, multipliers, Growth
@@ -1415,7 +1415,7 @@
 //      nearest step only when the extra SL risk is inside a configured
 //      tolerance.
 //
-// v6.4.13 CHANGES (2026-06-30) — LIVE REPORT HEARTBEAT:
+// v6.4.13 CHANGES (2026-06-30) - LIVE REPORT HEARTBEAT:
 //
 //   1. Adds a local report heartbeat so GateReport / ForwardTest files refresh
 //      during live scanning instead of only at startup, deinit, and 23:59.
@@ -1426,7 +1426,7 @@
 //      version/build instead of the old v6.3.9 label.
 //   4. Trading decisions are untouched. This is observability only.
 //
-// v6.4.12 CHANGES (2026-06-30) — ADAPTIVE TRADE MANAGEMENT + EQUITY GROWTH GUARD:
+// v6.4.12 CHANGES (2026-06-30) - ADAPTIVE TRADE MANAGEMENT + EQUITY GROWTH GUARD:
 //
 //   1. Replaces broker tick-value shortcuts with OrderCalcProfit-based XAUUSD
 //      money conversion. Live evidence showed the old risk math undercounted
@@ -1445,7 +1445,7 @@
 //   6. Preserves runner logic: the bot should hold the good high-position trade
 //      with protected stop instead of banking tiny profit and selling lower.
 //
-// v6.4.11 CHANGES (2026-06-30) — SMART EXIT 3-LAYER SYSTEM:
+// v6.4.11 CHANGES (2026-06-30) - SMART EXIT 3-LAYER SYSTEM:
 //
 //   1. Adds explicit exit states: LET_IT_WORK, PROTECT_PROFIT,
 //      HOLD_RUNNER, GIVEBACK_WARNING, SECOND_CHANCE_EXIT,
@@ -1458,14 +1458,14 @@
 //   4. Giveback limits adapt to trend strength: weak trend exits/tightens
 //      sooner; strong M5/M15 continuation gets more breathing room.
 //
-// v6.4.10 CHANGES (2026-06-29) — OPEN-BASKET PEAK RECOVERY:
+// v6.4.10 CHANGES (2026-06-29) - OPEN-BASKET PEAK RECOVERY:
 //
 //   1. When the EA is reloaded while positions are open, it reconstructs an
 //      approximate basket MFE from M5 highs/lows since entry before managing.
 //   2. This prevents a reload from forgetting a prior $191 floating peak and
 //      starting the lifecycle manager from zero on an already-proven trade.
 //
-// v6.4.9 CHANGES (2026-06-29) — TRADE LIFECYCLE MANAGER:
+// v6.4.9 CHANGES (2026-06-29) - TRADE LIFECYCLE MANAGER:
 //
 //   1. Basket lifecycle now tracks peak -> loss -> recovery cycles so a
 //      proven winner cannot drift through repeated givebacks without a plan.
@@ -1475,7 +1475,7 @@
 //      CYCLE_DECAY_EXIT, HOLD_REASON_REQUIRED, CONTINUATION_HOLD_PROTECTED,
 //      and CONTINUATION_HOLD_REJECTED.
 //
-// v6.4.8 CHANGES (2026-06-29) — PROTECTED PEAK PROFIT FLOOR:
+// v6.4.8 CHANGES (2026-06-29) - PROTECTED PEAK PROFIT FLOOR:
 //
 //   1. Meaningful floating peaks now create an earned profit floor before
 //      AI HOLD, Clean Exits, or Trend Continuation runner logic can hold.
@@ -1484,7 +1484,7 @@
 //      proven winner become a loser.
 //   3. Basket protection no longer breathes into red after a meaningful peak.
 //
-// v6.4.7 CHANGES (2026-06-29) — ADAPTIVE TREND CONTINUATION MODE:
+// v6.4.7 CHANGES (2026-06-29) - ADAPTIVE TREND CONTINUATION MODE:
 //
 //   1. TREND CONTINUATION MODE:
 //      Gold can continue aggressively after breakdowns/news. The timing guard
@@ -1505,32 +1505,32 @@
 //      When similar BAD-RR/late blocks repeatedly became BLOCK_MISSED_PROFIT,
 //      the timing guard reduces overblocking pressure in aggregate only.
 //
-// v6.4.6 CHANGES (2026-06-29) — NEWS INTELLIGENCE + EXPECTANCY ENGINE:
+// v6.4.6 CHANGES (2026-06-29) - NEWS INTELLIGENCE + EXPECTANCY ENGINE:
 //
 //   1. NEWS_AFTERMATH CRITICAL FIX:
 //      ROOT CAUSE: g_newsAftermathUntil was reset to (now+10min) on EVERY TICK while
 //      spread was elevated. If spread stayed wide for 15 min, the block rolled forward
 //      continuously creating an endless block instead of a clean 10-min cooldown.
 //      FIX: Timer only SET at START of a new spike window. While window is already
-//      active, timer is NOT touched — it counts down cleanly. A new spike after the
+//      active, timer is NOT touched - it counts down cleanly. A new spike after the
 //      window expires correctly opens a fresh window.
 //
 //   2. SPREAD CLASSIFIER (ClassifySpreadEvent):
 //      Every spread block now identifies its root cause:
-//        NEWS_SPIKE    — sudden spike > 3x EMA baseline (likely economic news)
-//        BROKER_NOISE  — moderate 2.5-3x widening (broker noise, not true news)
-//        ROLLOVER      — 23:45-00:15 GMT daily rollover spread
-//        SUNDAY_OPEN   — Sunday 00:00-00:45 GMT weekly open gap risk
-//        LOW_LIQUIDITY — Friday 21:00+ or Asian thin session
+//        NEWS_SPIKE    - sudden spike > 3x EMA baseline (likely economic news)
+//        BROKER_NOISE  - moderate 2.5-3x widening (broker noise, not true news)
+//        ROLLOVER      - 23:45-00:15 GMT daily rollover spread
+//        SUNDAY_OPEN   - Sunday 00:00-00:45 GMT weekly open gap risk
+//        LOW_LIQUIDITY - Friday 21:00+ or Asian thin session
 //      Logs: current spread, baseline, ratio, type, cooldown remaining.
 //
 //   3. POST-NEWS STATE MACHINE (g_postNewsState):
 //      After news aftermath expires, EA transitions through states:
-//        PNS_AFTERMATH  → initial spike settling
-//        PNS_DISCOVERY  → observing first post-news price reaction
-//        PNS_CONFIRMED  → N bars of confirmed direction + spread normalized
-//        PNS_ALLOWED    → A/A+ trades allowed in confirmed direction
-//        PNS_AVOID      → chop/reversal — block until state expires
+//        PNS_AFTERMATH  -> initial spike settling
+//        PNS_DISCOVERY  -> observing first post-news price reaction
+//        PNS_CONFIRMED  -> N bars of confirmed direction + spread normalized
+//        PNS_ALLOWED    -> A/A+ trades allowed in confirmed direction
+//        PNS_AVOID      -> chop/reversal - block until state expires
 //      Dashboard shows: state + bias (BULLISH / BEARISH / UNCLEAR).
 //
 //   4. EARLY LOSER CUT (ExpectancyEarlyCut):
@@ -1539,51 +1539,51 @@
 //      EMA + RSI + candle = 4-5/5), cut at -0.5R after just 10 minutes.
 //      Saves 50-70% of the loss vs waiting for the full SL to hit.
 //
-//   5. HOLD WINNERS LONGER — AMPL defaults relaxed:
-//      InpAMPL_MinUSD:         50  → 80   (arm later, avoid early chop triggers)
-//      InpAMPL_GivebackPct:    32% → 40%  (allow more breathing room)
-//      InpAMPL_GivebackMinUSD: 40  → 65   (peak must be meaningful first)
-//      InpAMPL_TrailATR_Strong: 0.45 → 0.52 (slightly wider trail on strong runs)
+//   5. HOLD WINNERS LONGER - AMPL defaults relaxed:
+//      InpAMPL_MinUSD:         50  -> 80   (arm later, avoid early chop triggers)
+//      InpAMPL_GivebackPct:    32% -> 40%  (allow more breathing room)
+//      InpAMPL_GivebackMinUSD: 40  -> 65   (peak must be meaningful first)
+//      InpAMPL_TrailATR_Strong: 0.45 -> 0.52 (slightly wider trail on strong runs)
 //
 //   6. VOLATILITY-ADJUSTED LOT SIZING:
 //      When ATR > 1.8x 20-bar median, lot auto-scales down so dollar risk stays
 //      consistent even when news inflates ATR and widens the SL. Prevents -260
 //      loss events caused by news-spike ATR inflating both SL and lot simultaneously.
 //
-// v6.4.5 CHANGES (2026-06-29) — FULL OVER-PROTECTIVE LOGIC AUDIT:
+// v6.4.5 CHANGES (2026-06-29) - FULL OVER-PROTECTIVE LOGIC AUDIT:
 //
 //   PHILOSOPHY: When the EA takes a loss, the correct response is to become
 //   MORE SELECTIVE, not to stop. Stopping is fear-based programming. It causes
 //   the EA to miss high-quality recovery setups that appear after the loss.
-//   Losses → raise the bar. Never → pause the entire EA.
+//   Losses -> raise the bar. Never -> pause the entire EA.
 //
-//   REMOVED — Hard Consecutive-Loss Cooldown (pg_pauseUntil enforcement):
+//   REMOVED - Hard Consecutive-Loss Cooldown (pg_pauseUntil enforcement):
 //   OLD: After 2 losses, pg_pauseUntil was set to 5 hours (InpTwoLossCooldownMin=300).
-//   3+ losses = 4 hours (InpPG_PostLossCooldown × 8). EA completely blocked.
-//   NEW: pg_pauseUntil enforcement converted to ADAPTIVE COOLDOWN MODE —
+//   3+ losses = 4 hours (InpPG_PostLossCooldown x 8). EA completely blocked.
+//   NEW: pg_pauseUntil enforcement converted to ADAPTIVE COOLDOWN MODE -
 //   B-grade blocked, A/A+ trades continue at reduced size. EA never fully stops.
 //   Defaults changed: InpTwoLossCooldownMin=0, InpPG_PostLossCooldown=0.
 //
-//   REMOVED — Hard Drawdown Watermark Pause (g_drawdownPause):
-//   OLD: When equity drops >8% from all-time watermark → new entries suppressed.
+//   REMOVED - Hard Drawdown Watermark Pause (g_drawdownPause):
+//   OLD: When equity drops >8% from all-time watermark -> new entries suppressed.
 //   Block only cleared when equity recovered to within 3% of watermark.
-//   NEW: g_drawdownPause converted to ADAPTIVE DRAWDOWN MODE — A/A+ only,
+//   NEW: g_drawdownPause converted to ADAPTIVE DRAWDOWN MODE - A/A+ only,
 //   50% size, all quality filters active. Resumes full normal on any win.
 //
-//   REMOVED — Hard Weekly Loss Block until Monday (weeklyLossHit):
-//   OLD: Weekly loss ≥ InpWeeklyMaxLoss% → blocked until Monday. Hard stop.
-//   NEW: Same as adaptive recovery mode — A/A+ only, 50% size, keep trading.
+//   REMOVED - Hard Weekly Loss Block until Monday (weeklyLossHit):
+//   OLD: Weekly loss >= InpWeeklyMaxLoss% -> blocked until Monday. Hard stop.
+//   NEW: Same as adaptive recovery mode - A/A+ only, 50% size, keep trading.
 //
-//   PRESERVED — True emergency stops (broker disconnect, corrupted data,
+//   PRESERVED - True emergency stops (broker disconnect, corrupted data,
 //   margin danger, extreme spread, prop firm hard daily limit).
 //
-// v6.4.4 CHANGES (2026-06-29) — ADAPTIVE RECOVERY MODE:
+// v6.4.4 CHANGES (2026-06-29) - ADAPTIVE RECOVERY MODE:
 //   REMOVED: Hard daily loss lockout that paused trading for the rest of the day.
 //   The old behaviour: when daily P&L < -InpDailyLossLimit%, the EA called CloseAll()
 //   and blocked ALL new trades until midnight. This caused the EA to miss high-quality
 //   recovery setups that appeared after the loss threshold was crossed.
 //
-//   NEW BEHAVIOUR — g_adaptiveRecoveryMode:
+//   NEW BEHAVIOUR - g_adaptiveRecoveryMode:
 //   When daily loss >= threshold, the EA CONTINUES scanning and trading, but:
 //     1. Only A/A+ setups are allowed (B-grade blocked by RECOVERY_GATE)
 //     2. All lot sizes are reduced 50% (capital protection without full stop)
@@ -1593,40 +1593,40 @@
 //     a) A profitable trade closes (PG_OnBasketWin resets the flag)
 //     b) Daily equity recovers above the threshold
 //     c) New trading day begins (daily reset)
-//   InpDailyLossLimit is now the "Adaptive Recovery Mode trigger" — set 0 to disable.
+//   InpDailyLossLimit is now the "Adaptive Recovery Mode trigger" - set 0 to disable.
 //
 //   Also removed: dailyLimitHit from CheckPyramidOpportunity gate.
-//   Also updated: dashboard shows "ADAPTIVE RECOVERY ACTIVE" not "DAILY LIMIT — CLOSED ALL".
+//   Also updated: dashboard shows "ADAPTIVE RECOVERY ACTIVE" not "DAILY LIMIT - CLOSED ALL".
 //
-// v6.4.3 CHANGES (2026-06-29) — ADAPTIVE MOMENTUM PROFIT LOCK (AMPL):
+// v6.4.3 CHANGES (2026-06-29) - ADAPTIVE MOMENTUM PROFIT LOCK (AMPL):
 //   NEW FEATURE: AMPL in ManageCleanExitsForPosition().
-//   PROBLEM: Wide SL + large lot → large dollar profit at LOW R-multiple (e.g., $136
+//   PROBLEM: Wide SL + large lot -> large dollar profit at LOW R-multiple (e.g., $136
 //   floating at 0.33R with 30pt SL). R-based exit systems (BE@1.5R, Chandelier@2R,
-//   A+Shield@3R) never fire in time. Market retraces → EA exits at +$38 (72% giveback).
+//   A+Shield@3R) never fire in time. Market retraces -> EA exits at +$38 (72% giveback).
 //   SOLUTION: AMPL works in USD space, not R-multiples. Fires when DOLLAR profit >= $50
 //   AND the move qualifies as explosive (large directional candle or fast velocity over
 //   5 bars). Places adaptive tight SL just behind current price using SafeModifySL()
-//   (ratchet-only — never moves SL backward, never conflicts with other systems).
-//   Trail distance adapts: 4-5/5 momentum → 0.45×ATR, 3/5 → 0.30×ATR, 0-2/5 → 0.18×ATR.
-//   ALSO: profit give-back limit fires independently — when peak >= $40 AND giveback
+//   (ratchet-only - never moves SL backward, never conflicts with other systems).
+//   Trail distance adapts: 4-5/5 momentum -> 0.45xATR, 3/5 -> 0.30xATR, 0-2/5 -> 0.18xATR.
+//   ALSO: profit give-back limit fires independently - when peak >= $40 AND giveback
 //   >= 32% of peak, tighten SL to prevent further bleed even on non-explosive moves.
 //   Re-entry after an AMPL stop is handled by the existing re-entry engine.
 //   New inputs: InpAMPL_Enable, InpAMPL_MinUSD, InpAMPL_ExplosiveBodyR,
 //   InpAMPL_VelATRFactor, InpAMPL_TrailATR_{Strong,Mid,Weak}, InpAMPL_GivebackPct,
 //   InpAMPL_GivebackMinUSD. Master toggle allows instant disable without recompile.
-// v6.4.2 CHANGES (2026-06-28) — SELF-AUDIT FIXES:
+// v6.4.2 CHANGES (2026-06-28) - SELF-AUDIT FIXES:
 //   1. VERSION STRINGS: Startup Print() and heartbeat now report v6.4.2 (was stale v5.9.1).
 //   2. CALIBRATION KEY COLLISION: ExtractJsonDouble called with bare key like "0-49" but the
-//      JSON response places "sample_counts" BEFORE "multipliers" — "0-49" under sample_counts
+//      JSON response places "sample_counts" BEFORE "multipliers" - "0-49" under sample_counts
 //      (an integer like 12) would be returned instead of the multiplier (like 0.88). Fixed by
 //      searching for the "multipliers" sub-object first and then parsing inside it.
 //   3. SQUEEZE_RELEASE WEIGHT BUG: when dir is counter-trend s is set to 0, but the weight
-//      multiplication s *= g_stratWeight[4] still fires, yielding 0*weight=0 — which then
+//      multiplication s *= g_stratWeight[4] still fires, yielding 0*weight=0 - which then
 //      wins the bestScore check against 0 if all other setups also scored 0. Added guard:
 //      weight and comparison only happen when s > 0.
 //   4. TRADEBRAIN FIFO RESTORE: LoadTradeBrainMemory() resets g_tradeMemHead=0 before loading.
 //      After loading N records, g_tradeMemHead = N % 500. The next write will correctly land
-//      at slot N (the slot after the last loaded record). This was already correct — confirmed clean.
+//      at slot N (the slot after the last loaded record). This was already correct - confirmed clean.
 // v6.4.1 CHANGES (2026-06-28):
 // v6.4.0 CHANGES (2026-06-28):
 //   1. MARKET PERSONALITY ENGINE: ClassifyMarketPersonality() classifies
@@ -1637,9 +1637,9 @@
 //      Global g_marketPersonality updated at the start of each bar scan.
 //   2. PER-STRATEGY ADAPTIVE WEIGHTS: g_stratWeight[10] array adjusts
 //      raw ScoreSetups() scores by each strategy's historical expectancy.
-//      Min 8 trades before adjusting; EMA-smoothed; range 0.70–1.20.
+//      Min 8 trades before adjusting; EMA-smoothed; range 0.70-1.20.
 //      Weights persisted to XAUAI_StratWeights_v1.csv.
-//      StratNameToIndex() maps strategy name→1-9 index.
+//      StratNameToIndex() maps strategy name->1-9 index.
 //   3. CONFIDENCE CALIBRATION: /api/ai/calibration endpoint (server.py)
 //      computes actual vs claimed win rates per confidence band.
 //      EA fetches on startup, applies CalibratedConfidence() to adjust
@@ -1649,15 +1649,15 @@
 //      evaluation (open AND blocked) to a daily .txt file with all
 //      scored components for review and diagnostics.
 // v6.3.9 CHANGES (2026-06-28):
-//   1. TRADEBRAIN TYPO FIX: all Print() log strings corrected TRADEBBRAIN→TRADEBRAIN.
+//   1. TRADEBRAIN TYPO FIX: all Print() log strings corrected TRADEBBRAIN->TRADEBRAIN.
 //   2. GetPerformanceMultiplier() SAFETY OVERRIDES (5 new guards):
 //      Override 1: cap at 1.0 when floating drawdown > 0.5% of balance.
-//      Override 2: cap at 1.0 when currentATR > 1.5× 50-bar median ATR (high vol).
+//      Override 2: cap at 1.0 when currentATR > 1.5x 50-bar median ATR (high vol).
 //      Override 3: cap at 1.0 when daily P&L is negative.
 //      Override 4: cap at 1.0 when TradeBrain has < 10 samples.
-//      Override 5: hard cap 1.15× (was 1.30×).
-//      Consecutive loss thresholds: ≥3 → 0.70 immediately; ≥5 → 0.50 immediately.
-//   3. ATR-ADAPTIVE PROFIT LOCK: SL tightening now uses MathMax(1.5×ATR, minStopDist)
+//      Override 5: hard cap 1.15x (was 1.30x).
+//      Consecutive loss thresholds: >=3 -> 0.70 immediately; >=5 -> 0.50 immediately.
+//   3. ATR-ADAPTIVE PROFIT LOCK: SL tightening now uses MathMax(1.5xATR, minStopDist)
 //      instead of a fixed 20% of open distance. g_dailyProfitLockArmed prevents
 //      re-trigger on every tick; partial resets below 50% threshold.
 //   4. AI FEEDBACK LOOP: added missing `ai_reason` and `direction` fields to WebRequest body.
@@ -1685,7 +1685,7 @@
 //      /api/ai/feedback/stats endpoint for accuracy analysis by confidence/strategy/session.
 //   6. GATE ANALYTICS: g_gateBlocks_* counters for every gate type. PrintGateReport() called
 //      every 24h and on OnDeinit(). g_totalSignals / g_totalAllowed track pass rate.
-//   7. SMART GROWTH: GetPerformanceMultiplier() adjusts lot sizing ±30% based on last 10 trades.
+//   7. SMART GROWTH: GetPerformanceMultiplier() adjusts lot sizing +/-30% based on last 10 trades.
 //      Daily profit lock tightens trailing stops when day gain >= InpDailyProfitLockPct (3%).
 //      Equity watermark: g_equityHighWatermark + g_drawdownPause when > InpDrawdownFromHighPct (8%).
 //   PHILOSOPHY: All existing safety rules preserved. New code is additive. Zero removed gates.
@@ -1694,16 +1694,16 @@
 //   2. CONTEXT-BUSY RETRY: 150ms yield + retry on ERR_TRADE_CONTEXT_BUSY before giving up
 //   3. INDICATOR REBUILD FIX: err=4807 transient no longer forces immediate rebuild/warmup
 //   4. SPREAD RECOVERY: 90s cooldown after a spread spike before entries re-open
-//   5. MOMENTUM SOFT MODE: fastScore>=80 + no opposing TF → x0.80 lot instead of hard block
+//   5. MOMENTUM SOFT MODE: fastScore>=80 + no opposing TF -> x0.80 lot instead of hard block
 //   6. SLIPPAGE MONITOR: logs fills with >0.20 ATR slippage + daily slippage statistics
-// v5.8.52 CHANGES (A+ Profit Shield — initial, too aggressive):
-//   Shield armed at 0.9R, causing force-closes on normal pullbacks (e.g. SELL 4229→4228 $10,
+// v5.8.52 CHANGES (A+ Profit Shield - initial, too aggressive):
+//   Shield armed at 0.9R, causing force-closes on normal pullbacks (e.g. SELL 4229->4228 $10,
 //   then market ran to 4221). Fixed in v5.8.53.
 // v5.8.53 CHANGES (Smart Two-Tier Shield 2026-06-18):
-//   TIER 1 (low threshold): Arms at 1.5R / 2% equity → moves SL to entry ONLY. Trade runs free.
+//   TIER 1 (low threshold): Arms at 1.5R / 2% equity -> moves SL to entry ONLY. Trade runs free.
 //   TIER 2 (high threshold): Only fires when peak >= 3R OR 3% equity AND momentum CONFIRMS
-//   reversal (score <= 2, trend broken, RSI against). If it's a pullback → APLUS_PULLBACK_DETECTED,
-//   trade holds. If genuine reversal → trail tightens or force-closes. Prevents missing good runs.
+//   reversal (score <= 2, trend broken, RSI against). If it's a pullback -> APLUS_PULLBACK_DETECTED,
+//   trade holds. If genuine reversal -> trail tightens or force-closes. Prevents missing good runs.
 // v5.8.54 CHANGES (Patient Profit Shield 2026-06-19):
 //   Reports showed v5.8.53 still closed several A/A+ positions too early ($0.49/$1.50/$4.27)
 //   after arming on noise-level floating profit. The shield is now protective, not
@@ -1717,68 +1717,68 @@
 //   Blocked-trade memory remains a reporting/learning system by default, not a tiny
 //   live-scout engine.
 // v5.9.0 CHANGES (Precision Audit 2026-06-21):
-//   1. PERFORMANCE: GetVolAdaptiveMult() O(n²) bubble sort replaced with ArraySort() — 25× faster on every tick
+//   1. PERFORMANCE: GetVolAdaptiveMult() O(n^2) bubble sort replaced with ArraySort() - 25x faster on every tick
 //   2. PERFORMANCE: deleted legacy context gate() caches HTF EMA handles via static locals instead of create/release per call
 //   3. PERFORMANCE: PG_PerPositionRatchet() uses global bufATR[1] instead of creating a new iATR handle every tick
-//   4. PRECISION: SafeModifySL throttle raised 1→3 mods/sec so all open positions can lock BE in the same second
+//   4. PRECISION: SafeModifySL throttle raised 1->3 mods/sec so all open positions can lock BE in the same second
 //   5. INTELLIGENCE: GetTrailATRMulti() widens trail 15% during strong directional RSI to reduce premature stop-outs
-//   6. INTELLIGENCE: Stale drift exit now requires EMA to oppose trade direction — flat but aligned trades are held
+//   6. INTELLIGENCE: Stale drift exit now requires EMA to oppose trade direction - flat but aligned trades are held
 //   7. VERSION: Startup sync and bot heartbeat version strings updated to v5.9.0
 // v6.0.0 CHANGES (Strategic Trend Intelligence 2026-06-23):
-//   STRATEGIC TREND INTELLIGENCE (STI) — the biggest intelligence upgrade yet.
+//   STRATEGIC TREND INTELLIGENCE (STI) - the biggest intelligence upgrade yet.
 //   The EA now understands complete market structure instead of isolated candles.
 //   1. STI_ComputeTCP(): Multi-TF Trend Continuation Probability (D1+H4+H1+M30+M15+M5 = 100pts)
-//      — every entry sees a 0-100 probability score of the trend continuing.
+//      - every entry sees a 0-100 probability score of the trend continuing.
 //   2. STI_ComputeExhaustion(): Exhaustion detection (H4/H1 ATR contraction + RSI divergence)
-//      — multiple signals must agree before marking a trend as exhausted.
+//      - multiple signals must agree before marking a trend as exhausted.
 //   3. STI_ComputeLateEntryRisk(): Late Entry Filter (H4 EMA dist + run bars + H1 RSI)
-//      — blocks/reduces entries after the trend has already moved significantly without reset.
-//   4. Trend Memory: g_sti struct survives trade closes — macro direction never resets to zero.
+//      - blocks/reduces entries after the trend has already moved significantly without reset.
+//   4. Trend Memory: g_sti struct survives trade closes - macro direction never resets to zero.
 //   5. Re-entry Intelligence: after a profitable TP, STI watches for a clean pullback before
 //      allowing same-direction re-entry (STI_AfterProfitableClose + STI_BlockLateReentry).
 //   6. TCP-based exit guidance: stagnant/stale cuts suppressed when TCP >= TCPContinueMinimum
-//      and trade is profitable — lets high-probability runners continue riding the trend.
+//      and trade is profitable - lets high-probability runners continue riding the trend.
 //   7. All existing modules (Profit Guardian, Smart Guard, EPF, Clean Exits, Basket Protect)
 //      unchanged. STI is an additive intelligence layer, not a replacement.
 //   PHILOSOPHY: strict != smart. STI only hard-blocks extreme late entries / exhausted trends.
 //   Borderline cases get lot reduction. The bot stays aggressive on high-quality setups.
 // v5.9.1 CHANGES (Balanced Precision 2026-06-22):
 //   Merges Claude's Precision Audit with Codex's Precision Refinement engineering improvements.
-//   No new strategy or features — pure polish.
-//   FROM CLAUDE (v5.9.0 Precision Audit — all preserved):
-//     ArraySort() in GetVolAdaptiveMult() replaces O(n²) bubble sort — 25× faster.
+//   No new strategy or features - pure polish.
+//   FROM CLAUDE (v5.9.0 Precision Audit - all preserved):
+//     ArraySort() in GetVolAdaptiveMult() replaces O(n^2) bubble sort - 25x faster.
 //     deleted legacy context gate() caches HTF EMA handles per-TF via static locals.
-//     PG_PerPositionRatchet() reads global bufATR[1] — no per-tick iATR handle create.
-//     SafeModifySL throttle: 3 mods/sec (was 1) — all basket positions can lock BE together.
+//     PG_PerPositionRatchet() reads global bufATR[1] - no per-tick iATR handle create.
+//     SafeModifySL throttle: 3 mods/sec (was 1) - all basket positions can lock BE together.
 //     GetTrailATRMulti() RSI momentum factor: 15% wider trail on strong directional RSI (68-80 / 20-32).
-//     Stale drift exit: EMA must oppose trade direction — flat+aligned trades are held, not killed.
-//   FROM CODEX (v5.9.0 Precision Refinement commit 63937bd — safe engineering only):
-//     GetVolAdaptiveMult() now caches the computed multiplier per closed M5 bar — avoids
+//     Stale drift exit: EMA must oppose trade direction - flat+aligned trades are held, not killed.
+//   FROM CODEX (v5.9.0 Precision Refinement commit 63937bd - safe engineering only):
+//     GetVolAdaptiveMult() now caches the computed multiplier per closed M5 bar - avoids
 //       redundant 50-bar CopyBuffer+sort on every tick between bar closes.
 //     PG_HTFTrendGet() releases hEMA and hATR handles on ALL failure paths, not just success.
 //       Eliminates handle leaks when the indicator read fails mid-function.
 //   NET RESULT: lowest per-tick overhead yet, no handle leaks, no trading logic changed.
 // v6.1.3 CHANGES (Anti-Trend Protection + Basket Loss Block 2026-06-26):
 //   ROOT CAUSE AUDIT: Bot was opening SELL trades during a clear XAUUSD bull move
-//   (3991→4022→4036+), losing -$260 per trade on 0.18 lots ($3k account).
+//   (3991->4022->4036+), losing -$260 per trade on 0.18 lots ($3k account).
 //   Five specific bugs identified and fixed:
 //
-//   1. SQUEEZE_RELEASE had NO H1 trend check — fired sell when BB expanded down
+//   1. SQUEEZE_RELEASE had NO H1 trend check - fired sell when BB expanded down
 //      even during H1 uptrend. Fixed: block sell if h1TrendDir==1 or htfBullConsensus.
 //
-//   2. LONDON_FIX_PIN had NO trend check — faded EVERY London spike regardless of
+//   2. LONDON_FIX_PIN had NO trend check - faded EVERY London spike regardless of
 //      direction. In a gold bull run, every spike is a valid buy continuation.
 //      Fixed: only fade spike if H1 is NOT trending in spike direction.
 //
-//   3. RANGE_REVERSAL sell required h1TrendDir <= 0 (neutral OR bearish) — neutral
+//   3. RANGE_REVERSAL sell required h1TrendDir <= 0 (neutral OR bearish) - neutral
 //      H1 (spread < 0.0015) let sells fire in a clearly bullish market.
 //      Fixed: now requires h1TrendDir == -1 AND !htfBullConsensus.
 //
-//   4. MULTI_EXTREME sell same bug — h1TrendDir <= 0 allowed neutral-H1 sells.
+//   4. MULTI_EXTREME sell same bug - h1TrendDir <= 0 allowed neutral-H1 sells.
 //      Fixed: requires h1TrendDir == -1 AND !htfBullConsensus.
 //
 //   5. No protection against adding sells into a losing sell basket.
-//      Fixed: BasketDirectionLossBlock() — if same-direction floating loss exceeds
+//      Fixed: BasketDirectionLossBlock() - if same-direction floating loss exceeds
 //      InpBasketDirLossBlockPct (default 2%) of balance, no new same-dir entries.
 //
 //   6. GLOBAL ANTI-TREND VETO added at end of ScoreSetups():
@@ -1792,44 +1792,44 @@
 //
 // v6.1.2 CHANGES (No DD Blocking 2026-06-25):
 //   Removed all drawdown-based entry blocks. Bot now trades regardless of daily loss.
-//   1. InpEPF_HardDailyDDPct = 0  → hard daily loss lockdown disabled
-//   2. InpEPF_T4BlockHardDD  = false → T4 hard DD block disabled
-//   3. InpEPF_CooldownMin    = 0  → no cooldown pause after consecutive losses
-//   4. InpStreakPauseSec      = 0  → no streak pause
-//   EPF lot-reduction tiers (T1-T4 on profit milestones) are kept — they only
+//   1. InpEPF_HardDailyDDPct = 0  -> hard daily loss lockdown disabled
+//   2. InpEPF_T4BlockHardDD  = false -> T4 hard DD block disabled
+//   3. InpEPF_CooldownMin    = 0  -> no cooldown pause after consecutive losses
+//   4. InpStreakPauseSec      = 0  -> no streak pause
+//   EPF lot-reduction tiers (T1-T4 on profit milestones) are kept - they only
 //   adjust size, they do not block. Goal: bot always fires when setup qualifies.
 //
 // v6.1.1 CHANGES (Data-Backed Block Removal 2026-06-25):
 //   30-day forensic attribution (133 trades, WR 63.2%, PF 1.78, net +$228,874) proved:
-//   1. DIR-LOCK DEFAULT → false: 30-day data: 1 blocked trade, 2 would-win, 0 would-loss, -5.27 ATR
+//   1. DIR-LOCK DEFAULT -> false: 30-day data: 1 blocked trade, 2 would-win, 0 would-loss, -5.27 ATR
 //      net cost. Zero protection benefit. Costs more in suppressed growth than it ever saves.
-//   2. ANTI-BIAS DEFAULT → false: 30-day data: 15 blocked, 7 would-win, 7 would-loss (50/50).
-//      Net cost -1.56 ATR. A 50/50 filter is indistinguishable from random — not worth running.
-//   3. EPF T4 EliteLotMult 0.12 → 0.20: The lot collapse from avg 21.40 to 0.05 is the primary
-//      growth blocker in the current phase. T4 guarded mode at 0.12× makes recovery impossible.
-//      0.20× is still strongly defensive while allowing the account to compound back.
+//   2. ANTI-BIAS DEFAULT -> false: 30-day data: 15 blocked, 7 would-win, 7 would-loss (50/50).
+//      Net cost -1.56 ATR. A 50/50 filter is indistinguishable from random - not worth running.
+//   3. EPF T4 EliteLotMult 0.12 -> 0.20: The lot collapse from avg 21.40 to 0.05 is the primary
+//      growth blocker in the current phase. T4 guarded mode at 0.12x makes recovery impossible.
+//      0.20x is still strongly defensive while allowing the account to compound back.
 //   Rule: being strict does not mean being smart. These three blocks cost more than they save.
-//   All other logic unchanged. InpDirectionLockout and InpAntiBiasCorrection remain as inputs —
+//   All other logic unchanged. InpDirectionLockout and InpAntiBiasCorrection remain as inputs -
 //   power users can still enable them; default is now data-proven off.
 //
 // v6.1.0 CHANGES (SMC Entry Layer 2026-06-24):
-//   SMC (SMART MONEY CONCEPTS) ADDITIVE CONFIRMATION — the xaubot's entry eye on your brain.
+//   SMC (SMART MONEY CONCEPTS) ADDITIVE CONFIRMATION - the xaubot's entry eye on your brain.
 //   PHILOSOPHY: Nothing removed. Nothing gated. SMC bonus lifts quality entries to A/A+
 //   and exposes SMC-opposed setups as lower-grade B trades, letting the committee/EPF
 //   handle sizing naturally. The aggressive growth personality is fully preserved.
 //
 //   1. SMC_DetectBOS(): Break of Structure on H1.
 //      Tracks highest high and lowest low in InpSMC_BOS_Lookback bars.
-//      Bullish BOS: H1 close breaks above recent swing high → g_smc_bos_dir = +1.
-//      Bearish BOS: H1 close breaks below recent swing low → g_smc_bos_dir = -1.
+//      Bullish BOS: H1 close breaks above recent swing high -> g_smc_bos_dir = +1.
+//      Bearish BOS: H1 close breaks below recent swing low -> g_smc_bos_dir = -1.
 //      BOS direction aligned with trade: +InpSMC_BOS_BonusScore to setup score.
-//      BOS opposing: logged as BOS_OPP (awareness only, no penalty — growth personality preserved).
+//      BOS opposing: logged as BOS_OPP (awareness only, no penalty - growth personality preserved).
 //
 //   2. SMC_DetectOrderBlocks(): Order Block zones on H1.
-//      Bullish OB: last bearish H1 candle before a confirmed bullish impulse (>5×ATR move up).
-//      Bearish OB: last bullish H1 candle before a confirmed bearish impulse (>5×ATR move down).
+//      Bullish OB: last bearish H1 candle before a confirmed bullish impulse (>5xATR move up).
+//      Bearish OB: last bullish H1 candle before a confirmed bearish impulse (>5xATR move down).
 //      When price RETURNS to the OB zone: +InpSMC_OB_BonusScore (default +2.0).
-//      This is the xaubot's core entry concept — buying into demand, selling into supply.
+//      This is the xaubot's core entry concept - buying into demand, selling into supply.
 //
 //   3. SMC_DetectFVGs(): Fair Value Gaps on M15.
 //      3-bar imbalance: candle[i+1].high < candle[i-1].low (bullish FVG, price must fill it).
@@ -1839,101 +1839,101 @@
 //      +InpSMC_KZ_BonusScore (default +0.5) during these windows.
 //
 //   NET EFFECT: A clean TREND_PULLBACK + BOS + OB + kill zone = +4.0 score bonus.
-//   A score of 3.5 (B-grade) becomes 7.5 → A+ in one confluence stack.
+//   A score of 3.5 (B-grade) becomes 7.5 -> A+ in one confluence stack.
 //   A trade that fights BOS is logged as BOS_OPP (awareness only); no penalty applied.
 //   Zero new blocking logic. Zero risk engine changes. Zero exit logic changes.
 //
 // v6.0.4 CHANGES (Calendar + Memory + MidLock 2026-06-24):
 //   1. SCHEDULED NEWS CALENDAR (IsScheduledNewsWindow, new inputs group):
 //      Pure GMT time-math, no external API. Pre-defined recurring high-impact windows:
-//        - Sunday 00:00-00:45 GMT — weekly market open gap risk
-//        - Monday 00:00-00:30 GMT — Asian open liquidity spike
-//        - Thursday 12:15-13:30 GMT — US Jobless Claims
-//        - Friday 12:15-14:00 GMT — NFP / US data window (covers all Fridays)
+//        - Sunday 00:00-00:45 GMT - weekly market open gap risk
+//        - Monday 00:00-00:30 GMT - Asian open liquidity spike
+//        - Thursday 12:15-13:30 GMT - US Jobless Claims
+//        - Friday 12:15-14:00 GMT - NFP / US data window (covers all Fridays)
 //      Plus 3 user-configurable custom windows (InpCalCustomDay1-3 etc.)
-//      Default custom 1: Wednesday 18:00 GMT +30min (FOMC — disable when not FOMC week)
-//      v6.24.4: shortened from +90min — 90 minutes blocked well past the point
+//      Default custom 1: Wednesday 18:00 GMT +30min (FOMC - disable when not FOMC week)
+//      v6.24.4: shortened from +90min - 90 minutes blocked well past the point
 //      where the EA should be resuming normal campaign analysis (e.g. still
 //      showing a Custom-window-1 block at 19:29 GMT for an 18:00 GMT event).
 //      Entries blocked silently; logged once per minute to terminal.
 //   2. TRADE MEMORY GRADE PRIORS (warm start):
 //      Previously: returned neutral 1.0 until 8+ real samples accumulated (took weeks).
 //      Now: uses grade-based priors from day 1 and blends them out as real data arrives:
-//        A+ pattern → 1.06× prior (historically proven, ~70%+ WR baseline)
-//        A  pattern → 1.01× prior (slight positive)
-//        B  pattern → 0.91× prior (lower expectancy, slight caution)
+//        A+ pattern -> 1.06x prior (historically proven, ~70%+ WR baseline)
+//        A  pattern -> 1.01x prior (slight positive)
+//        B  pattern -> 0.91x prior (lower expectancy, slight caution)
 //      Linear blend: at 0 samples = 100% prior, at 4 samples = 50/50, at 8+ = 100% real data.
 //      This makes the committee useful on the very first trade, not just after weeks of data.
 //   3. CUSHIONED MID-ZONE PROFIT LOCK (ratchet Stage 1 upgrade):
-//      Between BE trigger (1.5×ATR) and trail start (3.0×ATR), there was a "dead zone"
-//      where SL was locked at entry+0.35×ATR even if profit grew to 2.9×ATR.
-//      Fix: in CUSHIONED mode, at profit >= 2.0×ATR, SL steps up to entry+0.75×ATR.
-//      This provides a progressive staircase: 0.35×ATR lock at 1.5×ATR profit →
-//      0.75×ATR lock at 2.0×ATR profit → full trail at 3.0×ATR profit.
-//      In DEFERRED mode (strong trend): unchanged — original SL still provides backstop.
+//      Between BE trigger (1.5xATR) and trail start (3.0xATR), there was a "dead zone"
+//      where SL was locked at entry+0.35xATR even if profit grew to 2.9xATR.
+//      Fix: in CUSHIONED mode, at profit >= 2.0xATR, SL steps up to entry+0.75xATR.
+//      This provides a progressive staircase: 0.35xATR lock at 1.5xATR profit ->
+//      0.75xATR lock at 2.0xATR profit -> full trail at 3.0xATR profit.
+//      In DEFERRED mode (strong trend): unchanged - original SL still provides backstop.
 // v6.0.3 CHANGES (Forensic Recovery Patch 2026-06-24):
 //   FORENSIC INVESTIGATION FINDING (full audit of all 75 EA versions, git history, MT5 logs):
 //   1. LOT COLLAPSE ROOT CAUSE CONFIRMED: Manual switch from account #5050699209 ($419K-$483K)
-//      to account #108492408 ($3,000) on June 17 at 17:11:43. EA works correctly on both —
+//      to account #108492408 ($3,000) on June 17 at 17:11:43. EA works correctly on both -
 //      lots are proportional to balance. 161x balance reduction = 161x smaller lots. No bug.
 //   2. CODEX MADE ZERO CHANGES: All 75 /Applications .mq5 files MD5-verified. Codex artifacts
 //      are only internal SQLite session databases. Every EA commit in git was from Claude Code.
-//   3. GRADE SCORING UNCHANGED: A+=5.5, A=4.0, B=3.0 thresholds identical across v5.8.50→v6.0.2.
+//   3. GRADE SCORING UNCHANGED: A+=5.5, A=4.0, B=3.0 thresholds identical across v5.8.50->v6.0.2.
 //      Entry logic has not degraded. The EA did not drift from its profitable personality.
 //   4. EXIT LOGIC IMPROVED: v6.0.1 context-aware ratchet fixed the 4 BE-at-zero trades.
 //      shieldArmed=Y confirmed working in recent logs. Profit giveback is within normal parameters.
 //
 //   TWO TARGETED FIXES (evidence-backed):
-//   A. patternMult floor: 0.50 → 0.70 (line ~6644)
-//      After ≤1 win in last 5 trades, lot size was halved. This prevented recovery on small
-//      accounts — each recovery trade was too small to offset the prior loss, producing the
+//   A. patternMult floor: 0.50 -> 0.70 (line ~6644)
+//      After <=1 win in last 5 trades, lot size was halved. This prevented recovery on small
+//      accounts - each recovery trade was too small to offset the prior loss, producing the
 //      observed win/lose alternation. Reduced to 70% (still disciplined, allows recovery).
-//   B. Committee lot floor: 0.50 → 0.70 (line ~12701)
-//      In worst-case negative committee sentiment, the floor was 0.50× of base lot.
-//      Combined with STI late-entry reduction (0.65×), this stacked to 0.325× of base risk —
-//      producing $6.95 risk on a $3K account (0.03 lots). Raised floor to 0.70× so
-//      STI+committee worst case = 0.65×0.70 = 0.455× of base. Typical recovery scenario
-//      (A-grade, normal session, loss streak) improves from 0.193× to 0.399× of base risk.
+//   B. Committee lot floor: 0.50 -> 0.70 (line ~12701)
+//      In worst-case negative committee sentiment, the floor was 0.50x of base lot.
+//      Combined with STI late-entry reduction (0.65x), this stacked to 0.325x of base risk -
+//      producing $6.95 risk on a $3K account (0.03 lots). Raised floor to 0.70x so
+//      STI+committee worst case = 0.65x0.70 = 0.455x of base. Typical recovery scenario
+//      (A-grade, normal session, loss streak) improves from 0.193x to 0.399x of base risk.
 //
 //   IMPACT: Growth potential preserved. Worst-case position roughly doubles in size.
-//   Protective personality intact — no entry gates removed, no exit gates relaxed.
+//   Protective personality intact - no entry gates removed, no exit gates relaxed.
 // v6.0.2 CHANGES (Human Intelligence Upgrade 2026-06-23):
 //   1. HUMAN REASONING ENGINE: expanded from 5 rules to 12 rules.
 //      New rules (fire after primary 5; ordered risk-before-opportunity):
-//      Rule 6  AGAINST_H4_TREND:      H4+H1 both oppose direction → reduce size
-//      Rule 7  LOSS_STREAK_CAUTION:   2+ consecutive losses + B-grade → reduce size
-//      Rule 8  ASIAN_RANGING:         02:00-06:00 GMT + B-grade → reduce size (low-liquidity)
-//      Rule 9  SPREAD_ELEVATED:       live spread > 1.8× EMA baseline → reduce size
-//      Rule 10 TRIPLE_TF_ALIGNED:     H4+H1+M5 all aligned → boost (highest conviction)
-//      Rule 11 LN_NY_OVERLAP:         13:00-17:00 GMT + H1+M5 aligned → boost (peak liquidity)
-//      Rule 12 CLEAN_ENTRY_CONDITIONS: H1 aligned + RSI 40-65 + normal spread → slight boost
+//      Rule 6  AGAINST_H4_TREND:      H4+H1 both oppose direction -> reduce size
+//      Rule 7  LOSS_STREAK_CAUTION:   2+ consecutive losses + B-grade -> reduce size
+//      Rule 8  ASIAN_RANGING:         02:00-06:00 GMT + B-grade -> reduce size (low-liquidity)
+//      Rule 9  SPREAD_ELEVATED:       live spread > 1.8x EMA baseline -> reduce size
+//      Rule 10 TRIPLE_TF_ALIGNED:     H4+H1+M5 all aligned -> boost (highest conviction)
+//      Rule 11 LN_NY_OVERLAP:         13:00-17:00 GMT + H1+M5 aligned -> boost (peak liquidity)
+//      Rule 12 CLEAN_ENTRY_CONDITIONS: H1 aligned + RSI 40-65 + normal spread -> slight boost
 //   2. PER-POSITION COMMITTEE MEMORY: fixes basket race condition.
 //      Previously g_lastTradePattern was a global string overwritten by every new trade open.
 //      In a 3-position basket, a pyramid add would corrupt the original entry's pattern before
 //      the original closed and recorded. Fix: DEAL_ENTRY_IN handler now captures committee data
 //      (pattern+dirLabel+conf) into g_posCommData[] keyed by posId. At close, DEAL_ENTRY_OUT
-//      looks up posId → retrieves the correct data for that specific position → records memory.
+//      looks up posId -> retrieves the correct data for that specific position -> records memory.
 //   3. NEWS AFTERMATH FILTER: pauses new entries after spread spikes (news events).
-//      Spread EMA (α=0.02, ~50-tick baseline) tracks normal spread. If live spread exceeds
-//      InpNewsSpreadMulti (default 2.5×) of that baseline, entries are paused for
+//      Spread EMA (alpha=0.02, ~50-tick baseline) tracks normal spread. If live spread exceeds
+//      InpNewsSpreadMulti (default 2.5x) of that baseline, entries are paused for
 //      InpNewsAftermathMins (default 10 min) even after spread normalizes.
-//      Also exposed as HumanReasoning Rule 9 (reduces size when spread is 1.8× elevated).
+//      Also exposed as HumanReasoning Rule 9 (reduces size when spread is 1.8x elevated).
 // v6.0.1 CHANGES (Exit Intelligence Upgrade 2026-06-23):
 //   FORENSIC AUDIT FINDING: PG_PerPositionRatchet() moved SL to EXACT ENTRY with zero cushion
 //   and zero trend context. Live evidence: 4 A-grade SELL positions (4119.20/4121.64/4117.55/4112.85)
 //   closed at $0.00 profit (bestFloating: $17.60/$25.89/$19.52/$16.77) during normal M5 pullbacks
 //   while the H1 bearish trend remained fully intact. Root causes:
-//     1. Hard BE at exactly entry price — normal M5 noise (0.3-0.5×ATR) closed winning trades
-//     2. No trend context in ratchet — BE fired even when M5+H1 EMA both aligned bearish
-//     3. APLUS Shield grade race condition — g_lastEntryGrade read by wrong pyramid ticket
-//   REDESIGN — PG_PerPositionRatchet() now:
-//     a) DEFERRED:  trend confirmed (M5+H1 aligned, momentum>=3, regime OK) → don't move SL at all
+//     1. Hard BE at exactly entry price - normal M5 noise (0.3-0.5xATR) closed winning trades
+//     2. No trend context in ratchet - BE fired even when M5+H1 EMA both aligned bearish
+//     3. APLUS Shield grade race condition - g_lastEntryGrade read by wrong pyramid ticket
+//   REDESIGN - PG_PerPositionRatchet() now:
+//     a) DEFERRED:  trend confirmed (M5+H1 aligned, momentum>=3, regime OK) -> don't move SL at all
 //        The original protective SL remains. No unnecessary BE move during strong trends.
-//     b) CUSHIONED: trend weakening (M5 against or H1 mixed) → SL = entry ± InpRatchetBECushionATR×ATR
+//     b) CUSHIONED: trend weakening (M5 against or H1 mixed) -> SL = entry +/- InpRatchetBECushionATRxATR
 //        Locks a small amount of proven profit instead of clamping to zero.
-//     c) HARD BE:   reversal confirmed (EMAs crossed against, RSI extreme, momentum<=1) → old behavior
+//     c) HARD BE:   reversal confirmed (EMAs crossed against, RSI extreme, momentum<=1) -> old behavior
 //        Only clamps to zero when the market has actually reversed.
-//     d) ADAPTIVE TRAIL: when momentum >= 4, trail is InpRatchetStrongMomMulti wider (default 1.5×)
+//     d) ADAPTIVE TRAIL: when momentum >= 4, trail is InpRatchetStrongMomMulti wider (default 1.5x)
 //        giving pullbacks room to recover without stopping out a still-running trend.
 //   APLUS SHIELD FIX: reads grade from POSITION_COMMENT (contains "[A]"/"[A+]") instead of
 //     g_lastEntryGrade, which is a global that changes on every new trade open (race condition).
@@ -2086,12 +2086,12 @@ input group "=== RISK (Gate 4) ==="
 // EXIT: Clean Exits owns per-trade management when enabled; Basket Protect owns aggregate profitable baskets.
 // AI: advisory by default; logs opinions but does not override deterministic trade/risk authority.
 // CLOUD: mirrors accepted master actions; cloud failures must not change local trade decisions.
-input group "=== PRESERVATION MODE (v4.7.2 — let winners run, don't trade like scalper) ==="
-input group "=== ACCOUNT MODE (v4.8.2 — one-input preset for risk profile) ==="
+input group "=== PRESERVATION MODE (v4.7.2 - let winners run, don't trade like scalper) ==="
+input group "=== ACCOUNT MODE (v4.8.2 - one-input preset for risk profile) ==="
 enum ENUM_ACCT_MODE { ACCT_BALANCED, ACCT_CONSERVATIVE, ACCT_AGGRESSIVE };
 input ENUM_ACCT_MODE InpAccountMode = ACCT_BALANCED;  // v5.8.4: original default risk preset for demo/cloud testing
 
-input group "=== TRADE MODE (v6.4.21 — blocker strictness profile) ==="
+input group "=== TRADE MODE (v6.4.21 - blocker strictness profile) ==="
 enum ENUM_XAU_TRADE_MODE { SAFE_MODE=0, BALANCED_MODE=1, AGGRESSIVE_GROWTH_MODE=2 };
 input ENUM_XAU_TRADE_MODE InpTradeMode = BALANCED_MODE; // SAFE=stricter blocks, BALANCED=context-aware, AGGRESSIVE=allow clean B/continuation warnings
 
@@ -2145,22 +2145,22 @@ enum ENUM_XAU_AI_MODE { AI_OFF=0, AI_ADVISOR_ONLY=1, AI_FILTER_ONLY=2, AI_DIRECT
 input ENUM_XAU_AI_MODE InpAIMode = AI_FILTER_ONLY; // OFF=no AI calls | ADVISOR=AI logs an opinion only, never blocks/resizes | FILTER=AI may still block/reduce a weak-confidence disagreement, but can never re-open a structure-confirmed hard block | DIRECTOR=legacy full veto+lot authority, explicit opt-in only, NOT the default
 input bool   InpJune18RestoreMode = false; // TRUE: forces AI_ADVISOR_ONLY, keeps grade-only soft-bypass and no-limit daily locks off regardless of other settings, requires Active Direction agreement before HTF_TREND_FOLLOW can fire, restores a bounded loss-streak lot tier, requires fresh structure before same-direction re-entry after a loss
 
-input group "=== LOT SIZING MODE (v6.4.21 — real risk or June 16-19 balance lots) ==="
+input group "=== LOT SIZING MODE (v6.4.21 - real risk or June 16-19 balance lots) ==="
 enum ENUM_XAU_LOT_SIZING_MODE { REAL_RISK_MODE=0, JUNE_16_19_BALANCE_MODE=1 };
 input ENUM_XAU_LOT_SIZING_MODE InpLotSizingMode = JUNE_16_19_BALANCE_MODE; // JUNE mode restores balance-based lots; REAL mode uses OrderCalcProfit SL risk
-input double InpJuneBalanceLotPer1000 = 0.070; // $3k A trade ≈0.21 before broker/margin/maxlot; B≈0.15, A+≈0.26
+input double InpJuneBalanceLotPer1000 = 0.070; // $3k A trade ~=0.21 before broker/margin/maxlot; B~=0.15, A+~=0.26
 
-input group "=== NO-LIMIT TRADING MODE (v6.6.1 — disable daily stop/lock systems) ==="
+input group "=== NO-LIMIT TRADING MODE (v6.6.1 - disable daily stop/lock systems) ==="
 input bool   InpNoLimitTradingMode = true;      // TRUE = no daily/profit/growth lock force-close, no daily pause, no cooldown stop-for-day
 input bool   InpDisableAllDailyLocks = true;    // Alias/master override: bypass Daily Growth Lock, daily profit lock, retain-percent giveback locks
 input bool   InpNoDailyLimitMode = true;        // Alias/master override: bypass daily/weekly target/loss stop logic and daily pause logic
 
-input group "=== PROFIT GUARDIAN (v5.1.3 — OFF by default; v4.9.7-style aggressive trading) ==="
-input bool   InpProfitGuardian      = false; // v5.1.3: DEFAULT OFF — tier risk-cuts + HTF trend lock + cooldown OFF (restores v4.9.7 aggression)
-input bool   InpProfitLock          = true;  // v5.1.3: ALWAYS-ON safety net — runs INDEPENDENTLY of InpProfitGuardian
+input group "=== PROFIT GUARDIAN (v5.1.3 - OFF by default; v4.9.7-style aggressive trading) ==="
+input bool   InpProfitGuardian      = false; // v5.1.3: DEFAULT OFF - tier risk-cuts + HTF trend lock + cooldown OFF (restores v4.9.7 aggression)
+input bool   InpProfitLock          = true;  // v5.1.3: ALWAYS-ON safety net - runs INDEPENDENTLY of InpProfitGuardian
 
 // ====================================================================
-// v5.5.0 — EQUITY PRESERVATION FRAMEWORK (EPF)
+// v5.5.0 - EQUITY PRESERVATION FRAMEWORK (EPF)
 // Multi-tier defensive system that preserves winning phases instead
 // of letting the bot self-destruct after good runs.
 //
@@ -2176,60 +2176,60 @@ input bool   InpProfitLock          = true;  // v5.1.3: ALWAYS-ON safety net —
 //   T3 (preserve) : 0.40x lot, A/A+ only, no pyramids, max 2 concurrent positions
 //   T4 (lockdown) : NO new entries (existing trades managed normally)
 //
-// Existing pyramiding/scaling logic is preserved — EPF only restricts
+// Existing pyramiding/scaling logic is preserved - EPF only restricts
 // FRESH entries, never touches running trades' SL/TP unless trailing.
 // ====================================================================
 input group "=== EQUITY PRESERVATION FRAMEWORK (v5.5.0) ==="
-input bool   InpEPF_Enable          = true;   // master switch — set false to disable all EPF behavior
+input bool   InpEPF_Enable          = true;   // master switch - set false to disable all EPF behavior
 input double InpEPF_DailyT1Pct      = 5.0;    // daily +5%: mild defense
 input double InpEPF_DailyT2Pct      = 10.0;   // daily +10%: moderate defense
 input double InpEPF_DailyT3Pct      = 15.0;   // daily +15%: capital preservation
 input double InpEPF_DailyT4Pct      = 20.0;   // daily +20%: ultra-defensive lockdown
 input double InpEPF_PeakRetracePct  = 6.0;    // % retrace from intraday peak (after >=5% peak) = jump 1 tier up
 input double InpEPF_PeakMinPct      = 5.0;    // ignore retrace gate until daily peak >= this %
-input int    InpEPF_ConsecLossWarn  = 3;      // after N consecutive losses → bump 1 tier
-input int    InpEPF_ConsecLossCool  = 5;      // after N consecutive losses → full cooldown
+input int    InpEPF_ConsecLossWarn  = 3;      // after N consecutive losses -> bump 1 tier
+input int    InpEPF_ConsecLossCool  = 5;      // after N consecutive losses -> full cooldown
 input int    InpEPF_CooldownMin     = 0;      // minutes to pause after consecutive-loss cooldown (v6.1.2: no DD blocking)
 input bool   InpEPF_BlockClusters   = true;   // block fresh entries within InpEPF_ClusterATR of an existing same-direction position
 input double InpEPF_ClusterATR      = 0.6;    // ATR distance under which entries are considered "clustered"
 input int    InpEPF_ClusterMaxSec   = 600;    // clustering protection window (seconds since last entry)
-input double InpEPF_TrailTightT3    = 0.6;    // T3+ tightens trailing stop to N×ATR (vs default ~1.5)
+input double InpEPF_TrailTightT3    = 0.6;    // T3+ tightens trailing stop to NxATR (vs default ~1.5)
 input bool   InpEPF_PartialClose    = true;   // T1+ enables 50% partial close at +1.5R on trend-aligned trades
-input double InpEPF_HardDailyDDPct  = 0;      // v5.7.0: HARD lockdown if daily loss exceeds this %. Set 0 to disable. (v6.1.2: disabled — no DD blocking)
+input double InpEPF_HardDailyDDPct  = 0;      // v5.7.0: HARD lockdown if daily loss exceeds this %. Set 0 to disable. (v6.1.2: disabled - no DD blocking)
 input bool   InpEPF_T4AdaptiveAllowElite = true;  // T4 allows elite A/B signals at reduced size unless hard DD is hit
 input double InpEPF_T4EliteSetupScore    = 4.70;  // minimum raw setup score for guarded T4 pass
 input double InpEPF_T4EliteCombinedScore = 3.70;  // minimum combined score for guarded T4 pass
-input double InpEPF_T4EliteLotMult       = 0.20;  // reduced lot multiplier for guarded T4 pass (v6.1.1: was 0.12 — too small to recover)
+input double InpEPF_T4EliteLotMult       = 0.20;  // reduced lot multiplier for guarded T4 pass (v6.1.1: was 0.12 - too small to recover)
 input bool   InpEPF_T4RequireAorB        = true;  // only A/B grade may pass guarded T4 mode
 input int    InpEPF_T4MaxTradesPerDay    = 3;     // max guarded T4 trades per day
 input int    InpEPF_T4MinMinutesBetween  = 45;    // spacing between guarded T4 trades
-input bool   InpEPF_T4BlockHardDD        = false; // hard daily loss limit still blocks completely (v6.1.2: disabled — no DD blocking)
+input bool   InpEPF_T4BlockHardDD        = false; // hard daily loss limit still blocks completely (v6.1.2: disabled - no DD blocking)
                                               //         enables: (1) escalating HWM giveback day-halt, (2) per-position BE/trail ratchet
 input double InpPG_Tier1Pct         = 30.0;  // ignored when InpProfitGuardian=false
 input double InpPG_Tier2Pct         = 50.0;  // ignored when InpProfitGuardian=false
 input double InpPG_Tier3Pct         = 75.0;  // ignored when InpProfitGuardian=false
 input double InpPG_HWMGivebackPct   = 25.0;  // BASE giveback % when day gain < 30%. Used by InpProfitLock too.
 input bool   InpPG_EscalatingGiveback = true;  // tighten allowed giveback as the day's gain grows (locks big runs)
-input double InpPG_GivebackMinGainPct = 5.0;   // v5.1.4: don't activate giveback brake until day-HWM gain ≥ this % (avoid firing on noise)
-input double InpPG_GivebackAt30Pct  = 20.0;  // max giveback% when day gain ≥ 30%
-input double InpPG_GivebackAt50Pct  = 15.0;  // max giveback% when day gain ≥ 50%
-input double InpPG_GivebackAt75Pct  = 10.0;  // max giveback% when day gain ≥ 75% (lock big runs hard)
-input bool   InpPG_HTFTrendLock     = false; // v5.1.3: DEFAULT OFF — was blocking 7+ hours of valid trades
+input double InpPG_GivebackMinGainPct = 5.0;   // v5.1.4: don't activate giveback brake until day-HWM gain >= this % (avoid firing on noise)
+input double InpPG_GivebackAt30Pct  = 20.0;  // max giveback% when day gain >= 30%
+input double InpPG_GivebackAt50Pct  = 15.0;  // max giveback% when day gain >= 50%
+input double InpPG_GivebackAt75Pct  = 10.0;  // max giveback% when day gain >= 75% (lock big runs hard)
+input bool   InpPG_HTFTrendLock     = false; // v5.1.3: DEFAULT OFF - was blocking 7+ hours of valid trades
 const ENUM_TIMEFRAMES InpPG_HTFTrendTF = PERIOD_M10; // v6.25.16: locked to M10; M30 removed from entry-side PG trend authority
 input double InpPG_HTFTrendATR      = 1.0;
 input bool   InpPG_ConsolidationCarveout = true;
 input double InpPG_ConsolidationATR = 0.8;
-input int    InpPG_PostLossCooldown = 0;     // v6.4.5: 0=disabled — cooldown now adaptive (A/A+ only + 50% size) not a hard block
+input int    InpPG_PostLossCooldown = 0;     // v6.4.5: 0=disabled - cooldown now adaptive (A/A+ only + 50% size) not a hard block
 input bool   InpPG_AdaptiveCooldown = true;
-input int    InpTwoLossCooldownMin  = 0;     // v6.4.5: 0=disabled — two losses raise selectivity (A/A+ only), not a 5-hour hard freeze
+input int    InpTwoLossCooldownMin  = 0;     // v6.4.5: 0=disabled - two losses raise selectivity (A/A+ only), not a 5-hour hard freeze
 input int    InpLossCycleDedupSec    = 30;    // Layered basket closes inside this window count as one loss cycle
 input int    InpProfitLockCooldownMin = 300;  // Legacy HWM full-day halt becomes a 5h monitoring cooldown
-input bool   InpPG_PerPositionRatchet = true; // v5.1.3: KEY profit-protection — works INDEPENDENTLY of InpProfitGuardian
+input bool   InpPG_PerPositionRatchet = true; // v5.1.3: KEY profit-protection - works INDEPENDENTLY of InpProfitGuardian
 input double InpPG_RatchetBETrigger  = 1.0;  // ATR multiples in profit before BE move
 input double InpPG_RatchetTrailStart = 2.0;  // ATR multiples in profit before trail kicks in
 input double InpPG_RatchetTrailDist  = 1.0;  // ATR distance behind price to trail SL
 
-// v5.2.1 — STARTUP COOLDOWN (prevents blind trades right after MT5/EA reload)
+// v5.2.1 - STARTUP COOLDOWN (prevents blind trades right after MT5/EA reload)
 // v6.21.2 audit fix: the old 5-minute-plus-new-bar startup wait was itself an
 // intentional five-minute entry delay, exactly the pattern the timing repair
 // requires removed everywhere. Replaced with the same bounded 120-180s
@@ -2238,45 +2238,45 @@ input double InpPG_RatchetTrailDist  = 1.0;  // ATR distance behind price to tra
 input int    InpStartupCooldownSeconds = 150;  // Wall-clock warm-up after EA init before any trade is allowed, clamped to [120,180]
 input bool   InpStartupRequireNewBar   = false; // INERT as of v6.21.2 -- no longer read as a waiting condition; kept only so an old .set setting it true does not error. See StartupCooldownReason().
 
-// v5.3.0 — PHASE 1: VOLATILITY / SPREAD / DAILY-DD GUARDS (account-aware)
-input bool   InpVolKillEnabled    = true;   // Block entries when M5 ATR > 2× 50-bar median (turbulent market)
+// v5.3.0 - PHASE 1: VOLATILITY / SPREAD / DAILY-DD GUARDS (account-aware)
+input bool   InpVolKillEnabled    = true;   // Block entries when M5 ATR > 2x 50-bar median (turbulent market)
 input double InpVolKillMultiplier = 2.0;    // Multiplier vs 50-bar median ATR to trigger the kill switch
 input double InpVolKillHardMultiplier = 2.80; // v5.8.25: only this level is a hard chaos block for XAU fast mode
 input bool   InpVolKillXAUAdaptiveBypass = true; // v5.8.25: strong XAU fast confirmations soft-pass moderate ATR expansion
-input bool   InpSpreadKillEnabled = true;   // Block entries when current spread > 2× 60-bar median (broker freakout)
+input bool   InpSpreadKillEnabled = true;   // Block entries when current spread > 2x 60-bar median (broker freakout)
 input double InpSpreadKillMultiplier = 2.0; // Multiplier vs median spread to trigger kill switch
 input double InpHardDailyDDPct    = 0.0;    // v5.8.4 demo: disabled
-input double InpSoftDDPct         = 4.0;    // v6.3.5: enabled — reduce risk when daily DD exceeds 4% before hitting hard EPF tiers
+input double InpSoftDDPct         = 4.0;    // v6.3.5: enabled - reduce risk when daily DD exceeds 4% before hitting hard EPF tiers
 input double InpSoftDDLotMulti    = 0.7;    // lot multiplier while in soft DD mode (unused while soft DD disabled)
-// v6.3.8 UPGRADE 7 — Smart profit-growth / equity protection
+// v6.3.8 UPGRADE 7 - Smart profit-growth / equity protection
 input double InpDailyProfitLockPct   = 3.0;  // Daily profit lock %: tighten trailing stops when day gain >= this
 input double InpDrawdownFromHighPct  = 8.0;  // Max % drop from equity watermark before new entries pause
-input double InpPyramidMinSpaceATR = 1.0;   // AUTHORITATIVE pyramid spacing: ≥ this × ATR from previous live leg/add
-input double InpAdvPyrMinScore    = 4.0;    // v5.3.1: combined score required for ADVERSE pyramids (≥ here OR no add). Trend-side adds skip this gate.
+input double InpPyramidMinSpaceATR = 1.0;   // AUTHORITATIVE pyramid spacing: >= this x ATR from previous live leg/add
+input double InpAdvPyrMinScore    = 4.0;    // v5.3.1: combined score required for ADVERSE pyramids (>= here OR no add). Trend-side adds skip this gate.
 
-// v5.3.1 — HIGH-GRADE BREATHING ROOM (let A/A+ winners run instead of trailing them out)
+// v5.3.1 - HIGH-GRADE BREATHING ROOM (let A/A+ winners run instead of trailing them out)
 input double InpHighGradeBETriggerATR  = 1.5; // A/A+ trades only move to BE after this much profit (vs InpPG_RatchetBETrigger for B)
-input double InpHighGradeTrailStartATR = 3.0; // A/A+ trail kicks in only after 3× ATR profit (vs 2× for B)
-input double InpHighGradeTrailDistATR  = 1.5; // A/A+ trail distance (vs 1× ATR for B) — looser leash to capture continuation
+input double InpHighGradeTrailStartATR = 3.0; // A/A+ trail kicks in only after 3x ATR profit (vs 2x for B)
+input double InpHighGradeTrailDistATR  = 1.5; // A/A+ trail distance (vs 1x ATR for B) - looser leash to capture continuation
 
-// v6.0.1 — EXIT INTELLIGENCE GATE (context-aware ratchet — eliminates unnecessary BE exits)
+// v6.0.1 - EXIT INTELLIGENCE GATE (context-aware ratchet - eliminates unnecessary BE exits)
 // Forensic finding: ratchet fired hard BE (SL = exact entry) during strong trends, closing
 // A-grade trades at $0.00 while bestFloating was $17-$25. Three-tier context now governs all ratchet decisions.
-input group "=== EXIT INTELLIGENCE GATE (v6.0.1 — context-aware ratchet) ==="
-input bool   InpRatchetTrendGate      = true;   // Gate BE ratchet behind trend context — DEFERRED/CUSHIONED/HARD per market
+input group "=== EXIT INTELLIGENCE GATE (v6.0.1 - context-aware ratchet) ==="
+input bool   InpRatchetTrendGate      = true;   // Gate BE ratchet behind trend context - DEFERRED/CUSHIONED/HARD per market
 input int    InpRatchetTrendMinMoment = 3;       // Momentum score (1-5) needed to defer BE ratchet (trend still running)
-input double InpRatchetBECushionATR   = 0.35;   // Weakening trend: lock entry + N×ATR instead of clamping to zero
+input double InpRatchetBECushionATR   = 0.35;   // Weakening trend: lock entry + NxATR instead of clamping to zero
 input bool   InpRatchetAdaptiveTrail  = true;    // Widen trail in strong momentum, tighten on reversals
 input double InpRatchetStrongMomMulti = 1.5;    // Trail width multiplier when momentum >= 4 (1.5 = 50% wider leash)
 input double InpRatchetWeakMomMulti   = 1.0;    // Trail width multiplier when momentum <= 2 (1.0 = normal, locks profit)
 
-input group "=== AI TRADING COMMITTEE (v6.0.1 — committee of reasoning modules) ==="
+input group "=== AI TRADING COMMITTEE (v6.0.1 - committee of reasoning modules) ==="
 // Every trade now goes through a 3-module committee before sizing.
 // Each module votes (-2 to +2). Votes aggregate into a lot multiplier and an entry thesis.
-// No additional blocking gates — "strict != smart". The committee adjusts SIZE, not access.
+// No additional blocking gates - "strict != smart". The committee adjusts SIZE, not access.
 input bool   InpCommitteeEnable  = true;    // Master switch: enable the trading committee
 input bool   InpCommitteeLog     = true;    // Print committee thesis to terminal before every trade
-input bool   InpCommitteeLotAdj  = true;    // Let committee adjust lot size (range 0.50-1.25×)
+input bool   InpCommitteeLotAdj  = true;    // Let committee adjust lot size (range 0.50-1.25x)
 input bool   InpInTradeClassify  = true;    // Classify open positions every bar (HEALTHY/PULLBACK/REVERSING/etc.)
 
 input group "=== NEWS AFTERMATH FILTER (v6.0.2) ==="
@@ -2286,9 +2286,9 @@ input bool   InpNewsAftermathEnable  = true;  // Pause new entries after true ne
 input double InpNewsSpreadMulti      = 2.5;   // Broker-noise classifier threshold; no aftermath timer by itself
 input double InpNewsAftermathArmMulti= 3.5;   // v6.4.7: only this ratio (or scheduled news/extreme spread) arms NEWS_AFTERMATH
 input bool   InpNewsAftermathIgnoreBrokerNoise = true; // v6.4.7: spread noise logs, but does not create a fake news pause
-input int    InpNewsAftermathMins    = 5;     // v6.24.17: owner rule -- blanket post-news execution gate is bounded to exactly 5 minutes from the actual spike (timer NOT reset on every tick — fixed v6.4.6). Was 10.
+input int    InpNewsAftermathMins    = 5;     // v6.24.17: owner rule -- blanket post-news execution gate is bounded to exactly 5 minutes from the actual spike (timer NOT reset on every tick - fixed v6.4.6). Was 10.
 input int    InpPostNewsConfirmBars  = 3;     // Bars of directional closes to confirm post-news direction (1-5 recommended) -- informational bias tracking only, never itself blocks entries
-input double InpPostNewsSpreadReturnX = 2.5;  // v6.17.14: raised from 1.5 -- loosened alongside InpMaxSpread, same user choice. Spread must return to <= N× EMA baseline before post-news entries allowed
+input double InpPostNewsSpreadReturnX = 2.5;  // v6.17.14: raised from 1.5 -- loosened alongside InpMaxSpread, same user choice. Spread must return to <= Nx EMA baseline before post-news entries allowed
 input int    InpPostNewsAvoidMins    = 5;     // v6.24.17: owner rule -- no extra 20/30/60/90-minute blanket block once the 5-minute gate has passed. Was 20.
 input bool   InpAdaptiveNewsMomentumEnable = true; // v6.10.0: staged news engine; blocks release chaos, then trades confirmed continuation
 input int    InpAdaptiveNewsPreBlockMin    = 15;   // minutes before scheduled US data release to block fresh entries
@@ -2310,10 +2310,10 @@ input group "=== SCHEDULED NEWS CALENDAR (v6.0.4) ==="
 // Pre-defined high-impact windows (GMT). Entries blocked for duration. No external API needed.
 // Covers the recurring economic releases that most affect XAUUSD.
 input bool   InpCalendarEnable       = true;  // Enable scheduled news calendar blackout
-input bool   InpCalThursJobless      = true;  // Thursday 12:15-13:30 GMT — US Jobless Claims
-input bool   InpCalFridayData        = true;  // Friday 12:15-14:00 GMT — NFP / US data window
-input bool   InpCalSundayOpen        = true;  // Sunday 00:00-00:45 GMT — weekly market open gap risk
-input bool   InpCalMondayOpen        = true;  // Monday 00:00-00:30 GMT — Asian liquidity open spike
+input bool   InpCalThursJobless      = true;  // Thursday 12:15-13:30 GMT - US Jobless Claims
+input bool   InpCalFridayData        = true;  // Friday 12:15-14:00 GMT - NFP / US data window
+input bool   InpCalSundayOpen        = true;  // Sunday 00:00-00:45 GMT - weekly market open gap risk
+input bool   InpCalMondayOpen        = true;  // Monday 00:00-00:30 GMT - Asian liquidity open spike
 // User-configurable custom blackout windows (set Day=-1 to disable; Day 0=Sun...6=Sat, time in GMT)
 input int    InpCalCustomDay1        = 3;     // Custom 1: day (0=Sun, 3=Wed for FOMC, -1=off)
 input int    InpCalCustomHour1       = 18;    // Custom 1: start hour GMT (18 = 18:00)
@@ -2328,8 +2328,8 @@ input int    InpCalCustomHour3       = 0;     // Custom 3: start hour GMT
 input int    InpCalCustomMin3        = 0;     // Custom 3: start minute GMT
 input int    InpCalCustomDurMin3     = 60;    // Custom 3: duration in minutes
 
-input group "=== SMC ENTRY LAYER (v6.1.0 — Smart Money Concepts additive confirmation) ==="
-// Additive only. Nothing blocked, nothing removed. SMC confluence lifts score → better grade → bigger lot.
+input group "=== SMC ENTRY LAYER (v6.1.0 - Smart Money Concepts additive confirmation) ==="
+// Additive only. Nothing blocked, nothing removed. SMC confluence lifts score -> better grade -> bigger lot.
 // Turn InpSMC_Enable=false to run exactly as v6.0.4 for A/B comparison.
 input bool   InpSMC_Enable          = true;  // Master switch: SMC layer ON (false = pure v6.0.4 behaviour)
 input bool   InpSMC_Log             = true;  // Print SMC context line before every scored setup
@@ -2340,31 +2340,31 @@ input double InpSMC_BOS_BonusScore  = 1.0;  // Score bonus when H1 BOS direction
 input double InpSMC_OB_BonusScore   = 2.0;  // Score bonus when price is returning to a valid OB zone
 input double InpSMC_FVG_BonusScore  = 1.5;  // Score bonus when price is inside an unfilled FVG zone
 input double InpSMC_KZ_BonusScore   = 0.5;  // Score bonus during ICT kill zones (LN open, NY open, LN close)
-input double InpSMC_OppPenalty      = 0.5;  // Reserved (not applied) — BOS opposition is log-only; existing Smart Guard handles counter-trend
+input double InpSMC_OppPenalty      = 0.5;  // Reserved (not applied) - BOS opposition is log-only; existing Smart Guard handles counter-trend
 input double InpSMC_OB_ToleranceATR = 0.5;  // OB zone tolerance in ATR multiples (price proximity)
 input double InpSMC_FVG_ToleranceATR= 0.3;  // FVG zone tolerance in ATR multiples
 input double InpSMC_ImpulseATR      = 5.0;  // Min M5-ATR multiples for impulse move to confirm OB validity
 input bool   InpSMC_KillZones       = true; // Enable ICT kill zone timing bonus
 
-// v5.3.0 — PHASE 2: EXHAUSTION + ML SMOOTHING
+// v5.3.0 - PHASE 2: EXHAUSTION + ML SMOOTHING
 input bool   InpRSIDivergenceFilter = true; // Block buy if RSI_HH < prev RSI_HH while price made new HH (and mirror for sells)
 input bool   InpMomentumSlowdown    = true; // Block entry if last close is in lower 30% of last 3 candles' ranges
 input int    InpMLSmoothingBars     = 5;    // WMA smoothing on ML score over last N decisions (0 = disabled)
 input bool   InpResetMLSmoothingBySignature = true; // v5.8.6: keep smoothing inside same setup/direction signature
 
-// v5.3.0 — PHASE 3: REGIME / BASKET POLISH
+// v5.3.0 - PHASE 3: REGIME / BASKET POLISH
 input bool   InpFakeBreakoutGuard   = true; // Require 2-bar confirmation past Donchian-N break before entering breakouts
-input bool   InpDynamicBasketTP     = true; // Push basket arm by +0.5×ATR if momentum still accelerating
+input bool   InpDynamicBasketTP     = true; // Push basket arm by +0.5xATR if momentum still accelerating
 
-// v5.1.9 — SELECTIVE MODE (replaces full day-halt; keep trading the BEST setups)
+// v5.1.9 - SELECTIVE MODE (replaces full day-halt; keep trading the BEST setups)
 input bool   InpPG_SelectiveMode        = true;  // v5.1.9: when giveback brake fires, switch to A/A+ only instead of full halt
-input double InpPG_SelectiveMinDayGain  = 25.0; // PG only activates after day gain ≥ this % (avoid noise lockouts)
-input double InpPG_SelectiveMinScore    = 4.0;  // In selective mode, combined score must be ≥ this (Grade A floor)
+input double InpPG_SelectiveMinDayGain  = 25.0; // PG only activates after day gain >= this % (avoid noise lockouts)
+input double InpPG_SelectiveMinScore    = 4.0;  // In selective mode, combined score must be >= this (Grade A floor)
 input bool   InpPG_SelectiveRequireHTF  = true; // Use adaptive XAU confirmation instead of slow H1 hard veto
 input double InpPG_SelectiveLotMulti    = 0.6;  // Lot multiplier while selective (0.6 = 40% reduction). 1.0 disables.
 input int    InpPG_SelectiveRecoverMin  = 0;    // 0 = stay selective until next-day reset; >0 = exit selective after N min of no further drawdown
 
-input group "=== XAU FAST CONFIRMATION (v5.8.40 — breakout + pyramid adaptive confirmation) ==="
+input group "=== XAU FAST CONFIRMATION (v5.8.40 - breakout + pyramid adaptive confirmation) ==="
 input bool   InpXAU_AdaptiveConfirm       = true;  // XAU/GOLD: score M5/M10/M15; H1 only soft context; M30 has no entry authority
 input double InpXAU_FastTrendMinScore     = 50.0;  // Fast/trending gold can pass with this fast-TF score
 input double InpXAU_ChopMinScore          = 65.0;  // Choppy/ranging gold needs stricter fast-TF score
@@ -2373,7 +2373,7 @@ input double InpXAU_H1PenaltyScore        = 8.0;   // H1 disagreement confidence
 input bool   InpXAU_LogAdaptiveConfirm    = true;  // Print allow/block reasons for adaptive confirmation
 input bool   InpTrendPullbackBRequireAntiBias = true; // B TREND_PULLBACK/BREAKOUT must clear extra fast-confirm quality
 
-input group "=== M5 ENTRY DELAY, PHASE B (v6.20.0) — short in-candle execution delay ==="
+input group "=== M5 ENTRY DELAY, PHASE B (v6.20.0) - short in-candle execution delay ==="
 // v6.20.0: owner-directed, replaces the Timing Engine's bar-based wait (up to a
 // full 5-minute M5 bar) with a much shorter, wall-clock 60-120s delay INSIDE the
 // same M5 candle -- "this is NOT wait for the next M5 bar." Signal detection stays
@@ -2389,7 +2389,7 @@ input group "=== M5 ENTRY DELAY, PHASE B (v6.20.0) — short in-candle execution
 // confirmation, just with a printed legacy-removal warning" -- see
 // REMOVED_ELAPSED_CONFIRMATION_ENGINE().
 input bool   InpUseM5EntryDelay             = true;   // Master switch (both true and false now use the bounded 120-180s wall-clock delay -- see comment above)
-// v6.20.3 (Commit C) — closes two gaps found from the 2026-07-09 15:45 live
+// v6.20.3 (Commit C) - closes two gaps found from the 2026-07-09 15:45 live
 // incident (two BUY 0.22 XAUUSD entries ~2s apart from two chart instances):
 input bool   InpCrossInstanceEntryLockEnable = false;  // v6.20.4: OFF by default (was ON in v6.20.3). Terminal-wide lock (GlobalVariable, same pattern as the loss-streak fix) blocking a second chart instance of this EA from independently executing the same symbol+magic+direction within the lock window
 input int    InpCrossInstanceEntryLockSec    = 10;     // Lock window in seconds -- must comfortably exceed realistic cross-instance decision-timing skew (observed live skew was ~2s) without meaningfully delaying legitimate distinct entries
@@ -2412,7 +2412,7 @@ input bool   InpAllowImmediateAPlusMomentum = true;   // INERT as of v6.20.3 -- 
 input double InpCancelIfPriceMovedTooFarATR = 1.00;   // Delay-elapsed re-check: price already ran this many ATR in the signal's favor = chasing, not confirming -- cancel and reassess instead of entering at the now-worse price
 input bool   InpRecalculateSLTPAfterDelay   = true;   // Documents the (architecturally inherent, always-on) behavior: OpenTrade() computes entry/SL/TP/lot from CURRENT price at the moment it is finally called, never from the stale signal price -- this input is not wired to a "false" path because using stale price would contradict the explicit "do not use stale signal price blindly" requirement this feature was built to satisfy
 
-input group "=== XAU ENTRY TIMING GUARD (v5.8.40 — stop selling bottoms / buying tops) ==="
+input group "=== XAU ENTRY TIMING GUARD (v5.8.40 - stop selling bottoms / buying tops) ==="
 input bool   InpXAU_TimingGuard            = true;  // All grades must pass timing quality before execution
 input double InpXAU_MaxEMADistanceATR      = 1.35;  // Farther than this from M5 EMA50 = late unless pullback/rejection is clean
 input double InpXAU_MaxVWAPDistanceATR     = 1.80;  // Farther than this from session VWAP = chase risk
@@ -2545,7 +2545,7 @@ input double InpExitBrainEarlyProfitATR    = 1.20;  // If price moves this much 
 input double InpExitBrainGoodAvoidATR      = 0.90;  // If price reverses this much after close, mark exit as good protection
 input bool   InpCloudSafeDisablePartials   = true;  // Disable partial-loss/profit reductions so master/cloud lifecycle stays synchronized
 
-input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.40 — protect big winning cycles) ==="
+input group "=== XAU CYCLE GIVEBACK ARMOR (v5.8.40 - protect big winning cycles) ==="
 input bool   InpXAU_CycleGivebackArmor        = true; // After a strong winning day, reduce late-cycle risk instead of giving back many wins
 input double InpXAU_CycleArmGainPct           = 8.0;  // Daily gain % where cycle armor starts protecting session equity
 input double InpXAU_CycleLotMulti             = 0.55; // Lot multiplier while cycle armor is armed
@@ -2559,15 +2559,15 @@ input double InpXAU_ContinuationHealthFailedMax = 30.0; // v6.23.3: continuation
 input double InpXAU_ContinuationHealthStrongMin = 85.0; // v6.23.3: continuation-quality score at/above this = VERY_STRONG_CONTINUATION tier (diagnostics only)
 
 input bool   InpPreservationMode = true;  // Master toggle: disables premature profit-side exits
-input double InpRiskPercent    = 0.4;      // Base risk per trade (%) — IGNORED if InpAccountMode != BALANCED uses preset
+input double InpRiskPercent    = 0.4;      // Base risk per trade (%) - IGNORED if InpAccountMode != BALANCED uses preset
 
-input group "=== TP AUTO-EXTEND (v4.7.3 — push TP forward as winner runs) ==="
+input group "=== TP AUTO-EXTEND (v4.7.3 - push TP forward as winner runs) ==="
 input bool   InpTPAutoExtend     = true;   // When profit nears TP, push TP further so the runner keeps running
 input double InpTPExtendTriggerPct = 80.0; // Extend TP when profit reaches this % of TP-distance (e.g. 80%)
-input double InpTPExtendATRMulti = 1.5;    // Extend by this × ATR (added to current TP)
-input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 — pure MQL5)
+input double InpTPExtendATRMulti = 1.5;    // Extend by this x ATR (added to current TP)
+input int    InpTPExtendMaxTimes = 5;      // Max extensions per position (cost: 0 - pure MQL5)
 
-input group "=== ENTRY QUALITY GUARD (v5.8.40 — 10-30 min entry quality guard) ==="
+input group "=== ENTRY QUALITY GUARD (v5.8.40 - 10-30 min entry quality guard) ==="
 input bool   InpStructureRunnerMode           = true;  // Main runner: let correct XAU direction breathe into larger account-sized wins
 input double InpStructureTPMultiplier         = 6.5;   // Wider initial TP target; still based on SL/ATR, never fixed dollars
 input double InpStructureTPExtendTriggerPct   = 68.0;  // Extend earlier so strong trends do not hit a small TP and stop
@@ -2604,24 +2604,24 @@ input double InpMaxLots        = 50.0;     // Hard max lots; final equity/margin
 input double InpMaxRiskPctEquity = 10.0;
 input double InpMinAccountLotFloor  = 0.10;   // v6.17.17-v6.18.0: legacy input, no longer used to override sizing (see InpNormalRiskPct). Retained for back-compat/telemetry only.
 input double InpAccountLotFloorPer1000 = 0.08333; // v6.17.17-v6.18.0: legacy input, no longer used to override sizing -- the unified risk-%% system (InpNormalRiskPct/InpReducedRiskFloorPct) now produces equivalent nominal lots at realistic SL distances without an unconditional post-hoc override. Retained for back-compat/telemetry only.
-input double InpMaxTotalLots   = 0;        // v4.7.6 — Hard cap on TOTAL OPEN LOTS across all positions (0 = auto = 3% equity worst-case)
+input double InpMaxTotalLots   = 0;        // v4.7.6 - Hard cap on TOTAL OPEN LOTS across all positions (0 = auto = 3% equity worst-case)
 // v6.18.0: raised from 8.0 to 35.0 alongside InpMaxRiskPctEquity's 5->15 raise, so a
 // pyramided basket (single trades now up to 15% each) has room to add 2-3x without the
 // aggregate cap contradicting the single-trade cap it's supposed to sit above. Every
 // pyramid add is still margin-projection-checked (see EffectiveMaxPyramidAdds).
 input double InpMaxAggregateRiskPct = 35.0;
-input group "=== ACCOUNT-RELATIVE GROWTH SIZING (v6.18.0 — one risk-%% authority for every account size) ==="
+input group "=== ACCOUNT-RELATIVE GROWTH SIZING (v6.18.0 - one risk-%% authority for every account size) ==="
 input double InpNormalRiskPct       = 10.0; // v6.24.17 owner directive 2026-07-16: normal approved-trade risk target changed 15%->10% (supersedes the 2026-07-09 "cap all acc to start from 15%" directive). Uniform target risk-per-trade, ALL account sizes, for a fully-qualified (A/A+, clean evidence) trade. No opinion-based subsystem (grade/AI confidence/losses/drawdown fear/session/news/recovery mode/personality/memory/committee) may reduce a valid trade below this -- only hard broker/account reality (margin, volume step, stops, symbol/market state) may prevent full execution, and must do so with an explicit FULL_10_PERCENT_RISK_UNAVAILABLE reason, never a silent downscale.
 input double InpReducedRiskFloorPct = 10.0;  // v6.21.2 FULL-RISK BINARY MODE: set equal to InpNormalRiskPct on purpose -- there is no more quality-band reduction, so floor==ceiling collapses the band clamp to a no-op. A trade is either approved at the full 10% (v6.24.17: was 15%) or blocked; nothing sizes in between.
-input double InpDailyLossLimit = 3.0;      // v6.4.4: Adaptive Recovery Mode trigger — when daily loss >= this %, EA switches to A/A+ only + 50% size. Set 0 to disable. EA never pauses.
-input group "=== MARGIN VERIFICATION (v6.24.1 — real broker margin, not an arbitrary ceiling) ==="
-input double InpMarginReservePct         = 10.0;  // v6.24.1: small emergency buffer kept out of the margin check, as a % of current free margin. NOT a risk-sizing rule — SL-based risk (InpNormalRiskPct) and margin usage are independent. Replaces the old flat "must be <=50% of free margin" block, which rejected valid 15%-risk trades the broker could actually support.
+input double InpDailyLossLimit = 3.0;      // v6.4.4: Adaptive Recovery Mode trigger - when daily loss >= this %, EA switches to A/A+ only + 50% size. Set 0 to disable. EA never pauses.
+input group "=== MARGIN VERIFICATION (v6.24.1 - real broker margin, not an arbitrary ceiling) ==="
+input double InpMarginReservePct         = 10.0;  // v6.24.1: small emergency buffer kept out of the margin check, as a % of current free margin. NOT a risk-sizing rule - SL-based risk (InpNormalRiskPct) and margin usage are independent. Replaces the old flat "must be <=50% of free margin" block, which rejected valid 15%-risk trades the broker could actually support.
 input bool   InpMarginFallbackReduceToMax = false; // v6.24.1: when the 15%-risk lot needs more margin than is available, false (default) = block transparently with the true broker-margin reason and report the max supported lot; true = "use maximum safe lot" mode, auto-reduce to the largest broker-margin-supported lot instead of blocking.
 
-input group "=== EQUITY GROWTH GUARD (v6.4.12 — real XAU risk + loss containment) ==="
+input group "=== EQUITY GROWTH GUARD (v6.4.12 - real XAU risk + loss containment) ==="
 input bool   InpGrowthGuardEnable                 = true;  // Master switch for v6.4.12 equity growth controls
 input double InpGrowthMaxTradeLossEquityPct       = 1.50;  // Max actual-risk room per new trade and hard live-loss cap
-input double InpGrowthJuneModeCapSLMultiple       = 1.0;   // v6.5.0 (audit bug #5): in JUNE_16_19_BALANCE_MODE, GROWTH_HARD_LOSS_EXIT's cap is raised to at least this multiple of the trade's REAL SL-distance risk, so the flat equity% backstop (sized for REAL_RISK_MODE) can no longer cut a June-mode trade at a fraction of its actual SL — the real broker SL becomes the operative stop, as intended
+input double InpGrowthJuneModeCapSLMultiple       = 1.0;   // v6.5.0 (audit bug #5): in JUNE_16_19_BALANCE_MODE, GROWTH_HARD_LOSS_EXIT's cap is raised to at least this multiple of the trade's REAL SL-distance risk, so the flat equity% backstop (sized for REAL_RISK_MODE) can no longer cut a June-mode trade at a fraction of its actual SL - the real broker SL becomes the operative stop, as intended
 input double InpGrowthMaxBasketLossEquityPct      = 2.00;  // Max combined open XAU risk/loss before blocking or flattening
 input int    InpGrowthBadEntryMaxMinutes          = 0;     // 0 disables fast-failure exits; gold needs room for fake pushes
 input double InpGrowthBadEntryAdverseATR          = 0.70;  // Adverse move in ATR that marks a wrong fast entry when enabled
@@ -2638,7 +2638,7 @@ input int    InpGrowthLossAfterWinPauseMin        = 90;    // Pause after a loss
 input bool   InpGrowthRequireProtectedBaseForPyramid = true; // No rescue averaging unless the base trade is protected
 input bool   InpGrowthBlockRecoveryReEntryAfterSL    = true; // No same-side automatic recovery re-entry after broker SL
 
-input group "=== THESIS HOLD RUNNER (v6.4.12 — hold clean A+ trend trades) ==="
+input group "=== THESIS HOLD RUNNER (v6.4.12 - hold clean A+ trend trades) ==="
 input bool   InpThesisHoldRunnerEnable            = true;  // Prefer protected runners over early market exits while thesis is clean
 input int    InpThesisHoldMinHoldMinutes          = 35;    // Do not judge a clean trend runner as failed too early
 input double InpThesisHoldMinPeakUSD              = 45.0;  // Only apply thesis-hold behavior after meaningful open profit
@@ -2646,10 +2646,10 @@ input double InpThesisHoldMaxGivebackPct          = 92.0;  // Wide pullback room
 input int    InpThesisHoldReentryCooldownMin      = 90;    // After a winner, avoid same-side lower re-entry until a real reset
 
 input int    InpMaxOpenTrades  = 3;        // Max open positions
-input int    InpMaxTradesPerDay= 15;       // v5.8.2 — reduce overtrading after choppy loss windows
+input int    InpMaxTradesPerDay= 15;       // v5.8.2 - reduce overtrading after choppy loss windows
 input bool   InpAdaptiveDailyCap = true;   // v5.8.8: strong trend days can trade more; weak days trade less
 input int    InpMaxTradesStrongDay = 24;   // v5.8.8: adaptive cap ceiling during clean trend/breakout sessions
-input double InpWeeklyTarget   = 500.0;    // v6.3.2: raised 100→500 — CarefulMode lot-halving was crushing lots on any good week, preventing compounding
+input double InpWeeklyTarget   = 500.0;    // v6.3.2: raised 100->500 - CarefulMode lot-halving was crushing lots on any good week, preventing compounding
 input double InpWeeklyMaxLoss  = 0.0;      // v5.8.4 demo: disabled
 input bool   InpCarefulMode    = true;     // Scale down near target
 input bool   InpAccountSizeBoost = true;   // v5.8.8: lets larger accounts use slightly stronger risk, still capped
@@ -2660,19 +2660,19 @@ input group "=== STRATEGY ==="
 input int    InpEMAFast        = 50;       // Fast EMA
 input int    InpEMASlow        = 200;      // Slow EMA
 
-input group "=== CONTEXT ENGINE (v4.8.0/v4.8.1 — HTF + Swing-S/R, smarter entries) ==="
+input group "=== CONTEXT ENGINE (v4.8.0/v4.8.1 - HTF + Swing-S/R, smarter entries) ==="
 input bool   InpUseH4Bias        = true;   // Require HTF EMA align with trade direction (strong bias filter)
 const ENUM_TIMEFRAMES InpContextTF = PERIOD_M10;  // v6.25.16: locked to the primary M10 decision timeframe; M30 context veto removed
-input double InpH4NeutralPct     = 0.25;   // v4.8.1 — If H4 EMAs within this % apart → treat as neutral (allow trade)
+input double InpH4NeutralPct     = 0.25;   // v4.8.1 - If H4 EMAs within this % apart -> treat as neutral (allow trade)
 input bool   InpUseSRFilter      = true;   // Block entries too close to recent swing highs/lows
-input int    InpSRLookback       = 40;     // v4.8.1 — Bars back (was 60 = 5hr; now 40 = 3.3hr, less cluttered)
-input double InpSRProximityATR   = 0.2;    // v4.8.1 — Block if within X × ATR of swing (was 0.4 = way too strict)
+input int    InpSRLookback       = 40;     // v4.8.1 - Bars back (was 60 = 5hr; now 40 = 3.3hr, less cluttered)
+input double InpSRProximityATR   = 0.2;    // v4.8.1 - Block if within X x ATR of swing (was 0.4 = way too strict)
 input bool   InpContextGateLog   = true;   // Print PASS lines too so you can see the gate is working
 input int    InpRSIPeriod      = 14;       // RSI Period
 input int    InpATRPeriod      = 14;       // ATR Period
-input double InpSLMultiplier   = 2.5;      // v4.9.5 — wider SL (was 2.0) to survive M5 noise
+input double InpSLMultiplier   = 2.5;      // v4.9.5 - wider SL (was 2.0) to survive M5 noise
 input bool   InpUseStructuralSL = true;    // Real-money safety authority: a valid closed-M10 swing invalidation is mandatory. If an old .set file explicitly disables this, entry fails closed rather than silently using an ATR-only stop.
-input double InpTPMultiplier   = 4.0;      // v4.9.5 — wider TP (was 2.0) so runners can reach +4R
+input double InpTPMultiplier   = 4.0;      // v4.9.5 - wider TP (was 2.0) so runners can reach +4R
 
 // v6.25.24 OWNER-APPROVED SL POLICY (owner directive, ported to this
 // isolated M10 comparison branch experiment/v62524-m10-fixed-sl -- the
@@ -2699,7 +2699,7 @@ input double InpTPMultiplier   = 4.0;      // v4.9.5 — wider TP (was 2.0) so r
 // the original implementation record and test evidence.
 input double InpStopLossGoldMove = 10.0;   // Fixed initial-SL distance in absolute XAUUSD price (e.g. 10.0 = $10.00 Gold move). Must be > 0.
 
-input group "=== AI DIRECTOR (v6.3.0 — real authority, not just advisory) ==="
+input group "=== AI DIRECTOR (v6.3.0 - real authority, not just advisory) ==="
 // v6.3.0: The AI Director is the final authority above all strategies.
 // Strategies submit votes/signals. AI Director reviews ALL context and decides:
 // ALLOW | BLOCK | REDUCE_LOT | INCREASE_LOT. Hard safety rules sit above AI.
@@ -2716,7 +2716,7 @@ input bool   InpAIOnlyHighImpact = true;      // Use paid LLM only on meaningful
 input string InpAIMinGradeForLLM = "A";       // Minimum grade for paid LLM when high-impact mode is on
 input double InpAICostPer1KTokensUSD = 0.003; // Rough token-cost estimate for diagnostics only
 
-input group "=== PRIVATE VPS AI — PURE M10 (ZERO CREDIT DEFAULT) ==="
+input group "=== PRIVATE VPS AI - PURE M10 (ZERO CREDIT DEFAULT) ==="
 input bool   InpLocalAIEnabled = true;                    // Submit exactly one compact snapshot per eligible closed M10 candle
 input string InpLocalAIURL = "https://xauaisniper.com";  // Customer-safe HTTPS relay; add this URL to MT5 WebRequest allow-list
 input string InpLocalAIModel = "qwen3-0.6b-q8";          // Hardware-selected local model; part of the persistent decision signature
@@ -2730,14 +2730,14 @@ input bool   InpEmergentDifficultFallbackEnabled = false; // OFF by default; res
 input int    InpEmergentDifficultDailyLimit = 2;           // Hard paid fallback ceiling when explicitly enabled
 input bool   InpResearchOwnerBlockersEnabled = true;      // Research A/B switch; FALSE removes only the enumerated owner-blocker list
 
-// v6.3.8 UPGRADE 3 — AI SL/TP Advisory System
+// v6.3.8 UPGRADE 3 - AI SL/TP Advisory System
 // Default: ADVISORY (logs AI suggestion, never applies automatically)
 enum ENUM_AI_SLTP_MODE { AI_SLTP_OFF=0, AI_SLTP_ADVISORY=1, AI_SLTP_SAFE_ASSIST=2, AI_SLTP_FULL_CONTROL=3 };
 input ENUM_AI_SLTP_MODE InpAISLTPMode = AI_SLTP_ADVISORY; // AI SL/TP mode: ADVISORY=log only, SAFE_ASSIST=apply if safe, FULL_CONTROL=apply if confidence>80
 
 input group "=== XAU COMMAND CENTER (heartbeat, activity, safe remote commands) ==="
 input bool   InpCloudFanout       = false;   // Local-first default: reports/brain work without VPS/cloud. Turn ON only if using copy cloud.
-input string InpCloudURL          = "https://xauaisniper.com";  // Cloud API base URL — ALREADY SET. Add this to MT5 WebRequest whitelist!
+input string InpCloudURL          = "https://xauaisniper.com";  // Cloud API base URL - ALREADY SET. Add this to MT5 WebRequest whitelist!
 input string InpCloudAgentToken   = "";      // Optional legacy worker token. Command Center heartbeat uses InpLicensePIN.
 input int    InpCloudTimeoutMs    = 5000;    // HTTP timeout for cloud calls (ms)
 input int    InpCloudOfflineFailThreshold = 3; // v6.13.0: consecutive cloud-call failures before logging CLOUD_OFFLINE_LOCAL_MODE
@@ -2748,18 +2748,18 @@ input group "=== TUNABLE THRESHOLDS (walk-forward optimize these) ==="
 input double InpGradeAPlus     = 5.5;      // Combined score for A+ (default 5.5)
 input double InpGradeA         = 4.0;      // Combined score for A  (default 4.0)
 input double InpGradeB         = 3.0;      // v5.8.2: B floor raised; weak B trades caused most oversized loss clusters
-input double InpScoreFloor     = 0.65;     // v5.1.5: floor for quality-drag — combined score never drops below setupScore × this. Was effectively 0 → killed the bot in fair-quality regimes.
-input bool   InpAdaptiveGradeB = false;    // v5.1.6: DEFAULT OFF — was permanently tightening threshold after losses, killing the bot. Set true to re-enable.
+input double InpScoreFloor     = 0.65;     // v5.1.5: floor for quality-drag - combined score never drops below setupScore x this. Was effectively 0 -> killed the bot in fair-quality regimes.
+input bool   InpAdaptiveGradeB = false;    // v5.1.6: DEFAULT OFF - was permanently tightening threshold after losses, killing the bot. Set true to re-enable.
 input double InpAdaptiveGradeBMax = 3.0;   // when adaptive on: max tightening cap
 input int    InpStaleStreakHours = 6;      // when adaptive on: forget tightening after N hours of no trades
 input int    InpTradeCooldown  = 300;      // Seconds between trades after a close (default 300)
-input int    InpReversalCooldown = 300;    // v6.3.2: reduced 600→300 — 10min blocked V-reversals on M5 gold (2 full bars); 5min is enough
+input int    InpReversalCooldown = 300;    // v6.3.2: reduced 600->300 - 10min blocked V-reversals on M5 gold (2 full bars); 5min is enough
 input int    InpProfitTakeMin  = 150;      // Start scanning for quick exit (USD, default 150)
 input int    InpProfitTakeMax  = 500;      // Auto-close at this profit (USD, default 500)
 input int    InpQuickExitMin   = 18;       // Auto-close minutes threshold (default 18)
 
 input group "=== RE-ENTRY ENGINE (reverse-move recovery) ==="
-input bool   InpUseReEntry     = true;     // v6.3.2: ON — re-entry on bounced stops during trends recovers free missed moves
+input bool   InpUseReEntry     = true;     // v6.3.2: ON - re-entry on bounced stops during trends recovers free missed moves
 input int    InpReEntryWindow  = 900;      // Seconds after close to watch for reversal (15min)
 input double InpReEntryFactor  = 1.2;      // Price must move this x SL past original entry
 input double InpReEntrySize    = 0.5;      // Re-entry size multiplier (0.5 = half original)
@@ -2771,77 +2771,77 @@ input group "=== SMART FILTERS ==="
 input bool   InpUseDXYFilter   = true;     // Skip trades fighting DXY direction
 input int    InpDXYRefreshSec  = 900;      // Refresh DXY every N seconds (15min)
 input bool   InpDrawdownMode   = true;     // Tracks loss state for quality diagnostics; never reduces approved normal-trade risk
-input int    InpDrawdownLosses = 5;        // v6.3.2: raised 3→5 — 3 micro-losses were triggering half-risk mode all day
+input int    InpDrawdownLosses = 5;        // v6.3.2: raised 3->5 - 3 micro-losses were triggering half-risk mode all day
 input double InpDrawdownRisk   = 0.5;      // Risk % during recovery mode (default 0.5)
 input int    InpStreakCooldownLosses = 2;  // # losses in short window = pause
 input int    InpStreakWindowSec = 2700;    // Window for loss-streak detection (45min)
-input int    InpStreakPauseSec = 0;        // Pause duration after streak (v6.1.2: disabled — no DD blocking)
+input int    InpStreakPauseSec = 0;        // Pause duration after streak (v6.1.2: disabled - no DD blocking)
 input bool   InpAsiaRangeBreakout = true;  // Enable Asia-range breakout setup at London/NY open
 input bool   InpAdaptiveGrades = true;     // Auto-tune grade thresholds from recent win rate
 input bool   InpResetML        = false;    // TRUE = clear local ML on attach (fresh start for this version)
-input bool   InpDirectionLockout = false;  // Lock a direction if too many same-direction losses (v6.1.1: data shows -5.27 ATR net cost, 0 protection benefit — default off)
+input bool   InpDirectionLockout = false;  // Lock a direction if too many same-direction losses (v6.1.1: data shows -5.27 ATR net cost, 0 protection benefit - default off)
 input int    InpDirLockoutLookback = 5;    // Check last N trades
 input int    InpDirLockoutLossesNeeded = 2;// If N of last M were losses in same direction
 input int    InpDirLockoutMinutes = 120;   // Lock that direction for X minutes
-input bool   InpAntiBiasCorrection = false; // After repeated wrong-side losses, block or flip only if fast TFs prove opposite (v6.1.1: data shows 50/50 outcome at -1.56 ATR net cost — default off)
+input bool   InpAntiBiasCorrection = false; // After repeated wrong-side losses, block or flip only if fast TFs prove opposite (v6.1.1: data shows 50/50 outcome at -1.56 ATR net cost - default off)
 input int    InpAntiBiasLookback = 5;      // Recent closed trades checked for same-side losses
 input int    InpAntiBiasLossesNeeded = 2;  // Losses needed before correction activates
 input int    InpAntiBiasWindowMin = 180;   // Only use losses inside this many minutes
 input double InpAntiBiasMinScore = 3.6;    // Minimum combined score before considering correction
 
 input group "=== SMART FEATURES (secondary) ==="
-input bool   InpUseNewsFilter  = true;     // Hard-block ±10min around news
+input bool   InpUseNewsFilter  = true;     // Hard-block +/-10min around news
 input bool   InpLearnPatterns  = true;     // ML learning loop
 input int    InpMaxPatterns    = 500;      // Pattern memory size
-input int    InpMLMinTrustedSamples = 10;  // v6.3.5: lowered 20→10 — 10 samples gives reliable directional signal, less cold-start blind period
-input int    InpHiveMinTrustedSamples = 15;// v6.3.5: lowered 30→15 — hive authority from fewer global samples
+input int    InpMLMinTrustedSamples = 10;  // v6.3.5: lowered 20->10 - 10 samples gives reliable directional signal, less cold-start blind period
+input int    InpHiveMinTrustedSamples = 15;// v6.3.5: lowered 30->15 - hive authority from fewer global samples
 input string InpServerURL      = "https://xauaisniper.com";
 input bool   InpBacktestMode   = false;    // TRUE = Strategy Tester (disables ALL WebRequests)
 
-input group "=== CONVICTION-WEIGHTED SIZING (v4.5.0 — use Claude/GPT confidence) ==="
+input group "=== CONVICTION-WEIGHTED SIZING (v4.5.0 - use Claude/GPT confidence) ==="
 input bool   InpConvictionSizing = true;   // Legacy AI telemetry switch; confidence cannot alter binary full-risk sizing
-// v6.3.1: InpMinAIConfidence removed — threshold is now InpAIDirectorMinConf (55%) for all paths
+// v6.3.1: InpMinAIConfidence removed - threshold is now InpAIDirectorMinConf (55%) for all paths
 // (was 60%, causing blocks when AI agreed at 56-59% on valid setups)
 input int    InpNormalAIConfidence = 75;   // At/above this, use normal 1.0x size
 input int    InpHighAIConfidence   = 90;   // At/above this, use 1.3x boost size
-input double InpConvictionLowMulti  = 0.70; // v6.3.1: raised from 0.5 → 0.70 (AI at 55-74% = mild reduce, not halve)
+input double InpConvictionLowMulti  = 0.70; // v6.3.1: raised from 0.5 -> 0.70 (AI at 55-74% = mild reduce, not halve)
 input double InpConvictionHighMulti = 1.3;  // >=90% confidence -> 1.3x boost size
 input bool   InpRespectSkipIf    = true;   // Honor the AI's skip_if veto condition
 
-input group "=== TRAILING / BE LOCK (v4.5.1 — loosen the leash) ==="
+input group "=== TRAILING / BE LOCK (v4.5.1 - loosen the leash) ==="
 input double InpBELockActivateR   = 1.0;   // BE lock only fires at >= this R-multiple (was 0.5 = too tight)
 input double InpBELockProfitR     = 0.25;  // BE SL locks at openPx + this R (was +10pts = basically 0)
-input double InpCapTrailATRMulti  = 1.5;   // CAP_RUNNER trail distance = this × ATR (was 0.8 = clipped easily)
-input double InpCapTrailSpikeMulti= 1.8;   // On high-vol spike bars, widen trail to this × ATR
-input double InpCapTrailCalmMulti = 1.2;   // On calm bars, use this × ATR
+input double InpCapTrailATRMulti  = 1.5;   // CAP_RUNNER trail distance = this x ATR (was 0.8 = clipped easily)
+input double InpCapTrailSpikeMulti= 1.8;   // On high-vol spike bars, widen trail to this x ATR
+input double InpCapTrailCalmMulti = 1.2;   // On calm bars, use this x ATR
 input int    InpClaudeAuditSec    = 900;   // Claude mid-trade audit frequency (was 600 = 10min, now 15min)
 
-input group "=== TREND-AWARE TRAIL (v4.5.2 — read market mood) ==="
+input group "=== TREND-AWARE TRAIL (v4.5.2 - read market mood) ==="
 input bool   InpTrendAwareTrail   = true;  // TRUE = widen trail on trend days, tighten on ranges
-input double InpTrendTrailMulti   = 2.2;   // Trending regime + strong EMA sep → this × ATR
-input double InpStrongTrendTrail  = 2.5;   // Breakout / very strong trend → this × ATR
-input double InpLowVolTrailMulti  = 1.0;   // LOW_VOL regime → tighter (ranges are tight)
-input double InpChoppyTrailMulti  = 1.3;   // CHOPPY regime → moderate
+input double InpTrendTrailMulti   = 2.2;   // Trending regime + strong EMA sep -> this x ATR
+input double InpStrongTrendTrail  = 2.5;   // Breakout / very strong trend -> this x ATR
+input double InpLowVolTrailMulti  = 1.0;   // LOW_VOL regime -> tighter (ranges are tight)
+input double InpChoppyTrailMulti  = 1.3;   // CHOPPY regime -> moderate
 
-input group "=== CONVICTION RUNNER (v4.5.3 — let 90%+ winners RUN) ==="
+input group "=== CONVICTION RUNNER (v4.5.3 - let 90%+ winners RUN) ==="
 input bool   InpConvictionRunner  = true;  // TRUE = high-conf trades past +2R get max trail
 input int    InpConvRunMinConf    = 90;    // Original AI confidence must have been >= this
 input double InpConvRunMinR       = 2.0;   // Trade must be at least this much in profit (R-multiples)
-input double InpConvRunnerMulti   = 3.0;   // Trail distance on these monsters = this × ATR
+input double InpConvRunnerMulti   = 3.0;   // Trail distance on these monsters = this x ATR
 
-input group "=== PARTIAL TAKE-PROFIT (v4.5.4 — lock half, ride the rest) ==="
+input group "=== PARTIAL TAKE-PROFIT (v4.5.4 - lock half, ride the rest) ==="
 input bool   InpPartialTP         = true;  // Close part of the position at +X R, let rest run
 input double InpPartialTPAtR      = 1.5;   // Fire partial at this R-multiple of profit (1.5 = give winners more room)
 input double InpPartialPct        = 0.4;   // Fraction of position to close (0.4 = 40%, leaves 60% to ride)
 input bool   InpPartialSkipHighConf = true;// Skip partial on 90%+ trades (let them fully run)
 input int    InpPartialMinMinutes  = 3;    // Don't fire partial within first N minutes (let trade develop)
 
-input group "=== PROFIT LADDER (v4.6.2 — auto-scales to YOUR account size) ==="
-input bool   InpProfitLadder       = false; // v4.9.5 — DISABLED (clean exits use tiered model)
+input group "=== PROFIT LADDER (v4.6.2 - auto-scales to YOUR account size) ==="
+input bool   InpProfitLadder       = false; // v4.9.5 - DISABLED (clean exits use tiered model)
 input bool   InpLadderUsePct       = true;  // TRUE = tiers are % of balance (recommended). FALSE = absolute $
-input double InpLadderTier1ProfPct = 0.5;   // Tier 1 trigger: profit ≥ this % of balance
+input double InpLadderTier1ProfPct = 0.5;   // Tier 1 trigger: profit >= this % of balance
 input double InpLadderTier1LockPct = 0.2;   //   lock SL at this % of balance
-input double InpLadderTier2ProfPct = 1.0;   // Tier 2 trigger: profit ≥ this % of balance
+input double InpLadderTier2ProfPct = 1.0;   // Tier 2 trigger: profit >= this % of balance
 input double InpLadderTier2LockPct = 0.5;   //   lock SL at this % of balance
 input double InpLadderTier3ProfPct = 2.0;   // Tier 3 trigger
 input double InpLadderTier3LockPct = 1.2;
@@ -2849,9 +2849,9 @@ input double InpLadderTier4ProfPct = 3.5;   // Tier 4 trigger
 input double InpLadderTier4LockPct = 2.0;
 input double InpLadderTier5ProfPct = 5.0;   // Tier 5 trigger
 input double InpLadderTier5LockPct = 3.0;
-input double InpLadderTier6ProfPct = 8.0;   // Tier 6 trigger (v4.6.6 — massive profit)
+input double InpLadderTier6ProfPct = 8.0;   // Tier 6 trigger (v4.6.6 - massive profit)
 input double InpLadderTier6LockPct = 5.0;
-input double InpLadderTier7ProfPct = 12.0;  // Tier 7 trigger (v4.6.6 — moon mode)
+input double InpLadderTier7ProfPct = 12.0;  // Tier 7 trigger (v4.6.6 - moon mode)
 input double InpLadderTier7LockPct = 8.0;
 input bool   InpLadderMoonTrail    = true;  // After tier 7, switch SL to wide ATR trail (banks every new high)
 input double InpLadderMoonTrailATR = 3.5;   // ATR multiplier for moon trail (3.5 = generous, lets it run)
@@ -2873,75 +2873,75 @@ input double InpLadderTier6Lock    = 5000;
 input double InpLadderTier7Profit  = 12000; // v4.6.6
 input double InpLadderTier7Lock    = 8000;
 
-input group "=== PEAK-LOCK BACKSTOP (v4.6.7 — bank a slice of EVERY good move) ==="
-input bool   InpPeakLockBackstop = false;  // v4.9.5 — DISABLED (clean exits use tiered model)
-input double InpPeakLockArmPct   = 1.5;    // v4.9.0 — $1k→$20, $10k→$150, $100k→$1500 (floor $20). Primary early protection.
-input double InpPeakLockMinPct   = 40.0;   // v4.8.3 — Was 25%, now 40% base. Dynamic scaling adds more for bigger peaks.
+input group "=== PEAK-LOCK BACKSTOP (v4.6.7 - bank a slice of EVERY good move) ==="
+input bool   InpPeakLockBackstop = false;  // v4.9.5 - DISABLED (clean exits use tiered model)
+input double InpPeakLockArmPct   = 1.5;    // v4.9.0 - $1k->$20, $10k->$150, $100k->$1500 (floor $20). Primary early protection.
+input double InpPeakLockMinPct   = 40.0;   // v4.8.3 - Was 25%, now 40% base. Dynamic scaling adds more for bigger peaks.
 
-input group "=== MANAGEMENT MODE (v4.8.8 — pyramid-style simplicity) ==="
+input group "=== MANAGEMENT MODE (v4.8.8 - pyramid-style simplicity) ==="
 enum ENUM_MGMT_MODE { MGMT_SIMPLE, MGMT_BALANCED, MGMT_AGGRESSIVE };
 input ENUM_MGMT_MODE InpMgmtMode = MGMT_BALANCED;  // BALANCED: trailing active but patient. SIMPLE: only Peak-Lock. AGGRESSIVE: tighter.
 
-input group "=== PROFIT RATCHET (v4.9.1 — simple fast SL = 50% of current profit) ==="
-input bool   InpProfitRatchet       = false;  // v4.9.5 — DISABLED (clean exits use tiered model)
-input double InpRatchetArmPct       = 5.0;    // v4.9.2 — $1k→$100, $10k→$500, $100k→$5000, $1M→$50k
+input group "=== PROFIT RATCHET (v4.9.1 - simple fast SL = 50% of current profit) ==="
+input bool   InpProfitRatchet       = false;  // v4.9.5 - DISABLED (clean exits use tiered model)
+input double InpRatchetArmPct       = 5.0;    // v4.9.2 - $1k->$100, $10k->$500, $100k->$5000, $1M->$50k
 input double InpRatchetLockPct      = 50.0;   // Lock this % of current profit into SL (every tick, never pulls back)
-input double InpRatchetArmFloor     = 100.0;  // v4.9.2 — Absolute minimum arm amount ($100)
+input double InpRatchetArmFloor     = 100.0;  // v4.9.2 - Absolute minimum arm amount ($100)
 
-input group "=== BASKET PROTECT (v4.9.7 — smarter thresholds + fast-reversal circuit breakers) ==="
+input group "=== BASKET PROTECT (v4.9.7 - smarter thresholds + fast-reversal circuit breakers) ==="
 input bool   InpBasketMode          = true;   // Master toggle: SL logic works on AGGREGATE PnL, not per-trade
-input double InpBasketArmPct        = 3.0;    // v6.3.4: raised 2.2→3.0 — arm later, let winners breathe longer before locking
-input double InpBasketArmFloor      = 200.0;  // v6.3.4: lowered 300→200 — catch mid-sized wins on small accounts
-input double InpBasketLockMinPct    = 52.0;   // v6.3.4: raised 45→52 — never give back >48% of basket peak once armed
-input double InpBasketRatchetT1Pct  = 1.5;    // v4.9.7 — was 0.5, now 1.5 (tier-1 fires later, let winners run)
-input double InpBasketRatchetT2Pct  = 3.5;    // v4.9.7 — was 2.5, now 3.5 (tier-2 fires later)
-input double InpBasketRatchetT3Pct  = 6.0;    // v4.9.7 — was 5.0, now 6.0 (tier-3 fires on REAL big peaks)
-input double InpBasketBEPct         = 0.5;    // v4.9.7 — was 0.3, now 0.5 (BE lock at +0.5% bal — slightly later)
+input double InpBasketArmPct        = 3.0;    // v6.3.4: raised 2.2->3.0 - arm later, let winners breathe longer before locking
+input double InpBasketArmFloor      = 200.0;  // v6.3.4: lowered 300->200 - catch mid-sized wins on small accounts
+input double InpBasketLockMinPct    = 52.0;   // v6.3.4: raised 45->52 - never give back >48% of basket peak once armed
+input double InpBasketRatchetT1Pct  = 1.5;    // v4.9.7 - was 0.5, now 1.5 (tier-1 fires later, let winners run)
+input double InpBasketRatchetT2Pct  = 3.5;    // v4.9.7 - was 2.5, now 3.5 (tier-2 fires later)
+input double InpBasketRatchetT3Pct  = 6.0;    // v4.9.7 - was 5.0, now 6.0 (tier-3 fires on REAL big peaks)
+input double InpBasketBEPct         = 0.5;    // v4.9.7 - was 0.3, now 0.5 (BE lock at +0.5% bal - slightly later)
 input bool   InpBasketDisablePerTrade = true; // When basket active, disable per-trade peak-lock & ratchet (no conflict)
 // === v4.9.7 Smart Guards ===
 input bool   InpBasketFastReversalGuard = true; // CIRCUIT BREAKER: close ALL on sudden reversal even if floor not breached
 input double InpBasketFastDropPct       = 50.0; // If basket gives back >= X% of peak within FastWindowSec, close immediately
 input int    InpBasketFastWindowSec     = 45;   // Window for fast-drop detection (gold news = ~30-60s reversals)
-input double InpBasketHardGivebackPct   = 2.5;  // v6.3.4: raised 1.5→2.5 — $45 on $3k was closing basket too early; now $75
+input double InpBasketHardGivebackPct   = 2.5;  // v6.3.4: raised 1.5->2.5 - $45 on $3k was closing basket too early; now $75
 input bool   InpBasketBlockPyramidWhenArmed = true;  // v5.8.38: no fresh adds after basket protect is armed; let the current cycle resolve
 input bool   InpBasketSoftLockFirst     = true; // v5.8.15: first basket-floor hit banks partial only; runner stays alive
 input double InpBasketSoftLockPct       = 35.0; // % of each open layer to bank on first basket lock
-input bool   InpBasketSoftLockIgnoresCloudSafe = true; // v6.4.25 (audit bug #3): basket soft-lock can bypass InpCloudSafeDisablePartials, same as InpSmartExitPartialIgnoresCloudSafe already does for per-ticket partials — without this, InpCloudSafeDisablePartials=true (its own default) makes basket soft-lock unreachable and every floor/giveback breach fully closes on the FIRST hit with nothing banked
+input bool   InpBasketSoftLockIgnoresCloudSafe = true; // v6.4.25 (audit bug #3): basket soft-lock can bypass InpCloudSafeDisablePartials, same as InpSmartExitPartialIgnoresCloudSafe already does for per-ticket partials - without this, InpCloudSafeDisablePartials=true (its own default) makes basket soft-lock unreachable and every floor/giveback breach fully closes on the FIRST hit with nothing banked
 input double InpBasketRunnerFloorPct    = 20.0; // After soft lock, keep only a small positive floor for the runner
-// v6.1.3 — Basket direction-loss block: stop adding same-direction trades into a losing basket
+// v6.1.3 - Basket direction-loss block: stop adding same-direction trades into a losing basket
 input bool   InpBasketDirLossBlock      = true;  // Block new entries if same-direction trades are in net loss
 input double InpBasketDirLossBlockPct   = 2.0;   // Block new same-dir entries if floating loss exceeds X% of balance
 
 input group "=== ADAPTIVE RUNNER (legacy, DISABLED when ProfitRatchet is ON) ==="
-input bool   InpAdaptiveRunner      = false;  // v4.9.5 — DISABLED (clean exits use tiered model)
-input double InpARStage1ActivateR   = 0.8;    // v4.8.4 — Was 0.3, now 0.8 (let winners develop before tight trail)
-input double InpARStage1MinPct      = 2.5;    // v4.9.0 — $1k→$30, $10k→$250, $100k→$2500 (floor $30)
-input double InpARStage1TrailATR    = 2.5;    // v4.8.9 — Was 2.0, now 2.5 (more patient, ride profit growth)
-input double InpARStage2ActivateR   = 2.0;    // v4.8.9 — Was 1.0, now 2.0 (need strong profit before wide trail)
-input double InpARStage2TrailATR    = 4.0;    // v4.8.9 — Was 3.0, now 4.0 (trail FAR behind, let profit grow)
-input double InpARBreakEvenR        = 1.2;    // v4.8.6 — Was 1.0, now 1.2 (more profit confirmed before BE lock)
-input double InpARBreakEvenMinPct   = 4.0;    // v4.9.0 — $1k→$50, $10k→$400, $100k→$4000 (floor $50)
-input double InpARBreakEvenProfitR  = 0.15;   // v4.8.4 — slightly more cushion past BE (was 0.1)
+input bool   InpAdaptiveRunner      = false;  // v4.9.5 - DISABLED (clean exits use tiered model)
+input double InpARStage1ActivateR   = 0.8;    // v4.8.4 - Was 0.3, now 0.8 (let winners develop before tight trail)
+input double InpARStage1MinPct      = 2.5;    // v4.9.0 - $1k->$30, $10k->$250, $100k->$2500 (floor $30)
+input double InpARStage1TrailATR    = 2.5;    // v4.8.9 - Was 2.0, now 2.5 (more patient, ride profit growth)
+input double InpARStage2ActivateR   = 2.0;    // v4.8.9 - Was 1.0, now 2.0 (need strong profit before wide trail)
+input double InpARStage2TrailATR    = 4.0;    // v4.8.9 - Was 3.0, now 4.0 (trail FAR behind, let profit grow)
+input double InpARBreakEvenR        = 1.2;    // v4.8.6 - Was 1.0, now 1.2 (more profit confirmed before BE lock)
+input double InpARBreakEvenMinPct   = 4.0;    // v4.9.0 - $1k->$50, $10k->$400, $100k->$4000 (floor $50)
+input double InpARBreakEvenProfitR  = 0.15;   // v4.8.4 - slightly more cushion past BE (was 0.1)
 input double InpARMinTrailPoints    = 80;     // Anti-noise: SL never closer than X points (chop filter, 80pt = ~$0.80 on XAU)
 input double InpARMomentumBoostMulti = 0.7;   // In strong momentum, tighten trail by this multi (0.7 = 30% tighter = faster ratchet)
 
-input group "=== TREND HOLD MODE (v4.8.4 — don't micro-exit when trend is obvious) ==="
-input bool   InpTrendHoldMode    = false;  // v4.9.5 — DISABLED (clean exits handle trends via chandelier)
+input group "=== TREND HOLD MODE (v4.8.4 - don't micro-exit when trend is obvious) ==="
+input bool   InpTrendHoldMode    = false;  // v4.9.5 - DISABLED (clean exits handle trends via chandelier)
 input double InpTrendHoldTrailATR = 3.0;   // Trail distance in trend-hold mode (wider than Stage 2)
 
-input group "=== CLEAN EXITS (v6.3.4 — adaptive exits, close dead zone, tighter Chandelier) ==="
-input bool   InpCleanExits          = true;   // MASTER toggle — disables all other per-trade trails
+input group "=== CLEAN EXITS (v6.3.4 - adaptive exits, close dead zone, tighter Chandelier) ==="
+input bool   InpCleanExits          = true;   // MASTER toggle - disables all other per-trade trails
 // v6.3.4 EXIT FIXES (audit-confirmed profit giveback sources):
-// Old: BE at 1.85R with 0.05R cushion → trade could give back 95% between 1.85R and Chandelier start
-// Old: Chandelier starts at 3.5R with 4.8× ATR → 0.1 lot trade could give $190-380 from peak
-// New: BE at 1.50R with 0.30R cushion → meaningful floor earlier. Chandelier starts at 2.0R, tighter ATR.
-input double InpCleanBEActivateR    = 1.50;   // v6.3.4: earlier BE (was 1.85) — protect sooner without choking
+// Old: BE at 1.85R with 0.05R cushion -> trade could give back 95% between 1.85R and Chandelier start
+// Old: Chandelier starts at 3.5R with 4.8x ATR -> 0.1 lot trade could give $190-380 from peak
+// New: BE at 1.50R with 0.30R cushion -> meaningful floor earlier. Chandelier starts at 2.0R, tighter ATR.
+input double InpCleanBEActivateR    = 1.50;   // v6.3.4: earlier BE (was 1.85) - protect sooner without choking
 input double InpCleanBECushionR     = 0.30;   // v6.3.4: lock 30% of risk at BE (was 0.05 = $3 floor = worthless)
-input double InpCleanChandelierStartR = 2.00; // v6.3.4: trail from +2R not +3.5R — closes dead zone
-input double InpCleanChandelierATR1 = 3.2;    // v6.3.4: tightened 4.8→3.2 — still breathes but banks more profit
-input double InpCleanChandelierATR2 = 2.5;    // v6.3.4: tightened 3.8→2.5 — after +4R lock in the bulk
-input double InpCleanPartialR       = 2.20;   // v6.3.5: take partial at 2.2R (was 3.2R) — bank profit as Chandelier starts, runner continues
-input double InpCleanPartialPct     = 22.0;   // v6.3.5: raised 12→22% partial — meaningful cash in pocket, 78% runner still runs
+input double InpCleanChandelierStartR = 2.00; // v6.3.4: trail from +2R not +3.5R - closes dead zone
+input double InpCleanChandelierATR1 = 3.2;    // v6.3.4: tightened 4.8->3.2 - still breathes but banks more profit
+input double InpCleanChandelierATR2 = 2.5;    // v6.3.4: tightened 3.8->2.5 - after +4R lock in the bulk
+input double InpCleanPartialR       = 2.20;   // v6.3.5: take partial at 2.2R (was 3.2R) - bank profit as Chandelier starts, runner continues
+input double InpCleanPartialPct     = 22.0;   // v6.3.5: raised 12->22% partial - meaningful cash in pocket, 78% runner still runs
 input int    InpCleanChandelierLookback = 24; // Bars to scan for highest high / lowest low
 input bool   InpCleanMomentumInvalidation = true; // Cut trade if momentum flips hard against us
 input int    InpCleanStaleHours     = 3;      // Close if > X hours in AND profit < StaleMinR, unless trend still validates
@@ -2954,25 +2954,25 @@ input double InpCleanStructureATRBuffer = 0.35; // Close must break swing by thi
 input int    InpCleanMinInvalidationMin = 40; // Do not judge normal early XAU pullback too fast
 input int    InpCleanStagnantMinutes = 120;   // Time-based exit for flat/choppy trades with no progress
 input double InpCleanStagnantMaxR = 0.20;     // Stagnant if abs(R) remains below this after StagnantMinutes
-// v6.4.6: EARLY CONVICTION CUT — exits losing trades fast when ALL signals confirm failure
+// v6.4.6: EARLY CONVICTION CUT - exits losing trades fast when ALL signals confirm failure
 // Fires MUCH earlier than the 40-min main invalidation. Saves 50-70% of SL dollar loss.
 input bool   InpEarlyConvictionCut    = true;  // Enable early loser cut when full invalidation confirmed fast
 input double InpEarlyConvictionCutR   = 0.50;  // Exit when rMult <= -this AND invalidScore >= 4 (all signals against)
 input int    InpEarlyConvictionMinMin = 10;    // Minimum minutes before early cut can fire (gives XAU normal wiggle room)
 
-input group "=== VOLATILITY LOT CAP (v6.4.6 — prevent ATR inflation causing oversized losses) ==="
+input group "=== VOLATILITY LOT CAP (v6.4.6 - prevent ATR inflation causing oversized losses) ==="
 // When news spikes ATR by 1.8x+ vs the 20-bar median, the SL in dollars grows proportionally.
 // This cap scales down lot size to keep dollar risk consistent regardless of volatility.
 input bool   InpVolLotCapEnable  = true;   // Scale down lot when ATR is abnormally high (news spikes)
-input double InpVolLotCapATRRatio = 1.8;   // ATR > N× median triggers the vol cap
+input double InpVolLotCapATRRatio = 1.8;   // ATR > Nx median triggers the vol cap
 
-input group "=== GOLD PULLBACK SURVIVAL (v5.8.15 — structure before panic) ==="
+input group "=== GOLD PULLBACK SURVIVAL (v5.8.15 - structure before panic) ==="
 input bool   InpGoldPullbackSurvivalMode = true;  // If trend/structure still supports trade, give loss exits more room
 input int    InpGoldPullbackConfirmBars  = 3;     // Need this many closed bars beyond structure before true failure
 input double InpGoldPullbackCapBoost     = 1.80;  // Boost loss caps while recovery probability remains valid
 input int    InpGoldPullbackMinMomentum  = 3;     // Momentum score needed to classify drawdown as recoverable
 
-input group "=== EXPECTANCY LOSS ARMOR (v5.8.15 — breathe first, de-risk before disaster) ==="
+input group "=== EXPECTANCY LOSS ARMOR (v5.8.15 - breathe first, de-risk before disaster) ==="
 input bool   InpExpectancyLossArmor       = true;  // Runs even when Clean Exits owns trade management
 input bool   InpExpectancySoftDeRisk      = true;  // First response is partial size reduction, not full kill
 input double InpExpectancySoftLossR       = 2.70;  // Soft de-risk trigger by R
@@ -2993,7 +2993,7 @@ input double InpNoPartialSmartLossPctEq   = 4.0;   // Or by account equity %, wh
 input int    InpNoPartialSmartLossMinSec  = 1500;  // Let normal XAU pullbacks breathe first
 input int    InpNoPartialSmartMaxMomentum = 1;     // Momentum must be this weak or worse for early no-partial close
 
-input group "=== A+ PROFIT SHIELD (v5.8.55 — runner restore: no tiny BE choke) ==="
+input group "=== A+ PROFIT SHIELD (v5.8.55 - runner restore: no tiny BE choke) ==="
 input bool   InpAPlusShield             = true;   // Master toggle
 // --- TIER 1: observation arm (records proven profit; does NOT move SL by default) ---
 input double InpAPlusShieldEquityPct    = 1.5;    // Mark shield armed when peak >= X% of reference balance
@@ -3007,34 +3007,34 @@ input double InpAPlusShieldProtectR         = 3.0;  // And peakR >= this when Re
 input double InpAPlusShieldMinProtectUSD    = 75.0; // Never treat tiny moves as meaningful protection events
 input bool   InpAPlusShieldRequireUSDAndR   = false;// False = 3% account profit can lock even if SL was wide
 input double InpAPlusGivebackPct            = 70.0; // Trail only after large giveback from a meaningful peak
-input double InpAPlusGivebackTrailATR       = 1.80; // Wider ATR trail — gives pullbacks room
+input double InpAPlusGivebackTrailATR       = 1.80; // Wider ATR trail - gives pullbacks room
 input double InpAPlusForceExitGivePct       = 88.0; // If market-close enabled, force-close after X% giveback
 input bool   InpAPlusShieldAllowMarketClose = false;// Default OFF: tighten SL, do not close runners at tiny profit
 input double InpAPlusShieldPeakLockPct      = 45.0; // On confirmed reversal, try to lock this % of best floating profit
 input int    InpAPlusReversalMomentum       = 2;    // Trail/close only if momentum score <= this (confirms reversal, not pullback)
 
-input group "=== ADAPTIVE MOMENTUM PROFIT LOCK — AMPL (v6.4.3) ==="
+input group "=== ADAPTIVE MOMENTUM PROFIT LOCK - AMPL (v6.4.3) ==="
 // AMPL prevents large profit givebacks on explosive XAUUSD impulse moves.
-// XAUUSD pattern: strong impulse → sharp retracement → then continuation.
+// XAUUSD pattern: strong impulse -> sharp retracement -> then continuation.
 // AMPL detects explosive moves and places a TIGHT SL close behind price, capturing
 // most of the impulse. The EA can then re-enter if the trend resumes.
 //
-// Works in USD space — fires at dollar profit thresholds, NOT R-multiples.
+// Works in USD space - fires at dollar profit thresholds, NOT R-multiples.
 // This is critical for wide-SL / large-lot positions where R-based systems
 // (BE at 1.5R, Chandelier at 2.0R) never fire quickly enough to protect profit.
 //
-// Example: SELL 4064.74 → price falls to 4054 (+$136, but only 0.33R with wide SL).
+// Example: SELL 4064.74 -> price falls to 4054 (+$136, but only 0.33R with wide SL).
 // Normal systems do not fire at 0.33R. AMPL fires because $136 >= $50 threshold
 // AND the fast move qualifies as explosive. SL moves to 4056-4057, locking $90+.
 input bool   InpAMPL_Enable          = true;   // MASTER TOGGLE
-input double InpAMPL_MinUSD          = 80.0;   // v6.4.6: raised 50→80 — do not arm on small early moves
-input double InpAMPL_ExplosiveBodyR  = 1.35;   // Candle body >= N×ATR in trade direction = explosive candle
-input double InpAMPL_VelATRFactor    = 1.50;   // Price moved >= N×ATR over last 5 bars = fast velocity
-input double InpAMPL_TrailATR_Strong = 0.52;   // v6.4.6: widened 0.45→0.52 — give strong trend more breathing room
-input double InpAMPL_TrailATR_Mid    = 0.33;   // v6.4.6: slight widening 0.30→0.33
-input double InpAMPL_TrailATR_Weak   = 0.20;   // Trail buffer (×ATR) when momentum 0-2/5 (exhausting — lock now)
-input double InpAMPL_GivebackPct     = 40.0;   // v6.4.6: widened 32→40 — allow more giveback before locking tight
-input double InpAMPL_GivebackMinUSD  = 65.0;   // v6.4.6: raised 40→65 — peak must be meaningful before giveback triggers
+input double InpAMPL_MinUSD          = 80.0;   // v6.4.6: raised 50->80 - do not arm on small early moves
+input double InpAMPL_ExplosiveBodyR  = 1.35;   // Candle body >= NxATR in trade direction = explosive candle
+input double InpAMPL_VelATRFactor    = 1.50;   // Price moved >= NxATR over last 5 bars = fast velocity
+input double InpAMPL_TrailATR_Strong = 0.52;   // v6.4.6: widened 0.45->0.52 - give strong trend more breathing room
+input double InpAMPL_TrailATR_Mid    = 0.33;   // v6.4.6: slight widening 0.30->0.33
+input double InpAMPL_TrailATR_Weak   = 0.20;   // Trail buffer (xATR) when momentum 0-2/5 (exhausting - lock now)
+input double InpAMPL_GivebackPct     = 40.0;   // v6.4.6: widened 32->40 - allow more giveback before locking tight
+input double InpAMPL_GivebackMinUSD  = 65.0;   // v6.4.6: raised 40->65 - peak must be meaningful before giveback triggers
 input double InpAMPL_MinRetainUSD    = 25.0;   // v6.4.6 audit: never tighten AMPL if it would lock less than this
 input double InpAMPL_MinRetainPeakPct= 30.0;   // v6.4.6 audit: AMPL giveback lock must retain this % of best floating
 input double InpAMPL_GivebackMinCurrentPct = 25.0; // v6.4.6 audit: current profit must still be meaningful vs peak
@@ -3120,7 +3120,7 @@ input double InpEVReviewMinMoveATR            = 1.20;  // Post-close review must
 input double InpEVLearningBiasStep            = 0.04;  // Self-review adjustment step for future hold-vs-protect thresholds
 input double InpEVLearningBiasMax             = 0.18;  // Hard cap so learning nudges decisions but never takes over
 
-input group "=== ADAPTIVE EXIT MEMORY, PHASE A (v6.19.0) — segmented exit learning bias ==="
+input group "=== ADAPTIVE EXIT MEMORY, PHASE A (v6.19.0) - segmented exit learning bias ==="
 // v6.19.0: g_evExitLearningBias above is real and live (feeds XAU_EvaluateExitEV's
 // continuation/exhaustion probabilities) but is ONE global scalar shared across every
 // setup and direction -- a SELL TREND_PULLBACK that reliably reverses hard after peak
@@ -3143,16 +3143,16 @@ input int    InpLifecycleMaxProfitLossCycles  = 2;     // Exit earlier once a ba
 input double InpLifecycleAdverseAfterProfitPct= 70.0;  // Max giveback from peak after lifecycle arm before rejecting hold
 input int    InpLifecycleMaxMinutesAfterPeak  = 180;   // Max time to keep a confused basket alive after its best peak
 
-input group "=== v6.4.22 LET TRADES BREATHE — EARLY LOSS EXIT PROTECTION ==="
+input group "=== v6.4.22 LET TRADES BREATHE - EARLY LOSS EXIT PROTECTION ==="
 input bool   InpAllowEarlyLossExit            = false; // false=DEFAULT: block EA panic-closes on a losing trade/basket. Only broker SL, margin/spread/news emergency, or a confirmed BOS/HTF/M5 structural invalidation may close a loser early. Giveback%, TTM score, weak momentum, and continuation-hold rejection are NOT enough by themselves.
 input bool   InpAllowGivebackPanicClose       = false; // false=DEFAULT: a giveback%/context breach alone must not fully close a STILL-PROFITABLE position/basket either. Requires a confirmed reversal (or a repeat breach after the first soft-lock/partial). The floor SL already in place keeps protecting either way.
 
-input group "=== AI EXIT BRAIN (v4.7.0 — let Claude veto bad rule-based closes) ==="
+input group "=== AI EXIT BRAIN (v4.7.0 - let Claude veto bad rule-based closes) ==="
 input bool   InpAIExitOverride   = false;  // Paid exit AI is OFF by default in the zero-credit local-AI research build
 input int    InpAIExitMinSec     = 60;     // Min seconds between AI veto calls per position (cost control)
-input double InpAIExitMinProfit  = 30.0;   // Only call AI veto when profit/peak ≥ this $ (skip cheap closes)
+input double InpAIExitMinProfit  = 30.0;   // Only call AI veto when profit/peak >= this $ (skip cheap closes)
 
-input group "=== AUTO-SCALE (v4.4.4 — smart bounds for profit cap) ==="
+input group "=== AUTO-SCALE (v4.4.4 - smart bounds for profit cap) ==="
 input bool   InpAutoScale      = true;     // TRUE = auto-derive $ thresholds from balance
 input double InpAutoRiskPct    = 0.8;      // Hard stop = this % of balance (e.g. 0.8% of $1000 = $8)
 input double InpAutoProfMinPct = 0.15;     // Profit floor scan start = this % of balance
@@ -3160,19 +3160,19 @@ input double InpAutoProfMaxPct = 3.0;      // Profit soft-cap = this % of balanc
 input double InpAutoPeakMinPct = 0.25;     // Peak-retrace arm threshold = this % of balance
 input double InpProfMinFloorUSD  = 25.0;   // ProfitMin NEVER below this $ (micro-account floor)
 input double InpProfMaxFloorUSD  = 50.0;   // ProfitMax NEVER below this $ (micro-account floor)
-input double InpProfMaxCeilUSD   = 25000.0; // ProfitMax NEVER above this $ (raised v4.6.6 — let monsters run)
+input double InpProfMaxCeilUSD   = 25000.0; // ProfitMax NEVER above this $ (raised v4.6.6 - let monsters run)
 input bool   InpSmartCapExit     = true;   // TRUE = cap only exits on real reversal, else trail SL tightly
 
 input group "=== VOLATILITY-ADAPTIVE LOT SIZING ==="
 input bool   InpVolAdaptiveLots = true;    // Reduce lot size when ATR spikes above normal
-input double InpVolSpikeMulti  = 1.5;      // current ATR >= this × median ATR = "spike"
+input double InpVolSpikeMulti  = 1.5;      // current ATR >= this x median ATR = "spike"
 input double InpVolSpikeReduce = 0.70;     // Multiply lots by this during vol spikes
-input double InpVolCalmMulti   = 0.7;      // current ATR <= this × median ATR = "calm"
+input double InpVolCalmMulti   = 0.7;      // current ATR <= this x median ATR = "calm"
 input double InpVolCalmBoost   = 1.10;     // Lot boost during calm stable markets
 
 input group "=== SAFETY ==="
 input double InpMaxSpread      = 400.0;    // v6.17.14: raised from 150 -- user explicit choice to loosen the spread gate rather than remove it (still blocks genuine extreme news-spike blowouts)
-input double InpEquityProtect  = 70.0;     // Equity protection (%) — set 0 to disable
+input double InpEquityProtect  = 70.0;     // Equity protection (%) - set 0 to disable
 input bool   InpWeekendClose   = true;     // Close Friday 20:00
 input int    InpMagicNumber    = 26080301; // Market Edition (Claude XauCloud) Task 17R: distinct default magic (not the cloud product's 20250401) -- owner should re-verify uniqueness against any other EA before Market submission
 
@@ -3223,42 +3223,42 @@ input int    InpCounterExcursionMagicNumber            = 90205001; // dedicated 
 input int    InpCounterOpportunityMinScore             = 2;        // v6.21.3: minimum XAU_CounterExcursionOpportunityScore() to execute (of 6 positive/2 negative factors, range -2..+6). Owner directive 2026-07-13: initial value, provisional pending live COUNTER_SKIPPED_OUTCOME evidence at this and neighboring thresholds.
 input int    InpCounterShadowTrackMinutes              = 30;       // v6.21.3: how long to shadow-track a skipped candidate's hypothetical outcome before logging COUNTER_SKIPPED_OUTCOME and expiring
 
-input group "=== LOSS PROTECTION (v4.4.5 — trust the SL, stop scalping out) ==="
+input group "=== LOSS PROTECTION (v4.4.5 - trust the SL, stop scalping out) ==="
 input double InpHardStopUSD    = 0;        // Hard $ loss cap per trade (0 = OFF, SL handles it)
 input bool   InpHardStopRBased = true;     // TRUE = HardStop = adaptive R-based risk, not fixed dollars
 input double InpHardStopRMulti = 3.5;      // v5.8.15: catastrophic only; structure-aware de-risk handles earlier damage
-input bool   InpEarlyAdverseCut = false;   // OFF by default — let SL do its job (was killing good trades)
+input bool   InpEarlyAdverseCut = false;   // OFF by default - let SL do its job (was killing good trades)
 input int    InpEarlyAdverseMin = 5;       // Minutes window for early cut
-input double InpEarlyAdverseR  = 1.5;      // Only cut if down > 1.5R early (was 0.7 — too tight)
+input double InpEarlyAdverseR  = 1.5;      // Only cut if down > 1.5R early (was 0.7 - too tight)
 input bool   InpPeakRetraceExit = true;    // Exit winner if retraces from peak
 input double InpPeakRetracePct = 75.0;     // % retrace from peak to close (was 60, give room)
 input double InpPeakMinUSD     = 250.0;    // Peak must exceed this USD to arm retrace exit
 input bool   InpMomentumGuard  = true;     // Don't cut winners if momentum is strong
 input int    InpMomentumFadeScore = 4;     // Fade trigger needs ALL 4 signals (was 3 = premature)
 
-input group "=== PYRAMID / SCALE-IN (v4.4.5 — stack up to 5 in same direction) ==="
+input group "=== PYRAMID / SCALE-IN (v4.4.5 - stack up to 5 in same direction) ==="
 input bool   InpAllowPyramid    = true;    // Stack multiple trades in same direction when signal holds
 
 // ====================================================================
-// v5.8.0 — DATA-DRIVEN SETUP TOGGLES
+// v5.8.0 - DATA-DRIVEN SETUP TOGGLES
 // After analyzing 173 live trades:
-//   TREND_PULLBACK: 74 trades, 50% WR, -$48,961 net (PF 0.38) — KILLED
-//   BREAKOUT:       11 trades, 54% WR, -$8,048 net (PF 0.34) — KILLED
-//   SQUEEZE_RELEASE: 21 trades, 66.7% WR, +$13,651 (PF 4.36) — KEPT
-//   RANGE_REVERSAL:  2 trades, +$764 (PF 1.63) — KEPT
-//   ASIA_BREAKOUT:   1 trade,  +$1,004 — KEPT
+//   TREND_PULLBACK: 74 trades, 50% WR, -$48,961 net (PF 0.38) - KILLED
+//   BREAKOUT:       11 trades, 54% WR, -$8,048 net (PF 0.34) - KILLED
+//   SQUEEZE_RELEASE: 21 trades, 66.7% WR, +$13,651 (PF 4.36) - KEPT
+//   RANGE_REVERSAL:  2 trades, +$764 (PF 1.63) - KEPT
+//   ASIA_BREAKOUT:   1 trade,  +$1,004 - KEPT
 // User can re-enable any setup via these toggles if they redesign the entries.
 // ====================================================================
 input bool   InpAllowTrendPullback = true;  // v5.8.2: allowed only when Smart Guard quality gates pass
 input bool   InpAllowBreakout       = true;  // v5.8.2: allowed only when Smart Guard quality gates pass
-input bool   InpAllowSqueezeRelease = true;  // v5.8.0: KEEP — $13k profit, PF 4.36
+input bool   InpAllowSqueezeRelease = true;  // v5.8.0: KEEP - $13k profit, PF 4.36
 input bool   InpAllowRangeReversal  = true;  // small +EV
 input bool   InpAllowAsiaBreakout   = true;  // small +EV
 input bool   InpAllowRSIExtreme     = true;
 input bool   InpAllowLondonFixPin   = true;
 input bool   InpAllowDXYReversal    = true;
 input bool   InpAllowMultiExtreme   = true;
-input group "=== SMART GUARD (v5.8.2 — data-driven loss reduction) ==="
+input group "=== SMART GUARD (v5.8.2 - data-driven loss reduction) ==="
 input bool   InpSmartGuardEnable          = true;  // Master switch for v5.8.2 live-history protections
 input bool   InpOneDirectionOnly          = true;  // v5.8.5: block opposite-direction entries while a position is open
 input bool   InpBlockNewEntriesIfHedged   = true;  // v5.8.5: if account is already mixed BUY+SELL, pause fresh entries
@@ -3266,8 +3266,8 @@ input bool   InpSmartGuardSkipBTrendBreak = true;  // v5.8.7: adaptive B-grade g
 input bool   InpSmartGuardRequireHTF      = true;  // Use adaptive XAU confirmation for TREND_PULLBACK/BREAKOUT
 input group "=== ANTI-REPEAT-LOSS GUARD (v6.13.0) ==="
 input int    InpAntiRepeatLossStreak = 2; // consecutive same-direction losses this session before the guard can activate
-input bool   InpAntiRepeatLossEnable = true; // master switch — disabling restores the old unconditional soft-bypass behavior
-input bool   InpSmartGuardNoDamageStack   = false; // v6.3.2: OFF — was killing all re-entries during active positions; SmartGuard lot reduction already handles damage-setup risk
+input bool   InpAntiRepeatLossEnable = true; // master switch - disabling restores the old unconditional soft-bypass behavior
+input bool   InpSmartGuardNoDamageStack   = false; // v6.3.2: OFF - was killing all re-entries during active positions; SmartGuard lot reduction already handles damage-setup risk
 input double InpSmartGuardDamageLotMulti  = 0.75;  // v5.8.55 softer cut; protects damage setups without making A/A+ too timid
 input int    InpSmartGuardMinHardSamples  = 30;    // Need this many same-setup live patterns before hard expectancy veto
 input double InpSmartGuardHardExpectancy  = -150.0;// Hard-veto only when decayed avg P/L/trade is worse than this
@@ -3280,9 +3280,9 @@ input bool   InpPyramidRequireHTF         = true;  // Only pyramid when adaptive
 
 input int    InpMaxPyramidAdds  = 3;       // v5.8.38: controlled compounding in clean trends/rescue cycles
 input double InpPyramidMinATR   = 0.65;    // Legacy lower bound; effective spacing is max(this, InpPyramidMinSpaceATR)
-input double InpPyramidSizeMulti= 0.58;    // Each add is this × previous size (prevents stack blow-up)
+input double InpPyramidSizeMulti= 0.58;    // Each add is this x previous size (prevents stack blow-up)
 input int    InpPyramidMinGapSec= 180;     // Min seconds between pyramid adds
-input bool   InpPyramidOnAdverse= false;   // v5.8.0: DISABLED by default — live data showed -$21k from 37 adverse-pyramid trades (PF 0.28). Adds risk to losing positions.
+input bool   InpPyramidOnAdverse= false;   // v5.8.0: DISABLED by default - live data showed -$21k from 37 adverse-pyramid trades (PF 0.28). Adds risk to losing positions.
 input bool   InpPyramidOnTrend  = true;    // Add when price moves WITH us (trend continuation)
 input bool   InpPyramidAdaptiveEngine = true; // v5.8.25: score-based institutional pyramid engine
 input bool   InpPyramidAllowProtectedB = true; // Allow B-grade adds only when base trade is healthy and trend evidence is strong
@@ -3316,7 +3316,7 @@ input int    InpPyramidRetestLookbackBars = 12; // Recent M5 range used to find 
 input double InpPyramidRetestZoneATR = 0.35; // How close price must be to retest EMA/VWAP/range edge
 input double InpPyramidRetestBreakATR = 0.18; // Strong close beyond retest edge blocks rescue add
 
-input group "=== SCAN WATCHDOG (v5.8.8 — no restart needed) ==="
+input group "=== SCAN WATCHDOG (v5.8.8 - no restart needed) ==="
 input int    InpTimerScanSec     = 15;      // Timer wake-up so slow ticks/VPS lag cannot freeze scan loop
 input int    InpScanWatchdogMin  = 7;       // Force a scan if no successful entry scan for this many minutes
 input int    InpScanSkipLogSec   = 120;     // Log repeated idle-skip detail at most every N seconds
@@ -3324,10 +3324,10 @@ input int    InpIndicatorReloadFails = 3;   // Rebuild indicator handles after t
 input int    InpIndicatorWarmupSec = 12;    // v5.8.25: wait after rebuilding handles before copying buffers again
 input int    InpIndicatorRecoveryBackoffSec = 90; // v5.8.25: minimum seconds between handle rebuild attempts
 
-input group "=== POST-WINNER ENTRY GUARD (v4.6.5 — user-tunable cooldown) ==="
+input group "=== POST-WINNER ENTRY GUARD (v4.6.5 - user-tunable cooldown) ==="
 input bool   InpPostWinnerGuard    = true;   // Block re-entry in same direction after a winner (set false to disable)
 input int    InpPostWinnerCoolMin  = 5;      // Cooldown minutes after a winning close (was 30, now 5)
-input double InpPostWinnerATRBump  = 0.5;    // Need price ≥ this×ATR better to bypass cooldown
+input double InpPostWinnerATRBump  = 0.5;    // Need price >= thisxATR better to bypass cooldown
 input bool   InpPostWinnerCycleGuard = true; // v5.8.25: after banking, don't chase same direction at worse exhaustion price
 input int    InpPostWinnerCycleMin   = 45;   // Minutes to require a pullback/reset after profitable same-direction exit
 input double InpPostWinnerResetATR   = 0.60; // Required reset from close price before same-direction re-entry
@@ -3336,27 +3336,27 @@ input bool   InpPostLossSameSideGuard = true; // After a same-side loss, wait fo
 input int    InpPostLossGuardMin      = 90;   // Minutes after a loss to require better same-side price
 input double InpPostLossBetterATR     = 0.25; // BUY must be this ATR cheaper; SELL must be this ATR higher than failed entry
 
-input group "=== STRATEGIC TREND INTELLIGENCE (v6.0 STI — market narrative awareness) ==="
+input group "=== STRATEGIC TREND INTELLIGENCE (v6.0 STI - market narrative awareness) ==="
 // STI makes the EA understand COMPLETE market structure rather than isolated candles.
-// It does NOT replace existing guards — it is a mandatory additive intelligence layer.
+// It does NOT replace existing guards - it is a mandatory additive intelligence layer.
 // PHILOSOPHY: strict does NOT equal smart. STI is measured. Hard blocks = extreme cases only.
 input bool   InpSTI_Enable              = true;   // Master on/off for all STI logic
 input bool   InpSTI_Log                 = true;   // Print STI decisions and scores to terminal
-// Late Entry Filter — prevents entering after most of the trend move is already done
+// Late Entry Filter - prevents entering after most of the trend move is already done
 input double InpSTI_LateEntryMaxEMADist = 3.0;    // H4 EMA50 distance (in H4 ATR) = late territory
 input double InpSTI_LateEntryMaxMoveATR = 9.0;    // Consecutive M5 run in ATR multiples = late
 input double InpSTI_LateEntryBlockScore = 82.0;   // Late risk >= this = hard block (extreme only)
-input double InpSTI_LateEntryReduceScore= 68.0;   // v6.3.2: raised 58→68 — at 58 two mild signals triggered 0.65x reduce, stacking to sub-minLot on Asia B-grade
-// Exhaustion Detection — RSI divergence + ATR contraction must agree
+input double InpSTI_LateEntryReduceScore= 68.0;   // v6.3.2: raised 58->68 - at 58 two mild signals triggered 0.65x reduce, stacking to sub-minLot on Asia B-grade
+// Exhaustion Detection - RSI divergence + ATR contraction must agree
 input double InpSTI_ExhaustionBlock     = 80.0;   // Exhaustion >= this AND tcp < 60 = hard block
 input double InpSTI_ExhaustionReduce    = 62.0;   // Exhaustion >= this = lot reduction (x0.75)
-// TCP-based exit guidance — high continuation probability = hold the runner
+// TCP-based exit guidance - high continuation probability = hold the runner
 input double InpSTI_TCPContinueMinimum  = 62.0;   // TCP >= this: skip stagnant/stale close on profitable trade
-// Re-entry intelligence — after TP, wait for clean pullback before same-direction re-entry
+// Re-entry intelligence - after TP, wait for clean pullback before same-direction re-entry
 input bool   InpSTI_BlockLateReentry    = true;   // After TP, require pullback before same-dir re-entry
-input double InpSTI_ReentryPullbackATR  = 0.60;   // v6.3.2: reduced 1.20→0.60 — 1.2 ATR was too deep, missed most real trend re-entries
+input double InpSTI_ReentryPullbackATR  = 0.60;   // v6.3.2: reduced 1.20->0.60 - 1.2 ATR was too deep, missed most real trend re-entries
 input int    InpSTI_ReentryMinWaitMin   = 20;     // Minutes to wait after TP before watching for pullback
-input int    InpSTI_ReentryMaxWindowMin = 30;     // v6.3.2: reduced 90→30 min — 90 min was blocking 5+ re-entries per trend day
+input int    InpSTI_ReentryMaxWindowMin = 30;     // v6.3.2: reduced 90->30 min - 90 min was blocking 5+ re-entries per trend day
 
 //+------------------------------------------------------------------+
 //| ENUMS                                                            |
@@ -3484,10 +3484,15 @@ CPositionInfo posInfo;
 CAccountInfo  accInfo;
 
 bool   licenseValid = false;
+// Market Edition gold-only guard (owner directive): XauCloud is engineered and
+// validated exclusively for Gold. When true, OnInit() has determined the
+// attached chart is not a Gold symbol and OnTick() must do nothing beyond a
+// single one-time notice -- no indicators, no candidates, no orders.
+bool   g_xauCloudNonGoldChart = false;
 int    hEMAFast=INVALID_HANDLE, hEMASlow=INVALID_HANDLE, hRSI=INVALID_HANDLE, hATR=INVALID_HANDLE;
 int    hBBUpper=INVALID_HANDLE, hBBLower=INVALID_HANDLE, hBBMid=INVALID_HANDLE;
 int    hEMAFast_H1=INVALID_HANDLE, hEMASlow_H1=INVALID_HANDLE, hRSI_M15=INVALID_HANDLE, hStoch=INVALID_HANDLE;
-int    hEMAFast_H4=INVALID_HANDLE, hEMASlow_H4=INVALID_HANDLE;   // v4.8.0 — H4 HTF context
+int    hEMAFast_H4=INVALID_HANDLE, hEMASlow_H4=INVALID_HANDLE;   // v4.8.0 - H4 HTF context
 double bufEMAFast[], bufEMASlow[], bufRSI[], bufATR[];
 double bufBBUpper[], bufBBLower[], bufBBMid[];
 double bufEMAFast_H1[], bufEMASlow_H1[], bufRSI_M15[];
@@ -3627,7 +3632,7 @@ double g_propFirmAccountStartEquity = 0.0;
 double g_propFirmDailyStartEquity = 0.0;
 bool   g_propFirmLockActive = false;
 
-// v5.8.16 — adaptive XAU confirmation state. Callers use this to turn
+// v5.8.16 - adaptive XAU confirmation state. Callers use this to turn
 // H1 disagreement into reduced size instead of a hard gold veto.
 double   g_adaptiveConfirmLotMulti = 1.0;
 string   g_adaptiveConfirmReason   = "";
@@ -3637,13 +3642,13 @@ datetime g_lastVolKillSoftPassLog  = 0; // v5.8.25: throttle adaptive volkill pa
 // v5.1.2 Profit Guardian state ---------------------------------------------
 double   pg_dayHWM            = 0.0;   // highest equity reached today
 datetime pg_pauseUntil        = 0;     // halt new entries until this time (cooldown)
-bool     pg_dayHaltActive     = false; // HWM-giveback hit → no new entries today
+bool     pg_dayHaltActive     = false; // HWM-giveback hit -> no new entries today
 datetime pg_dayHaltDay        = 0;     // day this halt was triggered
 int      pg_lastReportedTier  = -1;    // throttle tier transition logs
 int      pg_consecutiveLosses = 0;     // v5.1.2: resets on any winner; drives adaptive cooldown
 datetime pg_lastLossCycleAt   = 0;     // layered closes from one basket count as one losing cycle
 
-// v6.4.12 — Equity Growth Guard state. This layer protects account growth after
+// v6.4.12 - Equity Growth Guard state. This layer protects account growth after
 // live evidence showed one XAU loss could erase many wins when risk was mispriced.
 datetime g_growthPauseUntil = 0;
 string   g_growthPauseReason = "";
@@ -3656,7 +3661,7 @@ datetime g_growthLastLossAt = 0;
 double   g_growthLastLoss = 0.0;
 double   g_evExitLearningBias = 0.0; // positive = exits were early, negative = protects earlier
 
-// v6.19.0 ADAPTIVE EXIT MEMORY, PHASE A — segments g_evExitLearningBias by (setup,
+// v6.19.0 ADAPTIVE EXIT MEMORY, PHASE A - segments g_evExitLearningBias by (setup,
 // direction) instead of one undifferentiated global number. Bounded array (evicts
 // oldest key past the cap), same step/cap constants as the global (InpEVLearningBiasStep/
 // InpEVLearningBiasMax) so this is strictly a finer-grained view of the SAME learning
@@ -3736,7 +3741,7 @@ void XAU_UpdateExitLearningBias(string setup, int dir, string verdict)
 int      g_evExitReviewCount = 0;
 
 // ====================================================================
-// v5.5.0 — Equity Preservation Framework state
+// v5.5.0 - Equity Preservation Framework state
 // ====================================================================
 int      epf_tier             = 0;     // 0=normal 1=mild 2=defense 3=preserve 4=lockdown
 int      epf_lastLoggedTier   = -1;    // throttle tier-change log spam
@@ -3747,7 +3752,7 @@ int      epf_partialClosedCnt = 0;     // running count
 int      epf_t4AdaptiveTradesToday = 0; // guarded T4 reduced-risk entries used today
 datetime epf_t4LastAdaptiveTrade   = 0; // last guarded T4 entry time
 
-// v5.2.1 — Startup cooldown state. Captured in OnInit so MT5/EA restart can't
+// v5.2.1 - Startup cooldown state. Captured in OnInit so MT5/EA restart can't
 // cause a blind trade on stale buffers / mid-bar context.
 datetime g_startupAt          = 0;     // when EA first booted this session
 datetime g_startupBarTime     = 0;     // open-time of the M5 bar at startup
@@ -3756,20 +3761,20 @@ bool     g_startupIntelSyncDone = false;
 bool     g_startupIntelSyncOk   = false;
 string   g_startupIntelSyncReason = "not started";
 
-// v5.1.9 — Selective Mode state (replaces day-halt full lockout)
-bool     pg_selectiveActive      = false;  // PG fired → A/A+ only
+// v5.1.9 - Selective Mode state (replaces day-halt full lockout)
+bool     pg_selectiveActive      = false;  // PG fired -> A/A+ only
 datetime pg_selectiveActivatedAt = 0;      // when selective mode started
 double   pg_selectiveTriggerEq   = 0.0;    // equity at activation
 double   pg_selectiveLowEq       = 0.0;    // lowest equity since activation
 datetime pg_selectiveLowAt       = 0;      // last time low was updated (for recovery timer)
 int      pg_selectiveSkippedCnt  = 0;      // # of B/C trades blocked since activation
 
-// v5.1.5 — Bot reasoning push throttle (avoid spamming cloud on every M5 bar)
+// v5.1.5 - Bot reasoning push throttle (avoid spamming cloud on every M5 bar)
 string   br_lastReason         = "";    // last reason string pushed
 datetime br_lastReasonAt       = 0;     // when last pushed
 int      br_minIntervalSec     = 30;    // min seconds between identical-reason pushes
 
-// v5.1.8 — admin-controlled trading mode (polled from /cloud/master/config every 60s).
+// v5.1.8 - admin-controlled trading mode (polled from /cloud/master/config every 60s).
 // Defaults match the EA inputs; backend response overrides them when admin flips mode.
 double          g_modeGradeB        = 0.0;     // 0 = use InpGradeB
 double          g_modeScoreFloor    = 0.0;     // 0 = use InpScoreFloor
@@ -3785,7 +3790,7 @@ int             g_modeFetchIntervalSec = 60;
 int    todayTradeCount;
 datetime lastDayReset, lastWeekReset, lastTradeClose;
 bool   dailyLimitHit, weeklyTargetHit, weeklyLossHit;
-bool   g_adaptiveRecoveryMode = false; // v6.4.4: true when daily loss >= threshold — A/A+ only, 50% size, EA keeps trading
+bool   g_adaptiveRecoveryMode = false; // v6.4.4: true when daily loss >= threshold - A/A+ only, 50% size, EA keeps trading
 int    totalTrades, wins, losses, lastTradeDir;
 
 TradePattern patterns[];
@@ -3799,7 +3804,7 @@ ENUM_REGIME currentRegime;
 int    g_htfConsensusDir = 0;
 
 // June 17-18 reconstruction: ADAPTIVE DIRECTION ENGINE state (see
-// XAU_ComputeActiveDirection). g_htfConsensusDir above is now context only —
+// XAU_ComputeActiveDirection). g_htfConsensusDir above is now context only -
 // this is what actually gates which direction may trade right now, computed
 // fresh every closed M5 bar from short-term structure so a stale HTF bias can
 // no longer keep permitting a direction M5 has already reversed against.
@@ -3826,7 +3831,7 @@ double g_activeDirectionSizeMult = 1.0;
 // "stay flat only briefly, with a clear reason" rather than indefinitely.
 // Does NOT touch STRONG/MEDIUM confirmation thresholds; only ends indecision.
 int g_transitionWaitStreak = 0;
-// Rolling "repeated failed continuation" tracker — counts consecutive closed
+// Rolling "repeated failed continuation" tracker - counts consecutive closed
 // bars where the prevailing direction tried and failed to make fresh
 // progress, direction-tagged so a failed-BUY streak doesn't get confused
 // with a failed-SELL streak. Feeds the STRONG-tier "repeated failed
@@ -3834,7 +3839,7 @@ int g_transitionWaitStreak = 0;
 int      g_failedContinuationStreak    = 0;
 int      g_failedContinuationStreakDir = 0;
 
-// v6.23.1 — one production lifecycle model.  Historical direction is kept
+// v6.23.1 - one production lifecycle model.  Historical direction is kept
 // separate from continuation value and from permission to reverse.  This is
 // the authoritative state consumed by PRIMARY/RE_ENTRY/RECOVERY/RETRY and
 // PYRAMID paths; SHADOW computes the identical decision but does not enforce.
@@ -3960,7 +3965,7 @@ struct XAU_ReversalOpportunityState
 };
 XAU_ReversalOpportunityState g_reversalOpportunity;
 
-// v6.13.0 ANTI-REPEAT-LOSS GUARD — tracks consecutive same-direction losses
+// v6.13.0 ANTI-REPEAT-LOSS GUARD - tracks consecutive same-direction losses
 // within the current session, plus whether the market is still genuinely
 // moving against that direction. Root cause fixed: 2026.07.03 15:23-17:08
 // XAUUSD stacked six losing BUY entries (4182 -> 4159) because g_htfConsensusDir
@@ -3980,11 +3985,11 @@ datetime g_lastLossAt         = 0;
 
 // June 17-18 reconstruction / multi-instance fix: the four variables above
 // used to reset to zero on every EA restart with no reconstruction from
-// history — a restarted instance would silently forget a same-direction
+// history - a restarted instance would silently forget a same-direction
 // loss-streak cooldown that a continuously-running peer instance still
 // enforces (confirmed multi-instance divergence mechanism). Persist via
-// GlobalVariableSet/Get — terminal-persistent, survives EA restart/recompile
-// — scoped per symbol+magic so multiple EA instances on one terminal never
+// GlobalVariableSet/Get - terminal-persistent, survives EA restart/recompile
+// - scoped per symbol+magic so multiple EA instances on one terminal never
 // collide with each other's state.
 string XAU_LossStreakGVPrefix()
 {
@@ -4003,11 +4008,11 @@ void XAU_PersistLossStreakState()
 void XAU_RestoreLossStreakState()
 {
    string p = XAU_LossStreakGVPrefix();
-   if(!GlobalVariableCheck(p + "at")) return; // nothing persisted yet — fresh terminal/first run
+   if(!GlobalVariableCheck(p + "at")) return; // nothing persisted yet - fresh terminal/first run
    datetime savedAt = (datetime)GlobalVariableGet(p + "at");
    if(savedAt <= 0 || TimeCurrent() - savedAt > 24 * 3600)
    {
-      Print("LOSS-STREAK RESTORE: persisted state missing or older than 24h — starting fresh, not restoring a stale streak");
+      Print("LOSS-STREAK RESTORE: persisted state missing or older than 24h - starting fresh, not restoring a stale streak");
       return;
    }
    g_sameDirLossStreak = (int)GlobalVariableGet(p + "streak");
@@ -4015,17 +4020,17 @@ void XAU_RestoreLossStreakState()
    g_lastLossClosePx   = GlobalVariableGet(p + "px");
    g_lastLossAt        = savedAt;
    if(g_sameDirLossStreak > 0)
-      PrintFormat("LOSS-STREAK RESTORE: reconstructed from terminal-persistent state after restart — dir=%s streak=%d closePx=%.2f (age=%.0fmin)",
+      PrintFormat("LOSS-STREAK RESTORE: reconstructed from terminal-persistent state after restart - dir=%s streak=%d closePx=%.2f (age=%.0fmin)",
                   g_lastLossDir == 1 ? "BUY" : "SELL", g_sameDirLossStreak, g_lastLossClosePx,
                   (TimeCurrent() - savedAt) / 60.0);
 }
 
-// v6.20.3 (Commit C, live incident 2026-07-09 15:45 — two BUY 0.22 XAUUSD
-// entries at 4123.83/4123.81 opened ~2 seconds apart) — CROSS-INSTANCE ENTRY
+// v6.20.3 (Commit C, live incident 2026-07-09 15:45 - two BUY 0.22 XAUUSD
+// entries at 4123.83/4123.81 opened ~2 seconds apart) - CROSS-INSTANCE ENTRY
 // LOCK. Root cause confirmed from the live journal: this terminal runs the
 // EA attached to two separate charts on the same symbol/account (M5 and H1
 // context tags interleaved throughout the log in roughly equal volume, with
-// two independent FIRST-SIGNAL detections 106ms apart at different prices —
+// two independent FIRST-SIGNAL detections 106ms apart at different prices -
 // impossible for one instance, since a chart's period is fixed for that
 // instance's lifetime). Each instance keeps its own independent in-memory
 // state for every mechanism in this file EXCEPT the loss-streak guard above,
@@ -4097,7 +4102,7 @@ bool XAU_TryClaimEntryLock(int dir)
    return claimed;
 }
 
-// v6.3.5: Hive verdict cache — one WebRequest per bar per signature
+// v6.3.5: Hive verdict cache - one WebRequest per bar per signature
 string   g_hiveLastSig     = "";
 int      g_hiveLastVerdict  = 0;
 int      g_hiveLastBar      = -1;
@@ -4108,12 +4113,12 @@ int    g_aiTransportFails = 0;     // consecutive AI decision failures: non-200 
 bool   g_aiOffline = false;        // true when AI fails InpAIOfflineMaxFails times in a row
 datetime g_aiOfflineSince = 0;     // v6.3.2: timestamp when AI went offline (for auto-recovery)
 string g_aiLastVerdict = "NONE";   // last AI Director verdict for dashboard
-// v6.24.4: g_aiLastConfidence removed — it was declared but never assigned,
+// v6.24.4: g_aiLastConfidence removed - it was declared but never assigned,
 // so every dashboard/decision-feed field that read it permanently reported
 // AI=0 regardless of whether AI was actually queried. All former readers
 // now use the real, live-updated `lastAIConfidence` (declared below) plus
 // XAU_CurrentAIStatus() for an explicit not-called/disabled/timeout/valid
-// status alongside the number — see BotMonitorDecisionEvent's ai_status field.
+// status alongside the number - see BotMonitorDecisionEvent's ai_status field.
 string g_aiClaudeVote = "";        // Claude's vote this bar
 string g_aiGPTVote = "";           // GPT's vote this bar
 string g_aiLastStatus = "Not Called";
@@ -4149,7 +4154,7 @@ double g_pendingBrainSetupScore = 0.0;
 double g_pendingBrainCombinedScore = 0.0;
 string g_pendingBrainEntryAudit = "";
 
-// v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER — shared per-candidate state, set during
+// v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER - shared per-candidate state, set during
 // CheckForEntry() and consumed by XAU_EntryArbiter() right before OpenTrade
 // fires. Reset at the top of every CheckForEntry() pass.
 bool   g_smcHardBlockActive   = false;
@@ -4158,7 +4163,7 @@ double g_smcConflictPenalty   = 0.0;
 bool   g_aiHardBlockB         = false;   // AI blocked a B-grade trade outright (new authority)
 string g_lastEntryArbiterDecision = ""; // ENTER | BLOCK | WAIT | REDUCE_SIZE, for BOT_DECISION log
 
-// v5.8.49 — Command Center-owned Prop Firm Mode with persistent EA enforcement.
+// v5.8.49 - Command Center-owned Prop Firm Mode with persistent EA enforcement.
 // This tracks where an idea first appeared, what blocked it, and whether a later
 // A/A+ entry is now chasing the already-played move.
 datetime g_signalFirstSeenTime = 0;
@@ -4438,7 +4443,7 @@ struct XAU_SetupClassification
    string   why;
 };
 
-// v6.24.4 TRADE HORIZON — classifies *holding intent*, distinct from
+// v6.24.4 TRADE HORIZON - classifies *holding intent*, distinct from
 // ENUM_XAU_SetupTiming (which classifies entry *character*). A PULLBACK_SCALP
 // setup can still be an INTRADAY_TREND horizon trade if the campaign has
 // plenty of room; a TREND_CONTINUATION setup late in a mature move is a
@@ -4467,7 +4472,7 @@ string XAU_TradeHorizonName(ENUM_XAU_TRADE_HORIZON h)
    return "UNKNOWN";
 }
 
-// v6.24.4 STRUCTURAL SL SOURCE — labels what actually computed the stop.
+// v6.24.4 STRUCTURAL SL SOURCE - labels what actually computed the stop.
 // SL_EMERGENCY_VOLATILITY_INVALIDATION is today's only live behavior (pure
 // ATR*InpSLMultiplier distance, unchanged). The other labels are produced by
 // XAU_ComputeStructuralSL for observability now; they only change the
@@ -4556,7 +4561,7 @@ enum ENUM_XAU_MARKET_THESIS_ACTION
    TRANSITION_WATCH=9, OPPOSITE_DISCOVERY=10, HARD_BLOCK=11
 };
 
-// v6.24.12 — unified buy/sell pressure bucket. Reads td.buyConfidence/
+// v6.24.12 - unified buy/sell pressure bucket. Reads td.buyConfidence/
 // sellConfidence, which already existed (computed from continuationConfidence
 // for the trend-aligned side and reversalProbability for the opposite side,
 // see XAU_AdaptiveMarketTransitionEngine line ~11778) -- no new signal math.
@@ -4693,7 +4698,7 @@ bool XAU_ThesisActionNeedsBoundedWait(ENUM_XAU_MARKET_THESIS_ACTION action)
           action==PROTECT_RUNNER;
 }
 
-// v6.24.8 — spec Part 6/the owner's follow-up asked for a named progressive
+// v6.24.8 - spec Part 6/the owner's follow-up asked for a named progressive
 // direction-transition sequence (CURRENT_DIRECTION_HEALTHY -> ... ->
 // NEW_CAMPAIGN_ACTIVE). Per that same request's own instruction ("do not
 // duplicate existing lifecycle systems merely to use these exact names"),
@@ -4717,7 +4722,7 @@ string XAU_DirectionTransitionStageName(ENUM_XAU_MARKET_LIFECYCLE lifecycle, boo
    return "UNKNOWN";
 }
 
-// v6.24.8 — original spec Part 2's CAMPAIGN_* lifecycle vocabulary, same
+// v6.24.8 - original spec Part 2's CAMPAIGN_* lifecycle vocabulary, same
 // "map, don't duplicate" treatment as above.
 string XAU_CampaignLifecycleName(ENUM_XAU_MARKET_LIFECYCLE lifecycle, bool invalidated)
 {
@@ -4796,12 +4801,12 @@ struct TradeBrainOpen
    string   thesisStructure;
    string   thesisPressure;
    string   thesisAction;
-   // v6.20.3 — structured entry-quality fields captured directly from the
+   // v6.20.3 - structured entry-quality fields captured directly from the
    // numeric variables XAU_FreshnessExtensionAuthority() already computes, independent
    // of the free-text `entryReason` narrative. Added because the audit
    // (xau_lifecycle_forensic_audit_FINAL_2026-07-09.md) found entryReason
-   // truncated/absent before these fields on 3 of 15 real trades — 2 of
-   // which were losses — making them unrecoverable from text alone.
+   // truncated/absent before these fields on 3 of 15 real trades - 2 of
+   // which were losses - making them unrecoverable from text alone.
    // Telemetry only: these fields are written to the brain CSV and read by
    // nothing else in the EA; no entry/exit decision depends on them.
    double   qualitySetup;
@@ -4815,12 +4820,12 @@ struct TradeBrainOpen
    double   qualityMissedMoveDistance;
    double   qualityMissedMoveATR;
    double   qualitySignalFirstSeenPrice;
-   // v6.20.3 — in-hold checkpoint progress. Index into g_checkpointMinutes[]
+   // v6.20.3 - in-hold checkpoint progress. Index into g_checkpointMinutes[]
    // of the next not-yet-logged checkpoint for this open position.
    int      checkpointNextIdx;
 };
 
-// v6.20.3 — in-hold checkpoint schedule (minutes since entry). Telemetry
+// v6.20.3 - in-hold checkpoint schedule (minutes since entry). Telemetry
 // only: read by XAU_CheckInHoldCheckpoint(), never by any entry/exit
 // decision. Addresses the audit's Section 0.4 finding that MAE/MFE could
 // previously only be reconstructed as a single worst/best-over-the-whole-
@@ -4828,13 +4833,13 @@ struct TradeBrainOpen
 // in time during the hold.
 int g_checkpointMinutes[] = {1, 2, 3, 5, 10, 20, 30, 60};
 
-// v6.20.3 — last-computed entry-quality snapshot, set as a side effect by
+// v6.20.3 - last-computed entry-quality snapshot, set as a side effect by
 // XAU_FreshnessExtensionAuthority() at the point each value is already being formatted
 // into entryReason text. Read once, immediately after a signal is scored,
 // by the OPEN-recording call path (XAU_BrainRecordOpen) so the brain CSV
 // gets these fields even when the narrative text is later truncated.
 // Deliberately global+scalar (not per-position) to avoid touching
-// XAU_FreshnessExtensionAuthority's widely-used by-reference signature — the same
+// XAU_FreshnessExtensionAuthority's widely-used by-reference signature - the same
 // codebase pattern already used for g_lastTradePattern/g_lastTradeDirLabel.
 double   g_lastEntryQ_SetupQuality           = 0.0;
 double   g_lastEntryQ_TimingQuality          = 0.0;
@@ -4847,7 +4852,7 @@ int      g_lastEntryQ_CandlesSinceSignal     = 0;
 double   g_lastEntryQ_MissedMoveDistance     = 0.0;
 double   g_lastEntryQ_MissedMoveATR          = 0.0;
 double   g_lastEntryQ_SignalFirstSeenPrice   = 0.0;
-// v6.20.3 adversarial-review fix — validity markers. deleted timed recovery path
+// v6.20.3 adversarial-review fix - validity markers. deleted timed recovery path
 // and XAU_TryForceOpenTrade never call XAU_FreshnessExtensionAuthority, so without these
 // markers, XAU_BrainRecordOpen would copy whichever signal's numbers happened
 // to be sitting in the globals above -- possibly a rejected signal, possibly
@@ -4923,28 +4928,28 @@ struct XAU_ForensicOpenSnapshot
 XAU_ForensicOpenSnapshot g_forensicOpenSnapshot[];
 
 // ======================================================================
-// v6.4.19 — TRADE THESIS MONITOR (TTM)
+// v6.4.19 - TRADE THESIS MONITOR (TTM)
 // Stores WHY we entered each trade. Per candle, re-evaluates whether that
-// reason still exists. Exits when the thesis is dead — not when ATR runs out.
+// reason still exists. Exits when the thesis is dead - not when ATR runs out.
 // Each component scores the current market state RELATIVE to the entry state.
 //
 // Live score (0-100) components:
-//   BOS alignment    30 pts  — was BOS +1, is it still +1?
-//   HTF alignment    20 pts  — was HTF bull/bear, is it still?
-//   Momentum          20 pts  — momentumScore/5 × 20
-//   Trend structure  15 pts  — M5/M15 regime still aligned
-//   RSI direction    10 pts  — RSI reading supports trade direction
-//   Structure intact  5 pts  — no confirmed BOS break against trade
+//   BOS alignment    30 pts  - was BOS +1, is it still +1?
+//   HTF alignment    20 pts  - was HTF bull/bear, is it still?
+//   Momentum          20 pts  - momentumScore/5 x 20
+//   Trend structure  15 pts  - M5/M15 regime still aligned
+//   RSI direction    10 pts  - RSI reading supports trade direction
+//   Structure intact  5 pts  - no confirmed BOS break against trade
 //
 // Action thresholds (applied ONLY after InpTTM_MinHoldBars bars):
-//   ≥ 70  STRONG HOLD — thesis healthy, consider pyramid
-//   50–69 HOLD        — thesis fine, normal management
-//   30–49 PROTECT     — thesis weakening, move SL toward BE
-//   < 30  EXIT        — thesis dead, close regardless of ATR
+//   >= 70  STRONG HOLD - thesis healthy, consider pyramid
+//   50-69 HOLD        - thesis fine, normal management
+//   30-49 PROTECT     - thesis weakening, move SL toward BE
+//   < 30  EXIT        - thesis dead, close regardless of ATR
 //
 // Healthy pullback vs reversal:
-//   PULLBACK  = score dropped but BOS unchanged, HTF unchanged → HOLD
-//   REVERSAL  = BOS flipped OR HTF flipped + score < 35 → EXIT
+//   PULLBACK  = score dropped but BOS unchanged, HTF unchanged -> HOLD
+//   REVERSAL  = BOS flipped OR HTF flipped + score < 35 -> EXIT
 // ======================================================================
 struct TradeTTMRecord
 {
@@ -4965,7 +4970,7 @@ struct TradeTTMRecord
    int      entryMomentum;    // momentumScore at entry (0-5)
    bool     entryTrendAligned;
 
-   // Live tracking — updated each candle
+   // Live tracking - updated each candle
    double   liveScore;
    double   prevScore;
    int      barsHeld;
@@ -4977,7 +4982,7 @@ struct TradeTTMRecord
    string   breakReason;
    datetime breakTime;
 
-   // v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER — complete trade thesis, stored once
+   // v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER - complete trade thesis, stored once
    // at entry so every later exit decision can reference WHY this trade was
    // taken instead of falling back to generic trailing math alone.
    double   invalidationPrice; // price level whose breach means the entry idea was wrong (SL at entry)
@@ -4993,7 +4998,7 @@ struct TradeTTMRecord
    // horizon that was actually classified for this specific ticket.
    ENUM_XAU_TRADE_HORIZON horizon;
 
-   // v6.8.0 TRADE RECOVERY INTELLIGENCE (TRI) — a trade that came close to SL
+   // v6.8.0 TRADE RECOVERY INTELLIGENCE (TRI) - a trade that came close to SL
    // and is being watched for a genuine recovery vs. a weak/failed bounce.
    bool     triActive;             // currently in Recovery Mode
    datetime triEnteredAt;          // when price first crossed the near-SL threshold
@@ -5007,7 +5012,7 @@ struct TradeTTMRecord
    datetime triClassifiedAt;
    bool     triExitTaken;          // TRI already closed this trade (weak-recovery bailout)
 
-   // RECOVERED TRADE EXPANSION MODE — deep-MAE trades that recover
+   // RECOVERED TRADE EXPANSION MODE - deep-MAE trades that recover
    // with thesis/momentum intact should be protected, not suffocated at the
    // first tiny profit. Uses the trade's own R, never account-history dollars.
    bool     recoveryExpansionActive;
@@ -5028,12 +5033,12 @@ input double InpTTM_ExitThreshold    = 28.0;   // Exit if live score falls below
 input int    InpTTM_PersistentBars   = 3;      // Exit if score below 35 for this many consecutive bars
 input bool   InpTTM_LogEveryBar      = true;   // Print TTM score every bar per position
 
-input group "=== TRADE RECOVERY INTELLIGENCE — TRI (v6.8.0) ==="
+input group "=== TRADE RECOVERY INTELLIGENCE - TRI (v6.8.0) ==="
 input bool   InpTRI_Enable              = true;   // Master toggle
 input double InpTRI_NearSLPct           = 0.85;   // Enter Recovery Mode once adverse move reaches this % of original SL distance
 input double InpTRI_StrongThreshold     = 65.0;   // Recovery score (0-100) at/above this = STRONG (no action, keep holding)
 input double InpTRI_WeakFloor           = 35.0;   // Recovery score below this at breakeven-reclaim = WEAK (bail at BE/small profit)
-input int    InpTRI_FailedAfterBars     = 12;      // Bars in Recovery Mode without reclaiming breakeven = classify FAILED (informational only — does NOT force an exit)
+input int    InpTRI_FailedAfterBars     = 12;      // Bars in Recovery Mode without reclaiming breakeven = classify FAILED (informational only - does NOT force an exit)
 input bool   InpTRI_AdaptThresholds     = true;    // Nudge strong/weak thresholds using rolling historical outcomes
 input double InpTRI_ReEntryTriggerBars  = 30;      // How many bars a bailed-out zone stays "needs fresh trigger" for smart re-entry
 input bool   InpRecoveryExpansionEnable = true;    // Deep recovered trades: protect and hold for meaningful own-R while thesis remains valid
@@ -5077,7 +5082,7 @@ double g_peakEquityAudit    = 0.0;
 double g_maxDrawdownAudit   = 0.0;
 
 //+------------------------------------------------------------------+
-//| SMART STATE — re-entry, drawdown, streak cool-down, DXY cache    |
+//| SMART STATE - re-entry, drawdown, streak cool-down, DXY cache    |
 //+------------------------------------------------------------------+
 struct LastClose
 {
@@ -5122,7 +5127,7 @@ struct XAU_EntryDecisionSnapshot
    ENUM_XAU_TRADE_HORIZON horizon;      // v6.24.5: holding-intent classification, set pre-OrderSend
    ENUM_XAU_SL_SOURCE     slSource;     // v6.24.5: what actually computed the stop
    XAU_MarketThesis       thesis;       // v6.24.8: unified location/exhaustion/timing/HTF/structure read
-   // v6.24.10 — remaining fields from the requested full decision-context
+   // v6.24.10 - remaining fields from the requested full decision-context
    // schema. campaignId links to g_campaign[] (0 if no campaign exists yet
    // -- a fresh core doesn't have an ID until XAU_CampaignOpenCore runs
    // AFTER OpenTrade succeeds, so this reflects the EXISTING campaign this
@@ -5208,7 +5213,7 @@ struct XAU_CampaignState
    double   ownerOriginalRiskUSD;
    double   ownerEffectiveRiskUSD;
 
-   // v6.24.18 owner directive 2026-07-16 — canonical PYRAMID BASKET EXIT.
+   // v6.24.18 owner directive 2026-07-16 - canonical PYRAMID BASKET EXIT.
    // basketOneRMoney is fixed from the INITIAL CORE trade's own real money
    // risk at the moment the core opens and is NEVER redefined when
    // pyramids are added, per owner spec ("do not change the basket 1R
@@ -5258,7 +5263,7 @@ ENUM_XAU_OWNER_EXIT_PROFILE XAU_OwnerExitProfileForEntryRegime(ENUM_REGIME entry
 XAU_CampaignState g_campaign[2];   // [0]=BUY campaign, [1]=SELL campaign
 long              g_nextCampaignId = 1;
 
-// v6.24.14 — universal five-minute post-trade execution cooldown +
+// v6.24.14 - universal five-minute post-trade execution cooldown +
 // exhausted-old-direction re-entry ban. Snapshots the state of whichever
 // direction just fully closed so a same-direction signal reappearing later
 // can be judged against what the market actually looked like at close, not
@@ -5296,7 +5301,7 @@ struct XAU_PostCloseState
    double   exitPrice;
    bool     wasProfitable;
 };
-// v6.24.16 audit fix — MUST be per-direction (indexed like g_campaign[2]),
+// v6.24.16 audit fix - MUST be per-direction (indexed like g_campaign[2]),
 // not a single global. A single struct meant a close of EITHER direction
 // unconditionally overwrote the other direction's exhaustion-ban memory:
 // BUY closes 90% exhausted -> SELL closes cleanly 30s later (a hedge, a
@@ -5329,7 +5334,7 @@ double XAU_CampaignInternalRDistanceOrZero(int direction)
 }
 
 // ===========================================================================
-// v6.25.0 owner directive 2026-07-17 — CANONICAL DIRECTION-EXCLUSIVITY
+// v6.25.0 owner directive 2026-07-17 - CANONICAL DIRECTION-EXCLUSIVITY
 // AUTHORITY. Forensic finding: the EA has been able to hold BUY and SELL
 // exposure at the same time -- no central pre-send authority existed at
 // all. This is the ONE place that answers "can this direction open right
@@ -5660,7 +5665,7 @@ ENUM_XAU_DIRECTION_TRANSITION XAU_HandleOppositeDirectionTransition(int requeste
 }
 
 // ===========================================================================
-// v6.25.0 owner directive 2026-07-17 — SMART RE-ENTRY / POST-PROFIT ENTRY.
+// v6.25.0 owner directive 2026-07-17 - SMART RE-ENTRY / POST-PROFIT ENTRY.
 // Not a new blocker system: the EA must not close a profitable trade, wait
 // out the cooldown, then re-enter the same direction at a worse price right
 // before a normal retracement. Cooldown expiry is not entry permission --
@@ -5819,7 +5824,7 @@ ENUM_XAU_POST_PROFIT_DECISION XAU_EvaluatePostProfitEntry(int requestedDirection
    return POST_PROFIT_WAIT_FOR_RETRACE;
 }
 
-// v6.24.16 — for display purposes only: which slot holds the MOST RECENT
+// v6.24.16 - for display purposes only: which slot holds the MOST RECENT
 // full close, across either direction. Returns -1 if neither slot has ever
 // recorded a close this run.
 int XAU_MostRecentPostCloseSlot()
@@ -5907,7 +5912,7 @@ void XAU_CampaignOpenCore(int direction, string setupName, ENUM_XAU_TRADE_HORIZO
    g_campaign[slot].ownerOriginalRiskUSD                 = coreMoneyRiskUSD;
    g_campaign[slot].ownerEffectiveRiskUSD                = effectiveRiskUSD;
 
-   // v6.24.18 — basket 1R is fixed HERE, from the initial core trade's own
+   // v6.24.18 - basket 1R is fixed HERE, from the initial core trade's own
    // real broker-confirmed money risk, and is never redefined by
    // XAU_CampaignRegisterAdd for the lifetime of this campaign.
    g_campaign[slot].initialCoreTicket         = coreTicket;
@@ -6129,7 +6134,7 @@ bool XAU_CampaignAllowsNewCore(int direction)
    return true;
 }
 
-// v6.24.16 audit fix — same restart-reconciliation pattern already used by
+// v6.24.16 audit fix - same restart-reconciliation pattern already used by
 // XAU_ReconcileTradeBrainOnInit/XAU_ReconcileRExitOnInit/
 // XAU_ReconcileCounterExcursionOnInit, applied to g_campaign[]. Before this
 // fix, g_campaign[] was a plain global with NO persistence and NO OnInit
@@ -6188,7 +6193,7 @@ void XAU_ReconcileCampaignOnInit()
 }
 
 // ===========================================================================
-// v6.24.18 owner directive 2026-07-16 — BASKET EXIT persistence.
+// v6.24.18 owner directive 2026-07-16 - BASKET EXIT persistence.
 // ===========================================================================
 // basketPeakProfitMoney/basketProtectedFloorMoney/basketProtectionArmed are
 // historical facts (a past peak, an armed floor) that CANNOT be reconstructed
@@ -6389,7 +6394,7 @@ void XAU_CampaignBasketState_Load()
 }
 
 // ===========================================================================
-// v6.24.14 — universal post-trade cooldown + exhausted-direction re-entry ban
+// v6.24.14 - universal post-trade cooldown + exhausted-direction re-entry ban
 // ===========================================================================
 
 // Symbol-level, direction-agnostic by design: active if EITHER direction's
@@ -6469,7 +6474,7 @@ bool XAU_SameDirectionReentryBlockedByExhaustion(int direction, ENUM_XAU_OLD_DIR
    return (stateOut == OLD_DIRECTION_EXHAUSTED || stateOut == OLD_DIRECTION_INVALIDATED);
 }
 
-// v6.24.16 — answers a DIFFERENT question than XAU_ClassifyOldDirectionState:
+// v6.24.16 - answers a DIFFERENT question than XAU_ClassifyOldDirectionState:
 // "is there a real, currently-open, non-invalidated campaign in the
 // OPPOSITE direction actively fighting this candidate" -- for the Entry
 // Readiness Engine's "old side must finish first" check. Audit fix: the
@@ -6545,7 +6550,7 @@ void XAU_PostTradeCooldownTick()
 }
 
 // ===========================================================================
-// v6.24.15 — Entry Readiness Engine.
+// v6.24.15 - Entry Readiness Engine.
 //
 // Root cause this repairs: XAU_ComputeMarketThesis/XAU_MarketThesisAction
 // already compute a full, priority-ordered readiness read every time they're
@@ -6973,14 +6978,14 @@ struct XAU_ReentryState
 XAU_ReentryState g_reentryState;
 
 // ====================================================================
-// v6.0 — STRATEGIC TREND INTELLIGENCE (STI) persistent state.
-// This struct survives trade closes — unlike everything else in the EA,
+// v6.0 - STRATEGIC TREND INTELLIGENCE (STI) persistent state.
+// This struct survives trade closes - unlike everything else in the EA,
 // macro trend context is NEVER reset after a TP or SL.
 // The EA thinks in terms of market narrative, not isolated candles.
 // ====================================================================
 struct STI_StateStruct
 {
-   int      macroDir;        // +1 bull, -1 bear, 0 neutral (D1×3 + H4×2 + H1×1 vote)
+   int      macroDir;        // +1 bull, -1 bear, 0 neutral (D1x3 + H4x2 + H1x1 vote)
    double   macroStrength;   // 0.0-1.0 how many HTF agree with macro direction
    // After-TP re-entry memory
    datetime lastProfitClose; // timestamp of last profitable close
@@ -6994,7 +6999,7 @@ STI_StateStruct g_sti;
 double g_stiLotMulti = 1.0;  // lot multiplier set by STI gate; applied to sizeMulti at entry
 
 // ====================================================================
-// v6.0.1 — AI TRADING COMMITTEE structs + global state
+// v6.0.1 - AI TRADING COMMITTEE structs + global state
 // ====================================================================
 struct CommitteeVote
 {
@@ -7050,11 +7055,11 @@ string g_lastTradePattern  = "";
 string g_lastTradeDirLabel = "";
 int    g_lastTradeCommConf = 0;
 
-// In-trade position classifier (max 10 simultaneous positions — parallel arrays)
+// In-trade position classifier (max 10 simultaneous positions - parallel arrays)
 ulong  g_posClassTicket[10];   // auto-init to 0
 int    g_posClassState[10];    // auto-init to 0 (= PSTATE_UNKNOWN)
 
-// v6.0.2: per-position committee data — fixes basket race condition where g_lastTradePattern
+// v6.0.2: per-position committee data - fixes basket race condition where g_lastTradePattern
 // would be overwritten by a pyramid add before the original position closed and recorded.
 struct PosCommitteeRec
 {
@@ -7072,18 +7077,18 @@ struct PosCommitteeRec
 PosCommitteeRec g_posCommData[10];
 
 // v6.0.2: news aftermath filter globals
-double   g_spreadEMA         = 0.0;  // exponential moving average of spread (α=0.02, ~50-tick baseline)
+double   g_spreadEMA         = 0.0;  // exponential moving average of spread (alpha=0.02, ~50-tick baseline)
 datetime g_newsAftermathUntil = 0;   // new entries blocked until this time after spread spike
 
 // v6.4.6: Post-News State Machine
 enum ENUM_POST_NEWS_STATE
 {
-   PNS_NONE      = 0,   // No news event active — normal trading
+   PNS_NONE      = 0,   // No news event active - normal trading
    PNS_AFTERMATH = 1,   // Inside the news aftermath cooldown window
    PNS_DISCOVERY = 2,   // Window expired; observing first post-news reaction
    PNS_CONFIRMED = 3,   // Direction confirmed (N bars + spread normal)
    PNS_ALLOWED   = 4,   // Post-news trades allowed in confirmed direction
-   PNS_AVOID     = 5    // Chop/unclear — block all entries until expires
+   PNS_AVOID     = 5    // Chop/unclear - block all entries until expires
 };
 ENUM_POST_NEWS_STATE g_postNewsState      = PNS_NONE;
 int                  g_postNewsBias       = 0;       // +1=bullish, -1=bearish, 0=unclear
@@ -7132,7 +7137,7 @@ int        todayLossCount = 0;
 datetime   todayLossResetDay = 0;
 bool       drawdownActive = false;
 
-// v6.3.8 UPGRADE 6 — Gate block analytics counters
+// v6.3.8 UPGRADE 6 - Gate block analytics counters
 int g_gateBlocks_Spread     = 0;
 int g_gateBlocks_News       = 0;
 int g_gateBlocks_Trend      = 0;
@@ -7198,13 +7203,13 @@ string g_exactOutcomeLastReason      = "";
 datetime g_gateReportLast   = 0;  // last time 24h report was printed
 datetime g_localReportHeartbeatLast = 0;  // last live refresh of local report files
 
-// v6.3.8 UPGRADE 7 — Equity high watermark + drawdown pause
+// v6.3.8 UPGRADE 7 - Equity high watermark + drawdown pause
 double   g_equityHighWatermark = 0.0;  // updated whenever equity exceeds previous high
 bool     g_drawdownPause       = false; // stop new entries when equity drops > InpDrawdownFromHighPct from watermark
 double   g_perfMultLast        = 1.0;  // last logged performance multiplier (detect changes)
 bool     g_dailyProfitLockArmed = false; // true when daily profit lock has been triggered
 
-// v6.3.9 UPGRADE — 24h Forward-Test Report globals
+// v6.3.9 UPGRADE - 24h Forward-Test Report globals
 int    g_ftReport_Signals     = 0;
 int    g_ftReport_Trades      = 0;
 int    g_ftReport_Wins        = 0;
@@ -7245,7 +7250,7 @@ void XAU_UpdateForwardFloatingStats()
 int    g_ftReport_LastWriteDay = -1;
 
 // ====================================================================
-// v6.4.0 UPGRADE 1 — Market Personality Engine
+// v6.4.0 UPGRADE 1 - Market Personality Engine
 // ====================================================================
 enum ENUM_MARKET_PERSONALITY
 {
@@ -7261,7 +7266,7 @@ enum ENUM_MARKET_PERSONALITY
 ENUM_MARKET_PERSONALITY g_marketPersonality = MKT_RANGE;
 
 // ====================================================================
-// v6.4.0 UPGRADE 2 — Per-Strategy Adaptive Weights
+// v6.4.0 UPGRADE 2 - Per-Strategy Adaptive Weights
 // ====================================================================
 // Indexed 0..9; index 0 unused; 1-9 map to strategy types
 double g_stratWeight[10];   // initialized to 1.0 in OnInit; range 0.70-1.20
@@ -7271,7 +7276,7 @@ double g_stratTotalR[10];   // sum of R multiples per strategy
 int    g_stratCount[10];    // total trades per strategy
 
 // ====================================================================
-// v6.4.0 UPGRADE 3 — Confidence Calibration
+// v6.4.0 UPGRADE 3 - Confidence Calibration
 // ====================================================================
 double g_calibration_0_49   = 1.0;
 double g_calibration_50_64  = 1.0;
@@ -7288,7 +7293,7 @@ double     asiaRangeLow  = 0;
 bool       asiaRangeLocked = false;
 datetime   asiaRangeDay = 0;
 
-// v6.1.0 — SMC (Smart Money Concepts) state — updated once per M5 bar
+// v6.1.0 - SMC (Smart Money Concepts) state - updated once per M5 bar
 struct SMC_OBZone
 {
    bool     valid;
@@ -7454,19 +7459,19 @@ bool XAU_PopBrainDrawdownTracking(ulong ticket, XAU_TradeBrainDrawdownTrack &out
    return true;
 }
 
-// v6.4.8 — Per-position protected peak floor state
+// v6.4.8 - Per-position protected peak floor state
 ulong      g_profitFloorTickets[];
 double     g_profitFloorLastFloorUSD[];
 datetime   g_profitFloorLastLogTime[];
 
-// v4.5.4 — Per-position partial-TP tracker (prevents double-firing the partial)
+// v4.5.4 - Per-position partial-TP tracker (prevents double-firing the partial)
 ulong      partialTakenTickets[];
 
-// v4.7.0 — Per-position AI veto cooldown (last-call-time per ticket, cost control)
+// v4.7.0 - Per-position AI veto cooldown (last-call-time per ticket, cost control)
 ulong      aiVetoTickets[];
 datetime   aiVetoLastCall[];
 
-// v4.7.3 — Per-position TP-extension counter (caps how many times TP can be pushed forward)
+// v4.7.3 - Per-position TP-extension counter (caps how many times TP can be pushed forward)
 ulong      tpExtendTickets[];
 int        tpExtendCount[];
 
@@ -7476,34 +7481,34 @@ double     autoProfitTakeMin  = 0;
 double     autoProfitTakeMax  = 0;
 double     autoPeakMinUSD     = 0;
 
-// v4.9.4 — BASKET PROTECT state (aggregate across all open EA positions)
+// v4.9.4 - BASKET PROTECT state (aggregate across all open EA positions)
 double     g_basketPeakUSD   = 0;     // Max total floating $ reached since last flat state
-double     g_basketFloorUSD  = 0;     // Dynamic floor — if total falls below this, close ALL
+double     g_basketFloorUSD  = 0;     // Dynamic floor - if total falls below this, close ALL
 bool       g_basketArmed     = false; // True once peak has crossed arm threshold
 bool       g_basketBEHit     = false; // True once basket reached +BEPct% (then never let it go negative)
 bool       g_basketSoftLockTaken = false; // v5.8.15: partial basket bank already used for this basket
 datetime   g_basketLastLog   = 0;     // Throttle "basket state" prints
-// v6.4.25 (audit bug #2) — BOS/HTF snapshot at basket formation, so the
+// v6.4.25 (audit bug #2) - BOS/HTF snapshot at basket formation, so the
 // structure-broken test can detect an actual FLIP since entry instead of
 // treating a standing opposite BOS/HTF (which entries are allowed to take)
 // as "confirmed invalidation." -999 = not yet captured for this basket cycle.
 int        g_basketEntryBOS = -999;
 int        g_basketEntryHTF = -999;
-// v6.4.9 — basket lifecycle state: prevents proven winners from cycling forever
+// v6.4.9 - basket lifecycle state: prevents proven winners from cycling forever
 bool       g_basketProfitToLossSeen = false;
 int        g_basketProfitLossCycles = 0;
 bool       g_basketWasPositiveAfterPeak = false;
 datetime   g_basketPeakTime = 0;
 datetime   g_basketLastLifecycleLog = 0;
 double     g_basketLifecyclePeakLoggedUSD = 0.0;
-// v4.9.7 — Fast-reversal circuit breaker rolling buffer
+// v4.9.7 - Fast-reversal circuit breaker rolling buffer
 //   Stores the last N (timestamp, basketPnL) pairs so we can detect a sudden drop
 //   even if the floor hasn't been formally breached yet.
 double     g_basketSnapPnL[];         // rolling buffer of basket PnL samples
 datetime   g_basketSnapTime[];        // matching timestamps
 int        g_basketSnapMax = 60;      // store up to 60 samples (~1 sample / sec when ticks come fast)
 
-// v4.9.6 — DIAGNOSTIC HEARTBEAT state
+// v4.9.6 - DIAGNOSTIC HEARTBEAT state
 string     g_lastSkipReason  = "";    // Updated every time OnTick returns silently
 string     g_lastTradeReason = "";    // Last actual OpenTrade() reason sent to broker
 string     lastExitReason    = "";    // Last resolved exit reason visible on dashboard/logs
@@ -7617,7 +7622,7 @@ ulong      g_pendingExitIds[];
 string     g_pendingExitReasons[];
 datetime   g_pendingExitTimes[];
 
-// v5.8.51 — LIVE EXECUTION TELEMETRY
+// v5.8.51 - LIVE EXECUTION TELEMETRY
 double     g_dailySlippageTotal = 0.0; // cumulative entry slippage today (in price units)
 int        g_dailySlippageCount = 0;   // number of fills with measured slippage
 datetime   g_slippageResetDay  = 0;    // day the counters were last reset
@@ -7627,24 +7632,24 @@ datetime   g_spreadSpikeUntil  = 0;    // spread recovery cooldown: block entrie
 string     currentTradeThesis = "";
 string     currentTradeInvalidation = "";
 string     currentTradeTarget = "";
-string     currentTradeBearishCase = "";   // v4.5.0 — Devil's Advocate counter-argument
-int        currentTradeConfidence = 0;     // v4.5.0 — Original AI confidence (0-100)
+string     currentTradeBearishCase = "";   // v4.5.0 - Devil's Advocate counter-argument
+int        currentTradeConfidence = 0;     // v4.5.0 - Original AI confidence (0-100)
 
-// v4.5.0 — Last entry AI output cached after GetAIAnalysis()
+// v4.5.0 - Last entry AI output cached after GetAIAnalysis()
 int        lastAIConfidence = 0;
 string     lastAIBearishCase = "";
 string     lastAISkipIf = "";
-// v6.3.8 — AI verdict stored at entry for feedback loop (Upgrade 5)
-string     g_lastAIVerdict_ForMemory = "";  // ALLOW/BLOCK/REDUCE/SKIP — captured when order is placed
+// v6.3.8 - AI verdict stored at entry for feedback loop (Upgrade 5)
+string     g_lastAIVerdict_ForMemory = "";  // ALLOW/BLOCK/REDUCE/SKIP - captured when order is placed
 
-// Dashboard state cache — prevents throttled refresh from wiping scan data to zero
+// Dashboard state cache - prevents throttled refresh from wiping scan data to zero
 int        lastDashSignal = 0;
 double     lastDashScore  = 0.0;
 string     lastDashGrade  = "";
 
 // Peak helpers
 // ====================================================================
-// v6.0 STRATEGIC TREND INTELLIGENCE — Core Functions
+// v6.0 STRATEGIC TREND INTELLIGENCE - Core Functions
 // ====================================================================
 
 void STI_Init()
@@ -7661,7 +7666,7 @@ void STI_Init()
 
 // Returns 0-100: how strongly the multi-TF stack supports the given direction.
 // v6.25.16 TRUE-M10: the former M30 component is replaced by M10.
-// Weights: D1=22, H4=22, H1=18, M10=15, M15=13, M5=10 → 100 total.
+// Weights: D1=22, H4=22, H1=18, M10=15, M15=13, M5=10 -> 100 total.
 // Cached per signal (buy/sell) per 30 s to avoid redundant handle creation.
 double STI_ComputeTCP(int signal)
 {
@@ -7692,7 +7697,7 @@ double STI_ComputeTCP(int signal)
 
 // Returns 0-100: how exhausted the current trend is.
 // Looks for ATR contraction + RSI divergence on H4 and H1.
-// Multiple signals must agree — a single signal is NOT enough for a block.
+// Multiple signals must agree - a single signal is NOT enough for a block.
 double STI_ComputeExhaustion(int signal)
 {
    if(!InpSTI_Enable || signal == 0) return 0.0;
@@ -7870,7 +7875,7 @@ double STI_ComputeLateEntryRisk(int signal, double m5atr)
          if(withTrend) runBars++;
          else break;
       }
-      // Each bar ≈ 0.65 ATR on average; flag if run > threshold
+      // Each bar ~= 0.65 ATR on average; flag if run > threshold
       double runEstATR = (double)runBars * 0.65;
       if(runEstATR >= InpSTI_LateEntryMaxMoveATR)
          risk += 30.0;
@@ -7949,7 +7954,7 @@ void STI_Update()
    if(curBarInt == g_sti.lastCalcBar) return;
    g_sti.lastCalcBar = curBarInt;
 
-   // D1×3 + H4×2 + H1×1 weighted vote for macro direction
+   // D1x3 + H4x2 + H1x1 weighted vote for macro direction
    string w;
    int d1 = TFDirectionByEMA(1, PERIOD_D1, 0.18, w);
    int h4 = TFDirectionByEMA(1, PERIOD_H4, 0.20, w);
@@ -7971,7 +7976,7 @@ void STI_Update()
       bool windowExpired = (elapsed > effectiveMaxWindow * 60);
       if(windowExpired)
       {
-         // Window expired — clear memory so the gate does not block indefinitely
+         // Window expired - clear memory so the gate does not block indefinitely
          g_sti.lastProfitDir = 0;
          g_sti.pullbackReady = false;
       }
@@ -8589,7 +8594,7 @@ bool XAU_ContextShouldTakePartial(XAU_TRADE_CONTEXT_STATE contextState,
 }
 
 //+------------------------------------------------------------------+
-//| v6.4.22 — EARLY LOSS CLOSE GATE                                  |
+//| v6.4.22 - EARLY LOSS CLOSE GATE                                  |
 //|   Gold pulls back. A losing position/basket must be left to ride |
 //|   to broker SL unless there is a true emergency (margin, extreme |
 //|   spread/news) or PROVEN structural invalidation (BOS flip, HTF  |
@@ -8605,11 +8610,11 @@ bool XAU_GateEarlyLossClose(ulong ticket, bool isBuy, double openPx, double curP
                             double ttmScore = -1.0, bool isGivebackTrigger = false)
 {
    // v6.4.24: a giveback-triggered close (SMART_EXIT_GIVEBACK, SMART_EXIT_TREND,
-   // basket LOCK/HARD-CAP/FAST-REVERSAL) can fire while STILL profitable — that's
+   // basket LOCK/HARD-CAP/FAST-REVERSAL) can fire while STILL profitable - that's
    // exactly the "gives back too much" / "closes early, misses the bigger move"
    // complaint. Those callers pass isGivebackTrigger=true so a positive P/L does
    // NOT auto-allow the close; they still need confirmed reversal (or a repeat
-   // breach). Pure loss-panic callers are unaffected — profit still auto-allows.
+   // breach). Pure loss-panic callers are unaffected - profit still auto-allows.
    if(currentPnL > 0.0 && !isGivebackTrigger) return true;
    if(isGivebackTrigger && InpAllowGivebackPanicClose) return true;
    if(!isGivebackTrigger && InpAllowEarlyLossExit)      return true;
@@ -8642,10 +8647,10 @@ bool XAU_GateEarlyLossClose(ulong ticket, bool isBuy, double openPx, double curP
    if(!allowed)
    {
       if(isGivebackTrigger)
-         PrintFormat("PROFIT_GIVEBACK_CLOSE_BLOCKED — floor SL already protects; letting it ride instead of banking early. #%I64u %s reason=%s pnl=$%.2f peak=$%.2f giveback=%.0f%%",
+         PrintFormat("PROFIT_GIVEBACK_CLOSE_BLOCKED - floor SL already protects; letting it ride instead of banking early. #%I64u %s reason=%s pnl=$%.2f peak=$%.2f giveback=%.0f%%",
                      ticket, isBuy ? "BUY" : "SELL", reason, currentPnL, peakProfit, givebackPct);
       else
-         PrintFormat("EARLY LOSS CLOSE BLOCKED — letting trade breathe. #%I64u %s reason=%s pnl=$%.2f peak=$%.2f giveback=%.0f%%",
+         PrintFormat("EARLY LOSS CLOSE BLOCKED - letting trade breathe. #%I64u %s reason=%s pnl=$%.2f peak=$%.2f giveback=%.0f%%",
                      ticket, isBuy ? "BUY" : "SELL", reason, currentPnL, peakProfit, givebackPct);
    }
 
@@ -8653,7 +8658,7 @@ bool XAU_GateEarlyLossClose(ulong ticket, bool isBuy, double openPx, double curP
 }
 
 //+------------------------------------------------------------------+
-//| v6.5.0 — UNIFIED REVERSAL CONFIRMATION (Exit Arbiter, part 1)    |
+//| v6.5.0 - UNIFIED REVERSAL CONFIRMATION (Exit Arbiter, part 1)    |
 //|   The ecosystem audit found FOUR different, sometimes-disagreeing|
 //|   definitions of "structure broken" scattered across the exit    |
 //|   engine (M5 swing break, SMC H1 BOS, TTM entry-vs-current flip, |
@@ -8664,7 +8669,7 @@ bool XAU_GateEarlyLossClose(ulong ticket, bool isBuy, double openPx, double curP
 //|   prior per-site checks already accepted (so no site loses        |
 //|   evidence it used to accept) plus the BOS/HTF flip-since-entry  |
 //|   check that only the basket-level gate (XAU_BasketStructureBroken,|
-//|   v6.4.25) and TTM's own internal logic had — per-ticket gate     |
+//|   v6.4.25) and TTM's own internal logic had - per-ticket gate     |
 //|   calls never used it, which is exactly the gap that made the    |
 //|   flagship v6.4.22 incident possible in the first place.         |
 //+------------------------------------------------------------------+
@@ -8676,7 +8681,7 @@ bool XAU_NewHostileStructureFlip(int entryDir, int currentDir, int tradeDir)
 }
 
 // June 17-18 reconstruction: this is already the file's own canonical
-// "trade thesis still valid?" arbiter (v6.5.0 Exit Arbiter) — the single
+// "trade thesis still valid?" arbiter (v6.5.0 Exit Arbiter) - the single
 // check every per-ticket close-decision gate is meant to use instead of
 // each recomputing its own combination. Rather than building a sixth,
 // separate "trade thesis exit evaluator" alongside it (which would just
@@ -8684,13 +8689,13 @@ bool XAU_NewHostileStructureFlip(int entryDir, int currentDir, int tradeDir)
 // this is extended in place with one new check: the Adaptive Direction
 // Engine's own STRONG-tier read (the same M5+M15+BOS+swing-sequence
 // assessment the entry side uses to tell a real breakdown apart from a
-// normal pullback — see XAU_ComputeActiveDirection). If the engine has
+// normal pullback - see XAU_ComputeActiveDirection). If the engine has
 // confirmed a STRONG opposite flip against this trade's direction, that
-// genuinely IS structure invalidating the original thesis — count it here
+// genuinely IS structure invalidating the original thesis - count it here
 // so exits react as fast on confirmed evidence as entries now do, without
 // waiting for a slower, separately-computed local reversal signal. A
 // normal pullback (BOTH_ALLOWED, or WEAK/MEDIUM tiers) does NOT satisfy
-// this — those are exactly the cases a strong runner should be allowed to
+// this - those are exactly the cases a strong runner should be allowed to
 // keep breathing through.
 bool XAU_ReversalConfirmed(ulong ticket, bool isBuy, bool structureConfirmedBroken,
                            bool emaAgainst, bool rsiAgainst, int momentumScore,
@@ -8937,7 +8942,7 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
 	            allowedGiveback = MathMax(allowedGiveback,
                                          runnerConvictionHold ? InpRunnerConvictionGivebackPct
                                                               : InpSmartExitStrongGivebackPct);
-	            PrintFormat("EV_PROTECT_RUNNER_BREATHE #%I64u %s | holdEV %.2f > exitEV %.2f, continuationProb=%.2f, thesis healthy — using wider floor %.0f%% and giveback %.0f%%",
+	            PrintFormat("EV_PROTECT_RUNNER_BREATHE #%I64u %s | holdEV %.2f > exitEV %.2f, continuationProb=%.2f, thesis healthy - using wider floor %.0f%% and giveback %.0f%%",
 	                        ticket, isBuy ? "BUY" : "SELL",
 	                        ev.holdEV, ev.exitEV, ev.continuationProb,
 	                        lockPct, allowedGiveback);
@@ -9097,7 +9102,7 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
                                        runnerClean ? "Y" : "N");
          // v6.4.24/v6.5.0: while still profitable, a giveback%/context breach
          // alone (e.g. WEAK_TRADE context capping allowed giveback at 35%) is
-         // not proof of real reversal — route through the single canonical
+         // not proof of real reversal - route through the single canonical
          // reversal check (Exit Arbiter) instead of an ad hoc combination.
          bool reversalConfirmedGiveback = XAU_ReversalConfirmed(ticket, isBuy, structureConfirmedBroken,
                                                                 emaAgainst, rsiAgainst, momentumScore, trendAligned);
@@ -9136,13 +9141,13 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
    return false;
 }
 
-// v6.17.18 PROFIT QUALITY GATE — runtime-proven from live telemetry
+// v6.17.18 PROFIT QUALITY GATE - runtime-proven from live telemetry
 // (XAUAI_TradingIntelligence_XAUUSD.jsonl, 48 closes 07-02..07-08): 15/35
 // winners (43%) were self-tagged EXIT_EARLY_LEFT_PROFIT by the EA's own
 // post-close tracker, and 7 of those 15 were this exact function's
 // SL_MOD:PROFIT_FLOOR ratchet. Root cause: once peak crossed the arm
 // threshold, the floor SL jumped straight to lockPct% of peak (45% by
-// default) UNCONDITIONALLY — the thesis/structure-still-valid check below
+// default) UNCONDITIONALLY - the thesis/structure-still-valid check below
 // only gated the full CLOSE path, never this SL-tightening step. So a clean
 // runner with intact structure got its stop yanked to a flat percentage the
 // instant it armed, and any ordinary pullback (not a real reversal) then
@@ -9206,7 +9211,7 @@ XAU_ProfitQuality XAU_AssessProfitQuality(double profit, double peak, double rDo
 
 // Telemetry line (Rule: ExitReason, NetProfitAfterCosts, ProfitR, ProfitATR,
 // PeakProfit, GivebackPercent, SpreadCostImpact, ThesisStillValid,
-// ExitStrength, decision, AccountNormalizedProfit, LotSizeInfluence) —
+// ExitStrength, decision, AccountNormalizedProfit, LotSizeInfluence) -
 // appended to the exit/SL-mod reason string so it flows into the existing
 // exitReason/CloseReasonExact/extra fields already wired into
 // XAU_IntelAppendJson/XAU_IntelAppend without touching that 30+-parameter
@@ -9221,7 +9226,7 @@ string XAU_ProfitQualityTelemetry(const XAU_ProfitQuality &q, double profit, dou
 }
 
 //+------------------------------------------------------------------+
-//| v6.4.8 — PROTECTED PEAK PROFIT FLOOR                             |
+//| v6.4.8 - PROTECTED PEAK PROFIT FLOOR                             |
 //+------------------------------------------------------------------+
 bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double curPrice,
                                 double curSL, double curTP, double slDist, double atr,
@@ -9239,7 +9244,7 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
    // with much wider or narrower risk than typical never got a threshold
    // that reflected ITS OWN R. Scale the fixed floor by account size, and
    // separately allow arming once peak reaches a meaningful R-multiple of
-   // this specific trade's own risk — whichever condition is met first.
+   // this specific trade's own risk - whichever condition is met first.
    // v6.18.0: account-size scaling now uses InpProtectedPeakEquityPct (a real
    // equity-%, same MathMax(flat,%) shape as the A+ Shield tiers) instead of
    // AccountSizeRiskMultiplier()'s 0.75x-1.35x equity-TIER boost, which this
@@ -9408,10 +9413,10 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
       // June 17-18 reconstruction: a position that peaked in profit and then
       // fully round-tripped to breakeven or a loss must never get zero action
       // just because trend/momentum still "look okay." Previously this branch
-      // logged THESIS_HOLD_PULLBACK and returned with no SL change at all —
+      // logged THESIS_HOLD_PULLBACK and returned with no SL change at all -
       // the exact mechanism behind trades riding a real reversal all the way
       // down after banking nothing. At minimum, re-arm at breakeven (never a
-      // downgrade — only moves if breakeven is more protective than the
+      // downgrade - only moves if breakeven is more protective than the
       // current SL) before continuing to hold for the thesis to prove itself.
       double bePoint = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
       long   beStopsLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
@@ -9421,7 +9426,7 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
       if(beSane && beRatchet && SafeModifySL(ticket, openPx, curTP, isBuy, curPrice, "THESIS_HOLD_BE_REARM"))
       {
          currentLockUSD = 0.0;
-         PrintFormat("THESIS_HOLD_BE_REARM #%I64u %s | peak=$%.2f current=$%.2f round-tripped to/below breakeven while thesis still valid — SL moved to breakeven instead of taking zero action",
+         PrintFormat("THESIS_HOLD_BE_REARM #%I64u %s | peak=$%.2f current=$%.2f round-tripped to/below breakeven while thesis still valid - SL moved to breakeven instead of taking zero action",
                      ticket, isBuy ? "BUY" : "SELL", peak, profit);
       }
       PrintFormat("THESIS_HOLD_PULLBACK #%I64u %s | %s context=%s floor/giveback touched but trade context still valid, holding protected runner | peak=$%.2f current=$%.2f floor=$%.2f giveback=%.0f%% allowed=%.0f%% trend=%s momentum=%d/5 protectedSL=$%.2f",
@@ -9461,7 +9466,7 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
                   ticket, isBuy ? "BUY" : "SELL",
                   trendAligned ? "Y" : "N", momentumScore, structureConfirmedBroken ? "Y" : "N");
       // v6.4.24/v6.5.0: floor/giveback breach while still profitable is not
-      // proof of reversal by itself — route through the same canonical
+      // proof of reversal by itself - route through the same canonical
       // reversal check as SMART_EXIT_GIVEBACK (Exit Arbiter). This function
       // doesn't track EMA/RSI locally, so pass false/false for those (same as
       // before); the new BOS/HTF flip check still applies on top.
@@ -9485,7 +9490,7 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
    return false;
 }
 
-// v4.5.4 — Partial-TP tracker helpers
+// v4.5.4 - Partial-TP tracker helpers
 bool PartialAlreadyTaken(ulong ticket)
 {
    for(int i = 0; i < ArraySize(partialTakenTickets); i++)
@@ -9511,13 +9516,13 @@ void ClearPartialTaken(ulong ticket)
    ArrayResize(partialTakenTickets, n);
 }
 
-// v5.8.52 — A+ Profit Shield per-ticket tracker
+// v5.8.52 - A+ Profit Shield per-ticket tracker
 ulong g_aplusShieldArmedTickets[];
 bool APlusShieldArmed(ulong ticket) { for(int i=0;i<ArraySize(g_aplusShieldArmedTickets);i++) if(g_aplusShieldArmedTickets[i]==ticket) return true; return false; }
 void APlusMarkShieldArmed(ulong ticket) { if(APlusShieldArmed(ticket)) return; int n=ArraySize(g_aplusShieldArmedTickets); ArrayResize(g_aplusShieldArmedTickets,n+1); g_aplusShieldArmedTickets[n]=ticket; }
 void APlusClearShield(ulong ticket) { int idx=-1; for(int i=0;i<ArraySize(g_aplusShieldArmedTickets);i++) if(g_aplusShieldArmedTickets[i]==ticket){idx=i;break;} if(idx<0) return; int n=ArraySize(g_aplusShieldArmedTickets)-1; for(int i=idx;i<n;i++) g_aplusShieldArmedTickets[i]=g_aplusShieldArmedTickets[i+1]; ArrayResize(g_aplusShieldArmedTickets,n); }
 
-// v4.7.0 — Per-ticket AI-veto cooldown helpers
+// v4.7.0 - Per-ticket AI-veto cooldown helpers
 bool AIVetoCooldownOK(ulong ticket, int minSec)
 {
    for(int i = 0; i < ArraySize(aiVetoTickets); i++)
@@ -9555,7 +9560,7 @@ void ClearAIVeto(ulong ticket)
    ArrayResize(aiVetoLastCall, n);
 }
 
-// v4.7.3 — TP extension tracker helpers
+// v4.7.3 - TP extension tracker helpers
 int GetTPExtendCount(ulong ticket)
 {
    for(int i = 0; i < ArraySize(tpExtendTickets); i++)
@@ -9588,7 +9593,7 @@ void ClearTPExtend(ulong ticket)
    ArrayResize(tpExtendCount, n);
 }
 
-// v4.7.0 — AI exit verdict struct (used by CheckPositionWithAI later in file)
+// v4.7.0 - AI exit verdict struct (used by CheckPositionWithAI later in file)
 //   action: 0=HOLD, -1=CLOSE, 1=LOCK
 //   lockUSD: $ amount AI wants SL to bank (only if action=1)
 //   reason:  short text explanation (for log)
@@ -9600,9 +9605,9 @@ struct AIExitVerdict
    int    confidence;
 };
 
-// v4.7.0 — AI veto wrapper. Called BEFORE every rule-based close.
+// v4.7.0 - AI veto wrapper. Called BEFORE every rule-based close.
 // Returns TRUE if the close was blocked (AI said HOLD, or AI said LOCK $X and SL was banked).
-// Returns FALSE if AI confirmed CLOSE (or AI was not consulted) — caller proceeds with close.
+// Returns FALSE if AI confirmed CLOSE (or AI was not consulted) - caller proceeds with close.
 // Cost-aware: only calls AI if profit/peak >= InpAIExitMinProfit and cooldown is satisfied.
 bool AIBlocksClose(string ruleName, ulong ticket, bool isBuy, double openPx, double curPrice,
                     double profit, double peak, double rDollars, double slDist, double curSL, double curTP,
@@ -9630,7 +9635,7 @@ bool AIBlocksClose(string ruleName, ulong ticket, bool isBuy, double openPx, dou
 
    if(v.action == 0)
    {
-      Print("AI VETO #", ticket, " (", ruleName, "): HOLD — ", v.reason);
+      Print("AI VETO #", ticket, " (", ruleName, "): HOLD - ", v.reason);
       return true;
    }
    if(v.action == 1 && v.lockUSD > 0 && rDollars > 0)
@@ -9647,18 +9652,18 @@ bool AIBlocksClose(string ruleName, ulong ticket, bool isBuy, double openPx, dou
       if(sane && ratchet)
       {
          if(SafeModifySL(ticket, newSL, curTP, isBuy, curPrice, "AI_LOCK"))
-            Print("AI LOCK #", ticket, " (", ruleName, ") — locked +$", DoubleToString(v.lockUSD,2),
+            Print("AI LOCK #", ticket, " (", ruleName, ") - locked +$", DoubleToString(v.lockUSD,2),
                   " at ", DoubleToString(newSL, digits), ". ", v.reason);
       }
       return true; // AI processed (either banked or sanity-rejected); skip the close
    }
-   // v.action == -1 → AI confirmed CLOSE → caller proceeds
-   Print("AI CONFIRM #", ticket, " (", ruleName, "): CLOSE — ", v.reason);
+   // v.action == -1 -> AI confirmed CLOSE -> caller proceeds
+   Print("AI CONFIRM #", ticket, " (", ruleName, "): CLOSE - ", v.reason);
    return false;
 }
 
 //+------------------------------------------------------------------+
-//| v6.4.6 audit — broker-side exit attribution                      |
+//| v6.4.6 audit - broker-side exit attribution                      |
 //| Stores the most recent protective action per MT5 position id so   |
 //| a later broker SL/TP fill records the real engine that caused it. |
 //+------------------------------------------------------------------+
@@ -9777,10 +9782,10 @@ void XAU_SetPendingSLReason(ulong ticket, double newSL, string logTag)
 }
 
 //+------------------------------------------------------------------+
-//| v4.5.6 — SAFE POSITION MODIFY (freeze/stops aware)               |
+//| v4.5.6 - SAFE POSITION MODIFY (freeze/stops aware)               |
 //| Broker brokers reject PositionModify when:                       |
-//|   • Price within SYMBOL_TRADE_FREEZE_LEVEL of SL/TP               |
-//|   • SL/TP closer to price than SYMBOL_TRADE_STOPS_LEVEL           |
+//|   - Price within SYMBOL_TRADE_FREEZE_LEVEL of SL/TP               |
+//|   - SL/TP closer to price than SYMBOL_TRADE_STOPS_LEVEL           |
 //| This helper:                                                     |
 //|   1. Clamps the new SL to the minimum allowed distance            |
 //|   2. Skips the modify (and warns ONCE) if price is frozen          |
@@ -9846,7 +9851,7 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
    if(!XAU_OwnerProtectedFloorAllowsModify(ticket, newSL, logTag))
       return false;
 
-   // v4.6.5 — NO-OP GUARD: don't modify if SL is already at/very near target.
+   // v4.6.5 - NO-OP GUARD: don't modify if SL is already at/very near target.
    //   Prevents "SL-MOD FAIL Ret=10025" (NO_CHANGES) spam when ladder/trail
    //   recomputes the same level tick after tick.
    if(PositionSelectByTicket(ticket))
@@ -9855,10 +9860,10 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       double curTP = PositionGetDouble(POSITION_TP);
       double tol   = MathMax(point * 2, 0.00001);  // 2-pt tolerance
       if(MathAbs(curSL - newSL) < tol && MathAbs(curTP - tp) < tol)
-         return true;  // already where we want it — silent success
+         return true;  // already where we want it - silent success
    }
 
-   // Freeze level check — skip modify (but don't error) if price is within freeze band
+   // Freeze level check - skip modify (but don't error) if price is within freeze band
    if(minFreezeDist > 0)
    {
       double distToSL = isBuy ? MathAbs(curPrice - newSL) : MathAbs(newSL - curPrice);
@@ -9867,7 +9872,7 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
          static datetime lastFreezeWarn = 0;
          if(TimeCurrent() - lastFreezeWarn > 60)
          {
-            Print("SL-MOD SKIP #", ticket, " (", logTag, ") — price within freeze level (",
+            Print("SL-MOD SKIP #", ticket, " (", logTag, ") - price within freeze level (",
                   DoubleToString(distToSL/point, 0), " pts < ", freezeLvl, " pts). Retry next tick.");
             lastFreezeWarn = TimeCurrent();
          }
@@ -9897,7 +9902,7 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
             if(TimeCurrent() - g_slThrottleLog >= 60)
             {
                Print("SL-MOD DEFERRED #", ticket, " (", logTag,
-                     ") — 3 trailing mods/sec live-execution limit. Will retry next tick.");
+                     ") - 3 trailing mods/sec live-execution limit. Will retry next tick.");
                g_slThrottleLog = TimeCurrent();
             }
             return false;
@@ -9906,12 +9911,12 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       }
    }
 
-   // Execute modify — log any failure so they're no longer silent
+   // Execute modify - log any failure so they're no longer silent
    if(!trade.PositionModify(ticket, newSL, tp))
    {
       uint ret = trade.ResultRetcode();
       int  err = GetLastError();
-      // v5.8.51: context-busy retry — broker context sometimes holds after a prior
+      // v5.8.51: context-busy retry - broker context sometimes holds after a prior
       // request completes. A 150ms yield often clears it without wasting a full tick.
       if(err == 4756 || ret == 10016)
       {
@@ -9925,9 +9930,9 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
          ret = trade.ResultRetcode();
          err = GetLastError();
       }
-      // v4.6.5 — Downgrade common non-fatal retcodes to throttled INFO (1/min).
+      // v4.6.5 - Downgrade common non-fatal retcodes to throttled INFO (1/min).
       //   10025 NO_CHANGES, 10004 REQUOTE, 10021 OFF_QUOTES, 4756 invalid stops
-      //   are transient/benign — the next tick will retry. Don't spam the log.
+      //   are transient/benign - the next tick will retry. Don't spam the log.
       bool benign = (ret == 10025 || ret == 10004 || ret == 10021 || err == 4756 || err == 10025);
       if(benign)
       {
@@ -9935,7 +9940,7 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
          if(TimeCurrent() - lastBenignWarn > 60)
          {
             Print("SL-MOD INFO #", ticket, " (", logTag, ") transient ret=", ret,
-                  " err=", err, " — will retry next tick.");
+                  " err=", err, " - will retry next tick.");
             lastBenignWarn = TimeCurrent();
          }
       }
@@ -9978,7 +9983,7 @@ void RecomputeAutoScale()
    double bal = StrategyReferenceBalance();
    if(bal <= 0) bal = 100;                  // fallback if account query fails
 
-   // TRUE proportional scaling — works on $10 or $100k equally.
+   // TRUE proportional scaling - works on $10 or $100k equally.
    // Then clamp with absolute floor/ceiling so micro accounts still get viable targets
    // and mega-accounts don't chase unreachable daily jackpots.
    autoHardStopUSD   = NormalizeDouble(bal * (InpAutoRiskPct    / 100.0), 2);
@@ -9987,9 +9992,9 @@ void RecomputeAutoScale()
    autoPeakMinUSD    = NormalizeDouble(bal * (InpAutoPeakMinPct / 100.0), 2);
 
    // Absolute bounds on profit targets (v4.4.4)
-   //   ProfitMin floor: $25  → micro accounts still have a scan trigger
-   //   ProfitMax floor: $50  → micro accounts still have a cap target
-   //   ProfitMax ceiling: $5000 → large accounts don't chase unreachable numbers
+   //   ProfitMin floor: $25  -> micro accounts still have a scan trigger
+   //   ProfitMax floor: $50  -> micro accounts still have a cap target
+   //   ProfitMax ceiling: $5000 -> large accounts don't chase unreachable numbers
    if(autoProfitTakeMin < InpProfMinFloorUSD) autoProfitTakeMin = InpProfMinFloorUSD;
    if(autoProfitTakeMax < InpProfMaxFloorUSD) autoProfitTakeMax = InpProfMaxFloorUSD;
    if(autoProfitTakeMax > InpProfMaxCeilUSD)  autoProfitTakeMax = InpProfMaxCeilUSD;
@@ -9997,17 +10002,17 @@ void RecomputeAutoScale()
    if(autoProfitTakeMax < autoProfitTakeMin * 1.5)
       autoProfitTakeMax = autoProfitTakeMin * 1.5;
 
-   // Viability warning for micro accounts — XAU M5 scalping has structural minimums
+   // Viability warning for micro accounts - XAU M5 scalping has structural minimums
    // due to broker minimum lot size (0.01) and typical XAU tick values
    if(bal < 100.0)
    {
       Print("=========================================================");
-      Print("⚠ SMALL ACCOUNT WARNING: Balance $", DoubleToString(bal,2),
+      Print("[!] SMALL ACCOUNT WARNING: Balance $", DoubleToString(bal,2),
             " is below $100 viability threshold for XAU M5 scalping.");
       Print("  Broker minimum lot (0.01) on XAU = $1 per $1 price move.");
       Print("  Typical SL distance ($5-8) can produce -$5 to -$8 losses per trade,");
       Print("  which is ", DoubleToString(5.0/bal*100, 1), "-", DoubleToString(8.0/bal*100, 1),
-            "% of your balance — too high for sustainable compounding.");
+            "% of your balance - too high for sustainable compounding.");
       Print("  Recommended minimum: $200-500 to survive normal drawdown swings.");
       Print("=========================================================");
    }
@@ -10031,7 +10036,7 @@ double GetVolAdaptiveMult()
    double cur = bufATR[1];
    if(cur <= 0) return 1.0;
 
-   // v5.9.1: cache per closed M5 bar — all consumers get last-bar data anyway,
+   // v5.9.1: cache per closed M5 bar - all consumers get last-bar data anyway,
    // so there is no benefit to recomputing the 50-bar sort on every tick.
    static datetime cachedClosedBar = 0;
    static double   cachedMult      = 1.0;
@@ -10061,16 +10066,16 @@ double GetVolAdaptiveMult()
 }
 
 //+------------------------------------------------------------------+
-//| v4.5.2 — TREND-AWARE TRAIL DISTANCE                              |
+//| v4.5.2 - TREND-AWARE TRAIL DISTANCE                              |
 //| Returns the ATR multiplier to use for trailing SL given:         |
-//|   • Current regime (trending vs ranging vs breakout vs low-vol)  |
-//|   • EMA separation (strong trend = bigger stretch)               |
-//|   • Volatility spike/calm (existing v4.5.1 logic)                |
-//| v4.5.3 CONVICTION RUNNER — if the trade was entered at           |
-//|   ≥ InpConvRunMinConf% AI confidence AND is already              |
-//|   ≥ InpConvRunMinR in profit, widen to InpConvRunnerMulti × ATR. |
+//|   - Current regime (trending vs ranging vs breakout vs low-vol)  |
+//|   - EMA separation (strong trend = bigger stretch)               |
+//|   - Volatility spike/calm (existing v4.5.1 logic)                |
+//| v4.5.3 CONVICTION RUNNER - if the trade was entered at           |
+//|   >= InpConvRunMinConf% AI confidence AND is already              |
+//|   >= InpConvRunMinR in profit, widen to InpConvRunnerMulti x ATR. |
 //|   These are the trades where both AIs said "textbook setup" AND  |
-//|   the market has already validated it — ride them for max gain.  |
+//|   the market has already validated it - ride them for max gain.  |
 //+------------------------------------------------------------------+
 double GetTrailATRMulti(double profitRRatio = 0.0)
 {
@@ -10119,10 +10124,10 @@ double GetTrailATRMulti(double profitRRatio = 0.0)
          base = InpCapTrailATRMulti;
    }
 
-   // Volatility overlay — still respects spike/calm (survival over aesthetics)
+   // Volatility overlay - still respects spike/calm (survival over aesthetics)
    double volM = GetVolAdaptiveMult();
-   if(volM < 0.85)  base = MathMax(base, InpCapTrailSpikeMulti);   // spike → widen if not already
-   else if(volM > 1.05) base = MathMin(base, MathMax(InpCapTrailCalmMulti, 1.0));  // calm → tighten (but not absurdly)
+   if(volM < 0.85)  base = MathMax(base, InpCapTrailSpikeMulti);   // spike -> widen if not already
+   else if(volM > 1.05) base = MathMin(base, MathMax(InpCapTrailCalmMulti, 1.0));  // calm -> tighten (but not absurdly)
 
    // v5.9.0 RSI MOMENTUM FACTOR: when RSI is strongly directional (not extreme/overbought),
    // widen the trail slightly so the position breathes through genuine momentum impulses
@@ -10136,9 +10141,9 @@ double GetTrailATRMulti(double profitRRatio = 0.0)
          base = MathMin(base * 1.15, base + 0.50);
    }
 
-   // v4.5.3 — CONVICTION RUNNER OVERLAY: if the AI was ≥90% confident AND the trade
-   // is already ≥+2R in profit, upgrade to the monster-runner trail. This is the
-   // "textbook setup validated by market" case — let it run for max profit.
+   // v4.5.3 - CONVICTION RUNNER OVERLAY: if the AI was >=90% confident AND the trade
+   // is already >=+2R in profit, upgrade to the monster-runner trail. This is the
+   // "textbook setup validated by market" case - let it run for max profit.
    if(InpConvictionRunner && currentTradeConfidence >= InpConvRunMinConf &&
       profitRRatio >= InpConvRunMinR)
    {
@@ -10150,8 +10155,8 @@ double GetTrailATRMulti(double profitRRatio = 0.0)
          if(TimeCurrent() - lastConvLog > 60)
          {
             Print("CONVICTION RUNNER: ", currentTradeConfidence, "% conf + ",
-                  DoubleToString(profitRRatio,2), "R profit → trail upgrade ",
-                  DoubleToString(base,2), "x → ", DoubleToString(convTrail,2), "xATR");
+                  DoubleToString(profitRRatio,2), "R profit -> trail upgrade ",
+                  DoubleToString(base,2), "x -> ", DoubleToString(convTrail,2), "xATR");
             lastConvLog = TimeCurrent();
          }
          base = convTrail;
@@ -10488,7 +10493,7 @@ void XAU_ClassifySetup(int dir, double atr, string setupName, XAU_SetupClassific
 }
 
 //+------------------------------------------------------------------+
-//| CONTEXT GATE (v4.8.0) — HTF bias + Swing S/R proximity filter    |
+//| CONTEXT GATE (v4.8.0) - HTF bias + Swing S/R proximity filter    |
 //| Blocks entries that fight H4 trend OR sit near a recent swing    |
 //| level without a break+retest. Rule-based, zero LLM cost.         |
 //+------------------------------------------------------------------+
@@ -10751,6 +10756,22 @@ void XAU_LogRuntimePureM10Gap(datetime lastSeenClose,datetime currentClose);
 
 int OnInit()
 {
+   // Market Edition gold-only guard (owner directive): XauCloud is engineered
+   // and validated exclusively for Gold. Checked first, before anything else
+   // -- license, self-tests, indicator handles, or trading state -- so a
+   // non-Gold chart (including MetaQuotes' own automated EURUSD validation
+   // pass) never creates indicators, never generates a candidate, and never
+   // sends an order. IsXAUFastSymbol() already covers common broker
+   // suffixes/prefixes (XAUUSDm, XAUUSD.a, XAUUSD.pro, GOLD, etc.) via a
+   // case-insensitive substring match, not one exact symbol string.
+   g_xauCloudNonGoldChart = !IsXAUFastSymbol();
+   if(g_xauCloudNonGoldChart)
+   {
+      Print("XauCloud is a Gold-only Expert Advisor. Attach it to your broker's XAUUSD or GOLD chart.");
+      Comment("XauCloud is a Gold-only Expert Advisor.\nAttach it to your broker's XAUUSD or GOLD chart.\nCurrent chart symbol: ", Symbol());
+      return INIT_SUCCEEDED; // safe idle result -- not a crash, not a parameter error
+   }
+
    licenseValid = true; // Market Edition (Claude XauCloud) Task 17R: custom PIN-format gate removed -- MQL5
    // Marketplace's own per-account activation replaces this for a Market product.
    Print("LICENSE OK: ", InpLicensePIN);
@@ -10762,7 +10783,7 @@ int OnInit()
    if((bool)MQLInfoInteger(MQL_TESTER) && !XAU_RunPermanentM10CategoryPolicySelfTests())
       return INIT_FAILED;
 
-   // v6.21.2 Part 3 — CONFIG-AGREEMENT ASSERTION: InpNormalRiskPct (the sole normal-
+   // v6.21.2 Part 3 - CONFIG-AGREEMENT ASSERTION: InpNormalRiskPct (the sole normal-
    // entry risk authority) and InpMaxRiskPctEquity (the hard equity-% backstop) must
    // agree, or a valid approved trade could be silently clamped below the risk the
    // owner configured. Refuse to start rather than trade on a self-contradicting config.
@@ -10836,10 +10857,10 @@ int OnInit()
    // v6.4.19: initialize TTM record array
    for(int _i = 0; _i < TTM_MAX_POSITIONS; _i++) { g_ttm[_i].active = false; g_ttm[_i].posId = 0; }
 
-   // v5.2.0 — restore cloud position→signal map across EA restarts
+   // v5.2.0 - restore cloud position->signal map across EA restarts
    CloudMapLoad();
 
-   // v5.2.1 — startup cooldown: capture boot time + current bar so we can block
+   // v5.2.1 - startup cooldown: capture boot time + current bar so we can block
    // any premature trade right after EA init/reload (prevents blind shots on
    // stale indicator buffers).
    g_startupAt           = TimeCurrent();
@@ -10852,7 +10873,7 @@ int OnInit()
    {
       double resolvedStartupSecLog = MathMax(XAU_ENTRY_DELAY_ABSOLUTE_FLOOR_SEC,
                                              MathMin(XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC, (double)InpStartupCooldownSeconds));
-      PrintFormat("🟡 Startup detected — entering %.0fs wall-clock cooldown before any trade is allowed (no M5 bar wait).",
+      PrintFormat("[YELLOW] Startup detected - entering %.0fs wall-clock cooldown before any trade is allowed (no M5 bar wait).",
                   resolvedStartupSecLog);
    }
 
@@ -10906,7 +10927,7 @@ int OnInit()
    dailyStartEquity = weeklyStartEquity = accInfo.Equity();
    LoadPropFirmConfig();
    LoadPropFirmBaseline();
-   pg_dayHWM = accInfo.Equity();        // v5.1.0 — initialize Profit Guardian HWM
+   pg_dayHWM = accInfo.Equity();        // v5.1.0 - initialize Profit Guardian HWM
    todayTradeCount = 0;
    lastDayReset = lastWeekReset = lastTradeClose = 0;
    dailyLimitHit = weeklyTargetHit = weeklyLossHit = false;
@@ -11013,7 +11034,7 @@ int OnInit()
       g_stratCount[si]   = 0;
    }
    LoadStratWeights();  // override with persisted values if file exists
-   XAU_TRI_LoadStats(); // v6.8.0 — persisted TRI adaptive threshold, if any
+   XAU_TRI_LoadStats(); // v6.8.0 - persisted TRI adaptive threshold, if any
 
    // v6.3.8 Upgrade 6: initialize gate analytics timer
    g_gateReportLast = TimeCurrent();
@@ -11059,40 +11080,40 @@ int OnInit()
    BotMonitorActivity("SYNC", "SYNC", "Startup sync completed: " + g_startupIntelSyncReason);
 
    // ============================================================
-   // v4.9.6 — STARTUP DIAGNOSTIC BANNER
+   // v4.9.6 - STARTUP DIAGNOSTIC BANNER
    //   Tells the user IMMEDIATELY if their setup is wrong.
    //   Catches the top 5 "bot active but idle" causes at attach time.
    // ============================================================
-   Print("─────────────── STARTUP DIAGNOSTICS ───────────────");
+   Print("--------------- STARTUP DIAGNOSTICS ---------------");
    string sym = Symbol();
    bool  symOK = (StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0 || StringFind(sym, "Gold") >= 0);
-   PrintFormat("▸ Symbol detected: %s %s", sym, symOK ? "✓ OK (gold instrument)" : "⚠ NOT A GOLD SYMBOL — attach EA to XAUUSD chart!");
+   PrintFormat("- Symbol detected: %s %s", sym, symOK ? "[OK] OK (gold instrument)" : "[!] NOT A GOLD SYMBOL - attach EA to XAUUSD chart!");
    long  acctNum  = AccountInfoInteger(ACCOUNT_LOGIN);
    string acctSrv = AccountInfoString(ACCOUNT_SERVER);
    string acctTyp = AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_DEMO ? "DEMO" :
                     AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_CONTEST ? "CONTEST" : "LIVE";
    string acctCur = AccountInfoString(ACCOUNT_CURRENCY);
-   PrintFormat("▸ Account: #%I64d on %s (%s, %s)", acctNum, acctSrv, acctTyp, acctCur);
+   PrintFormat("- Account: #%I64d on %s (%s, %s)", acctNum, acctSrv, acctTyp, acctCur);
    bool termConn = (bool)TerminalInfoInteger(TERMINAL_CONNECTED);
    bool termAlgo = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
    bool mqlAlgo  = (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
-   PrintFormat("▸ Broker connection: %s", termConn ? "✓ connected" : "✗ NOT CONNECTED — check internet");
-   PrintFormat("▸ Algo Trading toolbar button: %s", termAlgo ? "✓ ENABLED (green)" : "✗ DISABLED — click toolbar button until GREEN");
-   PrintFormat("▸ EA-level Algo Trading: %s", mqlAlgo ? "✓ allowed (Common tab checked)" : "✗ NOT allowed — re-attach EA, tick 'Allow Algo Trading' in Common tab");
+   PrintFormat("- Broker connection: %s", termConn ? "[OK] connected" : "[X] NOT CONNECTED - check internet");
+   PrintFormat("- Algo Trading toolbar button: %s", termAlgo ? "[OK] ENABLED (green)" : "[X] DISABLED - click toolbar button until GREEN");
+   PrintFormat("- EA-level Algo Trading: %s", mqlAlgo ? "[OK] allowed (Common tab checked)" : "[X] NOT allowed - re-attach EA, tick 'Allow Algo Trading' in Common tab");
    double curSpread = (double)SymbolInfoInteger(sym, SYMBOL_SPREAD);
-   PrintFormat("▸ Current spread: %.0f points (max allowed: %d) %s",
+   PrintFormat("- Current spread: %.0f points (max allowed: %d) %s",
                curSpread, InpMaxSpread,
-               curSpread <= InpMaxSpread ? "✓ OK" : "⚠ TOO WIDE — entries will be blocked until spread narrows");
+               curSpread <= InpMaxSpread ? "[OK] OK" : "[!] TOO WIDE - entries will be blocked until spread narrows");
    // WebRequest live connectivity test (cheap GET, 3s timeout)
    // Market Edition (Claude XauCloud) Task 17R: startup cloud health-check + AI-calibration fetch removed --
    // no WebRequest calls in this build (was a diagnostic banner only; never
    // gated trading, calibration multipliers simply stay at their neutral 1.0 default).
    // Indicator buffer check
    int barsAvail = Bars(sym, XAU_PRIMARY_DECISION_TF);
-   PrintFormat("▸ M5 bars loaded: %d %s", barsAvail, barsAvail >= 100 ? "✓ OK" : "⚠ need 100+ bars — wait or scroll chart back");
-   Print("─────────────── END DIAGNOSTICS ───────────────");
+   PrintFormat("- M5 bars loaded: %d %s", barsAvail, barsAvail >= 100 ? "[OK] OK" : "[!] need 100+ bars - wait or scroll chart back");
+   Print("--------------- END DIAGNOSTICS ---------------");
    if(!symOK || !termConn || !termAlgo || !mqlAlgo)
-      Print("⚠⚠⚠  ONE OR MORE CRITICAL CHECKS FAILED — THE BOT WILL NOT TRADE UNTIL FIXED  ⚠⚠⚠");
+      Print("[!][!][!]  ONE OR MORE CRITICAL CHECKS FAILED - THE BOT WILL NOT TRADE UNTIL FIXED  [!][!][!]");
    // One production authority: every approved normal entry targets
    // InpNormalRiskPct. Legacy account-mode and confidence values are visible
    // for diagnostics only and must never be presented as effective risk.
@@ -11123,7 +11144,7 @@ int OnInit()
                            : StringFormat("$-ABS $%.2f", EffHardStopUSD()),
          " | EarlyAdverse=", InpEarlyAdverseCut?"ON":"OFF", " (", InpEarlyAdverseMin, "min,", DoubleToString(InpEarlyAdverseR,1), "R)",
          " | PeakRetrace=", InpPeakRetraceExit?"ON":"OFF", " (", DoubleToString(InpPeakRetracePct,0), "%,min$", DoubleToString(EffPeakMinUSD(),2), ")",
-         " | MomentumGuard=", InpMomentumGuard?"ON":"OFF", " (fade ≥", InpMomentumFadeScore, "/4)");
+         " | MomentumGuard=", InpMomentumGuard?"ON":"OFF", " (fade >=", InpMomentumFadeScore, "/4)");
    Print("PYRAMID: ", InpAllowPyramid?"ON":"OFF",
          " | MaxAdds=", InpMaxPyramidAdds, " (total=", 1+InpMaxPyramidAdds, ")",
          " | MinATR=", DoubleToString(InpPyramidMinATR,2),
@@ -11133,7 +11154,7 @@ int OnInit()
          " | OnTrend=", InpPyramidOnTrend?"Y":"N",
          " | Adaptive=", InpPyramidAdaptiveEngine?"Y":"N",
          " | Rescue=", InpPyramidRescueMode?"Y":"N",
-         " (max ", DoubleToString(InpPyramidRescueMaxATR,2), "ATR, size×",
+         " (max ", DoubleToString(InpPyramidRescueMaxATR,2), "ATR, sizex",
          DoubleToString(InpPyramidRescueSizeMulti,2), ")");
    if(InpAutoScale)
       Print("AUTO-SCALE ON | Balance: $", DoubleToString(accInfo.Balance(),2),
@@ -11170,7 +11191,7 @@ int OnInit()
    Print("PARTIAL-TP v4.5.4: ", (InpPartialTP && !InpCloudSafeDisablePartials)?"ON":"OFF",
          " | Fires at +", DoubleToString(InpPartialTPAtR,2), "R",
          " | Close ", DoubleToString(InpPartialPct*100, 0), "% of position",
-         " | Skip on ≥", InpConvRunMinConf, "% conf=", InpPartialSkipHighConf?"Y":"N",
+         " | Skip on >=", InpConvRunMinConf, "% conf=", InpPartialSkipHighConf?"Y":"N",
          " | CloudSafeNoPartials=", InpCloudSafeDisablePartials?"Y":"N");
    STI_Init();
    Print(StringFormat("STI v6.0: %s | LateBlock=%.0f LateReduce=%.0f ExhaustBlock=%.0f ExhaustReduce=%.0f | TCP_min=%.0f | ReentryPullback=%.2fATR wait=%dmin",
@@ -12261,7 +12282,7 @@ bool CopyEntryBuffer(int handle, int buffer, int start, int count, double &targe
    int calculated = (handle != INVALID_HANDLE) ? BarsCalculated(handle) : -1;
    // v5.8.51: only a truly invalid handle warrants an immediate rebuild.
    // got<0 with err=4807 (ERR_INDICATOR_DATA_NOT_FOUND) is a transient MT5 quirk
-   // at new-bar boundaries — treat it as a fail-counter increment, not a stale handle.
+   // at new-bar boundaries - treat it as a fail-counter increment, not a stale handle.
    // Without this fix, err=4807 triggered 58+ rebuilds/day (12s warmup each).
    //
    // v6.17.1 FIX: the fail counter used to only reset to 0 after a FULL clean
@@ -12437,10 +12458,10 @@ double DetectRegime()
    double emaDiff = MathAbs(emaF - emaS) / emaS * 100;
    bool mtfAligned = (emaF > emaS && h1F > h1S) || (emaF < emaS && h1F < h1S);
 
-   // --- TIER 1: DEAD (truly no movement — everything else is tradeable) ---
+   // --- TIER 1: DEAD (truly no movement - everything else is tradeable) ---
    if(atrPct < 0.03) { currentRegime = REGIME_DEAD; return 0.05; }
 
-   // --- TIER 2: BREAKOUT (explosive squeeze releases — highest priority) ---
+   // --- TIER 2: BREAKOUT (explosive squeeze releases - highest priority) ---
    if(expanding && close1 > bbU) { currentRegime = REGIME_BREAKOUT_UP; return 0.75; }
    if(expanding && close1 < bbL) { currentRegime = REGIME_BREAKOUT_DOWN; return 0.75; }
 
@@ -12456,13 +12477,13 @@ double DetectRegime()
       return mtfAligned ? 0.85 : 0.65;
    }
 
-   // --- TIER 4: LOW_VOL (quiet AND flat — only now that trend is ruled out) ---
+   // --- TIER 4: LOW_VOL (quiet AND flat - only now that trend is ruled out) ---
    if(atrPct < 0.08) { currentRegime = REGIME_LOW_VOL; return 0.65; }
 
    // --- TIER 5: CHOPPY (EMAs tangled, no trend, no clear direction) ---
    if(emaDiff < 0.03 && !mtfAligned) { currentRegime = REGIME_CHOPPY; return 0.30; }
 
-   // --- TIER 6: RANGING (everything else — moderate vol, no strong direction) ---
+   // --- TIER 6: RANGING (everything else - moderate vol, no strong direction) ---
    currentRegime = REGIME_RANGING;
    return 0.60;
 }
@@ -12521,19 +12542,19 @@ string BuildSignature(int dir, string setupName)
 }
 
 //+------------------------------------------------------------------+
-//| HIVE-MIND — 7-day global WR lookup                               |
+//| HIVE-MIND - 7-day global WR lookup                               |
 //| Returns: 1=BOOST (+8pp), 0=NEUTRAL, -1=VETO                      |
 //+------------------------------------------------------------------+
 // Market Edition (Claude XauCloud) Task 17R: GetHiveVerdict() (cloud /api/ml/hive/score, dead code -- zero call sites) deleted outright.
 
 //+------------------------------------------------------------------+
-//| DXY CORRELATION — cached so we don't hammer the endpoint         |
+//| DXY CORRELATION - cached so we don't hammer the endpoint         |
 //| Returns gold_bias: +1 bullish, -1 bearish, 0 neutral/unknown     |
 //+------------------------------------------------------------------+
 // Market Edition (Claude XauCloud) Task 17R: GetDXYBias() (cloud /api/smart/dxy, dead code -- zero call sites) deleted outright.
 
 //+------------------------------------------------------------------+
-//| STREAK TRACKER — count LOSSes in last InpStreakWindowSec         |
+//| STREAK TRACKER - count LOSSes in last InpStreakWindowSec         |
 //+------------------------------------------------------------------+
 void RecordCloseForStreak(bool wasLoss)
 {
@@ -12553,7 +12574,7 @@ void RecordCloseForStreak(bool wasLoss)
    if(recentLosses >= InpStreakCooldownLosses)
    {
       streakPauseUntil = TimeCurrent() + InpStreakPauseSec;
-      Print("STREAK COOLDOWN: ", recentLosses, " losses in window — pausing until ",
+      Print("STREAK COOLDOWN: ", recentLosses, " losses in window - pausing until ",
             TimeToString(streakPauseUntil, TIME_SECONDS));
    }
 
@@ -12574,20 +12595,20 @@ void RecordCloseForStreak(bool wasLoss)
          if(buyLosses >= InpDirLockoutLossesNeeded)
          {
             buyLockoutUntil = TimeCurrent() + InpDirLockoutMinutes * 60;
-            Print("DIR-LOCK: BUY locked for ", InpDirLockoutMinutes, " min — ",
+            Print("DIR-LOCK: BUY locked for ", InpDirLockoutMinutes, " min - ",
                   buyLosses, "/", buyTotal, " BUYs lost. Stop fighting this side.");
          }
          if(sellLosses >= InpDirLockoutLossesNeeded)
          {
             sellLockoutUntil = TimeCurrent() + InpDirLockoutMinutes * 60;
-            Print("DIR-LOCK: SELL locked for ", InpDirLockoutMinutes, " min — ",
+            Print("DIR-LOCK: SELL locked for ", InpDirLockoutMinutes, " min - ",
                   sellLosses, "/", sellTotal, " SELLs lost. Stop fighting this side.");
          }
       }
    }
 }
 
-// v6.1.3 — Basket direction-loss block.
+// v6.1.3 - Basket direction-loss block.
 // Returns true (= block entry) if existing same-direction open trades are in a net
 // floating loss exceeding InpBasketDirLossBlockPct % of current balance.
 // Prevents the bot adding more sells into a rising gold market that is already
@@ -12599,7 +12620,7 @@ bool BasketDirectionLossBlock(int dir, string &reason)
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    if(balance <= 0) return false;
    // v6.3.2 FIX: enforce $200 minimum so the block never fires from normal spread+noise
-   // float on small accounts (e.g. 2% of $3k = $60 — one open position in mild drawdown).
+   // float on small accounts (e.g. 2% of $3k = $60 - one open position in mild drawdown).
    double threshold = -MathMax(balance * InpBasketDirLossBlockPct / 100.0, 200.0);
    double dirFloat  = 0.0;
    int    dirCount  = 0;
@@ -12619,7 +12640,7 @@ bool BasketDirectionLossBlock(int dir, string &reason)
    }
    if(dirCount > 0 && dirFloat < threshold)
    {
-      reason = StringFormat("BASKET-DIR-LOSS: %d open %s trades floating $%.2f (threshold $%.2f = %.1f%% of $%.0f balance) — no new %s entries until basket recovers",
+      reason = StringFormat("BASKET-DIR-LOSS: %d open %s trades floating $%.2f (threshold $%.2f = %.1f%% of $%.0f balance) - no new %s entries until basket recovers",
                             dirCount, dir == 1 ? "BUY" : "SELL", dirFloat, threshold,
                             InpBasketDirLossBlockPct, balance, dir == 1 ? "BUY" : "SELL");
       return true;
@@ -12850,7 +12871,7 @@ void XAU_CaptureDecisionSnapshot(int signal, string setupName, string grade,
    g_latestDecisionSnapshot.thesis          = (signal != 0)
       ? XAU_ComputeMarketThesis(signal, false, false, g_transitionDecision)
       : XAU_ComputeMarketThesis(0, false, false, g_transitionDecision);
-   // v6.24.10 — remaining decision-context fields. campaignId reflects the
+   // v6.24.10 - remaining decision-context fields. campaignId reflects the
    // EXISTING campaign this candidate would join (0 if none), reusing the
    // same g_campaign[] object, not a duplicate lookup path.
    int cSlot = XAU_CampaignSlot(signal != 0 ? signal : 1);
@@ -13195,7 +13216,7 @@ void SMC_DetectOrderBlocks(double atr)
       if(openH <= 0 || closeH <= 0) break;
 
       // === BULLISH ORDER BLOCK ===
-      // A bearish (down) H1 candle before a bullish impulse — becomes demand zone
+      // A bearish (down) H1 candle before a bullish impulse - becomes demand zone
       if(!g_smc_ob_bull.valid && closeH < openH)
       {
          // Find highest price reached since this candle (bars i-1 down to bar 1)
@@ -13221,7 +13242,7 @@ void SMC_DetectOrderBlocks(double atr)
       }
 
       // === BEARISH ORDER BLOCK ===
-      // A bullish (up) H1 candle before a bearish impulse — becomes supply zone
+      // A bullish (up) H1 candle before a bearish impulse - becomes supply zone
       if(!g_smc_ob_bear.valid && closeH > openH)
       {
          double lowestSince = DBL_MAX;
@@ -13327,12 +13348,12 @@ bool SMC_InKillZone()
 
 void SMC_Update()
 {
-   // Run once per closed M5 bar — no extra overhead on every tick
+   // Run once per closed M5 bar - no extra overhead on every tick
    datetime curBar = iTime(Symbol(), XAU_PRIMARY_DECISION_TF, 1);
    if(curBar <= 0 || curBar == g_smc_last_bar) return;
 
    double atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
-   if(atr <= 0) return;   // bufATR not yet loaded — do not stamp bar, retry next tick
+   if(atr <= 0) return;   // bufATR not yet loaded - do not stamp bar, retry next tick
 
    g_smc_last_bar = curBar;   // stamp only after confirmed good ATR
    SMC_DetectBOS(atr);
@@ -13341,7 +13362,7 @@ void SMC_Update()
 }
 
 // Returns the total SMC score bonus (positive = confluent, negative = opposed).
-// Populates smcReason string for logging. Never blocks — only adjusts score.
+// Populates smcReason string for logging. Never blocks - only adjusts score.
 double SMC_GetScoreBonus(int dir, string &smcReason)
 {
    smcReason = "";
@@ -13355,7 +13376,7 @@ double SMC_GetScoreBonus(int dir, string &smcReason)
    double obTol  = atr * InpSMC_OB_ToleranceATR;
    double fvgTol = atr * InpSMC_FVG_ToleranceATR;
 
-   // --- BOS alignment (bonus only — no penalty; existing Smart Guard / EPF handle bad-direction trades) ---
+   // --- BOS alignment (bonus only - no penalty; existing Smart Guard / EPF handle bad-direction trades) ---
    if(g_smc_bos_dir != 0 && g_smc_bos_dir == dir)
    {
       bonus += InpSMC_BOS_BonusScore;
@@ -13363,7 +13384,7 @@ double SMC_GetScoreBonus(int dir, string &smcReason)
    }
    else if(g_smc_bos_dir != 0 && g_smc_bos_dir != dir)
    {
-      // BOS opposes — log it for awareness but do NOT reduce score (keeps aggressive growth personality)
+      // BOS opposes - log it for awareness but do NOT reduce score (keeps aggressive growth personality)
       smcReason += "BOS_OPP(log_only) ";
    }
 
@@ -13413,11 +13434,11 @@ double SMC_GetScoreBonus(int dir, string &smcReason)
    return bonus;
 }
 
-// v6.7.0 ADAPTIVE ENTRY ARBITER — SMC was bonus-only (audit item #2): an
+// v6.7.0 ADAPTIVE ENTRY ARBITER - SMC was bonus-only (audit item #2): an
 // opposing BOS was logged but never cost anything, and price sitting inside
 // the OPPOSITE side's order block/FVG (exactly where that side is most
 // likely to defend) was invisible to the score. This adds a real penalty,
-// and a hard block when structure conflicts on multiple fronts at once —
+// and a hard block when structure conflicts on multiple fronts at once -
 // SMC should be able to say no, not just add bonus points.
 double SMC_GetConflictPenalty(int dir, bool &hardBlock, string &conflictReason)
 {
@@ -13442,8 +13463,8 @@ double SMC_GetConflictPenalty(int dir, bool &hardBlock, string &conflictReason)
       conflictReason += StringFormat("BOS%+d_AGAINST ", g_smc_bos_dir);
    }
 
-   // Sitting inside the OPPOSITE side's order block — the zone that side is
-   // most likely to defend — is a real structural headwind, not noise.
+   // Sitting inside the OPPOSITE side's order block - the zone that side is
+   // most likely to defend - is a real structural headwind, not noise.
    bool insideOpposingOB = (dir == 1 && g_smc_ob_bear.valid &&
                              currentPrice >= g_smc_ob_bear.low - obTol && currentPrice <= g_smc_ob_bear.high + obTol) ||
                             (dir == -1 && g_smc_ob_bull.valid &&
@@ -13467,7 +13488,7 @@ double SMC_GetConflictPenalty(int dir, bool &hardBlock, string &conflictReason)
    }
 
    // Two or more independent structural signals against the trade at once
-   // (not just one noisy BOS read) — this is where SMC should be able to
+   // (not just one noisy BOS read) - this is where SMC should be able to
    // say no outright, not merely cost points.
    if(conflicts >= 2)
    {
@@ -13482,7 +13503,7 @@ double SMC_GetConflictPenalty(int dir, bool &hardBlock, string &conflictReason)
 //| GATE 2: SESSION FILTER (UTC)                                     |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
-//| ASIA RANGE TRACKER — builds high/low during Asia session (0-7h)  |
+//| ASIA RANGE TRACKER - builds high/low during Asia session (0-7h)  |
 //| Locks when Asia ends; used by breakout setup at London/NY open    |
 //+------------------------------------------------------------------+
 void UpdateAsiaRange()
@@ -13519,7 +13540,7 @@ double GetSessionQuality()
 {
    MqlDateTime dt; TimeCurrent(dt);
    int h = dt.hour;
-   // v6.3.2: London fix windows — RAISED 0.65→0.85. The 10:00 and 15:00 London fix
+   // v6.3.2: London fix windows - RAISED 0.65->0.85. The 10:00 and 15:00 London fix
    // are high-liquidity directional events. Scoring them 0.65 was suppressing valid
    // LONDON_FIX_PIN setups below the B-grade (3.0) combined threshold.
    if((h == 10 && dt.min >= 20) || (h == 15 && dt.min <= 10)) return 0.85;
@@ -13536,7 +13557,7 @@ double GetSessionQuality()
 }
 
 //+------------------------------------------------------------------+
-//| v6.4.0 UPGRADE 1 — MARKET PERSONALITY ENGINE                    |
+//| v6.4.0 UPGRADE 1 - MARKET PERSONALITY ENGINE                    |
 //+------------------------------------------------------------------+
 
 // Returns a string label for the market personality (for logging/scorecard)
@@ -13557,7 +13578,7 @@ string MarketPersonalityStr(ENUM_MARKET_PERSONALITY p)
 }
 
 // Compute a proxy for ADX strength using EMA spread + BB bandwidth.
-// We do NOT create a new iADX handle here — we use the already-loaded
+// We do NOT create a new iADX handle here - we use the already-loaded
 // buffers (bufEMAFast, bufEMASlow, bufATR, bufBBUpper, bufBBLower, bufBBMid).
 // ADX proxy = absolute H1 EMA spread as a percentage, scaled 0-50.
 double ComputeADXProxy()
@@ -13566,7 +13587,7 @@ double ComputeADXProxy()
    double h1S = bufEMASlow_H1[1];
    if(h1S <= 0) return 20.0;
    double spread = MathAbs(bufEMAFast_H1[1] - h1S) / h1S;
-   // Map 0% → 0, 0.10% → 25, 0.14% → 35 (matches h1TrendDir thresholds in ScoreSetups)
+   // Map 0% -> 0, 0.10% -> 25, 0.14% -> 35 (matches h1TrendDir thresholds in ScoreSetups)
    // v6.17.7 FIX (regression A): was "* 10.0", a factor of 10 short of the
    // documented mapping -- 0.10% produced 2.5, not 25, so ClassifyMarketPersonality()
    // almost never crossed its ADX>20/ADX>35 thresholds and fell through to
@@ -13612,7 +13633,7 @@ ENUM_MARKET_PERSONALITY ClassifyMarketPersonality()
    double adx = ComputeADXProxy();
    if(adx > 35.0)
    {
-      // Strong trend — further classify momentum vs reversal
+      // Strong trend - further classify momentum vs reversal
       double rsi = (ArraySize(bufRSI) >= 2) ? bufRSI[1] : 50.0;
       // RSI extreme in strong trend = reversal environment
       if(rsi > 75.0 || rsi < 25.0) return MKT_REVERSAL_ENV;
@@ -13630,7 +13651,7 @@ ENUM_MARKET_PERSONALITY ClassifyMarketPersonality()
       return MKT_WEAK_TREND;
    }
 
-   // RSI extreme check (HTF — use M15 RSI as proxy for "HTF")
+   // RSI extreme check (HTF - use M15 RSI as proxy for "HTF")
    {
       double rsiH = (ArraySize(bufRSI_M15) >= 2) ? bufRSI_M15[1] : 50.0;
       if(rsiH > 75.0 || rsiH < 25.0) return MKT_REVERSAL_ENV;
@@ -13706,7 +13727,7 @@ bool StrategyFitsPersonality(string setupName, ENUM_MARKET_PERSONALITY personali
    return true;   // default: allow
 }
 
-// v6.4.0 UPGRADE 2 — StratNameToIndex: maps strategy name string to 1-9 index
+// v6.4.0 UPGRADE 2 - StratNameToIndex: maps strategy name string to 1-9 index
 int StratNameToIndex(string setupName)
 {
    if(StringFind(setupName, "TREND_PULLBACK")  >= 0) return 1;
@@ -13722,7 +13743,7 @@ int StratNameToIndex(string setupName)
    return 0;
 }
 
-// v6.4.0 UPGRADE 3 — Calibrated confidence
+// v6.4.0 UPGRADE 3 - Calibrated confidence
 double CalibratedConfidence(int rawConf)
 {
    if(!g_calibrationLoaded) return (double)rawConf;
@@ -13733,7 +13754,7 @@ double CalibratedConfidence(int rawConf)
    return rawConf * mult;
 }
 
-// v6.4.0 UPGRADE 4 — Decision Scorecard
+// v6.4.0 UPGRADE 4 - Decision Scorecard
 // Writes a structured scorecard entry for every evaluated signal.
 void WriteDecisionScorecard(int signal, string setupName, string grade,
                              double setupScore, double combinedScore,
@@ -13760,12 +13781,12 @@ void WriteDecisionScorecard(int signal, string setupName, string grade,
    FileWrite(fh, "AI verdict:         " + aiVerdict + " | Confidence: " + IntegerToString(aiConf) + "% | Source: " + consensusSource);
    FileWrite(fh, "TradeBrain:         WR=" + DoubleToString(tbWinRate*100.0, 1) + "% samples=" + IntegerToString(tbSamples));
    FileWrite(fh, "Strategy weight:    " + wStr);
-   FileWrite(fh, "Outcome:            " + (tradeOpened ? "TRADE OPENED" : "BLOCKED — " + blockReason));
+   FileWrite(fh, "Outcome:            " + (tradeOpened ? "TRADE OPENED" : "BLOCKED - " + blockReason));
    FileWrite(fh, "");
    FileClose(fh);
 }
 
-// v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER — single, structured, parseable log line
+// v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER - single, structured, parseable log line
 // for every entry decision (ENTER, BLOCK, WAIT, REDUCE_SIZE), so the Command
 // Center dashboard can render one clean record per decision instead of
 // reconstructing it from scattered Prints. Deliberately key=value, easy to
@@ -13784,7 +13805,7 @@ void XAU_LogBotDecision(string action, int direction, string setupName, string g
                smcState, htfState, aiView, memoryView, finalReason);
 }
 
-// v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER — one clean, dashboard-ready status line
+// v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER - one clean, dashboard-ready status line
 // per open position, per evaluation. Pure observability: reads existing
 // TTM/profit-floor state, changes nothing. This is what lets a human (or
 // the Command Center UI) see "is the thesis still alive" without piecing
@@ -13822,7 +13843,7 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
       barsHeld     = g_ttm[ttmIdx].barsHeld;
       tradeAgeMinutes = (int)MathMax(0, (TimeCurrent() - g_ttm[ttmIdx].entryTime) / 60);
 
-      // v6.8.0 TRI — a trade currently in Recovery Mode takes priority over
+      // v6.8.0 TRI - a trade currently in Recovery Mode takes priority over
       // the generic pullback/warning read, since it's a more specific and
       // more informative state ("recovering from a near-SL event" vs just
       // "pulled back").
@@ -13841,7 +13862,7 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
          recoveryClassification = "FAILED";
          recoveryWorstPct = g_ttm[ttmIdx].triWorstAdversePct * 100.0;
          state = "warning";
-         holdReason = "Recovery stalled after a near-SL event, but not force-exiting — still riding normal SL management, exactly as intended";
+         holdReason = "Recovery stalled after a near-SL event, but not force-exiting - still riding normal SL management, exactly as intended";
          nextAction = "HOLD";
       }
       else if(g_ttm[ttmIdx].thesisBroken)
@@ -13853,18 +13874,18 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
       else if(liveScore < 45)
       {
          state = "warning";
-         holdReason = StringFormat("thesis score %.0f/100 weakening — watching for confirmation before acting", liveScore);
+         holdReason = StringFormat("thesis score %.0f/100 weakening - watching for confirmation before acting", liveScore);
          nextAction = "WATCH_CLOSELY";
       }
       else if(profit < peak * 0.7 && peak > 0)
       {
          state = "pullback";
-         holdReason = StringFormat("thesis score %.0f/100 still intact — treating as normal retracement", liveScore);
+         holdReason = StringFormat("thesis score %.0f/100 still intact - treating as normal retracement", liveScore);
          nextAction = "HOLD";
       }
       else
       {
-         holdReason = StringFormat("thesis score %.0f/100 — original entry reason still valid", liveScore);
+         holdReason = StringFormat("thesis score %.0f/100 - original entry reason still valid", liveScore);
          nextAction = protectedProfit > 0 ? "HOLD_PROTECTED" : "HOLD";
       }
    }
@@ -13896,7 +13917,7 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
                direction, lotsOpen, tradeAgeMinutes, setupType, grade,
                aiConfidence, holdProbability, exitProbability);
 
-   // v6.9.0 — this used to be local-only (MT5 journal Print, never left the
+   // v6.9.0 - this used to be local-only (MT5 journal Print, never left the
    // terminal). The Command Center's "Open Trade Thinking" panel needs this
    // exact data (thesis health, hold/protect/exit reasons, recovery-mode
    // status, distance to SL/TP), so it now also posts to the cloud, one
@@ -13985,10 +14006,10 @@ void LoadStratWeights()
 // ============================================================
 // ADAPTIVE DIRECTION ENGINE v2 (June 17-18 reconstruction)
 // ============================================================
-//   1. HTF Bias        — g_htfConsensusDir (+ currentRegime for RANGE) —
+//   1. HTF Bias        - g_htfConsensusDir (+ currentRegime for RANGE) -
 //                         context only, never a permission gate.
-//   2. Active Direction — the 5-state gate below, tiered WEAK/MEDIUM/STRONG.
-//   3. Short-term structure — one canonical assessment per bar: a BOS-level
+//   2. Active Direction - the 5-state gate below, tiered WEAK/MEDIUM/STRONG.
+//   3. Short-term structure - one canonical assessment per bar: a BOS-level
 //                         swing break (CleanStructureLevels, long lookback),
 //                         a CHoCH-level break (same primitive, short
 //                         lookback), a swing-sequence read (HH/HL vs LH/LL,
@@ -14001,8 +14022,8 @@ void LoadStratWeights()
 // v1 (shipped v6.15.0) only had the BOS-level break + H1 BOS as its two
 // tiers. v2 adds: the swing-sequence read, which is what lets a normal
 // pullback (HH/HL or LH/LL sequence still intact) be told apart from an
-// actual breakdown/reversal (sequence broken) — the explicit goal of this
-// upgrade — and a WEAK tier (CHoCH-level warning / failed continuation) that
+// actual breakdown/reversal (sequence broken) - the explicit goal of this
+// upgrade - and a WEAK tier (CHoCH-level warning / failed continuation) that
 // pauses the weakening direction without forcing a flip.
 
 // --- Swing-sequence scan: last 2 confirmed 3-bar fractal swing highs/lows
@@ -14010,11 +14031,11 @@ void LoadStratWeights()
 // intact), -1 = lower-high+lower-low (bearish structure intact), 0 = mixed/
 // transitional (first sign of deterioration, not yet a confirmed reversal).
 // Nothing already in the file tracks a *sequence* of swing points (only a
-// single rolling swingHigh/swingLow) — this is new, but it is one
+// single rolling swingHigh/swingLow) - this is new, but it is one
 // self-contained scan, not a family of detectors.
 // tf parameter added (v2.1) so the same fractal-swing scan serves both M5
 // and M15 without a second duplicated detector. lastSwingHigh/lastSwingLow
-// output the most recent confirmed fractal pivot in each direction — the
+// output the most recent confirmed fractal pivot in each direction - the
 // textbook CHoCH trigger level (break of the most recent minor swing point
 // against the trend), used by the caller instead of a separate rolling-
 // window proxy.
@@ -14057,11 +14078,11 @@ int XAU_SwingSequenceDir(ENUM_TIMEFRAMES tf, int lookbackBars, string &why,
       why = StringFormat("LH/LL intact (highs %.2f<%.2f, lows %.2f<%.2f)", highs[0], highs[1], lows[0], lows[1]);
       return -1;
    }
-   why = StringFormat("mixed sequence (highs %.2f/%.2f lows %.2f/%.2f) — transitional", highs[0], highs[1], lows[0], lows[1]);
+   why = StringFormat("mixed sequence (highs %.2f/%.2f lows %.2f/%.2f) - transitional", highs[0], highs[1], lows[0], lows[1]);
    return 0;
 }
 
-// v6.24.4 STRUCTURAL SL — reuses XAU_SwingSequenceDir's already-computed M5
+// v6.24.4 STRUCTURAL SL - reuses XAU_SwingSequenceDir's already-computed M5
 // swing pivots (no new indicator math) to find where the trade thesis is
 // genuinely wrong, instead of an arbitrary ATR multiple. Falls back to the
 // existing pure-ATR distance (SL_EMERGENCY_VOLATILITY_INVALIDATION, today's
@@ -14109,7 +14130,7 @@ void XAU_ComputeStructuralSL(int signal, double atr, double entryPrice, double a
    finalDist = candidateDist;
 }
 
-// v6.24.4 TRADE HORIZON CLASSIFIER — reads the already-computed
+// v6.24.4 TRADE HORIZON CLASSIFIER - reads the already-computed
 // XAU_AdaptiveTransitionDecision (g_transitionDecision, refreshed every
 // closed bar by XAU_AdaptiveMarketTransitionEngine) instead of new signal
 // math. remainingRewardR/oppositeRemainingRewardR are already in R-multiples
@@ -14139,7 +14160,7 @@ ENUM_XAU_TRADE_HORIZON XAU_ClassifyTradeHorizon(int signal, bool isPyramidAdd,
    return XAU_HORIZON_INTRADAY_TREND;
 }
 
-// v6.24.8 — bucket the six evidence sources into the named states, then
+// v6.24.8 - bucket the six evidence sources into the named states, then
 // the one priority-ordered action. Every input value read below already
 // existed before this function; nothing here computes a new signal.
 ENUM_XAU_LOCATION_QUALITY XAU_BucketLocation(const XAU_AdaptiveTransitionDecision &td)
@@ -14202,7 +14223,7 @@ ENUM_XAU_STRUCTURE_STATE XAU_BucketStructure(int signal, string &smcReason)
    return STRUCTURE_MIXED;
 }
 
-// v6.24.12 — buckets td.buyConfidence/sellConfidence (both already computed,
+// v6.24.12 - buckets td.buyConfidence/sellConfidence (both already computed,
 // 0-100 scale via XAU_ATClamp). A forming/neutral transition is reported as
 // PRESSURE_TRANSITIONING regardless of the raw confidence numbers, since
 // during that lifecycle window the two sides' confidence values are
@@ -15954,7 +15975,7 @@ void XAU_AssessFailureAndSweep(double atr, bool &failedContUp, bool &failedContD
 // Failed breakout, distinct from failed-continuation: failed-continuation
 // (above) is an established trend stalling after a fresh extreme;
 // failed-breakout is price breaking OUT of a defined range/swing and then
-// closing back INSIDE it within a few bars — a range rejecting the breakout
+// closing back INSIDE it within a few bars - a range rejecting the breakout
 // attempt, not a trend running out of steam.
 //
 // v6.17.7 REBUILD (regression D): this used to receive the CALLER's
@@ -16030,7 +16051,7 @@ ENUM_XAU_ACTIVE_DIRECTION XAU_ResolveOrReleaseTransitionWait(int enteringStreak,
    g_transitionWaitStreak = enteringStreak + 1;
    if(InpMaxTransitionWaitBars > 0 && g_transitionWaitStreak > InpMaxTransitionWaitBars)
    {
-      reason = StringFormat("TRANSITION_WAIT PERSISTED: %d consecutive M5 bars (legacy cap=%d ignored by v6.23.1) — no time/bar-count release; only proven continuation reset or opposite confirmation may change authority | prior reason: %s",
+      reason = StringFormat("TRANSITION_WAIT PERSISTED: %d consecutive M5 bars (legacy cap=%d ignored by v6.23.1) - no time/bar-count release; only proven continuation reset or opposite confirmation may change authority | prior reason: %s",
                             g_transitionWaitStreak, InpMaxTransitionWaitBars, reason);
       return DIRECTION_TRANSITION_WAIT;
    }
@@ -16056,7 +16077,7 @@ ENUM_XAU_ACTIVE_DIRECTION XAU_ComputeActiveDirection(int htfBias, string &reason
 
    if(c1 <= 0 || atrNow <= 0 || swingLow >= DBL_MAX || swingHigh <= -DBL_MAX)
    {
-      reason = "insufficient closed-bar data — staying flat rather than guessing";
+      reason = "insufficient closed-bar data - staying flat rather than guessing";
       return DIRECTION_NO_TRADE;
    }
 
@@ -16066,10 +16087,10 @@ ENUM_XAU_ACTIVE_DIRECTION XAU_ComputeActiveDirection(int htfBias, string &reason
    bool bosBull = (g_smc_bos_dir == 1);
    bool bosBear = (g_smc_bos_dir == -1);
 
-   // M5 swing sequence — also yields the most recent confirmed fractal pivot
+   // M5 swing sequence - also yields the most recent confirmed fractal pivot
    // levels, which become the CHoCH trigger levels below (the textbook
    // definition: break of the most recent MINOR swing point against the
-   // trend — not a relabeled rolling-window proxy).
+   // trend - not a relabeled rolling-window proxy).
    string seqWhy = "";
    double m5LastSwingHigh = 0.0, m5LastSwingLow = 0.0;
    int seqDir = XAU_SwingSequenceDir(XAU_PRIMARY_DECISION_TF, MathMax(30, InpCleanStructureLookback * 2), seqWhy,
@@ -16077,7 +16098,7 @@ ENUM_XAU_ACTIVE_DIRECTION XAU_ComputeActiveDirection(int htfBias, string &reason
    bool chochBear = (m5LastSwingLow  > 0 && c1 < m5LastSwingLow  - structBuf);
    bool chochBull = (m5LastSwingHigh > 0 && c1 > m5LastSwingHigh + structBuf);
 
-   // M15 structure — a second, coarser confirmation timeframe. Same fractal
+   // M15 structure - a second, coarser confirmation timeframe. Same fractal
    // scan reused via the tf parameter, not a duplicated detector. Feeds the
    // STRONG tier's "M5/M15 alignment" requirement and softens/removes the
    // BOS-confirmation requirement when M15 itself has already turned.
@@ -16116,7 +16137,7 @@ ENUM_XAU_ACTIVE_DIRECTION XAU_ComputeActiveDirection(int htfBias, string &reason
    string breakoutWhy = "";
    XAU_AssessFailedBreakout(swingHigh, swingLow, breakoutWhy, failedBreakoutUp, failedBreakoutDown);
    // A failed breakout is itself a failed-continuation-class warning for
-   // whichever side attempted it — fold it in rather than run a fourth
+   // whichever side attempted it - fold it in rather than run a fourth
    // separate branch of tier logic for it.
    failedContUp   = failedContUp   || failedBreakoutUp;
    failedContDown = failedContDown || failedBreakoutDown;
@@ -16124,7 +16145,7 @@ ENUM_XAU_ACTIVE_DIRECTION XAU_ComputeActiveDirection(int htfBias, string &reason
 
    // Repeated-failed-continuation streak, direction-tagged, updated once per
    // closed bar (feeds the STRONG-tier "repeated failure + structural break"
-   // condition — not a session-length flag, self-resets the moment the
+   // condition - not a session-length flag, self-resets the moment the
    // failure pattern stops repeating).
    int failDirNow = failedContUp ? 1 : (failedContDown ? -1 : 0); // 1 = the BUY side keeps failing, -1 = the SELL side keeps failing
    static datetime lastFailBarTime = 0;
@@ -16175,7 +16196,7 @@ ENUM_XAU_ACTIVE_DIRECTION XAU_ComputeActiveDirection(int htfBias, string &reason
                                (htfBias == -1 && (chochBull || failedContDown || sweepRejUp)));
    if(htfBias != 0 && sequenceStillAgrees && noBosLevelBreakAgainst && noWeakSignalEither)
    {
-      reason = StringFormat("normal pullback — swing sequence intact (%s), no opposing structure signal", seqWhy);
+      reason = StringFormat("normal pullback - swing sequence intact (%s), no opposing structure signal", seqWhy);
       return DIRECTION_BOTH_ALLOWED;
    }
 
@@ -16216,8 +16237,8 @@ ENUM_XAU_ACTIVE_DIRECTION XAU_ComputeActiveDirection(int htfBias, string &reason
    // ---- MEDIUM opposite confirmation ----
    // BOS-level M5 break alone (H1 BOS not yet confirming), OR a strong
    // displacement candle with sweep+rejection support. Opposite direction
-   // becomes eligible at reduced size — a tactical trade, not full
-   // conviction — unless HTF is still actively fighting it, in which case
+   // becomes eligible at reduced size - a tactical trade, not full
+   // conviction - unless HTF is still actively fighting it, in which case
    // wait rather than force it.
    double o1m = iOpen(Symbol(), XAU_PRIMARY_DECISION_TF, 1);
    bool dispUp   = (c1 - o1m) >= atrNow * 0.5;
@@ -16261,7 +16282,7 @@ ENUM_XAU_ACTIVE_DIRECTION XAU_ComputeActiveDirection(int htfBias, string &reason
       return XAU_ResolveOrReleaseTransitionWait(enteringTransitionWaitStreak, reason);
    }
 
-   reason = StringFormat("no fresh opposing structure — HTF is context only, both directions structurally open | seq=%s", seqWhy);
+   reason = StringFormat("no fresh opposing structure - HTF is context only, both directions structurally open | seq=%s", seqWhy);
    return DIRECTION_BOTH_ALLOWED;
 }
 
@@ -16530,7 +16551,7 @@ void XAU_ATMarkOpportunityEntry(int direction,double price,string source)
    if(direction==1) g_reversalOpportunity.impulsePeak=MathMax(g_reversalOpportunity.impulsePeak,price);
    else g_reversalOpportunity.impulsePeak=MathMin(g_reversalOpportunity.impulsePeak,price);
    XAU_ATSavePersistentState();
-   PrintFormat("REVERSAL_OPPORTUNITY_CONSUMED id=%s source=%s direction=%s entryPrice=%.2f — another entry requires evidence-based value reset",
+   PrintFormat("REVERSAL_OPPORTUNITY_CONSUMED id=%s source=%s direction=%s entryPrice=%.2f - another entry requires evidence-based value reset",
                XAU_ATReversalOpportunityId(),source,direction==1?"BUY":"SELL",price);
 }
 
@@ -16639,7 +16660,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    double c1 = iClose(Symbol(), XAU_PRIMARY_DECISION_TF, 1);
    if(bar <= 0 || atr <= 0.0 || c1 <= 0.0)
    {
-      d.reason = "closed-bar/ATR evidence unavailable — fail closed in ACTIVE";
+      d.reason = "closed-bar/ATR evidence unavailable - fail closed in ACTIVE";
       d.continuationEntryPaused = true;
       // v6.25.3 -- genuine data-unavailability signal, kept separate from
       // continuationEntryPaused (see struct comment). This is the only
@@ -16651,7 +16672,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
       return d;
    }
 
-   // v6.24.18 owner directive 2026-07-16 (Signal-Evidence Integrity) — a
+   // v6.24.18 owner directive 2026-07-16 (Signal-Evidence Integrity) - a
    // closed primary bar existing is not the same fact as it being RECENT. A
    // feed gap/disconnection can leave iTime()/iClose() returning the last
    // bar that ever arrived, arbitrarily old, while this function keeps
@@ -16708,7 +16729,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    // M5 -- each therefore covers proportionally more real time than before
    // (e.g. the 8-bar absorption window was 40min on M5, is 80min on M10).
    // This is an intentional, low-risk consequence of "more complete candle
-   // information per decision" (owner spec Part 2 §18) and deliberately
+   // information per decision" (owner spec Part 2 Sec.18) and deliberately
    // does NOT re-derive the scoring weights/divisors below (55.0/30.0/8.0
    // etc.) -- those are tightly coupled, untested-off-platform constants
    // that the owner's own rules forbid changing without explicit
@@ -16803,7 +16824,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    else if(realContinuationReset)
       g_transitionPersistentExhaustion=MathMax(rawExhaustion,g_transitionPersistentExhaustion-10.0);
    d.exhaustionProbability=XAU_ATClamp(g_transitionPersistentExhaustion);
-   // v6.24.18 Signal-Evidence Integrity — every component that fed
+   // v6.24.18 Signal-Evidence Integrity - every component that fed
    // rawExhaustion/exhaustionProbability, named and logged together, so a
    // live reading can always be traced back to the exact real closed-bar
    // evidence that produced it. All fields on the right are the SAME
@@ -16826,7 +16847,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    if(d.exhaustionProbability>=80.0) d.transitionProbability=XAU_ATClamp(d.transitionProbability+8.0);
    d.reversalProbability = XAU_ATClamp(d.transitionProbability*0.55 + (d.oppositeReclaim?15.0:0.0) + (d.oppositeRetestHeld?12.0:0.0) + (d.oppositeDisplacement?12.0:0.0));
    d.trendHealth = XAU_ATClamp(d.continuationConfidence - d.exhaustionProbability*0.35);
-   // v6.24.18 Signal-Evidence Integrity — buyConfidence/sellConfidence are
+   // v6.24.18 Signal-Evidence Integrity - buyConfidence/sellConfidence are
    // NOT a naive 100-minus-the-other split: whichever side is dominant
    // reads continuationConfidence (its own trend-continuation formula,
    // built from oldBars/freshProgress/absorption/oppositeMomentum above);
@@ -16984,7 +17005,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
          g_reversalOpportunity.expectedPullbackPrice=c1;
          g_reversalOpportunity.state=REVERSAL_VALUE_RESET;
          g_reversalOpportunity.contradictionBars=0;
-         PrintFormat("REVERSAL_VALUE_RESET id=%s method=%s price=%.2f distanceFromValue=%.2fATR reward=%.2fR — same elapsed time alone cannot create this reset",
+         PrintFormat("REVERSAL_VALUE_RESET id=%s method=%s price=%.2f distanceFromValue=%.2fATR reward=%.2fR - same elapsed time alone cannot create this reset",
                      XAU_ATReversalOpportunityId(),pullbackReset?"ATR_PULLBACK":"STRUCTURE_RETEST_BASE",c1,d.distanceFromValueATR,d.oppositeRemainingRewardR);
       }
       int opportunityAgeBars=(g_reversalOpportunity.createdAt>0)?(int)((bar-g_reversalOpportunity.createdAt)/PeriodSeconds(XAU_PRIMARY_DECISION_TF)):0;
@@ -16996,7 +17017,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
       {
          g_reversalOpportunity.state=REVERSAL_OPPORTUNITY_EXPIRED;
          g_reversalOpportunity.impulseConsumedByEntry=true;
-         PrintFormat("REVERSAL_OPPORTUNITY_EXPIRED id=%s ageBars=%d contradictionBars=%d evidenceStale=%s — exhaustion remains authoritative until genuine continuation reset",
+         PrintFormat("REVERSAL_OPPORTUNITY_EXPIRED id=%s ageBars=%d contradictionBars=%d evidenceStale=%s - exhaustion remains authoritative until genuine continuation reset",
                      XAU_ATReversalOpportunityId(),opportunityAgeBars,g_reversalOpportunity.contradictionBars,evidenceStale?"true":"false");
       }
       bool liveBeyondInitialZone=trackedDir==1?c1>g_reversalOpportunity.latestAcceptablePrice:c1<g_reversalOpportunity.latestAcceptablePrice;
@@ -17115,7 +17136,7 @@ string XAU_AdaptiveEntrySource(string reason, string fallback)
 }
 
 // ===========================================================================
-// v6.24.18 owner correction 2026-07-16 — CANONICAL EXHAUSTION DECISION
+// v6.24.18 owner correction 2026-07-16 - CANONICAL EXHAUSTION DECISION
 // ===========================================================================
 // "Exhaustion >= 80% => automatically reverse direction" is explicitly
 // wrong and does not exist anywhere in this file (grep confirms no branch
@@ -17434,7 +17455,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
    double upperWick = high1 - MathMax(open1, close1);
 
    // ====================================================================
-   // v5.4.0 — HTF TREND-STRENGTH GATE (the missing piece)
+   // v5.4.0 - HTF TREND-STRENGTH GATE (the missing piece)
    // Measures how strongly H1 is trending. Counter-trend mean-reversion
    // setups (RANGE_REVERSAL, RSI_EXTREME, LONDON_FIX_PIN, MULTI_EXTREME)
    // get a HARD VETO if H1 trend is strong against them. This is the
@@ -17448,11 +17469,11 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
    if(h1Spread >  0.0015) h1TrendDir =  1;     // EMA-fast > 0.15% above slow = clear uptrend
    if(h1Spread < -0.0015) h1TrendDir = -1;     // EMA-fast < 0.15% below slow = clear downtrend
    // Stretch detector: how far has price moved off the H1 fast EMA?
-   // If price is already 1.5×ATR away from H1 EMA fast, fading it is suicide.
+   // If price is already 1.5xATR away from H1 EMA fast, fading it is suicide.
    double h1Distance = (atr > 0) ? MathAbs(close1 - h1F) / atr : 0;
    bool   h1Stretched = h1Distance > 1.5;
 
-   // v6.1.3 — HTF (context-TF / M30) trend direction for anti-trend veto
+   // v6.1.3 - HTF (context-TF / M30) trend direction for anti-trend veto
    // bufEMAFast_H4 / bufEMASlow_H4 are loaded from InpContextTF (locked M10 in this build).
    double htfF = (ArraySize(bufEMAFast_H4) >= 2) ? bufEMAFast_H4[1] : 0.0;
    double htfS = (ArraySize(bufEMASlow_H4) >= 2) ? bufEMASlow_H4[1] : 0.0;
@@ -17468,7 +17489,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
    g_htfConsensusDir = htfBullConsensus ? 1 : (htfBearConsensus ? -1 : 0);
 
    // June 17-18 reconstruction: recompute Active Direction fresh every closed
-   // M5 bar (ScoreSetups only runs on a new bar) — HTF bias above is context,
+   // M5 bar (ScoreSetups only runs on a new bar) - HTF bias above is context,
    // this is what actually gates direction.
    g_activeDirection = XAU_ComputeActiveDirection(g_htfConsensusDir, g_activeDirectionReason);
    string htfBiasLabel = (currentRegime == REGIME_RANGING || currentRegime == REGIME_CHOPPY) ? "Range" :
@@ -17478,7 +17499,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
                (g_activeDirection == DIRECTION_BUY_ONLY)  ? "buy allowed" :
                (g_activeDirection == DIRECTION_SELL_ONLY) ? "sell allowed" :
                (g_activeDirection == DIRECTION_BOTH_ALLOWED) ? "both allowed" :
-               (g_activeDirection == DIRECTION_TRANSITION_WAIT) ? "transition wait — flat preferred over forced entry" : "no trade");
+               (g_activeDirection == DIRECTION_TRANSITION_WAIT) ? "transition wait - flat preferred over forced entry" : "no trade");
 
    int bestDir = 0;
    double bestScore = 0;
@@ -17488,11 +17509,11 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
    // === SETUP 1: TREND PULLBACK ===
    // v5.8.0: DATA-DRIVEN KILL. 74 trades, 50% WR, -$48,961 net (PF 0.38).
    // This setup was responsible for 80% of historical losses. DISABLED.
-   // v6.1.4: HTF OVERRIDE — when H1+HTF consensus is active, also allow this setup
+   // v6.1.4: HTF OVERRIDE - when H1+HTF consensus is active, also allow this setup
    // in RANGING and LOW_VOL regimes so the bot buys M5 dips within a confirmed H1
    // bull trend (or sells M5 rallies within a confirmed H1 bear trend).
    // Without this, htfBullConsensus blocked all SELLs AND M5 RANGING/LOW_VOL had no
-   // BUY setup → bot sat silent all day even while gold trended up.
+   // BUY setup -> bot sat silent all day even while gold trended up.
    if(InpAllowTrendPullback &&
       (currentRegime == REGIME_TRENDING_UP || currentRegime == REGIME_TRENDING_DOWN ||
        (htfBullConsensus && currentRegime != REGIME_DEAD) ||
@@ -17569,7 +17590,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
    }
 
    // === SETUP 2: RANGE REVERSAL ===
-   // v5.4.0 — HARD VETO when H1 is strongly trending against. Catching the
+   // v5.4.0 - HARD VETO when H1 is strongly trending against. Catching the
    // bottom of a strong downtrend is the #1 cause of historical losses.
    if(currentRegime == REGIME_RANGING || currentRegime == REGIME_LOW_VOL || currentRegime == REGIME_CHOPPY)
    {
@@ -17601,9 +17622,9 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
       }
       { double sw = s * g_stratWeight[2]; if(sw > bestScore && dir != excludeDir) { bestScore = sw; bestDir = dir; bestName = "RANGE_REVERSAL"; bestType = 2; } }
 
-      // SELL at upper BB — v6.3.2: allow neutral H1 (h1TrendDir <= 0) matching BUY symmetry.
+      // SELL at upper BB - v6.3.2: allow neutral H1 (h1TrendDir <= 0) matching BUY symmetry.
       // BUY allows h1TrendDir >= 0 (neutral or bullish). SELL was requiring h1TrendDir == -1 only,
-      // creating a bullish bias in RANGING — SELL setups needed confirmed bearish H1 while BUY
+      // creating a bullish bias in RANGING - SELL setups needed confirmed bearish H1 while BUY
       // only needed non-bearish. Hard-block on HTF bull consensus preserved --
       // UNLESS Active Direction has already confirmed SELL via fresh M5+M15
       // structure (same stale-HTF-veto gap fixed in TREND_PULLBACK/SQUEEZE_RELEASE
@@ -17653,7 +17674,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
    }
 
    // === SETUP 4: SQUEEZE RELEASE ===
-   // v6.1.3: added H1 trend gate — no short-squeeze sells during H1 uptrend
+   // v6.1.3: added H1 trend gate - no short-squeeze sells during H1 uptrend
    {
       double bbW = (bbU - bbL) / close1 * 100;
       double prevW = 0;
@@ -17687,7 +17708,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
          }
          // v6.4.2 FIX: Only apply weight and bestScore check when s > 0. Previously s=0 (counter-trend
          // block) was multiplied by g_stratWeight[4] producing 0, which could win bestScore when all
-         // other setups also produced 0 — causing a direction 1 or -1 trade on an invalidated squeeze.
+         // other setups also produced 0 - causing a direction 1 or -1 trade on an invalidated squeeze.
          if(s > 0)
          {
             s *= g_stratWeight[4]; // v6.4.0: adaptive weight for SQUEEZE_RELEASE
@@ -17708,7 +17729,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
    }
 
    // === SETUP 6: LONDON FIX PIN ===
-   // v6.1.3: CRITICAL FIX — added H1 trend gate. Fading a spike into a strong bull
+   // v6.1.3: CRITICAL FIX - added H1 trend gate. Fading a spike into a strong bull
    // trend is suicide. Only fade spikes that go AGAINST H1 trend (i.e. a down-spike
    // in a downtrend = buy; an up-spike in an uptrend = DO NOT sell).
    {
@@ -17718,10 +17739,10 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
       {
          double s = 1.5; int dir = 0;
          double move = close1 - iClose(Symbol(), XAU_PRIMARY_DECISION_TF, 4);
-         // Spike up → fade sell ONLY if H1 is NOT bullish (don't sell gold bull spikes) --
+         // Spike up -> fade sell ONLY if H1 is NOT bullish (don't sell gold bull spikes) --
          // unless Active Direction has already confirmed SELL via fresh M5+M15 structure.
          if(move > atr * 0.8 && (g_activeDirection == DIRECTION_SELL_ONLY || (h1TrendDir != 1 && !htfBullConsensus))) { dir = -1; s += 1.5; }
-         // Spike down → fade buy ONLY if H1 is NOT bearish (don't buy gold bear spikes) --
+         // Spike down -> fade buy ONLY if H1 is NOT bearish (don't buy gold bear spikes) --
          // unless Active Direction has already confirmed BUY via fresh M5+M15 structure.
          if(move < -atr * 0.8 && (g_activeDirection == DIRECTION_BUY_ONLY || (h1TrendDir != -1 && !htfBearConsensus))) { dir = 1; s += 1.5; }
          if(dir == 1 && rsi < 40) s += 1.0;
@@ -17732,7 +17753,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
       }
    }
 
-   // === SETUP 7: DXY REVERSAL (simplified — use RSI divergence proxy) ===
+   // === SETUP 7: DXY REVERSAL (simplified - use RSI divergence proxy) ===
    {
       // When gold RSI is oversold AND price at BB lower = likely bounce
       // When gold RSI is overbought AND price at BB upper = likely drop
@@ -17762,7 +17783,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
       if(dt.hour >= 7 && dt.hour < 17)
       {
          double rangeSize = asiaRangeHigh - asiaRangeLow;
-         // Only trust the break if Asia range isn't microscopic (>= 0.3 * ATR*10 ≈ reasonable size)
+         // Only trust the break if Asia range isn't microscopic (>= 0.3 * ATR*10 ~= reasonable size)
          if(rangeSize > atr * 1.5)
          {
             double s = 0; int dir = 0;
@@ -17816,7 +17837,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
       double s = 0;
 
       // v6.7.0 ADAPTIVE ENTRY ARBITER (audit item #1): HTF consensus alone
-      // used to be enough to fire this setup — "H1+HTF agree" with no
+      // used to be enough to fire this setup - "H1+HTF agree" with no
       // requirement for an actual entry trigger, which is exactly the lazy
       // late-entry pattern the audit flagged. Now require at least ONE real
       // trigger: a pullback into fair value (near the M5 EMA), a confirmed
@@ -17848,7 +17869,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
          hasRealTrigger = (hasRealTrigger && htfEntryQualityTrigger);
 
       // June 17-18 reconstruction: this is the setup the direction-lock
-      // complaint names directly — it used to require only HTF consensus
+      // complaint names directly - it used to require only HTF consensus
       // (+ a value/retest trigger since v6.7.0), with nothing checking
       // whether short-term M5 structure actually still agrees. Active
       // Direction (computed above from a fresh closed-bar M5 structure
@@ -17858,7 +17879,7 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
          ? (g_activeDirection == DIRECTION_BUY_ONLY  || g_activeDirection == DIRECTION_BOTH_ALLOWED)
          : (g_activeDirection == DIRECTION_SELL_ONLY || g_activeDirection == DIRECTION_BOTH_ALLOWED);
       if(!directionAllowsHtfTf && hasRealTrigger && InpSMC_Log)
-         Print("HTF_TREND_FOLLOW: withheld — Active Direction=", EnumToString(g_activeDirection),
+         Print("HTF_TREND_FOLLOW: withheld - Active Direction=", EnumToString(g_activeDirection),
                " (", g_activeDirectionReason, ") does not permit ", dir == 1 ? "BUY" : "SELL",
                " regardless of HTF consensus");
       hasRealTrigger = hasRealTrigger && directionAllowsHtfTf;
@@ -17895,18 +17916,18 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
          Print("HTF_TREND_FOLLOW: consensus present but no quality entry trigger (needs value/retest or BOS+momentum near EMA; emaDistATR=",
                DoubleToString(emaDistanceATR, 2), ", valueRetest=", valueRetestTrigger ? "Y" : "N",
                ", structureMomentum=", structureMomentumTrigger ? "Y" : "N",
-               ", newsMomentum=", newsMomentumTrigger ? "Y" : "N", ") — setup withheld");
+               ", newsMomentum=", newsMomentumTrigger ? "Y" : "N", ") - setup withheld");
       s *= g_stratWeight[9]; // v6.4.0: adaptive weight for HTF_TREND_FOLLOW
       if(s > bestScore && dir != excludeDir) { bestScore = s; bestDir = dir; bestName = "HTF_TREND_FOLLOW"; bestType = 9; }
    }
 
-   // v6.1.3 — GLOBAL ANTI-TREND VETO (last line of defence)
+   // v6.1.3 - GLOBAL ANTI-TREND VETO (last line of defence)
    // When H1 + context-TF are both clearly trending, block mean-reversion counter-trend
    // signals regardless of which setup generated them. Exemptions:
    //   type 1 = TREND_PULLBACK (direction forced to HTF in v6.1.4)
    //   type 3 = BREAKOUT (regime-aligned)
    //   type 8 = ASIA_BREAKOUT (range-break, can be in consensus direction)
-   //   type 9 = HTF_TREND_FOLLOW (v6.2.0 — always in HTF consensus direction, never counter-trend)
+   //   type 9 = HTF_TREND_FOLLOW (v6.2.0 - always in HTF consensus direction, never counter-trend)
    //
    // v6.17.2 FIX: this veto sat AFTER every setup's own direction logic and re-applied
    // the pre-Direction-Engine assumption "HTF+H1 agreement always wins" -- undoing the
@@ -17923,14 +17944,14 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
    if(bestDir == -1 && htfBullConsensus && !activeDirectionConfirmsSell &&
       bestType != 1 && bestType != 3 && bestType != 8 && bestType != 9)
    {
-      Print("ANTI-TREND VETO: H1+HTF both BULL — SELL blocked | setup=", bestName,
+      Print("ANTI-TREND VETO: H1+HTF both BULL - SELL blocked | setup=", bestName,
             " h1Spread=", DoubleToString(h1Spread*100, 3), "% htfSpread=", DoubleToString(htfSpread*100, 3), "%");
       bestDir = 0; bestScore = 0; bestName = "";
    }
    if(bestDir == 1 && htfBearConsensus && !activeDirectionConfirmsBuy &&
       bestType != 1 && bestType != 3 && bestType != 8 && bestType != 9)
    {
-      Print("ANTI-TREND VETO: H1+HTF both BEAR — BUY blocked | setup=", bestName,
+      Print("ANTI-TREND VETO: H1+HTF both BEAR - BUY blocked | setup=", bestName,
             " h1Spread=", DoubleToString(h1Spread*100, 3), "% htfSpread=", DoubleToString(htfSpread*100, 3), "%");
       bestDir = 0; bestScore = 0; bestName = "";
    }
@@ -17963,11 +17984,11 @@ int ScoreSetups(double &score, string &setupName, int excludeDir = 0)
 //+------------------------------------------------------------------+
 //| PYRAMID / SCALE-IN (v4.4.5)                                      |
 //| Adds a smaller same-direction position when:                     |
-//|   • Price moved ≥ InpPyramidMinATR × ATR (adverse or with trend) |
-//|   • Regime still supports direction                              |
-//|   • Not direction-locked                                         |
-//|   • ≥ InpPyramidMinGapSec since last add                         |
-//|   • Not exceeding InpMaxPyramidAdds                              |
+//|   - Price moved >= InpPyramidMinATR x ATR (adverse or with trend) |
+//|   - Regime still supports direction                              |
+//|   - Not direction-locked                                         |
+//|   - >= InpPyramidMinGapSec since last add                         |
+//|   - Not exceeding InpMaxPyramidAdds                              |
 //| Sizes DECREASE by InpPyramidSizeMulti each add (no martingale).  |
 //+------------------------------------------------------------------+
 datetime lastPyramidAddTime = 0;
@@ -17979,7 +18000,7 @@ double XAU_EffectivePyramidSpacingATR()
    return MathMax(InpPyramidMinATR,InpPyramidMinSpaceATR);
 }
 
-// v5.3.1 — last entry's grade + score (used by adverse-pyramid signal-strength gate
+// v5.3.1 - last entry's grade + score (used by adverse-pyramid signal-strength gate
 // and by per-position high-grade ratchet looseness).
 string   g_lastEntryGrade  = "B";
 double   g_lastEntryScore  = 0.0;
@@ -18127,7 +18148,7 @@ double AccountSizeTPMultiplier()
    return 1.30;
 }
 
-// v6.17.20 — shared R-floor for every flat-dollar/equity-percent exit-arm
+// v6.17.20 - shared R-floor for every flat-dollar/equity-percent exit-arm
 // threshold in the file. Proven from a real Mac ($3k, small lots, holds
 // well, $187-193 wins) vs VPS ($7k, v6.17.17 account-lot-floor pushes lots
 // to ~0.15-0.59, exits at $28-53) comparison: both accounts sit in the SAME
@@ -18143,7 +18164,7 @@ double AccountSizeTPMultiplier()
 // R-terms"). Floors any such threshold at InpExitArmMinOwnR (0.20R default)
 // of the position's OWN risk so a bigger lot can never make it fire sooner,
 // in R-terms, than a smaller one would.
-// v6.20.4 (Commit E) — ONE central adaptive profit-protection threshold
+// v6.20.4 (Commit E) - ONE central adaptive profit-protection threshold
 // function, per explicit owner requirement: "no module should independently
 // invent flat $20/$30/$50 protection levels anymore." Every exit/protection
 // module's flat-$/equity-% threshold should be computed as before (each
@@ -18782,11 +18803,11 @@ void CheckPyramidOpportunity()
 //+------------------------------------------------------------------+
 
 // ====================================================================
-// v5.5.0 — EQUITY PRESERVATION FRAMEWORK FUNCTIONS
+// v5.5.0 - EQUITY PRESERVATION FRAMEWORK FUNCTIONS
 // ====================================================================
 
 // Computes current EPF tier (0-4) from live conditions.
-// v5.7.0 — EQUITY-ONLY. Removed consecutive-loss escalation per user feedback:
+// v5.7.0 - EQUITY-ONLY. Removed consecutive-loss escalation per user feedback:
 // "after losses become safer" was creating a death spiral. Strategy stays
 // stable; only position size adapts via lot multiplier. Tier escalation now
 // driven SOLELY by daily P&L milestones and peak-retrace.
@@ -18812,11 +18833,11 @@ int EPF_ComputeTier()
    if(retraceFromPeakPct >= InpEPF_PeakRetracePct * 1.5 && peakGainPct >= InpEPF_PeakMinPct)
       tier = MathMax(tier, 3);
 
-   // v5.7.0 — Consecutive-loss tier escalation REMOVED. Old code that bumped
+   // v5.7.0 - Consecutive-loss tier escalation REMOVED. Old code that bumped
    // tier on N losses is gone. User explicitly requested: "stop strategy
    // switching based on emotional logic like 'after losses become safer'".
 
-   // v5.7.0 — HARD DAILY DRAWDOWN STOP. If account has lost more than
+   // v5.7.0 - HARD DAILY DRAWDOWN STOP. If account has lost more than
    // InpEPF_HardDailyDDPct % of starting equity today, lockdown for the day.
    // This is OBJECTIVE protection (not "safer mode"), kicks in only after
    // significant damage to prevent total destruction.
@@ -18830,7 +18851,7 @@ int EPF_ComputeTier()
 // Lot-size multiplier applied to every new entry (not pyramids).
 double EPF_LotMultiplier()
 {
-   // v6.4.16: DISABLED — EPF tier-based lot reductions removed.
+   // v6.4.16: DISABLED - EPF tier-based lot reductions removed.
    // EPF_EntryBlockReason() still blocks/vetoes trades in T4 hard lockdown (acceptable: skip trade).
    // Only the lot-reduction part (T1=0.85x, T2=0.65x, T3=0.40x) is removed.
    return 1.0;
@@ -18844,7 +18865,7 @@ bool EPF_IsEliteGrade(string grade)
 }
 
 // Returns empty string if entry is allowed, or a reason string for block.
-// v5.8.38 — T4 is no longer a blind robot lock. Hard daily drawdown still
+// v5.8.38 - T4 is no longer a blind robot lock. Hard daily drawdown still
 // blocks, but elite signals can pass in guarded mode with tiny reduced size.
 string EPF_EntryBlockReason(string grade, double setupScore, double combinedScore, int signal,
                             double &adaptiveLotMult, bool &adaptivePass)
@@ -18878,7 +18899,7 @@ string EPF_EntryBlockReason(string grade, double setupScore, double combinedScor
       adaptivePass = true;
       return "";
    }
-   // T1/T2/T3 do NOT block — they only reduce lot size via EPF_LotMultiplier().
+   // T1/T2/T3 do NOT block - they only reduce lot size via EPF_LotMultiplier().
    return "";
 }
 
@@ -18890,7 +18911,7 @@ string EPF_BlockReason(string grade, double setupScore, int signal)
 }
 
 // Returns true if a pyramid ADD should be blocked by current tier.
-// (We don't block initial entries via this — that's EPF_BlockReason's job.)
+// (We don't block initial entries via this - that's EPF_BlockReason's job.)
 bool EPF_BlockPyramidAdd()
 {
    if(XAU_NoLimitTradingModeActive()) return false;
@@ -18992,7 +19013,7 @@ void EPF_ManagePartials()
    }
 }
 
-// v6.0.4: Scheduled news calendar — pure GMT time-math, no external API required.
+// v6.0.4: Scheduled news calendar - pure GMT time-math, no external API required.
 // Returns true + fills `reason` if current time is inside a known high-impact window.
 bool IsScheduledNewsWindow(string &reason)
 {
@@ -19003,7 +19024,7 @@ bool IsScheduledNewsWindow(string &reason)
    int gM   = dt.min;
    int mNow = gH * 60 + gM; // minutes since midnight GMT
 
-   // Sunday market open — gap risk, thin liquidity, wild spread
+   // Sunday market open - gap risk, thin liquidity, wild spread
    if(InpCalSundayOpen && dow == 0 && mNow < 45)
    { reason = "CALENDAR: source=CUSTOM_STATIC_WINDOW Sunday open gap risk (00:00-00:45 GMT)"; return true; }
 
@@ -19011,15 +19032,15 @@ bool IsScheduledNewsWindow(string &reason)
    if(InpCalMondayOpen && dow == 1 && mNow < 30)
    { reason = "CALENDAR: source=CUSTOM_STATIC_WINDOW Monday Asian open spike window (00:00-00:30 GMT)"; return true; }
 
-   // Thursday US Jobless Claims — 12:15-13:30 GMT
+   // Thursday US Jobless Claims - 12:15-13:30 GMT
    if(InpCalThursJobless && dow == 4 && mNow >= 735 && mNow <= 810)
    { reason = "CALENDAR: source=CUSTOM_STATIC_WINDOW Thursday Jobless Claims window (12:15-13:30 GMT)"; return true; }
 
-   // Friday US data window (NFP on first Friday, other data other weeks) — 12:15-14:00 GMT
+   // Friday US data window (NFP on first Friday, other data other weeks) - 12:15-14:00 GMT
    if(InpCalFridayData && dow == 5 && mNow >= 735 && mNow <= 840)
    { reason = "CALENDAR: source=CUSTOM_STATIC_WINDOW Friday US data window (12:15-14:00 GMT)"; return true; }
 
-   // Custom window 1 — v6.24.4: reason now reports source type and the exact
+   // Custom window 1 - v6.24.4: reason now reports source type and the exact
    // GMT expiry (not just the duration) so a log line at, say, 19:29 GMT for
    // an 18:00 GMT event is unambiguous about whether it's still inside window.
    if(InpCalCustomDay1 >= 0 && dow == InpCalCustomDay1)
@@ -19315,18 +19336,25 @@ int XAU_ExecutionGapAtClose(datetime closeTime,datetime &firstAvailableTick)
 
 void OnTick()
 {
+   // Market Edition gold-only guard: set once in OnInit(). Returning here,
+   // before XAU_ObserveExecutionTick() or anything else, means a non-Gold
+   // chart never creates an indicator handle, never builds a candidate, and
+   // never reaches any order-send path. No per-tick log spam -- the notice
+   // was already printed once in OnInit() and the chart Comment() persists
+   // without re-printing.
+   if(g_xauCloudNonGoldChart) return;
    XAU_ObserveExecutionTick();
    if(!licenseValid) { g_lastSkipReason = "LICENSE_INVALID (enter correct PIN in inputs)"; return; }
    UpdateAuditDrawdown();
    XAU_UpdateForwardFloatingStats();
-   // v6.24.14 — cooldown blocks EXECUTION only; this runs every tick,
+   // v6.24.14 - cooldown blocks EXECUTION only; this runs every tick,
    // unconditionally, before any gate below could skip the rest of OnTick(),
    // so market analysis/thesis/pressure/transition computation elsewhere in
    // this function is never affected by it.
    XAU_PostTradeCooldownTick();
    XAU_ReadinessStuckWatchdog();
 
-   // v4.9.6 — DIAGNOSTIC HEARTBEAT (prints every 60s telling user WHY bot is idle)
+   // v4.9.6 - DIAGNOSTIC HEARTBEAT (prints every 60s telling user WHY bot is idle)
    if(TimeCurrent() - g_lastHeartbeat >= 60)
    {
       // Collect live state
@@ -19339,42 +19367,42 @@ void OnTick()
       int    openPs = CountMyPositions();
 
       string status;
-      // v6.9.0 — one of the 9 categories the Command Center shows as
+      // v6.9.0 - one of the 9 categories the Command Center shows as
       // "Current Bot Decision": scanning/waiting/blocked/entering/
       // managing_trade/protecting_profit/holding/preparing_exit/exiting.
       // entering/exiting are momentary and already come from the
       // TRADE_EXECUTED/TTM_EXIT event posts themselves; this periodic
       // heartbeat classifies among the other 7.
       string statusCategory;
-      if(!termConn)        { status = "BROKER DISCONNECTED — check internet/VPS connection"; statusCategory = "BLOCKED"; }
-      else if(!symOK)      { status = StringFormat("WRONG SYMBOL '%s' — attach EA to XAUUSD chart (your broker may call it XAUUSDm / XAUUSD.r / GOLD)", sym); statusCategory = "BLOCKED"; }
-      else if(!termAlgo)   { status = "ALGO TRADING OFF — click the 'Algo Trading' toolbar button until it turns GREEN"; statusCategory = "BLOCKED"; }
-      else if(!mqlAlgo)    { status = "EA-LEVEL ALGO NOT ALLOWED — re-attach EA and tick 'Allow Algo Trading' in the Common tab"; statusCategory = "BLOCKED"; }
+      if(!termConn)        { status = "BROKER DISCONNECTED - check internet/VPS connection"; statusCategory = "BLOCKED"; }
+      else if(!symOK)      { status = StringFormat("WRONG SYMBOL '%s' - attach EA to XAUUSD chart (your broker may call it XAUUSDm / XAUUSD.r / GOLD)", sym); statusCategory = "BLOCKED"; }
+      else if(!termAlgo)   { status = "ALGO TRADING OFF - click the 'Algo Trading' toolbar button until it turns GREEN"; statusCategory = "BLOCKED"; }
+      else if(!mqlAlgo)    { status = "EA-LEVEL ALGO NOT ALLOWED - re-attach EA and tick 'Allow Algo Trading' in the Common tab"; statusCategory = "BLOCKED"; }
       else if(openPs > 0)
       {
-         // Check whether any open position is in TRI Recovery Mode — worth
+         // Check whether any open position is in TRI Recovery Mode - worth
          // surfacing at the aggregate level, not just per-ticket.
          bool anyRecovering = false;
          for(int ri = 0; ri < TTM_MAX_POSITIONS; ri++)
             if(g_ttm[ri].active && g_ttm[ri].triActive) { anyRecovering = true; break; }
          if(anyRecovering)
          {
-            status = StringFormat("MANAGING %d OPEN POSITION(S) — one is in Recovery Mode after a near-SL event, watching for a genuine reclaim", openPs);
+            status = StringFormat("MANAGING %d OPEN POSITION(S) - one is in Recovery Mode after a near-SL event, watching for a genuine reclaim", openPs);
             statusCategory = "PROTECTING_PROFIT";
          }
          else
          {
-            status = StringFormat("MANAGING %d OPEN POSITION(S) + SCANNING — analysis remains active while trades run", openPs);
+            status = StringFormat("MANAGING %d OPEN POSITION(S) + SCANNING - analysis remains active while trades run", openPs);
             statusCategory = "MANAGING_TRADE";
          }
       }
-      else if(StringLen(g_lastSkipReason) > 0) { status = "IDLE — " + g_lastSkipReason; statusCategory = "BLOCKED"; }
-      else                 { status = StringFormat("SCANNING — spread=%.0fpts, all systems OK, waiting for A/A+ setup", curSpr); statusCategory = "SCANNING"; }
+      else if(StringLen(g_lastSkipReason) > 0) { status = "IDLE - " + g_lastSkipReason; statusCategory = "BLOCKED"; }
+      else                 { status = StringFormat("SCANNING - spread=%.0fpts, all systems OK, waiting for A/A+ setup", curSpr); statusCategory = "SCANNING"; }
 
-      PrintFormat("♥ HEARTBEAT │ %s", status);
+      PrintFormat("<3 HEARTBEAT | %s", status);
       XAU_WriteLocalReportHeartbeat(false);
 
-      // v6.9.0 — push this to the cloud unconditionally, BEFORE any of the
+      // v6.9.0 - push this to the cloud unconditionally, BEFORE any of the
       // deep entry-scan gates below can skip the rest of OnTick(). This is
       // the root fix for the Command Center showing stale multi-day-old
       // cards: previously the only cloud posts came from deep inside the
@@ -19382,7 +19410,7 @@ void OnTick()
       // higher-level gate (equity protect, weekly target hit, growth daily
       // lock, weekend close, etc.) was active, literally nothing posted for
       // as long as that gate stayed active. This heartbeat fires every 60s
-      // regardless of any of those gates — well inside the "every 5
+      // regardless of any of those gates - well inside the "every 5
       // minutes" the dashboard needs.
       BotMonitorDecisionEvent("BOT_STATUS_HEARTBEAT", "INFO", "Heartbeat", status,
                               true, g_lastSkipReason, statusCategory, "", 0.0, 0.0,
@@ -19405,14 +19433,14 @@ void OnTick()
       ResetPropFirmDailyBaseline();
       todayTradeCount = 0; dailyLimitHit = false; g_adaptiveRecoveryMode = false;
       lastDayReset = TimeCurrent();
-      // v5.1.0 — reset Profit Guardian state at day boundary
+      // v5.1.0 - reset Profit Guardian state at day boundary
       pg_dayHWM = accInfo.Equity();
       pg_dayHaltActive = false;
       pg_pauseUntil = 0;
       pg_lastReportedTier = -1;
       pg_consecutiveLosses = 0;  // v5.1.2: fresh streak each day
       pg_lastLossCycleAt = 0;
-      // v5.1.9 — selective mode resets at day boundary too
+      // v5.1.9 - selective mode resets at day boundary too
       pg_selectiveActive = false;
       pg_selectiveActivatedAt = 0;
       pg_selectiveTriggerEq = 0;
@@ -19421,7 +19449,7 @@ void OnTick()
       pg_selectiveSkippedCnt = 0;
       lastPyramidPx = 0.0;
       lastPyramidCampaignId = 0;
-      // v5.5.0 — reset EPF state at day boundary
+      // v5.5.0 - reset EPF state at day boundary
       epf_tier = 0;
       epf_lastLoggedTier = -1;
       epf_cooldownUntil = 0;
@@ -19443,13 +19471,13 @@ void OnTick()
    if(InpWeekendClose && dtNow.day_of_week == 5 && dtNow.hour >= 20)
    { if(CountMyPositions() > 0) { CloseAll("WEEKEND_CLOSE"); Print("WEEKEND CLOSE"); } XAU_CounterExcursionEmergencyClose("WEEKEND_CLOSE"); XAU_ExhaustionCounterEmergencyClose("WEEKEND_CLOSE"); return; }
 
-   // v4.5.7 — HEARTBEAT: if any risk gate is active, log ONCE per 5 min so
+   // v4.5.7 - HEARTBEAT: if any risk gate is active, log ONCE per 5 min so
    // user never has a silent EA again. Previously these only printed ONCE on
-   // threshold breach, then returned silently forever → looks like EA is dead.
+   // threshold breach, then returned silently forever -> looks like EA is dead.
    static datetime lastGateHeartbeat = 0;
    bool heartbeatDue = (TimeCurrent() - lastGateHeartbeat >= 300);
 
-   // Equity/daily/weekly limits — a value of 0 fully disables the gate (user choice)
+   // Equity/daily/weekly limits - a value of 0 fully disables the gate (user choice)
    double equity = accInfo.Equity();
    bool noLimitMode = XAU_NoLimitTradingModeActive();
    string propFirmLock = PropFirmLossLockReason();
@@ -19472,7 +19500,7 @@ void OnTick()
       CloseAll("EQUITY_PROTECT");
       XAU_CounterExcursionEmergencyClose("EQUITY_PROTECT");
       XAU_ExhaustionCounterEmergencyClose("EQUITY_PROTECT");
-      if(heartbeatDue) { Print("⏸  EQUITY PROTECT ACTIVE — equity $", DoubleToString(equity,2),
+      if(heartbeatDue) { Print("[PAUSED]  EQUITY PROTECT ACTIVE - equity $", DoubleToString(equity,2),
          " < ", DoubleToString(InpEquityProtect,1), "% of $", DoubleToString(initialBalance,2),
          ". EA paused until equity recovers. Add funds or close losing trades.");
          lastGateHeartbeat = TimeCurrent(); }
@@ -19484,13 +19512,13 @@ void OnTick()
    {
       if(!weeklyTargetHit) { CloseAll("WEEKLY_TARGET_HIT"); XAU_CounterExcursionEmergencyClose("WEEKLY_TARGET_HIT"); XAU_ExhaustionCounterEmergencyClose("WEEKLY_TARGET_HIT"); Print("WEEKLY TARGET HIT: +$", DoubleToString(weeklyPnL, 2)); }
       weeklyTargetHit = true;
-      if(heartbeatDue) { Print("⏸  WEEKLY TARGET HIT — +$", DoubleToString(weeklyPnL, 2),
+      if(heartbeatDue) { Print("[PAUSED]  WEEKLY TARGET HIT - +$", DoubleToString(weeklyPnL, 2),
          " reached (", DoubleToString(InpWeeklyTarget,1), "% of $", DoubleToString(weeklyStartEquity,2),
          "). EA paused until Monday to protect gains.");
          lastGateHeartbeat = TimeCurrent(); }
       return;
    }
-   // v6.4.5: Weekly loss limit → Adaptive Weekly Recovery Mode (no hard block until Monday)
+   // v6.4.5: Weekly loss limit -> Adaptive Weekly Recovery Mode (no hard block until Monday)
    // EA continues scanning and trading at elevated selectivity. A/A+ only, 50% size.
    // Same philosophy as daily adaptive recovery: losses raise the bar, never stop the bot.
    if(!noLimitMode && InpWeeklyMaxLoss > 0 && weeklyPnL < -(weeklyStartEquity * InpWeeklyMaxLoss / 100.0))
@@ -19514,7 +19542,7 @@ void OnTick()
       // No return. No CloseAll. EA continues in adaptive mode.
    }
 
-   // v6.4.4 — ADAPTIVE RECOVERY MODE (replaces hard daily loss lockout)
+   // v6.4.4 - ADAPTIVE RECOVERY MODE (replaces hard daily loss lockout)
    // OLD: when daily P&L < -X%, call CloseAll() and block all trades until midnight.
    // NEW: EA continues scanning and trading, but raises the bar:
    //   - Only A/A+ setups pass the RECOVERY_GATE at entry
@@ -19535,7 +19563,7 @@ void OnTick()
       else if(!dailyThresholdHit && g_adaptiveRecoveryMode)
       {
          g_adaptiveRecoveryMode = false;
-         Print("ADAPTIVE_RECOVERY_CLEARED: daily equity recovered above threshold — resuming normal operation");
+         Print("ADAPTIVE_RECOVERY_CLEARED: daily equity recovered above threshold - resuming normal operation");
       }
       if(g_adaptiveRecoveryMode && heartbeatDue)
       {
@@ -19546,7 +19574,7 @@ void OnTick()
       // No return. No CloseAll. EA continues.
    }
 
-   // v6.4.12 — Growth Guard daily profit lock. Once the account has a real
+   // v6.4.12 - Growth Guard daily profit lock. Once the account has a real
    // profitable day, do not let active exposure give back the whole day.
    // v6.21.2 audit fix (Fix 13): this is ordinary daily-profit preservation
    // (a CloseAll() plus an entry pause), not a true account-survival
@@ -19561,7 +19589,7 @@ void OnTick()
          if(TimeCurrent() - lastGrowthDailyLockObserveLog >= 60)
          {
             lastGrowthDailyLockObserveLog = TimeCurrent();
-            Print("GROWTH_DAILY_LOCK OBSERVATION_ONLY — R manager owns normal positions | would have triggered: ", growthDayLockWhy);
+            Print("GROWTH_DAILY_LOCK OBSERVATION_ONLY - R manager owns normal positions | would have triggered: ", growthDayLockWhy);
          }
       }
       else if(XAU_GrowthDailyLockTriggered(growthDayLockWhy))
@@ -19588,7 +19616,7 @@ void OnTick()
    // "R manager stops running during indicator warm-up/failure."
    XAU_RExitCoreLoop();
 
-   // v6.21.3 — shadow-track skipped COUNTER_EXCURSION candidates' hypothetical
+   // v6.21.3 - shadow-track skipped COUNTER_EXCURSION candidates' hypothetical
    // outcomes. Pure observation (never sends an order); runs unconditionally
    // for the same reason XAU_RExitCoreLoop() does -- must not be gateable by
    // indicator warm-up or an early return further down.
@@ -19668,7 +19696,7 @@ void OnTick()
       XAU_RecordM10EvidenceIfNew();
    }
 
-   // === v5.5.0 EPF — update tier each tick + run partial-close manager ===
+   // === v5.5.0 EPF - update tier each tick + run partial-close manager ===
    // Cheap to run; tier transitions logged when they change.
    epf_tier = noLimitMode ? 0 : EPF_ComputeTier();
    if(epf_tier != epf_lastLoggedTier)
@@ -19680,7 +19708,7 @@ void OnTick()
                       : "T4-LOCKDOWN";
       double dayPct = (accInfo.Equity() - dailyStartEquity) / MathMax(dailyStartEquity,1) * 100.0;
       double peakPct = (pg_dayHWM - dailyStartEquity) / MathMax(dailyStartEquity,1) * 100.0;
-      Print(StringFormat("⚙ EPF TIER → %s (day:+%.1f%% peak:+%.1f%% consecLoss:%d)",
+      Print(StringFormat("[CFG] EPF TIER -> %s (day:+%.1f%% peak:+%.1f%% consecLoss:%d)",
                           tierName, dayPct, peakPct, pg_consecutiveLosses));
       epf_lastLoggedTier = epf_tier;
    }
@@ -19717,7 +19745,7 @@ void OnTick()
    if(TimeCurrent() - lastCloudHB >= 60)
    {
       CloudHeartbeat();
-      FetchBotMode();   // v5.1.8 — same cadence: pull admin-set mode preset
+      FetchBotMode();   // v5.1.8 - same cadence: pull admin-set mode preset
       lastCloudHB = TimeCurrent();
    }
    if(TimeCurrent() - g_lastBotMonitorHeartbeat >= MathMax(10, InpBotMonitorHeartbeatSec))
@@ -19725,14 +19753,14 @@ void OnTick()
       BotMonitorHeartbeat();
       g_lastBotMonitorHeartbeat = TimeCurrent();
    }
-   // v5.1.2 — Profit Guardian: HWM tracking + per-position ratchet every tick
+   // v5.1.2 - Profit Guardian: HWM tracking + per-position ratchet every tick
    // v6.21.0: PG_PerPositionRatchet is an independent SL-modifying authority
    // (raw OrderSend, bypasses SafeModifySL) that would otherwise fight the
    // new R-based exit manager over the same SL. Disabled by the manager.
    if(!noLimitMode) PG_UpdateHWM();
    if(!XAU_RExitOwnsNormalPositions()) PG_PerPositionRatchet();
 
-   // v6.3.9 UPGRADE — ATR-adaptive daily profit lock
+   // v6.3.9 UPGRADE - ATR-adaptive daily profit lock
    // Tightens all open SLs once per trigger (not on every tick). ATR-based distance
    // prevents over-tightening on high-volatility gold days with 40+ pip swings.
    // v6.21.1: this is a second, independent SL-modifying authority (Known
@@ -19758,7 +19786,7 @@ void OnTick()
          double lockATR = (ArraySize(bufATR) >= 2 && bufATR[1] > 0) ? bufATR[1] : 0.0;
          Print("PROFIT LOCK: daily gain ", DoubleToString(dayGainPct, 1),
                "% reached ", DoubleToString(InpDailyProfitLockPct, 1),
-               "% threshold — tightening SLs with ATR-adaptive distance (ATR=",
+               "% threshold - tightening SLs with ATR-adaptive distance (ATR=",
                DoubleToString(lockATR, 2), ")");
          int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
          double minStop = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(Symbol(), SYMBOL_POINT);
@@ -19775,7 +19803,7 @@ void OnTick()
             double pBid    = SymbolInfoDouble(Symbol(), SYMBOL_BID);
             double pAsk    = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
             double curPx   = (pDir == 0) ? pBid : pAsk;
-            // ATR-adaptive lock distance: at least 1.5×ATR behind price
+            // ATR-adaptive lock distance: at least 1.5xATR behind price
             double lockDist = (lockATR > 0) ? MathMax(1.5 * lockATR, minStop) : MathMax(0.0010, minStop);
             double newSL = (pDir == 0) // BUY: SL below current price
                          ? NormalizeDouble(curPx - lockDist, digits)
@@ -19799,18 +19827,18 @@ void OnTick()
       else if(g_dailyProfitLockArmed && dayGainPct < InpDailyProfitLockPct * 0.5)
       {
          g_dailyProfitLockArmed = false;
-         Print("PROFIT LOCK: reset — day gain dropped below 50% of threshold");
+         Print("PROFIT LOCK: reset - day gain dropped below 50% of threshold");
       }
    }
 
-   // Spread check — blocks NEW ENTRIES only
+   // Spread check - blocks NEW ENTRIES only
    double spread = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
 
    // v6.0.2: track spread EMA for news spike detection (runs every tick, negligible cost)
    if(g_spreadEMA <= 0.0) g_spreadEMA = spread;
    else g_spreadEMA = g_spreadEMA * 0.98 + spread * 0.02;
 
-   // v6.4.6: Spread Classifier — determines the root cause of any spread widening
+   // v6.4.6: Spread Classifier - determines the root cause of any spread widening
    // Returns: "NEWS_SPIKE", "BROKER_NOISE", "ROLLOVER", "SUNDAY_OPEN", "LOW_LIQUIDITY", "NORMAL"
    string spreadEventType = "NORMAL";
    double spreadRatio = 0.0;
@@ -19850,7 +19878,7 @@ void OnTick()
    {
       if(TimeCurrent() >= g_newsAftermathUntil)
       {
-         // New distinct spike — start a fresh window
+         // New distinct spike - start a fresh window
          g_newsAftermathUntil = TimeCurrent() + InpNewsAftermathMins * 60;
          if(g_preNewsPrice <= 0) g_preNewsPrice = (SymbolInfoDouble(Symbol(), SYMBOL_BID) + SymbolInfoDouble(Symbol(), SYMBOL_ASK)) * 0.5;
          // Reset post-news tracking
@@ -19866,7 +19894,7 @@ void OnTick()
                      spreadEventType, TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
                      InpNewsAftermathMins * 60, TimeToString(g_newsAftermathUntil, TIME_DATE|TIME_SECONDS));
       }
-      // else: still inside the same window — do NOT extend. Timer counts down cleanly.
+      // else: still inside the same window - do NOT extend. Timer counts down cleanly.
    }
    else if(InpNewsAftermathEnable && spreadEventType == "BROKER_NOISE")
    {
@@ -19879,7 +19907,7 @@ void OnTick()
       }
    }
 
-   // v6.4.6: Post-News State Machine — advance state after aftermath window expires
+   // v6.4.6: Post-News State Machine - advance state after aftermath window expires
    if(g_postNewsState == PNS_AFTERMATH && TimeCurrent() >= g_newsAftermathUntil && g_newsAftermathUntil > 0)
    {
       g_postNewsState      = PNS_DISCOVERY;
@@ -19934,24 +19962,24 @@ void OnTick()
          PrintFormat("POST_NEWS_ALLOWED: bias=%s spread normalized | high-quality entries permitted in confirmed direction",
                      g_postNewsBias > 0 ? "BULLISH" : "BEARISH");
       }
-      // Detect chop / reversal → AVOID
+      // Detect chop / reversal -> AVOID
       if(g_postNewsBias != 0 && g_postNewsConfirmCnt <= -2)
       {
          g_postNewsState      = PNS_AVOID;
          g_postNewsStateStart = TimeCurrent();
          g_postNewsAvoidUntil = TimeCurrent() + InpPostNewsAvoidMins * 60;
-         Print("POST_NEWS_AVOID: conflicting bars — chop/reversal detected, entries blocked for ", InpPostNewsAvoidMins, " min");
+         Print("POST_NEWS_AVOID: conflicting bars - chop/reversal detected, entries blocked for ", InpPostNewsAvoidMins, " min");
       }
    }
    if(g_postNewsState == PNS_AVOID && TimeCurrent() >= g_postNewsAvoidUntil)
    {
       g_postNewsState = PNS_NONE;
       g_preNewsPrice  = 0;
-      Print("POST_NEWS_AVOID: expired — resuming normal trading");
+      Print("POST_NEWS_AVOID: expired - resuming normal trading");
    }
    if(g_postNewsState == PNS_ALLOWED && TimeCurrent() - g_postNewsStateStart > 30 * 60)
    {
-      // Post-news window has been running 30+ minutes — return to normal
+      // Post-news window has been running 30+ minutes - return to normal
       g_postNewsState = PNS_NONE;
       g_preNewsPrice  = 0;
    }
@@ -19986,7 +20014,7 @@ void OnTick()
                                        secsLeft, g_postNewsBias > 0 ? "BULLISH" : g_postNewsBias < 0 ? "BEARISH" : "UNCLEAR");
       g_lastSkipReason = spreadBlockReason;
    }
-   // v6.0.4: scheduled news calendar — block entries during pre-defined high-impact windows
+   // v6.0.4: scheduled news calendar - block entries during pre-defined high-impact windows
    if(!spreadBlocksEntry)
    {
       string calReason = "";
@@ -20003,7 +20031,7 @@ void OnTick()
       {
          static datetime lastCalLog = 0;
          if(TimeCurrent() - lastCalLog >= 60)
-         { Print("NEWS-CALENDAR: ", calReason, " — entries blocked"); lastCalLog = TimeCurrent(); }
+         { Print("NEWS-CALENDAR: ", calReason, " - entries blocked"); lastCalLog = TimeCurrent(); }
          spreadBlocksEntry = true;
          spreadBlockReason = calReason;
          g_lastSkipReason  = calReason;
@@ -20013,7 +20041,7 @@ void OnTick()
    // v6.24.4: falling-edge log when a static calendar window expires. The
    // window itself is pure wall-clock math (IsScheduledNewsWindow has no
    // persisted timer), so expiry is already re-evaluated every tick with no
-   // restart-on-tick or restart-on-terminal-restart risk — this only adds
+   // restart-on-tick or restart-on-terminal-restart risk - this only adds
    // the one-shot observability line confirming the transition happened and
    // that normal confirmation gating (not a blind auto-entry) resumes next.
    {
@@ -20055,7 +20083,7 @@ void OnTick()
    // Note: bufATR/bufRSI/bufBBUpper may not be loaded yet at this point;
    // ClassifyMarketPersonality() uses copies via direct CopyBuffer so it
    // works even before CheckForEntry loads the global buffers. We call it
-   // after indicator buffer check below instead — see after buffer-load block.
+   // after indicator buffer check below instead - see after buffer-load block.
    int secondsSinceScan = (g_lastEntryScanAt > 0) ? (int)(TimeCurrent() - g_lastEntryScanAt) : 999999;
    bool watchdogDue = (InpScanWatchdogMin > 0 && secondsSinceScan >= InpScanWatchdogMin * 60);
    bool timerForced = g_timerForceScan;
@@ -20176,7 +20204,7 @@ void OnTick()
    {
       if(TimeCurrent() - g_lastWatchdogLog >= InpScanSkipLogSec)
       {
-         Print("⚠ SCAN WATCHDOG: forcing entry scan after ", secondsSinceScan,
+         Print("[!] SCAN WATCHDOG: forcing entry scan after ", secondsSinceScan,
                "s without a completed scan. curBar=", TimeToString(curBar, TIME_MINUTES),
                " lastBar=", TimeToString(g_lastEntryBarSeen, TIME_MINUTES));
          g_lastWatchdogLog = TimeCurrent();
@@ -20375,7 +20403,7 @@ void OnTick()
    // minutes, independent of which specific line causes it.
    // v6.4.0 UPGRADE 1: classify market personality now that buffers are loaded
    if(newPrimaryBar) g_marketPersonality = ClassifyMarketPersonality();
-   // v6.1.0: SMC update runs HERE — after bufATR is loaded, ATR is always fresh
+   // v6.1.0: SMC update runs HERE - after bufATR is loaded, ATR is always fresh
    if(InpSMC_Enable) SMC_Update();
    XAU_UpdateBlockedSignalOutcomes();
    InTradeClassifier_Update(); // v6.0.1: classify open positions every bar (feeds ratchet + exit logic)
@@ -20691,17 +20719,17 @@ void OnTick()
    else
    {
       double combinedRaw = setupScore * regimeQuality * sessionQuality;
-   // v5.1.5: floor the multiplicative drag — without this, fair-quality regimes
+   // v5.1.5: floor the multiplicative drag - without this, fair-quality regimes
    // (regimeQuality ~ 0.5) drop a Score:4.5 setup to Combined:2.0 which falls
    // below gradeB (esp. after loss-streak tightening). Floor keeps the combined
-   // at >= setupScore × InpScoreFloor (default 0.65) so good setups still trade.
+   // at >= setupScore x InpScoreFloor (default 0.65) so good setups still trade.
    // v5.1.8: floor and gradeB are now admin-controllable via Bot Mode preset.
-   // v5.6.0 FIX A — REGIME-AWARE FLOOR. Previously the floor (0.65) overrode
+   // v5.6.0 FIX A - REGIME-AWARE FLOOR. Previously the floor (0.65) overrode
    // CHOPPY/DEAD regime quality (0.05/0.30) and let B-grade trades fire in
    // unstable conditions, producing the asymmetric losses seen in live data.
    // New: floor scales DOWN in low-quality regimes so the regime filter actually
    // works. Aggressive mode keeps the legacy floor (user observed Aggressive
-   // mode wins more — don't break it).
+   // mode wins more - don't break it).
    double effFloor   = GetEffectiveScoreFloor();
    double effGradeB  = GetEffectiveGradeB();
    double regimeFloorScale = 1.0;
@@ -20710,7 +20738,7 @@ void OnTick()
       switch(currentRegime)
       {
          case REGIME_DEAD:        regimeFloorScale = 0.0;  break; // never trade
-         case REGIME_CHOPPY:      regimeFloorScale = 0.0;  break; // 🔑 the fix
+         case REGIME_CHOPPY:      regimeFloorScale = 0.0;  break; // [KEY] the fix
          case REGIME_LOW_VOL:     regimeFloorScale = 0.55; break;
          case REGIME_RANGING:     regimeFloorScale = 0.80; break;
          default:                 regimeFloorScale = 1.0;  break; // trending/breakout
@@ -20719,7 +20747,7 @@ void OnTick()
    double combinedFloor = setupScore * effFloor * regimeFloorScale;
       combinedScore = MathMax(combinedRaw, combinedFloor);
 
-   // v5.6.0 FIX B — REGIME-DIRECTION BONUS. With-trend setups get a score bump,
+   // v5.6.0 FIX B - REGIME-DIRECTION BONUS. With-trend setups get a score bump,
    // counter-trend setups get a small penalty. Previously the bot scored buy
    // and sell setups symmetrically regardless of regime, which is why the live
    // history showed 100% BUY trades during a clear downtrend. Now the regime
@@ -20734,17 +20762,17 @@ void OnTick()
       else if(signal == -1 && isTrendingUp) combinedScore = MathMax(0.0, combinedScore - 0.5);
    }
 
-   // v6.2.0 — HTF CONSENSUS BONUS.
-   // The regime quality multiplier (0.30–0.85) murders valid signals in non-trending
+   // v6.2.0 - HTF CONSENSUS BONUS.
+   // The regime quality multiplier (0.30-0.85) murders valid signals in non-trending
    // M5 conditions. In RANGING regime a perfect setup (score 4.5) computes to combined
-   // 2.34 → SKIP, even when H1+HTF are both screaming bullish.
+   // 2.34 -> SKIP, even when H1+HTF are both screaming bullish.
    //
    // A professional trader doesn't multiply confidence levels. When the bigger picture
    // is clear (H1 AND HTF both agree), they require LESS M5 confirmation, not more.
    //
    // This bonus (+2.5) directly compensates the regime multiplier drag for trend-aligned
    // signals during confirmed H1+HTF consensus. It is NOT applied to counter-trend
-   // signals — the anti-trend veto already handles those.
+   // signals - the anti-trend veto already handles those.
    bool htfConsensusTrade = (g_htfConsensusDir == 1 && signal == 1) ||
                             (g_htfConsensusDir == -1 && signal == -1);
    if(htfConsensusTrade)
@@ -20763,17 +20791,17 @@ void OnTick()
       Print(accelReason);
    }
 
-   // v5.7.0 — ADAPTIVE GRADE TIGHTENING IS PERMANENTLY DISABLED.
+   // v5.7.0 - ADAPTIVE GRADE TIGHTENING IS PERMANENTLY DISABLED.
    // User analysis of live trades concluded that the adaptive system was
-   // creating a death spiral: lose → raise threshold → fewer trades, only
-   // the rare "high-confidence" setups → those setups happen to be the
-   // overfitted ones → they lose → raise threshold again. The strategy
+   // creating a death spiral: lose -> raise threshold -> fewer trades, only
+   // the rare "high-confidence" setups -> those setups happen to be the
+   // overfitted ones -> they lose -> raise threshold again. The strategy
    // should stay STABLE during drawdowns; only POSITION SIZE should change.
    double dynGradeB = effGradeB;
    // Adaptive grade tightening DISABLED entirely. Code block removed in v5.7.0.
    // To re-enable (not recommended), restore the block from git history.
-   // v5.1.5: rename worst label "PASS" → "SKIP". The literal text "PASS" was
-   // misleading — it appeared next to "— PASS" in logs making users think the
+   // v5.1.5: rename worst label "PASS" -> "SKIP". The literal text "PASS" was
+   // misleading - it appeared next to "- PASS" in logs making users think the
    // signal was accepted when it was actually rejected.
       grade = combinedScore >= InpGradeAPlus ? "A+"
               : combinedScore >= InpGradeA    ? "A"
@@ -20879,7 +20907,7 @@ void OnTick()
             g_drawdownPause = true;
             Print("DRAWDOWN PAUSE: equity ", DoubleToString(ddFromHigh, 1),
                   "% below watermark $", DoubleToString(g_equityHighWatermark, 2),
-                  " — new entries suspended");
+                  " - new entries suspended");
          }
          else if(g_drawdownPause && ddFromHigh <= 3.0)
          {
@@ -20931,7 +20959,7 @@ void OnTick()
    }
    else if(!resumeFrozenPrimaryCandidate && CheckReEntryOpportunity()) return;
 
-   // v6.24.0 ALIGNED ENTRY ENGINE — exact authority order:
+   // v6.24.0 ALIGNED ENTRY ENGINE - exact authority order:
    // candidate -> score/grade -> confirmed structure -> freshness/extension
    // -> one 2-3 minute timing owner -> one news owner -> operational risk
    // -> OpenTrade. The post-delay pass always recomputes freshness first.
@@ -21108,7 +21136,7 @@ void OnTick()
    // know whether it actually opened a position) -- a risk block, broker
    // rejection, or any other early-exit inside OpenTrade still left the EA
    // believing a trade had opened. Only commit this state on a confirmed fill.
-   // v6.24.8 — immediately-before-OrderSend market-thesis recheck. Reserved
+   // v6.24.8 - immediately-before-OrderSend market-thesis recheck. Reserved
    // exclusively for the same "genuinely invalidated" conditions the
    // existing authorities above already treat as blocking (confirmed
    // opposite BOS+HTF, or an extreme location with no realistic remaining
@@ -21185,7 +21213,7 @@ void OnTick()
    g_lastEntryTimingDecision.valid = false;
    if(tradeOpened)
    {
-      // v5.3.1 — remember this entry's grade + score so adverse-pyramid logic and
+      // v5.3.1 - remember this entry's grade + score so adverse-pyramid logic and
       // high-grade ratchet looseness can reference them.
       g_lastEntryGrade = grade;
       g_lastEntryScore = combinedScore;
@@ -21195,7 +21223,7 @@ void OnTick()
       lastDashScore  = combinedScore;
       lastDashGrade  = grade;
 
-      // v6.4.0 UPGRADE 4 — Decision Scorecard (TRADE OPENED)
+      // v6.4.0 UPGRADE 4 - Decision Scorecard (TRADE OPENED)
       string csrc = "none";
       bool cOk = (g_aiClaudeVote == "BUY" || g_aiClaudeVote == "SELL");
       bool gOk = (g_aiGPTVote    == "BUY" || g_aiGPTVote    == "SELL");
@@ -21407,7 +21435,7 @@ bool XAU_ReconcileFinalRisk(double &lots, double actualSLDistance, double lotSte
    if(equity <= 0) return true;
 
    double slDollarPerLot = RiskPerLotForDistance(actualSLDistance);
-   if(slDollarPerLot <= 0) return true; // can't price it — existing upstream skip-safety already handles this case
+   if(slDollarPerLot <= 0) return true; // can't price it - existing upstream skip-safety already handles this case
 
    double approvedDollarCap = equity * MathMax(approvedCapPct, 0.0) / 100.0;
    double lotsBefore            = lots;
@@ -21422,7 +21450,7 @@ bool XAU_ReconcileFinalRisk(double &lots, double actualSLDistance, double lotSte
    // only field the entry pipeline never actually uses) and NOT baseRisk/
    // ConfigBase (the per-grade target risk, which is EXPECTED to sit below
    // this backstop for a normal trade and is left alone). This function only
-   // ever intervenes when the final lot would breach that outer backstop —
+   // ever intervenes when the final lot would breach that outer backstop -
    // it does not pull a well-sized A+/A trade down to some smaller "displayed"
    // number, and it does not touch trades that are already within cap.
    string action = "NONE_WITHIN_CAP";
@@ -21450,7 +21478,7 @@ bool XAU_ReconcileFinalRisk(double &lots, double actualSLDistance, double lotSte
          action = "BLOCKED_MINLOT_EXCEEDS_CAP";
          proceed = false;
          blockReason = StringFormat(
-            "RISK-RECONCILE BLOCK [%s]: broker minLot %.4f would risk $%.2f (%.2f%% equity) > approved cap %.2f%% ($%.2f equity=$%.2f) — no safe lot exists, blocking instead of silently exceeding the risk cap",
+            "RISK-RECONCILE BLOCK [%s]: broker minLot %.4f would risk $%.2f (%.2f%% equity) > approved cap %.2f%% ($%.2f equity=$%.2f) - no safe lot exists, blocking instead of silently exceeding the risk cap",
             context, minLot, minLot * slDollarPerLot, minLot * slDollarPerLot / equity * 100.0,
             approvedCapPct, approvedDollarCap, equity);
       }
@@ -21647,14 +21675,14 @@ bool XAU_GrowthGuardManagePosition(ulong ticket, bool isBuy, double openPx,
    string dirStr = isBuy ? "BUY" : "SELL";
 
    // v6.5.0 (audit bug #5): JUNE_16_19_BALANCE_MODE used to size lots off
-   // balance/grade, not the real SL distance — a 0.21-lot trade could carry
+   // balance/grade, not the real SL distance - a 0.21-lot trade could carry
    // ~$489 of real SL risk while this flat equity% cap (built for
    // REAL_RISK_MODE, where lot size is already SL-risk-derived) defaulted to
    // ~$45, a structure-blind stop at under 10% of the trade's actual SL.
    // Confirmed live: a +$77.91 winner survived this cap by about $2 before
    // running to profit. Raise the cap to at least the trade's real SL-distance
-   // risk so the broker SL — not a hidden tighter EA-side cap — is the real
-   // stop. v6.18.0: this is now UNCONDITIONAL, not June-mode-gated — lot
+   // risk so the broker SL - not a hidden tighter EA-side cap - is the real
+   // stop. v6.18.0: this is now UNCONDITIONAL, not June-mode-gated - lot
    // sizing is always real-SL-risk-derived now (InpNormalRiskPct, uniform
    // across every account size), so the premise "REAL_RISK_MODE is a no-op"
    // no longer holds either way; both former modes need this same protection
@@ -21704,7 +21732,7 @@ bool XAU_GrowthGuardManagePosition(ulong ticket, bool isBuy, double openPx,
       lastExitReason = StringFormat("GROWTH_HARD_LOSS_EXIT | %s loss $%.2f exceeded %.2f%% equity cap $%.2f",
                                     dirStr, profit, InpGrowthMaxTradeLossEquityPct, maxTradeLossUSD);
       // v6.5.0 (audit bug #5): this used to compare maxTradeLossUSD against
-      // equity*0.015 — the SAME 1.5% that InpGrowthMaxTradeLossEquityPct
+      // equity*0.015 - the SAME 1.5% that InpGrowthMaxTradeLossEquityPct
       // defaults to, making the clause always true by construction and the
       // whole OR unconditional regardless of thesisFailing/badEntryGuardOn.
       // Compare against a threshold genuinely TIGHTER than the default so
@@ -22058,7 +22086,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                              "OpenTrade reached; execution-layer gates are now checking risk, exposure, margin, and broker send.",
                              reason, 0.0);
 
-   // v6.20.3 (Commit C) — cross-instance entry lock. Every caller reaches
+   // v6.20.3 (Commit C) - cross-instance entry lock. Every caller reaches
    // OpenTrade() (fresh scan, recovery, force-open) so this is the one place
    // a check here is guaranteed to apply regardless of which path decided to
    // trade -- same reasoning as the Exhaustion/Reversal backstop just below.
@@ -22120,7 +22148,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       return false;
    }
 
-   // v6.24.14 — universal five-minute post-trade execution cooldown +
+   // v6.24.14 - universal five-minute post-trade execution cooldown +
    // exhausted-same-direction re-entry ban. Every caller reaches
    // OpenTrade() (fresh scan, RE_ENTRY, force-open), same reasoning as the
    // cross-instance lock immediately above. isManualOverride is exempt for
@@ -22164,7 +22192,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                      signal == 1 ? "BUY" : "SELL", EnumToString(oldDirState));
       }
 
-      // v6.24.15 — Entry Readiness Engine, computed for telemetry/Command
+      // v6.24.15 - Entry Readiness Engine, computed for telemetry/Command
       // Center display on every call (unchanged).
       //
       // v6.24.17 CRITICAL FIX -- runtime-proven from the live 2026-07-16
@@ -22235,7 +22263,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // function owns operational collision, exposure, risk, margin, broker
    // volume and stop-geometry safety only.
 
-   // v5.8.6 — Execution-layer hedge backstop. The main signal path already
+   // v5.8.6 - Execution-layer hedge backstop. The main signal path already
    // blocks this, but OpenTrade can also be reached by recovery/re-entry paths.
    int openDir = GetOpenExposureDirection();
    if(InpBlockNewEntriesIfHedged && openDir == 2)
@@ -22259,7 +22287,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       return false;
    }
 
-   // v4.7.6 — AGGREGATE EXPOSURE GATE
+   // v4.7.6 - AGGREGATE EXPOSURE GATE
    //   Sum up the $-loss-if-SL-hit across ALL currently-open positions in our magic.
    //   This early gate blocks entries when current exposure is already too high.
    //   A second final gate below includes the candidate trade after lot sizing.
@@ -22276,7 +22304,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          {
             string aggMsg = StringFormat("AGG-RISK BLOCK: open $%.0f (%g lots) > %.2f%% equity cap $%.0f",
                                           aggDollar, aggLots, effectiveAggregateCap, maxAggDollar);
-            Print("⛔ ", aggMsg, ". New entries blocked until exposure drops.");
+            Print("[BLOCKED] ", aggMsg, ". New entries blocked until exposure drops.");
             g_lastSkipReason = aggMsg;
             UpdateDashboard(0, 0.0, "AGG-RISK");
             lastAggSkip = TimeCurrent();
@@ -22291,7 +22319,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       double maxTotal = InpMaxTotalLots;
       if(maxTotal <= 0)
       {
-         // auto: roughly 3% of equity at average SL distance ($16 per lot at 16pt SL × $10)
+         // auto: roughly 3% of equity at average SL distance ($16 per lot at 16pt SL x $10)
          maxTotal = (equity * 0.03) / 160.0;
          maxTotal = MathMax(0.5, maxTotal); // never below 0.5
       }
@@ -22301,7 +22329,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          if(TimeCurrent() - lastLotSkip > 60)
          {
             string lotsMsg = StringFormat("TOTAL-LOTS BLOCK: open lots %.2f >= cap %.2f", aggLots, maxTotal);
-            Print("⛔ ", lotsMsg, ". New entries blocked.");
+            Print("[BLOCKED] ", lotsMsg, ". New entries blocked.");
             g_lastSkipReason = lotsMsg;
             UpdateDashboard(0, 0.0, "LOT-CAP");
             lastLotSkip = TimeCurrent();
@@ -22447,7 +22475,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // Reward/room quality was decided by the shared freshness authority;
    // Growth Guard has no second execution veto inside OpenTrade.
 
-   // Lot sizing — v6.21.2 FULL-RISK BINARY MODE (replaces the v6.18.0 60%-100%
+   // Lot sizing - v6.21.2 FULL-RISK BINARY MODE (replaces the v6.18.0 60%-100%
    // quality band). Owner directive 2026-07-13: a trade is either APPROVED, in
    // which case it uses the full configured InpNormalRiskPct with no grade / AI /
    // memory / committee / session / volatility / performance / drawdown scaling,
@@ -22464,7 +22492,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    bool entryQualityScout = false; // v6.24.0: reduced-risk/scout classification removed
    double riskAfterSignal = riskPct;
 
-   // v6.18.0: AccountSizeRiskMultiplier() no longer scales riskPct — InpNormalRiskPct is
+   // v6.18.0: AccountSizeRiskMultiplier() no longer scales riskPct - InpNormalRiskPct is
    // DELIBERATELY uniform across every account size. acctSizeMult is still computed
    // (kept for telemetry/other callers) but held at 1.0 here.
    double acctSizeMult = 1.0; AccountSizeRiskMultiplier();
@@ -22474,20 +22502,20 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    double pgMult = 1.0;
    double riskAfterPG = riskPct;
 
-   // v6.4.16: REMOVED — drawdown recovery risk cap disabled.
+   // v6.4.16: REMOVED - drawdown recovery risk cap disabled.
    // drawdownActive still gates B-grade via the ADAPTIVE_RECOVERY gate earlier in ScanSignals.
    // A/A+ trades that reach this point trade at FULL account-mode risk.
    double drawdownMult = 1.0;   // kept for audit log compatibility (always 1.0 now)
    if(drawdownActive)
-      Print("DRAWDOWN MODE active — lot sizing UNCHANGED (v6.4.16: protection via quality gate only)");
+      Print("DRAWDOWN MODE active - lot sizing UNCHANGED (v6.4.16: protection via quality gate only)");
 
-   // v6.4.16: REMOVED — InpCarefulMode lot reductions disabled.
+   // v6.4.16: REMOVED - InpCarefulMode lot reductions disabled.
    // Weekly profit target is now advisory only; lot size is not reduced near the target.
    // If the user wants to protect weekly gains, use the weekly target halt (InpWeeklyTarget)
    // which stops trading entirely rather than taking tiny "fear trades."
    double riskAfterCareful = riskPct;   // kept for audit log compatibility
 
-   // Session scaling — v6.21.2 FULL-RISK BINARY MODE: session time is a PASS/BLOCK
+   // Session scaling - v6.21.2 FULL-RISK BINARY MODE: session time is a PASS/BLOCK
    // signal upstream (spread/liquidity gates in ScanSignals), never a lot reducer.
    // sessionMult is still computed and logged for telemetry (what the old Asia cut
    // WOULD have been) but is no longer multiplied into riskPct for any grade.
@@ -22501,27 +22529,27 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       if(trendContinuation)
          asianMult = g_propFirmMode ? 0.55 : 0.65;
       sessionMult = asianMult;
-      PrintFormat("[LOT_TRACE] Asia session — informational only, NOT applied to lot size | grade=B | wouldHaveBeen=%.2fx | hour=%d",
+      PrintFormat("[LOT_TRACE] Asia session - informational only, NOT applied to lot size | grade=B | wouldHaveBeen=%.2fx | hour=%d",
                   asianMult, dt.hour);
    }
    double riskAfterSession = riskPct;
 
-   // v6.4.16: REMOVED — performance multiplier and pattern loss multiplier disabled.
+   // v6.4.16: REMOVED - performance multiplier and pattern loss multiplier disabled.
    // GetPerformanceMultiplier() returns 1.0 (disabled above). Pattern streak adjustments
-   // (loss streak → 0.70x, win streak → 1.3x) are also removed. Position size must not
-   // be influenced by previous wins or losses — only current market conditions.
+   // (loss streak -> 0.70x, win streak -> 1.3x) are also removed. Position size must not
+   // be influenced by previous wins or losses - only current market conditions.
    double perfMult = GetPerformanceMultiplier();   // always 1.0 in v6.4.16
    double patternMult = 1.0;                       // always 1.0 in v6.4.16
    double riskAfterPattern = riskPct;              // kept for audit log compatibility
 
-   // VOLATILITY-ADAPTIVE SIZING — v6.21.2 FULL-RISK BINARY MODE: volatility is a
+   // VOLATILITY-ADAPTIVE SIZING - v6.21.2 FULL-RISK BINARY MODE: volatility is a
    // PASS/BLOCK signal upstream (ATR-based SL placement already captures it in the
    // dollar-risk formula). volMult is still computed and logged for telemetry but
    // is no longer multiplied into riskPct for any grade.
    bool highGradeVol = (StringFind(reason, "[A+]") >= 0 || StringFind(reason, "[A]") >= 0);
    double volMult = highGradeVol ? 1.0 : GetVolAdaptiveMult();
    if(!highGradeVol && volMult != 1.0)
-      PrintFormat("[LOT_TRACE] VOL-ADAPT — informational only, NOT applied to lot size | wouldHaveBeen=%.2fx (%s)",
+      PrintFormat("[LOT_TRACE] VOL-ADAPT - informational only, NOT applied to lot size | wouldHaveBeen=%.2fx (%s)",
                   volMult, volMult < 1.0 ? "high vol" : "calm");
 
    if(g_propFirmMode && g_propFirmRiskPerTradePct > 0.0 &&
@@ -22541,7 +22569,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    double equityForSizing = StrategyReferenceBalance();
    double largeFloor = 0.0; // no performance/fear floor
 
-   // v6.21.2 — DEFENSIVE INVARIANT: riskPct must equal InpNormalRiskPct exactly for
+   // v6.21.2 - DEFENSIVE INVARIANT: riskPct must equal InpNormalRiskPct exactly for
    // every normal approved trade (entryQualityScout already blocked the trade above,
    // so it can never reach here; g_propFirmMode is the one explicitly-enabled
    // exception, per owner directive). InpReducedRiskFloorPct is set equal to
@@ -22576,7 +22604,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       return false;
    }
    // v6.18.0: InpLotSizingMode / JUNE_16_19_BALANCE_MODE / REAL_RISK_MODE retired as a
-   // behavioral branch — one authority now (see the UNIFIED SIZING block above). The
+   // behavioral branch - one authority now (see the UNIFIED SIZING block above). The
    // enum/input stay declared (other code and dashboards still read InpLotSizingMode
    // for display) but no longer change what lot a trade actually gets: both paths
    // converge on the same real-SL-risk formula below. This closes the two-parallel-
@@ -22597,7 +22625,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // multiplier stacking on small accounts) is REMOVED in v6.21.2 FULL-RISK BINARY
    // MODE: there is no more multiplier stack to compensate for. riskPct is always
    // exactly InpNormalRiskPct for an approved normal trade, so rawLots is the
-   // honest balance×15%÷slDollarPerLot result with nothing left to counteract.
+   // honest balancex15%/slDollarPerLot result with nothing left to counteract.
    double proportionalFloorApplied = 0.0;   // always 0 now; kept only so downstream log lines still compile
 
    if(maxLot <= 0.0 || rawLots > maxLot + 0.0000001)
@@ -22623,7 +22651,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    {
       // v6.21.2 FULL-RISK BINARY MODE FIX (Part 7): a calculated lot below broker
       // minimum is NEVER silently substituted with minLot. Binary rule: valid trade
-      // = full configured risk; if the real math (balance × InpNormalRiskPct ÷
+      // = full configured risk; if the real math (balance x InpNormalRiskPct /
       // slDollarPerLot) doesn't reach minLot, the trade is skipped with an explicit
       // reason, not silently opened at a token size the owner never approved.
       string blockReasonTxt = (rawLots > 0)
@@ -22659,13 +22687,13 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // v6.18.0: XAU_GrowthGuardCapLots() no longer runs at entry time. It shares its two
    // inputs (InpGrowthMaxTradeLossEquityPct=1.5%, InpGrowthMaxBasketLossEquityPct=2.0%)
    // with the in-trade defensive "thesis broken, cut the loss" exit logic further down
-   // this file — those inputs are correctly small for THAT purpose (cut a clearly-wrong
+   // this file - those inputs are correctly small for THAT purpose (cut a clearly-wrong
    // trade early) but were never meant to also be the entry-sizing ceiling; leaving both
    // roles on one input meant this cap would have silently re-clamped every trade back
    // to ~1.5% and defeated the new InpNormalRiskPct=15% target the moment the old
    // JUNE_16_19_BALANCE_MODE bypass was removed above. Entry-time capping is now solely
    // owned by EffectiveSingleRiskCapPct()/EffectiveAggregateRiskCapPct() via
-   // XAU_ReconcileFinalRisk() and the aggregate-risk block below — one authority, not two
+   // XAU_ReconcileFinalRisk() and the aggregate-risk block below - one authority, not two
    // disagreeing ones. XAU_GrowthGuardCapLots()'s in-trade exit role is untouched.
    double beforeGrowthLots = lots;
    double afterGrowthLots = lots;
@@ -22684,11 +22712,11 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       return false;
    }
 
-   // v4.7.5 — HARD EQUITY-% CAP: regardless of risk math, no single trade can
+   // v4.7.5 - HARD EQUITY-% CAP: regardless of risk math, no single trade can
    //   risk more than InpMaxRiskPctEquity% of current equity if SL hits.
    //   This is the absolute backstop that prevents the "5+ lot whacked for $4k"
-   //   scenario the user reported on a $100k account. SL distance × tick value
-   //   × lots = $-loss-if-SL-hit. Cap that at e.g. 1.5% of equity.
+   //   scenario the user reported on a $100k account. SL distance x tick value
+   //   x lots = $-loss-if-SL-hit. Cap that at e.g. 1.5% of equity.
    if(!juneBalanceLotMode && effectiveSingleCap > 0 && slDist > 0 && slDollarPerLotRaw > 0)
    {
       double equity = StrategyReferenceBalance();
@@ -22764,12 +22792,12 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       }
    }
 
-   // Margin check — v6.24.1: real broker-aware margin verification, not an
+   // Margin check - v6.24.1: real broker-aware margin verification, not an
    // arbitrary ceiling. SL-based risk sizing (InpNormalRiskPct=15%, computed
    // above as balance*riskPct/100 / slDollarPerLot) and margin usage are two
    // independent things. The old rule blocked any trade whose OrderCalcMargin
    // result exceeded 50% of free margin, regardless of whether the broker could
-   // actually support it — that rejected valid trades (e.g. lot=0.56 needing
+   // actually support it - that rejected valid trades (e.g. lot=0.56 needing
    // ~$2,262 margin against ~$3,016 free margin: well within what the broker
    // allows, but >50% of free margin, so it was blocked). The only real
    // question is whether the broker itself would accept the order.
@@ -22778,7 +22806,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    double desiredLots = lots;   // pre-clamp 15%-risk lot, for logging/report
    if(!OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), lots, price, marginNeeded))
    {
-      Print("OrderCalcMargin failed — trade blocked");
+      Print("OrderCalcMargin failed - trade blocked");
       BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "ERROR", "MarginGate",
                                 signal, funnelSetup, funnelGrade, funnelScore,
                                 true, false, "ERROR", "ORDER_CALC_MARGIN_FAILED",
@@ -22787,7 +22815,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       return false;
    }
 
-   // Small emergency reserve only (InpMarginReservePct, default 10%) — not a
+   // Small emergency reserve only (InpMarginReservePct, default 10%) - not a
    // 50% cap. Keeps a sliver of free margin so a single fill can't run the
    // account to the exact margin-call edge; everything above that reserve is
    // available to the trade if the broker's own margin math supports it.
@@ -22796,7 +22824,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
 
    if(marginNeeded > marginAvailableForTrade)
    {
-      // The 15%-risk lot doesn't fit. Do not silently reduce to 0.01 — compute
+      // The 15%-risk lot doesn't fit. Do not silently reduce to 0.01 - compute
       // and report the actual maximum lot the broker's margin supports (margin
       // scales ~linearly with lot size at a given price/leverage), normalize it
       // to the broker's lot step, and re-verify with OrderCalcMargin.
@@ -22808,7 +22836,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       double maxMarginLotsMargin = 0.0;
       if(maxMarginLots >= minLot &&
          !OrderCalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, Symbol(), maxMarginLots, price, maxMarginLotsMargin))
-         maxMarginLots = 0.0;   // broker couldn't even price this lot — treat as unsupported
+         maxMarginLots = 0.0;   // broker couldn't even price this lot - treat as unsupported
       // Rounding/broker geometry can still push the re-verified margin over
       // budget by a step; walk it down until it genuinely fits.
       while(maxMarginLots >= minLot && maxMarginLotsMargin > marginAvailableForTrade)
@@ -22850,9 +22878,9 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    }
    lots = NormalizeDouble(lots, lotDigits);
 
-   // v6.24.1 — full risk/margin decision trace for every approved trade.
+   // v6.24.1 - full risk/margin decision trace for every approved trade.
    // v6.24.4: horizon + slSource appended so this one line also satisfies
-   // the "final actual risk %" proof for whichever SL source was used —
+   // the "final actual risk %" proof for whichever SL source was used -
    // actualRiskPct recomputes from the final normalized lot, so a wider
    // structural SL that produced a smaller lot still shows the same
    // configured target percentage, not a silently reduced one.
@@ -22866,7 +22894,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                slDollarPerLotRaw, desiredLots, riskMathLots, marginNeeded,
                freeMargin, marginReserve, InpMarginReservePct, lots, actualRiskPct);
 
-   // v6.18.0: per-mode "capApplied" log removed along with the June/RealRisk branch —
+   // v6.18.0: per-mode "capApplied" log removed along with the June/RealRisk branch -
    // LOT_TRACE below already reports every cap stage for the one unified path.
 
    string microCollapseReason = "NONE";
@@ -22883,7 +22911,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          microCollapseReason += "|BASKET_CAP";
    }
 
-   // v6.4.15 — FULL LOT SIZE REPORT (Phase 7)
+   // v6.4.15 - FULL LOT SIZE REPORT (Phase 7)
    // Every execution prints the complete stage-by-stage breakdown.
    // "Displayed Risk" = what InpRiskPercent shows in settings (may differ from actual).
    // "Configured Base Risk" = what is actually used after account-mode override.
@@ -22901,23 +22929,23 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    Print("  Broker Min/Max/Step:     ", DoubleToString(minLot, lotDigits), "/",
          DoubleToString(maxLot, lotDigits), "/", DoubleToString(lotStep, lotDigits));
    Print("  ---");
-   Print("  Grade Mult (", DoubleToString(sizeMulti, 3), "x): informational only, NOT applied to lot size — risk=", DoubleToString(riskAfterSignal, 3), "%");
-   Print("  Acct Scale (", DoubleToString(acctSizeMult, 2), "x): disabled v6.18.0 — risk=", DoubleToString(riskAfterAccount, 3), "%");
+   Print("  Grade Mult (", DoubleToString(sizeMulti, 3), "x): informational only, NOT applied to lot size - risk=", DoubleToString(riskAfterSignal, 3), "%");
+   Print("  Acct Scale (", DoubleToString(acctSizeMult, 2), "x): disabled v6.18.0 - risk=", DoubleToString(riskAfterAccount, 3), "%");
    Print("  PG Mult (1.00x - disabled v6.4.16): risk=", DoubleToString(riskAfterPG, 3), "%");
    Print("  Careful Mode (disabled v6.4.16):          risk=", DoubleToString(riskAfterCareful, 3), "%");
-   Print("  Session Mult (", DoubleToString(sessionMult, 2), "x): informational only, NOT applied — risk=", DoubleToString(riskAfterSession, 3), "%");
+   Print("  Session Mult (", DoubleToString(sessionMult, 2), "x): informational only, NOT applied - risk=", DoubleToString(riskAfterSession, 3), "%");
    Print("  Pattern Mult (disabled v6.4.16 = 1.00x): risk=", DoubleToString(riskAfterPattern, 3), "%");
-   Print("  Vol Adapt Mult (", DoubleToString(volMult, 2), "x): informational only, NOT applied — final risk=", DoubleToString(riskPct, 3), "%");
+   Print("  Vol Adapt Mult (", DoubleToString(volMult, 2), "x): informational only, NOT applied - final risk=", DoubleToString(riskPct, 3), "%");
    Print("  Risk Amount:             $", DoubleToString(riskAmount, 2));
    Print("  Raw Calculated Lot:      ", DoubleToString(rawLots, 4));
    Print("  Risk-Math Lot:           ", DoubleToString(riskMathLots, lotDigits));
    Print("  After InpMaxLots cap:    ", DoubleToString(afterInpMaxLots, lotDigits));
-   Print("  After Growth Guard:      ", DoubleToString(beforeGrowthLots, lotDigits), " → ", DoubleToString(afterGrowthLots, lotDigits));
-   Print("  After Basket Cap:        ", DoubleToString(beforeBasketCapLots, lotDigits), " → ", DoubleToString(afterBasketCapLots, lotDigits));
+   Print("  After Growth Guard:      ", DoubleToString(beforeGrowthLots, lotDigits), " -> ", DoubleToString(afterGrowthLots, lotDigits));
+   Print("  After Basket Cap:        ", DoubleToString(beforeBasketCapLots, lotDigits), " -> ", DoubleToString(afterBasketCapLots, lotDigits));
    Print("  Lot Before Final Reconciliation: ", DoubleToString(lots, lotDigits),
          " (candidate risk ", DoubleToString(executedRiskPct, 3), "% / $",
-         DoubleToString(lots * slDollarPerLotRaw, 2), " at SL — see RISK-RECONCILE line below for the TRUE final number)");
-   Print("  ConfigBase=", DoubleToString(baseRisk, 2), "% (InpRiskPercent input is NOT the live cap — ",
+         DoubleToString(lots * slDollarPerLotRaw, 2), " at SL - see RISK-RECONCILE line below for the TRUE final number)");
+   Print("  ConfigBase=", DoubleToString(baseRisk, 2), "% (InpRiskPercent input is NOT the live cap - ",
          "InpNormalRiskPct is the sole normal-entry risk authority; the hard backstop is InpMaxRiskPctEquity=",
          DoubleToString(InpMaxRiskPctEquity, 2), "%, enforced by RISK-RECONCILE)");
    Print("  Micro Collapse Reason:   ", microCollapseReason);
@@ -22984,11 +23012,11 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       g_pendingBrainEntryAudit += lotDetail;
    }
 
-   // ======== v6.4.17 — MANDATORY LOT TRACE (fires before every OrderSend) ========
+   // ======== v6.4.17 - MANDATORY LOT TRACE (fires before every OrderSend) ========
    double lotTrace_baseRisk      = baseRisk;
    double lotTrace_baseRiskLot   = (slDollarPerLotRaw > 0) ? (balance * baseRisk / 100.0 / slDollarPerLotRaw) : 0;
    double lotTrace_afterGradeLot = (slDollarPerLotRaw > 0) ? (balance * baseRisk / 100.0 * sizeMulti / slDollarPerLotRaw) : 0;
-   string lotTrace_reductionSummary = "NONE — unsafe full-risk orders are blocked, never reduced";
+   string lotTrace_reductionSummary = "NONE - unsafe full-risk orders are blocked, never reduced";
 
    Print("===== [LOT_TRACE] =====");
    PrintFormat("  grade         = %s", StringFind(reason,"[A+]")>=0 ? "A+" : StringFind(reason,"[A]")>=0 ? "A" : "B");
@@ -23001,17 +23029,17 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                InpAccountMode == ACCT_BALANCED ? "BALANCED" :
                InpAccountMode == ACCT_CONSERVATIVE ? "CONSERVATIVE" : "AGGRESSIVE",
                lotTrace_baseRisk);
-   PrintFormat("  baseRiskLot   = %.4f  (no-multiplier: balance×%.2f%%÷slDollar)",
+   PrintFormat("  baseRiskLot   = %.4f  (no-multiplier: balancex%.2f%%/slDollar)",
                lotTrace_baseRiskLot, lotTrace_baseRisk);
-   PrintFormat("  afterGradeMult= %.4f  (×sizeMulti %.3f | A+=1.10, A=0.85, B=0.45)",
+   PrintFormat("  afterGradeMult= %.4f  (xsizeMulti %.3f | A+=1.10, A=0.85, B=0.45)",
                lotTrace_afterGradeLot, sizeMulti);
    PrintFormat("  sessionMult   = %.2f  (%s)", sessionMult,
-               sessionMult < 0.999 ? "informational only — NOT applied" : "1.00 — no historical session reduction");
+               sessionMult < 0.999 ? "informational only - NOT applied" : "1.00 - no historical session reduction");
    PrintFormat("  volCapMult    = bypassed for A/A+ in v6.4.17");
    PrintFormat("  volAdaptMult  = %.2f  (%s)", volMult,
-               MathAbs(volMult-1.0)<0.01 ? "flat/informational" : "informational only — NOT applied");
+               MathAbs(volMult-1.0)<0.01 ? "flat/informational" : "informational only - NOT applied");
    PrintFormat("  pgMult        = %.2f  (1.0=normal; 0.0=T3 hard-block)", pgMult);
-   PrintFormat("  riskPctFinal  = %.3f%%  →  riskAmount=$%.2f", riskPct, riskAmount);
+   PrintFormat("  riskPctFinal  = %.3f%%  ->  riskAmount=$%.2f", riskPct, riskAmount);
    PrintFormat("  rawLots       = %.4f", rawLots);
    PrintFormat("  fullRiskLots  = %.4f  (broker-step floor; all later caps are PASS/BLOCK)", desiredLots);
    PrintFormat("  marginCheck   = PASS | required=$%.2f | free=$%.2f | finalLot unchanged=%.4f", marginNeeded, freeMargin, lots);
@@ -23019,7 +23047,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    PrintFormat("  reductions    = %s", lotTrace_reductionSummary);
 
    // v6.4.18: MICRO-LOT HARD-CAP DIAGNOSIS
-   // If lot is still tiny (≤2×minLot) after enforcement, explain exactly why.
+   // If lot is still tiny (<=2xminLot) after enforcement, explain exactly why.
    if(lots <= minLot * 2.01)
    {
       bool isHighGrade = (StringFind(reason, "[A+]") >= 0 || StringFind(reason, "[A]") >= 0);
@@ -23033,7 +23061,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       }
       if(StringLen(microReason) == 0) microReason = " BROKER_MIN_STEP";
 
-      PrintFormat("  *** MICRO-LOT DIAGNOSIS: lot=%.2f ≤2x minLot(%.2f) | grade=%s | hard-cap reasons:%s",
+      PrintFormat("  *** MICRO-LOT DIAGNOSIS: lot=%.2f <=2x minLot(%.2f) | grade=%s | hard-cap reasons:%s",
                   lots, minLot, isHighGrade ? (StringFind(reason,"[A+]")>=0?"A+":"A") : "B", microReason);
       if(isHighGrade)
          PrintFormat("  *** NOTE: enforcement floor restored sizeMulti to %.3f (A+/A grade baseline). "
@@ -23123,7 +23151,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // 12.5%-30% risk per trade while InpMaxRiskPctEquity claimed a 5% cap moments
    // earlier. The unified InpNormalRiskPct(15%)/InpReducedRiskFloorPct(9%) system above
    // already produces the same nominal lot sizes the floor targeted (~0.10 at $1k,
-   // ~0.25 at $3k, ~0.50 at $6-8k) at realistic SL distances — organically, from one
+   // ~0.25 at $3k, ~0.50 at $6-8k) at realistic SL distances - organically, from one
    // honest risk-%, not from a post-hoc override. InpMinAccountLotFloor/
    // InpAccountLotFloorPer1000 remain declared for back-compat but no longer act here.
 
@@ -23139,7 +23167,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       return false;
    }
 
-   // v6.25.15 — one final TradeBrain filter point for normal CORE/RE_ENTRY
+   // v6.25.15 - one final TradeBrain filter point for normal CORE/RE_ENTRY
    // execution. During the mandatory 180-day replay the default mode is
    // COLLECT_ONLY, so this call can only log/collect and cannot alter the
    // already-approved signal, direction, risk, lot, SL, TP, or exit policy.
@@ -23183,7 +23211,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       return false;
    }
 
-   // v6.20.3 (Commit C, adversarial-review fix) — the real, atomic
+   // v6.20.3 (Commit C, adversarial-review fix) - the real, atomic
    // cross-instance claim happens HERE, immediately before the broker send,
    // not earlier in this function: every hard gate above (Exhaustion/
    // Reversal backstop, hedge/exposure/margin/risk caps) has already had its
@@ -23203,7 +23231,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       return false;
    }
 
-   // v6.21.2 Part 12 — DEFINITIVE ENTRY/LOT AUDIT LOG. Fires once, right before the
+   // v6.21.2 Part 12 - DEFINITIVE ENTRY/LOT AUDIT LOG. Fires once, right before the
    // broker send, using the truly final `lots` (post margin/basket/reconcile). Every
    // approved normal trade's finalLots must be explainable from this single line.
    PrintFormat(
@@ -23368,7 +23396,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          g_lastEntryReadiness.finalAction = "POSITION_ACTIVE";
          g_lastEntryReadiness.reason = "Broker order filled; managing active position";
       }
-      // v6.24.13 — campaign registration lives HERE, not at any individual
+      // v6.24.13 - campaign registration lives HERE, not at any individual
       // caller's call site, precisely so every path that reaches a
       // confirmed fill through OpenTrade() (fresh entry, re-entry,
       // force-open -- all three call this same function) registers through
@@ -23413,8 +23441,8 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       }
 
       XAU_ATMarkOpportunityEntry(signal,trade.ResultPrice()>0.0?trade.ResultPrice():price,"NORMAL");
-      // v5.8.51: slippage monitoring — tracks difference between requested and filled price.
-      // On live ECN accounts, slippage is a real cost. Logged when > 0.20×ATR.
+      // v5.8.51: slippage monitoring - tracks difference between requested and filled price.
+      // On live ECN accounts, slippage is a real cost. Logged when > 0.20xATR.
       {
          double fillPx = trade.ResultPrice();
          MqlDateTime dt; TimeCurrent(dt);
@@ -23438,7 +23466,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       g_totalAllowed++; // v6.25.19: only broker-confirmed normal/re-entry fills count as allowed
       lastTradeDir = signal;
 
-      // v6.21.3 — owner rule 2026-07-13 point 6: audit-log when a fresh,
+      // v6.21.3 - owner rule 2026-07-13 point 6: audit-log when a fresh,
       // independently-approved normal entry (this IS one -- it already passed
       // every normal gate to reach this point; RE_ENTRY/COUNTER_EXCURSION
       // never call this OpenTrade branch of the function) follows a recent
@@ -23552,7 +23580,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                               "", g_pendingBrainCombinedScore,
                               (double)lastAIConfidence, signal, g_pendingBrainGrade, "");
 
-      // v6.4.19 — TRADE THESIS MONITOR: store entry snapshot so ManagePositions()
+      // v6.4.19 - TRADE THESIS MONITOR: store entry snapshot so ManagePositions()
       // can continuously re-evaluate whether the trade reason is still valid.
       if(openedPosId > 0)
       {
@@ -23612,7 +23640,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                          StringFormat("Trade failed err=%d ret=%d", GetLastError(), trade.ResultRetcode()));
    }
 
-   // v5.0.0 — XAUAI CLOUD fanout: mirror this open to subscribers
+   // v5.0.0 - XAUAI CLOUD fanout: mirror this open to subscribers
    if(ok && CloudEnabled())
    {
       string grade = CloudExtractGrade(reason);
@@ -23625,7 +23653,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                      lots,                                // v1.3: master lot size
                                      accInfo.Balance());                  // v1.3: master balance ($)
       if(StringLen(sigId) > 0 && openedPosId > 0) CloudMapAdd(openedPosId, sigId);
-      // v5.1.5 — push to bot-reasoning feed so subscribers see EVERY trade fire
+      // v5.1.5 - push to bot-reasoning feed so subscribers see EVERY trade fire
       string setupForCloud = reason;
       int setupBracket = StringFind(setupForCloud, " [");
       if(setupBracket >= 0) setupForCloud = StringSubstr(setupForCloud, 0, setupBracket);
@@ -23641,7 +23669,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
 }
 
 //+------------------------------------------------------------------+
-//| LogExit — structured trader-style exit card                      |
+//| LogExit - structured trader-style exit card                      |
 //| Produces 3 lines per exit:                                       |
 //|   1. One-line summary (greppable)                                |
 //|   2. Full market context at close                                |
@@ -23658,14 +23686,14 @@ void LogExit(ulong ticket, string dir, double openPx, double closePx,
    string rsiZone = rsi > 70 ? "OB" : rsi > 55 ? "bull" : rsi > 45 ? "neutral" : rsi > 30 ? "bear" : "OS";
 
    // Line 1: summary
-   Print("┌─ EXIT #", ticket, " ", dir, " @ ", DoubleToString(closePx, _Digits),
+   Print("-- EXIT #", ticket, " ", dir, " @ ", DoubleToString(closePx, _Digits),
          "  P/L: $", DoubleToString(profit, 2), "  Peak: $", DoubleToString(peak, 2),
          "  Move: ", DoubleToString(priceMove, _Digits), "  T+", minsOpen, "min");
    // Line 2: context
-   Print("│  Path: ", path, "  |  Bar: ", barDir, "  EMA: ", emaRel,
+   Print("|  Path: ", path, "  |  Bar: ", barDir, "  EMA: ", emaRel,
          "  RSI: ", DoubleToString(rsi, 1), " (", rsiZone, ")");
    // Line 3: human explanation
-   Print("└─ Reason: ", reason);
+   Print("-- Reason: ", reason);
 
    lastExitReason = path + " | $" + DoubleToString(profit, 2) + " | " + reason;
    TTM_ReleaseSlot(ticket);   // v6.4.19: free the thesis record when position closes
@@ -23702,7 +23730,7 @@ bool CloseBasketPartial(double closePct, string reason)
 
       if(closeLots < minL || runnerLots < minL)
       {
-         PrintFormat("BASKET SOFT-LOCK SKIP #%I64u | lots %.2f close %.2f runner %.2f min %.2f — too small to split",
+         PrintFormat("BASKET SOFT-LOCK SKIP #%I64u | lots %.2f close %.2f runner %.2f min %.2f - too small to split",
                      ticket, lotsOpen, closeLots, runnerLots, minL);
          continue;
       }
@@ -23781,7 +23809,7 @@ double XAU_ReconstructOpenBasketPeakUSD(double currentPnL)
    int startShift = iBarShift(Symbol(), PERIOD_M5, earliestOpen, false);
    if(startShift < 0) return MathMax(0.0, currentPnL);
 
-   // v6.4.25 (audit bug #1 — phantom basket peak): shift 0 is the still-FORMING
+   // v6.4.25 (audit bug #1 - phantom basket peak): shift 0 is the still-FORMING
    // M5 bar. Its high/low-so-far can include price action from BEFORE this
    // position existed (if it opened mid-bar) and is not a completed, witnessed
    // range. Reconstructing a "proven peak" from it fabricates floating profit
@@ -23791,7 +23819,7 @@ double XAU_ReconstructOpenBasketPeakUSD(double currentPnL)
    // with bestFloating=$0.00 per TradeBrain, then got force-closed on
    // "giveback" from a peak that never existed). Only reconstruct from CLOSED
    // bars strictly AFTER the entry candle; if the position has not yet lived
-   // through one full post-entry M5 candle, skip reconstruction entirely —
+   // through one full post-entry M5 candle, skip reconstruction entirely -
    // live per-tick tracking below will pick up the real peak organically.
    if(startShift <= 1)
       return MathMax(0.0, currentPnL);
@@ -23833,7 +23861,7 @@ double XAU_ReconstructOpenBasketPeakUSD(double currentPnL)
    return MathMax(MathMax(0.0, currentPnL), reconstructed);
 }
 
-// v6.4.22 — dominant direction of the open EA basket (+1 buy, -1 sell, 0 flat/mixed)
+// v6.4.22 - dominant direction of the open EA basket (+1 buy, -1 sell, 0 flat/mixed)
 int XAU_BasketDominantDirection()
 {
    int buys = 0, sells = 0;
@@ -23846,18 +23874,18 @@ int XAU_BasketDominantDirection()
    }
    if(buys > 0 && sells == 0) return 1;
    if(sells > 0 && buys == 0) return -1;
-   return 0;   // flat or mixed-direction basket — no single structure to test
+   return 0;   // flat or mixed-direction basket - no single structure to test
 }
 
-// v6.4.22 — true structural invalidation for the basket's direction: BOS flip (H1),
+// v6.4.22 - true structural invalidation for the basket's direction: BOS flip (H1),
 // HTF consensus flip, or a confirmed M5 close through the recent swing level.
-// This is what "structure is actually broken" means for basket-level gating —
+// This is what "structure is actually broken" means for basket-level gating -
 // giveback %, cycle count, and time-after-peak are NOT structure.
 //
 // v6.4.25 (audit bug #2): the BOS/HTF checks were absolute ("currently
 // opposes basket direction"), not a FLIP since entry. Entries are explicitly
 // allowed against a standing BOS/HTF (SMC opposition is log-only, never a
-// block — InpSMC_OppPenalty is reserved/unused by design), so a standing
+// block - InpSMC_OppPenalty is reserved/unused by design), so a standing
 // opposite reading is not evidence anything changed. It only counts as
 // broken structure if it FLIPPED against the basket after formation.
 bool XAU_BasketStructureBroken(int basketDir)
@@ -24025,7 +24053,7 @@ bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakA
                      g_basketProfitLossCycles, InpLifecycleMaxProfitLossCycles);
       // v6.5.0 (audit bug #6): this closed unconditionally the instant a
       // recovering basket crossed a fairly modest bar (max($35, 20% of
-      // peak)) — mechanically cutting what could be a genuine continuation,
+      // peak)) - mechanically cutting what could be a genuine continuation,
       // no different in kind from any other giveback-style close. A basket
       // that already exhausted its cycle budget or shows a confirmed
       // reversal has earned the bank-now decision; otherwise let it keep
@@ -24057,7 +24085,7 @@ bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakA
                                     g_basketProfitLossCycles, g_basketPeakUSD);
       // v6.5.0 (audit bug #6): pass isGivebackTrigger=true so a still-
       // profitable basket (totalPnL>0) isn't auto-allowed to close just
-      // because it cycled — it needs the same reversal proof a loser needs.
+      // because it cycled - it needs the same reversal proof a loser needs.
       int basketDirCD1 = XAU_BasketDominantDirection();
       if(XAU_GateEarlyLossClose(0, basketDirCD1 >= 0, 0, SymbolInfoDouble(Symbol(), SYMBOL_BID),
                                 totalPnL, g_basketPeakUSD, "CYCLE_DECAY_EXIT BASKET",
@@ -24106,13 +24134,13 @@ bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakA
    return false;
 }
 //+------------------------------------------------------------------+
-//| v4.9.4 — BASKET PROTECT                                          |
+//| v4.9.4 - BASKET PROTECT                                          |
 //|   Treat ALL open EA positions as a single basket. Protect the    |
 //|   AGGREGATE floating PnL (not per-trade). v5.8.15 banks partial  |
 //|   basket profit first and keeps a runner alive. Close-all is     |
 //|   reserved for fast reversal, hard giveback, or second failure.  |
 //|                                                                  |
-//|   Returns true if it closed all positions this tick — caller     |
+//|   Returns true if it closed all positions this tick - caller     |
 //|   should skip per-trade ManagePositions() to avoid redundant     |
 //|   work on an empty book.                                         |
 //+------------------------------------------------------------------+
@@ -24143,7 +24171,7 @@ bool ManageBasket()
 
    // Aggregate floating PnL across all EA positions on this symbol
    double totalPnL = 0.0;
-   // v6.20.4 (Commit D) — aggregate basket risk (sum of each open position's
+   // v6.20.4 (Commit D) - aggregate basket risk (sum of each open position's
    // own lots * risk-per-lot-for-its-own-SL-distance), the basket-level
    // analog of the per-position rDollars already used by EV_PROTECT/A+
    // Shield via XAU_MinArmUSDForOwnR(). Used below so Basket Lock's floor
@@ -24205,7 +24233,7 @@ bool ManageBasket()
 
    // Arm the basket-lock once peak crosses threshold
    double armUSD = MathMax(InpBasketArmFloor, bal * EffBasketArmPct() / 100.0);
-   // v5.3.0 — Phase 3: dynamic basket TP. If momentum is still accelerating
+   // v5.3.0 - Phase 3: dynamic basket TP. If momentum is still accelerating
    // (last 3 M5 closes are higher-highs for buys / lower-lows for sells AND
    // ATR is rising), push arm threshold +25% so we don't flush too early on
    // a strong trend continuation.
@@ -24235,7 +24263,7 @@ bool ManageBasket()
       // logic above in any way.
       if(hATR_dbtp != INVALID_HANDLE) IndicatorRelease(hATR_dbtp);
    }
-   // v6.20.4 (Commit D) — R-normalize the basket arm threshold the same way
+   // v6.20.4 (Commit D) - R-normalize the basket arm threshold the same way
    // EV_PROTECT (line ~5089) and A+ Shield (line ~18567) already do via
    // XAU_MinArmUSDForOwnR(). Without this, armUSD is a flat dollar/equity-%
    // value: a bigger-lot basket's floating profit crosses it after a SMALLER
@@ -24317,7 +24345,7 @@ bool ManageBasket()
    // Log state every 60s so user can watch live
    if(TimeCurrent() - g_basketLastLog >= 60)
    {
-      PrintFormat("BASKET │ PnL=$%.2f │ Peak=$%.2f │ Floor=$%.2f │ Armed=%s BE=%s",
+      PrintFormat("BASKET | PnL=$%.2f | Peak=$%.2f | Floor=$%.2f | Armed=%s BE=%s",
                   totalPnL, g_basketPeakUSD, g_basketFloorUSD,
                   g_basketArmed ? "Y" : "N", g_basketBEHit ? "Y" : "N");
       g_basketLastLog = TimeCurrent();
@@ -24328,13 +24356,13 @@ bool ManageBasket()
 
    // ============ v4.9.7 SMART GUARDS (run BEFORE floor trigger) ============
    //
-   //   Guard 1 — FAST REVERSAL CIRCUIT BREAKER
-   //   Push current PnL into rolling buffer. If basket gives back ≥ FastDropPct%
-   //   of peak within FastWindowSec → close immediately. This catches news spikes
+   //   Guard 1 - FAST REVERSAL CIRCUIT BREAKER
+   //   Push current PnL into rolling buffer. If basket gives back >= FastDropPct%
+   //   of peak within FastWindowSec -> close immediately. This catches news spikes
    //   and 1-minute reversals where price collapses faster than the floor logic
    //   can react. Without this, a longer arm threshold means more exposure.
    //
-   //   Guard 2 — HARD $ GIVEBACK CAP
+   //   Guard 2 - HARD $ GIVEBACK CAP
    //   Regardless of percentage rules, never give back more than HardGivebackPct%
    //   of balance from peak. This is the absolute backstop for tail-risk events.
    //
@@ -24370,7 +24398,7 @@ bool ManageBasket()
          for(int k = 0; k < g_basketSnapMax; k++) { g_basketSnapPnL[k] = tmpP[k]; g_basketSnapTime[k] = tmpT[k]; }
       }
 
-      // GUARD 1: fast reversal — find max PnL in window, see how far we've fallen.
+      // GUARD 1: fast reversal - find max PnL in window, see how far we've fallen.
       // v5.8.17: this may bank a still-profitable basket, but it must not
       // panic-close a losing/pullback basket. Gold often sweeps hard before
       // continuing; once the basket is negative, the structure SL/clean-exit
@@ -24387,7 +24415,7 @@ bool ManageBasket()
          {
             if(totalPnL > 0)
             {
-               // v6.4.24: a fast drop alone isn't proof of real reversal — bank a
+               // v6.4.24: a fast drop alone isn't proof of real reversal - bank a
                // partial and keep a runner on the FIRST breach (same soft-lock the
                // floor-trigger uses below), same as before only on a repeat breach,
                // confirmed structure break, or opt-in.
@@ -24396,17 +24424,17 @@ bool ManageBasket()
                                        XAU_BasketStructureBroken(basketDirFRW);
                // v6.4.25 (audit bug #3): InpCloudSafeDisablePartials defaults true, which
                // made this soft-lock unreachable and left the full close below firing on
-               // every FIRST breach with nothing banked — contradicting the whole point of
+               // every FIRST breach with nothing banked - contradicting the whole point of
                // "soft-lock first, full close only on a repeat breach." Bypass it here the
                // same way InpSmartExitPartialIgnoresCloudSafe already does per-ticket.
                if(InpBasketSoftLockFirst && (InpBasketSoftLockIgnoresCloudSafe || !InpCloudSafeDisablePartials) && !g_basketSoftLockTaken)
                {
-                  PrintFormat(">>> BASKET SOFT-LOCK (FAST-REVERSAL) │ dropped %.1f%% of peak $%.2f in %ds │ banking %.0f%%, runner stays alive",
+                  PrintFormat(">>> BASKET SOFT-LOCK (FAST-REVERSAL) | dropped %.1f%% of peak $%.2f in %ds | banking %.0f%%, runner stays alive",
                               dropPctOfPeak, g_basketPeakUSD, InpBasketFastWindowSec, InpBasketSoftLockPct);
                   bool partialDoneFR = CloseBasketPartial(InpBasketSoftLockPct,
                                                           StringFormat("fast reversal peak $%.2f -> pnl $%.2f", g_basketPeakUSD, totalPnL));
                   // v6.4.25 (audit bug #3): only count this as "already warned once" if the
-                  // partial actually banked something — a skipped/failed attempt (e.g. legs
+                  // partial actually banked something - a skipped/failed attempt (e.g. legs
                   // below broker min lot) must not silently unlock a $0-banked full close.
                   if(partialDoneFR)
                   {
@@ -24422,24 +24450,24 @@ bool ManageBasket()
                   string basketRunnerWhyFR = "";
                   if(XAU_BasketRunnerConvictionActive(basketDirFRW, totalPnL, g_basketPeakUSD, basketRunnerWhyFR, basketRDollars))
                   {
-                     PrintFormat("BASKET_RUNNER_CONVICTION_HOLD │ fast-reversal close deferred; runner trend still valid | %s",
+                     PrintFormat("BASKET_RUNNER_CONVICTION_HOLD | fast-reversal close deferred; runner trend still valid | %s",
                                  basketRunnerWhyFR);
                      g_basketFloorUSD = MathMax(1.0, g_basketPeakUSD * InpRunnerConvictionFloorPct / 100.0);
                      ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
                      return false;
                   }
-                  PrintFormat(">>> BASKET FAST-REVERSAL │ dropped $%.2f (%.1f%% of peak $%.2f) in %ds → BANK PROFIT",
+                  PrintFormat(">>> BASKET FAST-REVERSAL | dropped $%.2f (%.1f%% of peak $%.2f) in %ds -> BANK PROFIT",
                               dropFromWinMax, dropPctOfPeak, g_basketPeakUSD, InpBasketFastWindowSec);
-                  lastExitReason = StringFormat("BASKET FAST-REV │ peak $%.2f → $%.2f in %ds", g_basketPeakUSD, totalPnL, InpBasketFastWindowSec);
+                  lastExitReason = StringFormat("BASKET FAST-REV | peak $%.2f -> $%.2f in %ds", g_basketPeakUSD, totalPnL, InpBasketFastWindowSec);
                   CloseAll(lastExitReason);
-                  PG_OnBasketWin();  // v5.1.2 — winner resets consecutive-loss streak
+                  PG_OnBasketWin();  // v5.1.2 - winner resets consecutive-loss streak
                   g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
                   g_basketArmed    = false; g_basketBEHit = false;
                   g_basketSoftLockTaken = false;
                   ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
                   return true;
                }
-               PrintFormat("BASKET_FAST_REV_PROFIT_BREATHE │ peak $%.2f -> pnl $%.2f, drop %.1f%% in %ds, already soft-locked once with no confirmed reversal; holding runner",
+               PrintFormat("BASKET_FAST_REV_PROFIT_BREATHE | peak $%.2f -> pnl $%.2f, drop %.1f%% in %ds, already soft-locked once with no confirmed reversal; holding runner",
                            g_basketPeakUSD, totalPnL, dropPctOfPeak, InpBasketFastWindowSec);
             }
             if(totalPnL <= 0 && InpProtectedPeakBasketCloseRed && g_basketPeakUSD >= basketProtectedPeakMinUSD_R)
@@ -24461,7 +24489,7 @@ bool ManageBasket()
                   return true;
                }
             }
-            PrintFormat("BASKET_FAST_REV_BREATHE │ peak $%.2f -> pnl $%.2f, drop %.1f%% in %ds, but basket peak was not protected enough for red close; SL/structure manages recovery",
+            PrintFormat("BASKET_FAST_REV_BREATHE | peak $%.2f -> pnl $%.2f, drop %.1f%% in %ds, but basket peak was not protected enough for red close; SL/structure manages recovery",
                         g_basketPeakUSD, totalPnL, dropPctOfPeak, InpBasketFastWindowSec);
          }
       }
@@ -24478,18 +24506,18 @@ bool ManageBasket()
          {
             if(totalPnL > 0)
             {
-               // v6.4.24: same soft-lock-first treatment as Guard 1 — a hard $
+               // v6.4.24: same soft-lock-first treatment as Guard 1 - a hard $
                // giveback cap alone isn't proof of reversal; bank a partial and
                // keep a runner on the first breach.
                int basketDirHCW = XAU_BasketDominantDirection();
                bool hardCapConfirmed = g_basketSoftLockTaken || InpAllowGivebackPanicClose ||
                                        XAU_BasketStructureBroken(basketDirHCW);
-               // v6.4.25 (audit bug #3): see Guard 1 above — bypass the cloud-safe
+               // v6.4.25 (audit bug #3): see Guard 1 above - bypass the cloud-safe
                // switch that otherwise makes this soft-lock unreachable, and only
                // mark it "taken" if the partial actually banked something.
                if(InpBasketSoftLockFirst && (InpBasketSoftLockIgnoresCloudSafe || !InpCloudSafeDisablePartials) && !g_basketSoftLockTaken)
                {
-                  PrintFormat(">>> BASKET SOFT-LOCK (HARD-CAP) │ giveback $%.2f ≥ cap $%.2f (%.1f%% of bal) │ banking %.0f%%, runner stays alive",
+                  PrintFormat(">>> BASKET SOFT-LOCK (HARD-CAP) | giveback $%.2f >= cap $%.2f (%.1f%% of bal) | banking %.0f%%, runner stays alive",
                               currGivebackUSD, maxGivebackUSD, hardGivebackPct, InpBasketSoftLockPct);
                   bool partialDoneHC = CloseBasketPartial(InpBasketSoftLockPct,
                                                           StringFormat("hard cap peak $%.2f -> pnl $%.2f", g_basketPeakUSD, totalPnL));
@@ -24507,15 +24535,15 @@ bool ManageBasket()
                   string basketRunnerWhyHC = "";
                   if(XAU_BasketRunnerConvictionActive(basketDirHCW, totalPnL, g_basketPeakUSD, basketRunnerWhyHC, basketRDollars))
                   {
-                     PrintFormat("BASKET_RUNNER_CONVICTION_HOLD │ hard-cap close deferred; runner trend still valid | %s",
+                     PrintFormat("BASKET_RUNNER_CONVICTION_HOLD | hard-cap close deferred; runner trend still valid | %s",
                                  basketRunnerWhyHC);
                      g_basketFloorUSD = MathMax(1.0, g_basketPeakUSD * InpRunnerConvictionFloorPct / 100.0);
                      ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
                      return false;
                   }
-                  PrintFormat(">>> BASKET HARD-CAP │ giveback $%.2f ≥ cap $%.2f (%.1f%% of bal) → BANK PROFIT",
+                  PrintFormat(">>> BASKET HARD-CAP | giveback $%.2f >= cap $%.2f (%.1f%% of bal) -> BANK PROFIT",
                               currGivebackUSD, maxGivebackUSD, hardGivebackPct);
-                  lastExitReason = StringFormat("BASKET HARD-CAP │ peak $%.2f → $%.2f (giveback $%.2f)", g_basketPeakUSD, totalPnL, currGivebackUSD);
+                  lastExitReason = StringFormat("BASKET HARD-CAP | peak $%.2f -> $%.2f (giveback $%.2f)", g_basketPeakUSD, totalPnL, currGivebackUSD);
                   CloseAll(lastExitReason);
                   PG_OnBasketWin();  // v5.1.2
                   g_basketPeakUSD  = 0; g_basketFloorUSD = 0;
@@ -24524,7 +24552,7 @@ bool ManageBasket()
                   ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
                   return true;
                }
-               PrintFormat("BASKET_HARD_CAP_PROFIT_BREATHE │ peak $%.2f -> pnl $%.2f, giveback $%.2f >= cap $%.2f, already soft-locked once with no confirmed reversal; holding runner",
+               PrintFormat("BASKET_HARD_CAP_PROFIT_BREATHE | peak $%.2f -> pnl $%.2f, giveback $%.2f >= cap $%.2f, already soft-locked once with no confirmed reversal; holding runner",
                            g_basketPeakUSD, totalPnL, currGivebackUSD, maxGivebackUSD);
             }
             if(totalPnL <= 0 && InpProtectedPeakBasketCloseRed && g_basketPeakUSD >= basketProtectedPeakMinUSD_R)
@@ -24546,7 +24574,7 @@ bool ManageBasket()
                   return true;
                }
             }
-            PrintFormat("BASKET_HARD_CAP_BREATHE │ peak $%.2f -> pnl $%.2f, giveback $%.2f >= cap $%.2f, but basket peak was not protected enough for red close; holding for SL/structure",
+            PrintFormat("BASKET_HARD_CAP_BREATHE | peak $%.2f -> pnl $%.2f, giveback $%.2f >= cap $%.2f, but basket peak was not protected enough for red close; holding for SL/structure",
                         g_basketPeakUSD, totalPnL, currGivebackUSD, maxGivebackUSD);
          }
       }
@@ -24562,7 +24590,7 @@ bool ManageBasket()
       bool floorTriggerAlreadySoftLocked = g_basketSoftLockTaken;
       if(InpBasketSoftLockFirst && (InpBasketSoftLockIgnoresCloudSafe || !InpCloudSafeDisablePartials) && !g_basketSoftLockTaken && totalPnL > 0)
       {
-         PrintFormat(">>> BASKET SOFT-LOCK │ PnL=$%.2f < Floor=$%.2f │ Peak=$%.2f │ banking %.0f%%, runner stays alive",
+         PrintFormat(">>> BASKET SOFT-LOCK | PnL=$%.2f < Floor=$%.2f | Peak=$%.2f | banking %.0f%%, runner stays alive",
                      totalPnL, g_basketFloorUSD, g_basketPeakUSD, InpBasketSoftLockPct);
 
          bool partialDone = CloseBasketPartial(InpBasketSoftLockPct,
@@ -24571,7 +24599,7 @@ bool ManageBasket()
          if(partialDone)
          {
             g_basketSoftLockTaken = true;
-            lastExitReason = StringFormat("BASKET SOFT-LOCK │ peak $%.2f -> $%.2f; runner alive", g_basketPeakUSD, totalPnL);
+            lastExitReason = StringFormat("BASKET SOFT-LOCK | peak $%.2f -> $%.2f; runner alive", g_basketPeakUSD, totalPnL);
             g_basketPeakUSD = totalPnL;
             g_basketFloorUSD = MathMax(1.0, totalPnL * InpBasketRunnerFloorPct / 100.0);
             ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
@@ -24591,23 +24619,23 @@ bool ManageBasket()
                                     XAU_BasketStructureBroken(basketDirBL);
          if(!basketLockConfirmed)
          {
-            PrintFormat("BASKET_LOCK_PROFIT_BREATHE │ peak $%.2f -> pnl $%.2f < floor $%.2f, no prior soft-lock and no confirmed reversal; holding runner",
+            PrintFormat("BASKET_LOCK_PROFIT_BREATHE | peak $%.2f -> pnl $%.2f < floor $%.2f, no prior soft-lock and no confirmed reversal; holding runner",
                         g_basketPeakUSD, totalPnL, g_basketFloorUSD);
             return false;
          }
          string basketRunnerWhyBL = "";
          if(XAU_BasketRunnerConvictionActive(basketDirBL, totalPnL, g_basketPeakUSD, basketRunnerWhyBL, basketRDollars))
          {
-            PrintFormat("BASKET_RUNNER_CONVICTION_HOLD │ basket-lock close deferred; runner trend still valid | %s",
+            PrintFormat("BASKET_RUNNER_CONVICTION_HOLD | basket-lock close deferred; runner trend still valid | %s",
                         basketRunnerWhyBL);
             g_basketFloorUSD = MathMax(1.0, g_basketPeakUSD * InpRunnerConvictionFloorPct / 100.0);
             ArrayResize(g_basketSnapPnL, 0); ArrayResize(g_basketSnapTime, 0);
             return false;
          }
-         PrintFormat(">>> BASKET CLOSE │ PnL=$%.2f < Floor=$%.2f │ Peak=$%.2f │ banking %.1f%% of peak",
+         PrintFormat(">>> BASKET CLOSE | PnL=$%.2f < Floor=$%.2f | Peak=$%.2f | banking %.1f%% of peak",
                      totalPnL, g_basketFloorUSD, g_basketPeakUSD,
                      g_basketPeakUSD > 0 ? (totalPnL / g_basketPeakUSD) * 100.0 : 0.0);
-         lastExitReason = StringFormat("BASKET LOCK │ $%.2f peak → $%.2f banked", g_basketPeakUSD, totalPnL);
+         lastExitReason = StringFormat("BASKET LOCK | $%.2f peak -> $%.2f banked", g_basketPeakUSD, totalPnL);
          CloseAll(lastExitReason);
          // reset so the state doesn't instantly re-arm if a residual slippage trade lingers
          g_basketPeakUSD  = 0;
@@ -24640,7 +24668,7 @@ bool ManageBasket()
             return true;
          }
       }
-      PrintFormat("BASKET_LOCK_BREATHE │ PnL=$%.2f < Floor=$%.2f after peak $%.2f, but protected basket close is disabled or peak is too small; SL/structure owns exit",
+      PrintFormat("BASKET_LOCK_BREATHE | PnL=$%.2f < Floor=$%.2f after peak $%.2f, but protected basket close is disabled or peak is too small; SL/structure owns exit",
                   totalPnL, g_basketFloorUSD, g_basketPeakUSD);
    }
 
@@ -24648,7 +24676,7 @@ bool ManageBasket()
 }
 
 //+------------------------------------------------------------------+
-//| v5.8.3 — CLEAN EXITS                                             |
+//| v5.8.3 - CLEAN EXITS                                             |
 //|   ONE exit authority per phase. No competing systems.            |
 //|                                                                  |
 //|   Losses: close only after structure + EMA/RSI/momentum          |
@@ -24789,13 +24817,13 @@ bool CleanRecoveryLikely(bool isBuy, bool trendAligned, int momentumScore,
    return false;
 }
 
-// v6.20.3 — TELEMETRY-ONLY in-hold checkpoint logger. Called once per tick
+// v6.20.3 - TELEMETRY-ONLY in-hold checkpoint logger. Called once per tick
 // per open position from ManageCleanExitsForPosition() (immediately after
 // rMult is computed there, using values that function already has on hand).
 // Writes one "CHECKPOINT" row to the trade brain CSV the first time elapsed
 // minutes-open crosses each threshold in g_checkpointMinutes[]. Does not
 // return a value, does not modify SL/TP/lots, and is not consulted by any
-// exit/entry logic — it only observes and records.
+// exit/entry logic - it only observes and records.
 void XAU_CheckInHoldCheckpoint(ulong ticket, int minsOpen, double rMult, double floatingUSD, double peakUSD)
 {
    if(!InpTradeBrainMemory || !IsXAUFastSymbol()) return;
@@ -24834,7 +24862,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    // Compute current R-multiple of profit in price terms
    double priceProfit = isBuy ? (curPrice - openPx) : (openPx - curPrice);
    double rMult = priceProfit / slDist;   // negative if underwater
-   // v6.20.3 telemetry-only — see XAU_CheckInHoldCheckpoint() declaration
+   // v6.20.3 telemetry-only - see XAU_CheckInHoldCheckpoint() declaration
    // comment. Does not affect anything computed below; purely observes.
    XAU_CheckInHoldCheckpoint(ticket, minsOpen, rMult, rMult * rDollars, peak);
    double close2 = iClose(Symbol(), PERIOD_M5, 2);
@@ -24866,7 +24894,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
 
    // ============ v6.4.6 EARLY CONVICTION CUT ============
    // The original invalidation logic waits 40 minutes AND -2.6R. On a wide ATR-based SL
-   // (e.g., 2.5×ATR) that can mean a -$150+ loss on a 0.18-lot trade.
+   // (e.g., 2.5xATR) that can mean a -$150+ loss on a 0.18-lot trade.
    //
    // EXPECTANCY INSIGHT: "Has the original reason for entering disappeared?"
    // When ALL of the following are true from early in the trade, the answer is YES:
@@ -24882,11 +24910,11 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    if(InpEarlyConvictionCut && rMult < 0 && minsOpen >= InpEarlyConvictionMinMin &&
       rMult <= -InpEarlyConvictionCutR && !recoveryLikely && invalidScore >= 4)
    {
-      PrintFormat("EARLY_CONVICTION_CUT #%I64u %s | %.2fR in %dm | invalidScore=%d/5 | struct=%s ema=%s rsi=%s rev=%s | EXIT NOW — saves %.0f%% vs full SL",
+      PrintFormat("EARLY_CONVICTION_CUT #%I64u %s | %.2fR in %dm | invalidScore=%d/5 | struct=%s ema=%s rsi=%s rev=%s | EXIT NOW - saves %.0f%% vs full SL",
                   ticket, isBuy?"BUY":"SELL", rMult, minsOpen, invalidScore,
                   structureConfirmedBroken?"Y":"N", emaAgainst?"Y":"N", rsiAgainst?"Y":"N", reversalCandle?"Y":"N",
                   (1.0 - InpEarlyConvictionCutR / MathMax(0.01, InpCleanMaxLossR)) * 100.0);
-      lastExitReason = StringFormat("EARLY_CUT │ %.2fR all signals failed (%.0f%% vs full SL)", rMult,
+      lastExitReason = StringFormat("EARLY_CUT | %.2fR all signals failed (%.0f%% vs full SL)", rMult,
                                     (1.0 - InpEarlyConvictionCutR / MathMax(0.01, InpCleanMaxLossR)) * 100.0);
       // invalidScore>=4 mathematically requires structureConfirmedBroken (its 2 points
       // are needed to reach 4), so this is already a confirmed structural invalidation.
@@ -24900,7 +24928,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    // ============ STALE CUT ============
    // v6.0 STI: if the macro trend TCP is still strongly aligned AND the trade is
    // meaningfully profitable, suppress stagnant/stale exits. The EA was exiting
-   // profitable runners purely because short-term momentum paused — this is wrong
+   // profitable runners purely because short-term momentum paused - this is wrong
    // when the higher-timeframe trend is still fully intact.
    // Only active on profitable trades (rMult >= 0.25) with TCP >= configured minimum.
    bool stiHighTCP = false;
@@ -24913,7 +24941,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
          static datetime lastTCPHoldLog = 0;
          if(TimeCurrent() - lastTCPHoldLog >= 120)
          {
-            PrintFormat("STI_TCP_HOLD #%I64u %s | rMult=%.2fR tcp=%.0f >= %.0f | macro trend valid — suppressing premature stagnant/stale exit, runner continues",
+            PrintFormat("STI_TCP_HOLD #%I64u %s | rMult=%.2fR tcp=%.0f >= %.0f | macro trend valid - suppressing premature stagnant/stale exit, runner continues",
                         ticket, isBuy?"BUY":"SELL", rMult, tcpNow, InpSTI_TCPContinueMinimum);
             lastTCPHoldLog = TimeCurrent();
          }
@@ -24923,9 +24951,9 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    if(!stiHighTCP && InpCleanStagnantMinutes > 0 && minsOpen >= InpCleanStagnantMinutes &&
       MathAbs(rMult) <= InpCleanStagnantMaxR && choppyRegime && !trendAligned)
    {
-      PrintFormat("CLEAN_STAGNANT #%I64u %s | %dm open, %.2fR in %s → CLOSE",
+      PrintFormat("CLEAN_STAGNANT #%I64u %s | %dm open, %.2fR in %s -> CLOSE",
                   ticket, isBuy?"BUY":"SELL", minsOpen, rMult, RegimeName());
-      lastExitReason = StringFormat("STAGNANT │ %.2fR after %dm in %s", rMult, minsOpen, RegimeName());
+      lastExitReason = StringFormat("STAGNANT | %.2fR after %dm in %s", rMult, minsOpen, RegimeName());
       if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
                                  "CLEAN_STAGNANT", structureConfirmedBroken, false))
          return false;
@@ -24936,9 +24964,9 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    if(!stiHighTCP && InpCleanStaleHours > 0 && minsOpen >= InpCleanStaleHours * 60 &&
       rMult < InpCleanStaleMinR && (!trendAligned || momentumScore <= 2))
    {
-      PrintFormat("CLEAN_STALE #%I64u %s | %dm open, %.2fR, trendAligned=%s momentum=%d/5 → CLOSE",
+      PrintFormat("CLEAN_STALE #%I64u %s | %dm open, %.2fR, trendAligned=%s momentum=%d/5 -> CLOSE",
                   ticket, isBuy?"BUY":"SELL", minsOpen, rMult, trendAligned?"Y":"N", momentumScore);
-      lastExitReason = StringFormat("STALE │ %.2fR after %dm momentum %d/5", rMult, minsOpen, momentumScore);
+      lastExitReason = StringFormat("STALE | %.2fR after %dm momentum %d/5", rMult, minsOpen, momentumScore);
       if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
                                  "CLEAN_STALE", structureConfirmedBroken, false))
          return false;
@@ -24957,14 +24985,14 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       bool emergencyInvalid = (rMult <= -InpCleanEmergencyLossR && invalidScore >= 3);
       if(confirmedInvalid || emergencyInvalid)
       {
-         PrintFormat("CLEAN_INVALID #%I64u %s | %.2fR invalidScore=%d struct=%s bars=%d/%d ema=%s rsi=%s rev=%s recovery=%s → CLOSE",
+         PrintFormat("CLEAN_INVALID #%I64u %s | %.2fR invalidScore=%d struct=%s bars=%d/%d ema=%s rsi=%s rev=%s recovery=%s -> CLOSE",
                      ticket, isBuy?"BUY":"SELL", rMult, invalidScore,
                      structureConfirmedBroken?"Y":"N", structureBreakBars, InpGoldPullbackConfirmBars,
                      emaAgainst?"Y":"N", rsiAgainst?"Y":"N", reversalCandle?"Y":"N",
                      recoveryLikely?"Y":"N");
-         lastExitReason = StringFormat("INVALIDATION │ %.2fR score %d", rMult, invalidScore);
+         lastExitReason = StringFormat("INVALIDATION | %.2fR score %d", rMult, invalidScore);
          // emergencyInvalid = deep -InpCleanEmergencyLossR loss, a catastrophic-loss backstop
-         // independent of structure — treated as the "emergency" carve-out.
+         // independent of structure - treated as the "emergency" carve-out.
          if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
                                     "CLEAN_INVALID", structureConfirmedBroken, emergencyInvalid))
             return false;
@@ -24995,11 +25023,11 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       bool failedMomentum = (emaAgainst && rsiAgainst && !trendAligned && momentumScore <= 1);
       if(adverseWide && failedStructure && failedMomentum)
       {
-         PrintFormat("STRUCTURE_FAILFAST #%I64u %s | %.2fR adverse=%.2fATR invalidScore=%d structBars=%d/%d momentum=%d/5 recovery=%s → CLOSE",
+         PrintFormat("STRUCTURE_FAILFAST #%I64u %s | %.2fR adverse=%.2fATR invalidScore=%d structBars=%d/%d momentum=%d/5 recovery=%s -> CLOSE",
                      ticket, isBuy?"BUY":"SELL", rMult, adverseDist/atr, invalidScore,
                      structureBreakBars, InpGoldPullbackConfirmBars, momentumScore,
                      recoveryLikely?"Y":"N");
-         lastExitReason = StringFormat("STRUCTURE_FAILFAST │ %.2fR confirmed failed structure", rMult);
+         lastExitReason = StringFormat("STRUCTURE_FAILFAST | %.2fR confirmed failed structure", rMult);
          if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
                                     "STRUCTURE_FAILFAST", failedStructure, false))
             return false;
@@ -25010,20 +25038,20 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
 
    // ============ v5.8.55: A+ PROFIT SHIELD (runner-restore, report-backed) ============
    //
-   // TIER 1 — observation arm.
+   // TIER 1 - observation arm.
    //   Records that the trade produced proven floating profit, but does NOT move SL
    //   by default. This restores v5.8.50-style runner breathing and prevents
    //   good A/A+ trades from becoming $0.49/$1.50 scratch exits.
    //
-   // TIER 2 — Active protection (fires only after account-meaningful profit or large R):
+   // TIER 2 - Active protection (fires only after account-meaningful profit or large R):
    //   a) Peak was MEANINGFUL (>= configured % balance, or >= min USD + configured R)
-   //   b) Momentum CONFIRMS reversal (score <= InpAPlusReversalMomentum) — not a pullback
-   //   If momentum says continuation → log APLUS_PULLBACK_DETECTED and leave trade alone.
+   //   b) Momentum CONFIRMS reversal (score <= InpAPlusReversalMomentum) - not a pullback
+   //   If momentum says continuation -> log APLUS_PULLBACK_DETECTED and leave trade alone.
    //
    if(InpAPlusShield && peak > 0 && rDollars > 0)
    {
       // v6.0.1 FIX: g_lastEntryGrade is a global that changes every time any trade opens,
-      // so pyramid tickets read the wrong grade. Read from POSITION_COMMENT instead —
+      // so pyramid tickets read the wrong grade. Read from POSITION_COMMENT instead -
       // it was stamped with "[A]" or "[A+]" at entry and is per-position authoritative.
       string posCmtShield = "";
       if(PositionSelectByTicket(ticket))
@@ -25087,14 +25115,14 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                               DoubleToString(shieldBESL, digits));
             }
 
-            // ---- TIER 2: trail + force-close — only on significant peaks + confirmed reversal ----
+            // ---- TIER 2: trail + force-close - only on significant peaks + confirmed reversal ----
             if(tier2Ready)
             {
                double givebackPct = (peak > 0 && curProfitUSD < peak)
                                     ? ((peak - curProfitUSD) / peak) * 100.0 : 0.0;
 
                // Momentum check: is this a pullback or a reversal?
-               // CleanMomentumScore already computed in the outer scope — but we need it fresh here.
+               // CleanMomentumScore already computed in the outer scope - but we need it fresh here.
                // score >= 3 + trend aligned = still running. score <= InpAPlusReversalMomentum = reversing.
                bool trendStillWith  = CleanRegimeAligned(isBuy);
                bool momentumAgainst = (momentumScore <= InpAPlusReversalMomentum);
@@ -25155,8 +25183,8 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                   }
                   else
                   {
-                     // Big giveback but momentum/trend still with us — this is a pullback, hold.
-                     PrintFormat("APLUS_PULLBACK_DETECTED #%I64u %s | givebackPct=%.0f%% BUT momentum=%d trendWith=%s rsi=%.1f — holding, not closing",
+                     // Big giveback but momentum/trend still with us - this is a pullback, hold.
+                     PrintFormat("APLUS_PULLBACK_DETECTED #%I64u %s | givebackPct=%.0f%% BUT momentum=%d trendWith=%s rsi=%.1f - holding, not closing",
                                  ticket, isBuy?"BUY":"SELL", givebackPct,
                                  momentumScore, trendStillWith?"Y":"N", rsi);
                   }
@@ -25165,7 +25193,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                {
                   if(strongReversal)
                   {
-                     // Reversal confirmed — trail tightly to lock in remaining profit
+                     // Reversal confirmed - trail tightly to lock in remaining profit
                      double trailDist = atr * InpAPlusGivebackTrailATR;
                      double trailSL   = isBuy ? NormalizeDouble(curPrice - trailDist, digits)
                                               : NormalizeDouble(curPrice + trailDist, digits);
@@ -25185,8 +25213,8 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                   }
                   else
                   {
-                     // Giveback but still looks like a pullback — give it room, do not trail yet
-                     PrintFormat("APLUS_PULLBACK_DETECTED #%I64u %s | givebackPct=%.0f%% | momentum=%d trendWith=%s — giving room",
+                     // Giveback but still looks like a pullback - give it room, do not trail yet
+                     PrintFormat("APLUS_PULLBACK_DETECTED #%I64u %s | givebackPct=%.0f%% | momentum=%d trendWith=%s - giving room",
                                  ticket, isBuy?"BUY":"SELL", givebackPct,
                                  momentumScore, trendStillWith?"Y":"N");
                   }
@@ -25206,12 +25234,12 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
 
    // ============ v6.4.3 ADAPTIVE MOMENTUM PROFIT LOCK (AMPL) ============
    //
-   // PROBLEM SOLVED: Wide SL + large lot → large dollar profit at LOW R-multiple.
+   // PROBLEM SOLVED: Wide SL + large lot -> large dollar profit at LOW R-multiple.
    // Example: SELL 4064.74, price falls to 4054 (+$136) but only 0.33R with 30pt SL.
    // R-based systems never fire (BE@1.5R, Chandelier@2R, A+Shield@3R). Market
-   // retraces → EA exits at +$38. 72% of the move given back, preventably.
+   // retraces -> EA exits at +$38. 72% of the move given back, preventably.
    //
-   // AMPL works in USD space — fires at dollar profit thresholds, NOT R-multiples.
+   // AMPL works in USD space - fires at dollar profit thresholds, NOT R-multiples.
    // This makes it effective precisely when the other systems are blind.
    //
    // Two independent triggers:
@@ -25219,9 +25247,9 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    //   2. GIVEBACK_LIMIT: retrace >= N% of peak profit (any position with meaningful peak)
    //
    // Trail distance adapts to momentum:
-   //   Strong (4-5/5) → 0.45×ATR buffer  — trend still running, give room to continue
-   //   Moderate (3/5) → 0.30×ATR buffer  — moderating, tighten
-   //   Weak (0-2/5)  → 0.18×ATR buffer  — exhausting, lock the majority now
+   //   Strong (4-5/5) -> 0.45xATR buffer  - trend still running, give room to continue
+   //   Moderate (3/5) -> 0.30xATR buffer  - moderating, tighten
+   //   Weak (0-2/5)  -> 0.18xATR buffer  - exhausting, lock the majority now
    //
    // Fully additive: ratchet-only, never moves SL backward. Never conflicts with
    // Chandelier, A+Shield, or any other system (the tightest active SL wins).
@@ -25232,17 +25260,17 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
 
       if(amplProfit > 0 && peak > 0)
       {
-         // Signal 1: Explosive candle — large body in trade direction vs ATR
+         // Signal 1: Explosive candle - large body in trade direction vs ATR
          double barBody   = MathAbs(close1 - open1);
          bool   bigCandle = (barBody >= atr * InpAMPL_ExplosiveBodyR) &&
                             ((isBuy && close1 > open1) || (!isBuy && close1 < open1));
 
-         // Signal 2: Fast recent velocity — net move >= N×ATR over last 5 bars
+         // Signal 2: Fast recent velocity - net move >= NxATR over last 5 bars
          double price5BarAgo = iClose(Symbol(), PERIOD_M5, 5);
          double recentMove   = isBuy ? (curPrice - price5BarAgo) : (price5BarAgo - curPrice);
          bool   fastVelocity = (atr > 0 && recentMove >= atr * InpAMPL_VelATRFactor);
 
-         // v6.20.4 (Commit E) — AMPL was the one exit module using pure
+         // v6.20.4 (Commit E) - AMPL was the one exit module using pure
          // flat-$ thresholds (InpAMPL_MinUSD/GivebackMinUSD/MinRetainUSD)
          // with NO risk-scaling at all, unlike EV_PROTECT/A+ Shield/Basket
          // Lock's arm. Wrapped in XAU_AdaptiveProfitArmUSD so a bigger-lot
@@ -25251,7 +25279,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
          // "meaningful" -- same fix, same reasoning, extended to this module.
          bool explosiveMove = (bigCandle || fastVelocity) && (amplProfit >= XAU_AdaptiveProfitArmUSD(InpAMPL_MinUSD, rDollars));
 
-         // Signal 3: Give-back limit — fires regardless of explosive detection,
+         // Signal 3: Give-back limit - fires regardless of explosive detection,
          // but v6.4.6 audit prevents late tiny locks after most of the peak is gone.
          double peakRetrace   = (amplProfit < peak) ? ((peak - amplProfit) / peak) * 100.0 : 0.0;
          bool   givebackSignal = (peak >= XAU_AdaptiveProfitArmUSD(InpAMPL_GivebackMinUSD, rDollars)) && (peakRetrace >= InpAMPL_GivebackPct);
@@ -25260,7 +25288,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
 
          if(explosiveMove || givebackSignal)
          {
-            // Adaptive trail: stronger momentum → wider buffer (may continue), weaker → tighter
+            // Adaptive trail: stronger momentum -> wider buffer (may continue), weaker -> tighter
             double trailATR;
 	            if(momentumScore >= 4)      trailATR = InpAMPL_TrailATR_Strong;
 	            else if(momentumScore == 3) trailATR = InpAMPL_TrailATR_Mid;
@@ -25276,11 +25304,11 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
 	            if(amplRunnerHealthy)
 	               trailATR = MathMax(trailATR, InpStructureChandelierATR2 * 0.55);
 
-	            // RSI extreme → tighten (reversal increasingly likely)
+	            // RSI extreme -> tighten (reversal increasingly likely)
 	            if((isBuy && rsi > 74) || (!isBuy && rsi < 26))
 	               trailATR = MathMax(trailATR - 0.08, 0.12);
 
-            // HTF still aligned + strong momentum → small extra breathing room
+            // HTF still aligned + strong momentum -> small extra breathing room
             if(((isBuy && g_htfConsensusDir == 1) || (!isBuy && g_htfConsensusDir == -1))
                && momentumScore >= 4)
                trailATR += 0.10;
@@ -25325,7 +25353,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                   if(TimeCurrent() - lastAMPLLog >= 20)
                   {
 	                     PrintFormat("AMPL #%I64u %s | trigger=%s | profit=$%.2f peak=$%.2f retrace=%.0f%% | "
-	                                 "mom=%d/5 trail=%.2f×ATR %s | SL %s→%s | locks~$%.2f",
+	                                 "mom=%d/5 trail=%.2fxATR %s | SL %s->%s | locks~$%.2f",
 	                                 ticket, isBuy?"BUY":"SELL", amplTrigger,
 	                                 amplProfit, peak, peakRetrace, momentumScore, trailATR,
 	                                 amplRunnerHealthy ? "AMPL_RUNNER_BREATHE" : "",
@@ -25361,7 +25389,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
          if(sane)
          {
             if(SafeModifySL(ticket, beSL, curTP, isBuy, curPrice, "CLEAN_BE"))
-               PrintFormat("CLEAN_BE #%I64u %s | %.2fR → SL=%s (lock +%.2fR, trigger %.2fR)",
+               PrintFormat("CLEAN_BE #%I64u %s | %.2fR -> SL=%s (lock +%.2fR, trigger %.2fR)",
                            ticket, isBuy?"BUY":"SELL", rMult,
                            DoubleToString(beSL, digits), EffCleanBECushionR(), beActivateR);
          }
@@ -25382,7 +25410,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
          if(SafePositionClosePartial(ticket, partialLots, "CLEAN_PARTIAL"))
          {
             CleanMarkPartialTaken(ticket);
-            PrintFormat("CLEAN_PARTIAL #%I64u %s | %.2fR → closed %.2f lots (%.0f%%), runner=%.2f",
+            PrintFormat("CLEAN_PARTIAL #%I64u %s | %.2fR -> closed %.2f lots (%.0f%%), runner=%.2f",
                         ticket, isBuy?"BUY":"SELL", rMult, partialLots,
                         InpCleanPartialPct, lotsOpen - partialLots);
          }
@@ -25397,25 +25425,25 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    if(rMult >= trailStartR && momentumConfirmed)
    {
       // v6.3.4 ADAPTIVE CHANDELIER: ATR multiplier adapts to market state in real time.
-      // Base: 3.2× (start) or 2.5× (after +4R). Adjusts up or down based on:
-      //   + HTF consensus still matches position dir  → widen (+0.5) — let runner run
-      //   + Momentum score 4-5/5                      → widen (+0.4) — trend accelerating
-      //   - Regime choppy/ranging                     → tighten (-0.7) — protect gains
-      //   - Momentum score ≤ 2                         → tighten (-0.5) — momentum fading
-      //   - RSI extreme against position               → tighten (-0.3) — overextended
-      // Floor: 1.8× (always gives price 1-2 ATR breathing room to avoid normal pullback exit)
+      // Base: 3.2x (start) or 2.5x (after +4R). Adjusts up or down based on:
+      //   + HTF consensus still matches position dir  -> widen (+0.5) - let runner run
+      //   + Momentum score 4-5/5                      -> widen (+0.4) - trend accelerating
+      //   - Regime choppy/ranging                     -> tighten (-0.7) - protect gains
+      //   - Momentum score <= 2                         -> tighten (-0.5) - momentum fading
+      //   - RSI extreme against position               -> tighten (-0.3) - overextended
+      // Floor: 1.8x (always gives price 1-2 ATR breathing room to avoid normal pullback exit)
       double chanATR = (rMult >= 4.0) ? EffCleanChandelierATR2() : EffCleanChandelierATR1();
-      // Widen: HTF consensus still confirms our direction → trend is structurally sound → hold
+      // Widen: HTF consensus still confirms our direction -> trend is structurally sound -> hold
       bool htfStillWithUs = (isBuy && g_htfConsensusDir == 1) || (!isBuy && g_htfConsensusDir == -1);
       if(htfStillWithUs) chanATR += 0.50;
       if(trendAligned && momentumScore >= 4) chanATR += 0.40;
-      // Tighten: trend structure failing or momentum exhausting → protect what we have
+      // Tighten: trend structure failing or momentum exhausting -> protect what we have
       if(choppyRegime) chanATR -= 0.70;
       if(momentumScore <= 2) chanATR -= 0.50;
       double rsiVal = bufRSI[0]; // current RSI
       bool rsiExtreme = (isBuy && rsiVal > 75) || (!isBuy && rsiVal < 25);
-      if(rsiExtreme) chanATR -= 0.30; // overextended — tighten before reversal
-      chanATR = MathMax(1.80, chanATR); // never less than 1.8× — respect normal M5 pullbacks
+      if(rsiExtreme) chanATR -= 0.30; // overextended - tighten before reversal
+      chanATR = MathMax(1.80, chanATR); // never less than 1.8x - respect normal M5 pullbacks
       double chanDist = atr * chanATR;
       // Find highest high / lowest low over lookback bars (Chandelier Exit classic)
       int lb = InpCleanChandelierLookback;
@@ -25427,7 +25455,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
 
       // Ratchet only
       bool advance = isBuy ? (chanSL > curSL) : (chanSL < curSL || curSL == 0);
-      // Sanity — must stay on correct side of entry (never below BE once armed)
+      // Sanity - must stay on correct side of entry (never below BE once armed)
       bool profitZone = isBuy ? (chanSL >= openPx) : (chanSL <= openPx);
       // Broker stops-level buffer
       double pt = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
@@ -25455,7 +25483,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
 //| Path C: Claude AI Semantic Exit                                  |
 //+------------------------------------------------------------------+
 // ======================================================================
-// v6.4.19 — TRADE THESIS MONITOR FUNCTIONS
+// v6.4.19 - TRADE THESIS MONITOR FUNCTIONS
 // ======================================================================
 
 // Find TTM slot for a position (creates new slot if not found)
@@ -25468,7 +25496,7 @@ int TTM_FindOrCreateSlot(ulong posId)
    return -1; // all slots full
 }
 
-// v6.4.23 — read-only lookup (no side effects) so the early-loss gate can pull
+// v6.4.23 - read-only lookup (no side effects) so the early-loss gate can pull
 // the entry BOS/HTF snapshot for ANY close attempt, not just TTM_EXIT itself.
 int TTM_FindActiveSlot(ulong posId)
 {
@@ -25491,7 +25519,7 @@ void TTM_ReleaseSlot(ulong posId)
    }
 }
 
-// v6.7.0 — classify a setup name into the high-level trade-type family the
+// v6.7.0 - classify a setup name into the high-level trade-type family the
 // Exit Arbiter uses to pick appropriate giveback/hold tolerance (a trend
 // continuation should be allowed to run further than a range fade).
 string XAU_ExpectedTradeTypeFromSetup(string setupName)
@@ -25508,7 +25536,7 @@ string XAU_ExpectedTradeTypeFromSetup(string setupName)
    return "OTHER";
 }
 
-// Called immediately after OrderSend succeeds — stores the entry thesis snapshot.
+// Called immediately after OrderSend succeeds - stores the entry thesis snapshot.
 // v6.7.0: extended with slPrice/tpPrice/fullReason so every open trade carries a
 // complete thesis (invalidation level, target zone, expected type, full reason)
 // the Exit Arbiter can reference instead of relying on generic trailing math.
@@ -25536,7 +25564,7 @@ void TTM_RecordEntry(ulong posId, int signal, string setupName, string grade,
    r.entryPrice         = entryPrice;
    r.entryMomentum      = -1;      // set on first bar evaluation
    r.entryTrendAligned  = false;   // set on first bar evaluation
-   r.liveScore          = 100.0;   // starts at 100 — proven at entry
+   r.liveScore          = 100.0;   // starts at 100 - proven at entry
    r.prevScore          = 100.0;
    r.barsHeld           = 0;
    r.consecutiveLowBars = 0;
@@ -25588,17 +25616,17 @@ double TTM_CalcLiveScore(TradeTTMRecord &r, bool isBuy,
 
    // --- Component 1: BOS alignment (30 pts) ---
    // The original BOS established the structural bias we traded with.
-   // If it holds → thesis structure intact. If it flipped → thesis broken.
+   // If it holds -> thesis structure intact. If it flipped -> thesis broken.
    if(r.entryBOS != 0)
    {
       if(currentBOS == r.entryBOS)        score += 30;  // still aligned
-      else if(currentBOS == 0)            score += 12;  // neutral — unsettled
-      else                                score += 0;   // flipped — structural invalidation
+      else if(currentBOS == 0)            score += 12;  // neutral - unsettled
+      else                                score += 0;   // flipped - structural invalidation
    }
    else
    {
       if(currentBOS == (isBuy ? 1 : -1)) score += 20;  // bonus: BOS now confirmed our direction
-      else                                score += 10;  // no BOS data — partial credit
+      else                                score += 10;  // no BOS data - partial credit
    }
 
    // --- Component 2: HTF alignment (20 pts) ---
@@ -25615,26 +25643,26 @@ double TTM_CalcLiveScore(TradeTTMRecord &r, bool isBuy,
    }
 
    // --- Component 3: Current momentum (20 pts) ---
-   // Not compared to entry — this is current momentum quality
+   // Not compared to entry - this is current momentum quality
    score += MathMin(20.0, momentumScore * 4.0);
 
    // --- Component 4: Trend / regime aligned (15 pts) ---
    if(trendAligned)         score += 15;
    else if(!emaAgainst)     score += 6;   // regime not against us, just not supporting
-   // else 0 — regime actively against trade
+   // else 0 - regime actively against trade
 
    // --- Component 5: RSI direction (10 pts) ---
    if(isBuy)
    {
       if(rsi > 52)           score += 10;
-      else if(rsi >= 42)     score += 5;   // neutral zone — slight caution
-      // else 0 — RSI bearish for a long
+      else if(rsi >= 42)     score += 5;   // neutral zone - slight caution
+      // else 0 - RSI bearish for a long
    }
    else
    {
       if(rsi < 48)           score += 10;
       else if(rsi <= 58)     score += 5;
-      // else 0 — RSI bullish for a short
+      // else 0 - RSI bullish for a short
    }
 
    // --- Component 6: Structure not broken (5 pts) ---
@@ -25643,7 +25671,7 @@ double TTM_CalcLiveScore(TradeTTMRecord &r, bool isBuy,
    return MathMin(100.0, MathMax(0.0, score));
 }
 
-// Evaluate thesis — returns exit reason string or "" to hold
+// Evaluate thesis - returns exit reason string or "" to hold
 string TTM_Evaluate(int idx, bool isBuy, double liveScore,
                     double profit, double peak, int currentBOS, int currentHTF,
                     bool &isStructural)
@@ -25695,7 +25723,7 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
 
    // ---- EXIT DECISIONS ----
 
-   // 1. Hard thesis death — score collapsed
+   // 1. Hard thesis death - score collapsed
    if(liveScore < InpTTM_ExitThreshold)
    {
       string why = StringFormat(
@@ -25710,7 +25738,7 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
       return why;
    }
 
-   // 2. Structural flip — BOS reversed against trade (regardless of score)
+   // 2. Structural flip - BOS reversed against trade (regardless of score)
    bool bosFlipped = XAU_NewHostileStructureFlip(g_ttm[idx].entryBOS, currentBOS, tradeDir);
    bool htfFlipped = XAU_NewHostileStructureFlip(g_ttm[idx].entryHTF, currentHTF, tradeDir);
    if(bosFlipped && liveScore < 45.0)
@@ -25740,7 +25768,7 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
       return why;
    }
 
-   // 4. Persistent score decay — thesis dying slowly
+   // 4. Persistent score decay - thesis dying slowly
    if(g_ttm[idx].consecutiveLowBars >= InpTTM_PersistentBars && liveScore < 38.0)
    {
       string why = StringFormat(
@@ -25777,16 +25805,16 @@ string TTM_Evaluate(int idx, bool isBuy, double liveScore,
 // ======================================================================
 // v6.8.0 TRADE RECOVERY INTELLIGENCE (TRI)
 //
-// Purpose is NOT to avoid losses — it's to recognize when an entry was
+// Purpose is NOT to avoid losses - it's to recognize when an entry was
 // likely poor but the market gives a second chance to escape or improve
 // the position. Never closes just because price got close to SL. Never
 // closes just because price returned to breakeven. The only thing that
 // closes a trade here is a QUALITY assessment made at the moment price
-// actually reclaims breakeven — if that reclaim looks weak (little
+// actually reclaims breakeven - if that reclaim looks weak (little
 // momentum, structure still shaky, AI still unconvinced), TRI banks the
 // second chance instead of risking another full stop-loss cycle. A
 // recovery that never reaches breakeven at all is tagged FAILED purely
-// for logging/re-entry memory — it is NOT force-closed; the trade keeps
+// for logging/re-entry memory - it is NOT force-closed; the trade keeps
 // riding its normal SL/other exit systems exactly as before, matching
 // "never end a trade unless it's SL, or it bounces back to entry."
 // ======================================================================
@@ -25837,7 +25865,7 @@ void XAU_TRI_SaveStats()
 }
 
 // Called once a trade that went through Recovery Mode and was classified
-// STRONG (left to run) actually closes, so the threshold can self-tune —
+// STRONG (left to run) actually closes, so the threshold can self-tune -
 // if STRONG-and-held recoveries have mostly gone on to lose, the bar for
 // "trustworthy recovery" was too low; if they've mostly won, it can relax.
 void XAU_TRI_RecordStrongOutcome(bool wasWin)
@@ -25849,9 +25877,9 @@ void XAU_TRI_RecordStrongOutcome(bool wasWin)
    {
       double winRate = (double)g_triStatStrongWins / MathMax(1, g_triStatSamples);
       if(winRate < 0.40 && g_triAdaptStrongThreshold < 85.0)
-         g_triAdaptStrongThreshold += 1.0; // recoveries we trusted keep failing — raise the bar
+         g_triAdaptStrongThreshold += 1.0; // recoveries we trusted keep failing - raise the bar
       else if(winRate > 0.65 && g_triAdaptStrongThreshold > 45.0)
-         g_triAdaptStrongThreshold -= 1.0; // trusted recoveries keep working — allow it to trust a bit sooner
+         g_triAdaptStrongThreshold -= 1.0; // trusted recoveries keep working - allow it to trust a bit sooner
    }
    XAU_TRI_SaveStats();
 }
@@ -25884,11 +25912,11 @@ void XAU_TRI_RecordReEntryWatch(int direction, string setupName, double bailoutP
    g_triReEntry[slot].bailoutPrice      = bailoutPrice;
    g_triReEntry[slot].bailoutTime       = TimeCurrent();
    g_triReEntry[slot].invalidationPrice = invalidationPrice;
-   PrintFormat("[TRI] RE-ENTRY WATCH ARMED | dir=%s setup=%s bailoutPrice=%.2f — next same-direction entry needs a fresh trigger, not just the same read",
+   PrintFormat("[TRI] RE-ENTRY WATCH ARMED | dir=%s setup=%s bailoutPrice=%.2f - next same-direction entry needs a fresh trigger, not just the same read",
                direction == 1 ? "BUY" : "SELL", setupName, bailoutPrice);
 }
 
-// True if `dir` currently sits inside an active, still-fresh bailout watch —
+// True if `dir` currently sits inside an active, still-fresh bailout watch -
 // meaning the entry pipeline should require a genuinely fresh trigger
 // (handled by the caller) instead of accepting the same quality of signal
 // that just failed.
@@ -25910,7 +25938,7 @@ bool XAU_TRI_InReEntryWatch(int dir, string &watchSetup)
 }
 
 // Same underlying signals as the HTF_TREND_FOLLOW trigger requirement
-// (v6.7.0) — a self-contained, reusable "is there a genuinely fresh reason
+// (v6.7.0) - a self-contained, reusable "is there a genuinely fresh reason
 // to enter here" check, used to gate re-entry after a TRI bailout.
 bool XAU_TRI_FreshTriggerPresent(int dir)
 {
@@ -25948,7 +25976,7 @@ int XAU_TRI_Evaluate(int ttmIdx, ulong ticket, bool isBuy, double openPx, double
 
    if(!g_ttm[ttmIdx].triActive)
    {
-      if(adversePct < InpTRI_NearSLPct) return TRI_ACTION_NONE; // nowhere near SL — nothing to do
+      if(adversePct < InpTRI_NearSLPct) return TRI_ACTION_NONE; // nowhere near SL - nothing to do
       // ---- STEP 1: DETECT NEAR FAILURE ----
       g_ttm[ttmIdx].triActive              = true;
       g_ttm[ttmIdx].triEnteredAt           = TimeCurrent();
@@ -25959,7 +25987,7 @@ int XAU_TRI_Evaluate(int ttmIdx, ulong ticket, bool isBuy, double openPx, double
       g_ttm[ttmIdx].triAIConfAtEntry       = lastAIConfidence;
       g_ttm[ttmIdx].triHTFAtEntry          = currentHTF;
       g_ttm[ttmIdx].triClassification      = "PENDING";
-      triReason = StringFormat("Price reached %.0f%% of SL distance — entering Recovery Mode, watching for a genuine reclaim", adversePct * 100.0);
+      triReason = StringFormat("Price reached %.0f%% of SL distance - entering Recovery Mode, watching for a genuine reclaim", adversePct * 100.0);
       PrintFormat("[TRI] RECOVERY MODE ENTERED #%I64u %s | adverse=%.0f%% of SL | momentum=%d trendAligned=%s AIconf=%d htf=%+d regime=%s",
                   ticket, isBuy ? "BUY" : "SELL", adversePct * 100.0, momentumScore, trendAligned ? "Y" : "N",
                   lastAIConfidence, currentHTF, RegimeName());
@@ -25978,15 +26006,15 @@ int XAU_TRI_Evaluate(int ttmIdx, ulong ticket, bool isBuy, double openPx, double
 
    if(!reclaimedBreakeven)
    {
-      // Still underwater. Not yet a decision point — but if this has dragged
+      // Still underwater. Not yet a decision point - but if this has dragged
       // on long enough without ever reclaiming breakeven, tag it FAILED for
-      // logging/re-entry memory only. This does NOT close the trade — it
+      // logging/re-entry memory only. This does NOT close the trade - it
       // keeps riding its normal SL/other exit systems exactly as before.
       if(barsInRecovery >= InpTRI_FailedAfterBars && g_ttm[ttmIdx].triClassification != "FAILED")
       {
          g_ttm[ttmIdx].triClassification = "FAILED";
          g_ttm[ttmIdx].triClassifiedAt   = TimeCurrent();
-         triReason = StringFormat("Recovery stalled — %d bars in Recovery Mode without reclaiming breakeven. Not exiting early; still riding normal SL management.", barsInRecovery);
+         triReason = StringFormat("Recovery stalled - %d bars in Recovery Mode without reclaiming breakeven. Not exiting early; still riding normal SL management.", barsInRecovery);
          PrintFormat("[TRI] FAILED RECOVERY (informational, no forced exit) #%I64u %s | %s", ticket, isBuy ? "BUY" : "SELL", triReason);
       }
       return TRI_ACTION_MONITOR;
@@ -26024,8 +26052,8 @@ int XAU_TRI_Evaluate(int ttmIdx, ulong ticket, bool isBuy, double openPx, double
    if(recoveryScore >= strongThreshold)
    {
       g_ttm[ttmIdx].triClassification = "STRONG";
-      g_ttm[ttmIdx].triActive = false; // recovery resolved — resume normal management
-      triReason = StringFormat("Strong recovery: score=%.0f/100 (reclaim=%.0f momentum=%.0f htf=%.0f structure=%.0f ai=%.0f) — holding normally",
+      g_ttm[ttmIdx].triActive = false; // recovery resolved - resume normal management
+      triReason = StringFormat("Strong recovery: score=%.0f/100 (reclaim=%.0f momentum=%.0f htf=%.0f structure=%.0f ai=%.0f) - holding normally",
                                 recoveryScore, reclaimScore, momentumScorePts, htfScorePts, structureScorePts, aiScorePts);
       PrintFormat("[TRI] STRONG RECOVERY #%I64u %s | %s", ticket, isBuy ? "BUY" : "SELL", triReason);
       return TRI_ACTION_STRONG_CONTINUE;
@@ -26036,17 +26064,17 @@ int XAU_TRI_Evaluate(int ttmIdx, ulong ticket, bool isBuy, double openPx, double
       g_ttm[ttmIdx].triClassification = "WEAK";
       g_ttm[ttmIdx].triActive = false;
       g_ttm[ttmIdx].triExitTaken = true;
-      triReason = StringFormat("Weak recovery: score=%.0f/100 (below floor %.0f) — crawled back to breakeven with little conviction. Taking the second chance at $%.2f instead of risking another SL cycle.",
+      triReason = StringFormat("Weak recovery: score=%.0f/100 (below floor %.0f) - crawled back to breakeven with little conviction. Taking the second chance at $%.2f instead of risking another SL cycle.",
                                 recoveryScore, weakFloor, profit);
-      PrintFormat("[TRI] WEAK RECOVERY — BAILING AT BE/SMALL PROFIT #%I64u %s | %s", ticket, isBuy ? "BUY" : "SELL", triReason);
+      PrintFormat("[TRI] WEAK RECOVERY - BAILING AT BE/SMALL PROFIT #%I64u %s | %s", ticket, isBuy ? "BUY" : "SELL", triReason);
       return TRI_ACTION_WEAK_EXIT;
    }
 
-   // Between weak floor and strong threshold: genuinely ambiguous — the
+   // Between weak floor and strong threshold: genuinely ambiguous - the
    // safety rule ("never exit solely because price returned to breakeven")
    // means an ambiguous reclaim is NOT enough justification to act. Keep
    // watching; the next evaluation (next tick/bar) re-scores fresh.
-   triReason = StringFormat("Ambiguous reclaim: score=%.0f/100 (between weak floor %.0f and strong %.0f) — not enough evidence either way yet, continuing to watch",
+   triReason = StringFormat("Ambiguous reclaim: score=%.0f/100 (between weak floor %.0f and strong %.0f) - not enough evidence either way yet, continuing to watch",
                              recoveryScore, weakFloor, strongThreshold);
    return TRI_ACTION_MONITOR;
 }
@@ -26284,12 +26312,12 @@ bool XAU_EmergencyLossCloseAllowed(string ctx)
    if(InpWeekendClose && StringFind(c, "WEEKEND_CLOSE") >= 0) return true;
    // v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER (audit item #6): No-Limit Trading
    // Mode (default ON, this release) is an explicit, deliberately-tested
-   // decision that NO internal system may ever force-close a losing trade —
+   // decision that NO internal system may ever force-close a losing trade -
    // only broker SL, manual close, or true emergencies. That default stays
    // completely unchanged. This carve-out only activates when a user has
    // explicitly turned No-Limit mode OFF: in that configuration, the EA's
    // own objective-invalidation exits (EARLY_CONVICTION_CUT, CLEAN_INVALID,
-   // STRUCTURE_FAILFAST, a structurally-confirmed TTM exit) become allowed —
+   // STRUCTURE_FAILFAST, a structurally-confirmed TTM exit) become allowed -
    // each already requires multiple independent confirming signals
    // (confirmed structure break + EMA + RSI + reversal candle, or a genuine
    // BOS/HTF flip against the trade) before it ever reaches this firewall,
@@ -26657,7 +26685,7 @@ struct XAU_RExitState
    int      closeAttemptCount;
    bool     finalTelemetryLogged;     // dedup guard so OnTradeTransaction cleanup can't double-report
    datetime lastRunnerRecheckBarTime; // throttles RUN_TO_1R continuation-failure recheck to once per closed bar
-   // v6.21.3 — PROFIT GUARANTEE (owner rule 2026-07-13): once armed, permanent
+   // v6.21.3 - PROFIT GUARANTEE (owner rule 2026-07-13): once armed, permanent
    // and ratchet-only for the life of this ticket; persisted across restarts.
    bool     profitGuaranteeArmed;
    double   guaranteedFloorR;              // internal ratchet-only floor, in R
@@ -26714,7 +26742,7 @@ bool   g_rExitConfigValid = true;
 bool   g_rExitStateDirty  = false;    // v6.21.2 (Fix 16): set true on any meaningful state change; save only when dirty or on the periodic floor
 
 // ===========================================================================
-// v6.24.15 — Entry-quality telemetry (spec section 10). Deliberately a
+// v6.24.15 - Entry-quality telemetry (spec section 10). Deliberately a
 // SEPARATE array from g_rExit/XAU_RExitState, not new fields bolted onto it
 // -- g_rExit is the live, persisted, exit-DECISION-making state for the
 // non-negotiable "exit behaviour must not change" system; this array only
@@ -26878,7 +26906,7 @@ string XAU_ClassifyEntryQuality(int idx, double finalProfit)
    return "ENTRY_ACCEPTABLE";
 }
 
-// v6.21.3 — PROFIT GUARANTEE re-entry tracking (owner rule 2026-07-13, point 6).
+// v6.21.3 - PROFIT GUARANTEE re-entry tracking (owner rule 2026-07-13, point 6).
 // Small in-memory ring buffer of recent guarantee-protected exits, so a fresh
 // normal-pipeline signal in the same direction can be recognized and audited
 // as a genuine re-entry after a protected exit -- NOT a new bypass path; the
@@ -28245,7 +28273,7 @@ void XAU_RExit_LogCounterfactual(int idx, string exitReason)
                g_rExit[idx].currentR, g_rExit[idx].currentProfitUSD,
                g_rExit[idx].peakR, g_rExit[idx].peakProfitUSD, g_rExit[idx].troughR, g_rExit[idx].troughProfitUSD, cf);
 
-   // v6.21.3 — owner rule 2026-07-13: every close of an armed ticket is
+   // v6.21.3 - owner rule 2026-07-13: every close of an armed ticket is
    // reported against the profit guarantee, regardless of which exact path
    // closed it (guaranteed-floor SL touch, adaptive trail SL touch, floor
    // breach force-close, RUN_TO_1R continuation failure, or the 1R hard
@@ -28480,7 +28508,7 @@ bool XAU_ApplyTransitionPositionAuthority(int idx, ulong ticket, bool isBuy,
 }
 
 // ===========================================================================
-// v6.24.18 owner directive 2026-07-16 — CANONICAL PYRAMID BASKET EXIT
+// v6.24.18 owner directive 2026-07-16 - CANONICAL PYRAMID BASKET EXIT
 // ===========================================================================
 // One position in a campaign -> the existing individual XAU_ComputePrimaryExitFloor
 // policy (untouched, above). Two or more -> this basket authority takes over
@@ -28888,7 +28916,7 @@ void XAU_RExitCoreLoop()
    double buffer = MathMax(MathMax(stopsLevel, freezeLevel) * point, point * 30);
    bool anyTicket = false;
 
-   // v6.24.18 — basket exit runs FIRST, unconditionally, for both
+   // v6.24.18 - basket exit runs FIRST, unconditionally, for both
    // directions, before any individual-ticket decision below reads
    // g_campaign[].activePositionCount -- so every per-ticket basketModeActive
    // check this tick sees this tick's own fresh basket state, not last tick's.
@@ -28985,7 +29013,7 @@ void XAU_RExitCoreLoop()
          if(!g_rExit[idx].rCheckpointHit[c] && currentR >= g_rCheckpointLevels[c])
          { g_rExit[idx].rCheckpointHit[c] = true; g_rExit[idx].rCheckpointProfitUSD[c] = profit; }
 
-      // v6.24.15 — entry-quality telemetry (pure recorder, see
+      // v6.24.15 - entry-quality telemetry (pure recorder, see
       // XAU_RecordEntryQualityTelemetry's own header comment: reads
       // already-computed profit/riskUSD, writes only to the separate
       // g_entryQuality[] array, never touches g_rExit or influences any
@@ -29320,21 +29348,21 @@ void XAU_RExitCoreLoop()
    }
 }
 
-// v6.24.7 — EXIT-HIERARCHY PRECEDENCE (documented, not restructured; every
+// v6.24.7 - EXIT-HIERARCHY PRECEDENCE (documented, not restructured; every
 // system below already existed and this only records the actual per-tick
 // call order so future changes have one reference instead of re-deriving
 // it from scratch). Earlier checks `continue` and skip everything after:
-//   1. XAU_ProtectPeakProfitFloor()      — profit-floor lock once armed
-//   2. ManageCleanExitsForPosition()     — includes XAU_SmartExit3Layer's
+//   1. XAU_ProtectPeakProfitFloor()      - profit-floor lock once armed
+//   2. ManageCleanExitsForPosition()     - includes XAU_SmartExit3Layer's
 //                                          giveback/lock layers
-//   3. PEAK_RETRACE                      — this version adds horizon-aware,
+//   3. PEAK_RETRACE                      - this version adds horizon-aware,
 //                                          additive-only tolerance here (see
 //                                          below) on top of the existing
 //                                          InpPreservationMode widening
-//   4. ADAPTIVE RUNNER / PROFIT RATCHET  — tick-by-tick trailing, SL-only
+//   4. ADAPTIVE RUNNER / PROFIT RATCHET  - tick-by-tick trailing, SL-only
 //                                          (never closes outright)
-//   5. Break-even (InpARBreakEvenR)      — SL-only
-//   6. Time-expired / stale / EMA-against-drift closes — all explicitly
+//   5. Break-even (InpARBreakEvenR)      - SL-only
+//   6. Time-expired / stale / EMA-against-drift closes - all explicitly
 //      gated off while InpPreservationMode is true (default), which is
 //      the existing mechanism that already stops a good intraday/swing
 //      trade from being panic-closed on ordinary noise.
@@ -29343,7 +29371,7 @@ void ManagePositions()
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    if(ArraySize(bufATR) < 2 || bufATR[1] <= 0) return;
    // GUARD: Do not attempt any momentum logic until ALL indicator buffers are ready.
-   // Previously emaF/emaS defaulted to 0 on stale buffers → `close1 > emaF` always true →
+   // Previously emaF/emaS defaulted to 0 on stale buffers -> `close1 > emaF` always true ->
    // SELL trades silently flagged "momentum fading" and closed for no real reason.
    if(ArraySize(bufRSI) < 2 || ArraySize(bufEMAFast) < 2 || ArraySize(bufEMASlow) < 2) return;
    double atr = bufATR[1];
@@ -29354,7 +29382,7 @@ void ManagePositions()
    double open1 = iOpen(Symbol(), PERIOD_M5, 1);
    double tickPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
 
-   // v6.24.9 — campaign floating-P/L and evidence update, once per
+   // v6.24.9 - campaign floating-P/L and evidence update, once per
    // ManagePositions() call (i.e. once per tick position management runs),
    // BEFORE the per-position exit-decision loop below so every exit check
    // this tick sees the current campaign state, not last tick's.
@@ -29447,7 +29475,7 @@ void ManagePositions()
       // above -- passed through purely for read-only telemetry.
       XAU_UpdateBrainDrawdownTracking(ticket, isBuy, openPx, curPrice, slDist, curSL);
 
-      // v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER — one clean status line per position,
+      // v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER - one clean status line per position,
       // logged BEFORE any close decision runs so it always reflects the state
       // that decision was made from (not "healthy" logged after a close).
       if(InpTTM_Enable)
@@ -29482,7 +29510,7 @@ void ManagePositions()
 
       // ======== v6.4.19 TRADE THESIS MONITOR ========
       // Re-evaluate WHY we entered this trade. If the original thesis is dead,
-      // exit here — before the ATR trailing stop would have closed it.
+      // exit here - before the ATR trailing stop would have closed it.
       if(InpTTM_Enable)
       {
          int ttmIdx = TTM_FindOrCreateSlot(ticket);
@@ -29516,7 +29544,7 @@ void ManagePositions()
                }
                // v6.7.0: only the structurally-confirmed TTM exit (BOS/HTF
                // flipped against the trade) is recognized by the loss-close
-               // firewall as an objective invalidation — a plain score-decay
+               // firewall as an objective invalidation - a plain score-decay
                // TTM exit (TTM_THESIS_DEAD/TTM_PERSISTENT_WEAK) is a softer
                // signal and stays subject to "let trades breathe."
                else if(SafePositionClose(ticket, ttmIsStructural ? "TTM_STRUCTURAL_EXIT" : "TTM_EXIT"))
@@ -29528,7 +29556,7 @@ void ManagePositions()
             }
 
             // ======== v6.8.0 TRADE RECOVERY INTELLIGENCE (TRI) ========
-            // TTM held (thesis not broken) — check whether this trade came
+            // TTM held (thesis not broken) - check whether this trade came
             // close to SL and, if so, whether it's now recovering well
             // enough to trust, or should take a safe exit at breakeven.
             {
@@ -29552,7 +29580,7 @@ void ManagePositions()
 	                  if(recAction == RECOVERY_EXPANSION_HOLD)
 	                     continue;
 	                  // Only ever reached with profit >= 0 (see XAU_TRI_Evaluate),
-	                  // so this is always a breakeven-or-better close — never
+	                  // so this is always a breakeven-or-better close - never
 	                  // needs the loss-close firewall, never fights No-Limit mode.
 	                  if(SafePositionClose(ticket, "TRI_WEAK_RECOVERY_EXIT"))
                   {
@@ -29563,7 +29591,7 @@ void ManagePositions()
                   continue;
                }
 	               // TRI_ACTION_STRONG_CONTINUE / MONITOR / NONE: no forced
-	               // action here — trade falls through to normal management
+	               // action here - trade falls through to normal management
 	               // below exactly as it would have without TRI.
 	            }
 	         }
@@ -29729,7 +29757,7 @@ void ManagePositions()
       // Moved here from Path C so AI can HOLD/CLOSE/LOCK positions even when CleanExits=true.
       // Previously, the `continue` at line 9021 meant AI exit override had ZERO effect.
       // Now AI runs first, can: LOCK the SL to bank profit, or CLOSE early if thesis is dead.
-      // Cooldown: InpClaudeAuditSec (default 900s = 15min) — doesn't spam the API.
+      // Cooldown: InpClaudeAuditSec (default 900s = 15min) - doesn't spam the API.
       {
          static datetime lastClaudeCheckCE = 0;
          if(InpUseAI && InpAIExitOverride && !InpAIAdvisoryOnly &&
@@ -29746,7 +29774,7 @@ void ManagePositions()
 
             if(v.action == 1 && v.lockUSD > 0 && rDollars > 0)
             {
-               // AI wants to LOCK profit — move SL to bank the specified USD amount
+               // AI wants to LOCK profit - move SL to bank the specified USD amount
                double lockDist = (v.lockUSD / rDollars) * slDist;
                double newSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
                                     : NormalizeDouble(openPx - lockDist, digits);
@@ -29757,7 +29785,7 @@ void ManagePositions()
                                     : (newSL < openPx && newSL > curPrice + bufPts2);
                bool ratchet2 = isBuy ? (newSL > curSL) : (newSL < curSL || curSL == 0);
                if(sane2 && ratchet2 && SafeModifySL(ticket, newSL, curTP, isBuy, curPrice, "AI_LOCK_CE"))
-                  Print("AI DIRECTOR EXIT LOCK #", ticket, " — locked +$", DoubleToString(v.lockUSD,2),
+                  Print("AI DIRECTOR EXIT LOCK #", ticket, " - locked +$", DoubleToString(v.lockUSD,2),
                         " | SL=", DoubleToString(newSL, digits), " | reason: ", v.reason);
             }
             else if(v.action == -1 && profit > rDollars * 0.3)
@@ -29765,7 +29793,7 @@ void ManagePositions()
                // v6.7.0 ADAPTIVE ENTRY/EXIT ARBITER (explicit precedence rule):
                // "if AI says exit but structure is healthy, protect instead of
                // panic close." AI's CLOSE call used to execute unconditionally
-               // once minimally profitable — now it only full-closes when
+               // once minimally profitable - now it only full-closes when
                // structure agrees something has actually deteriorated. If
                // structure still looks healthy, lock in a meaningful chunk of
                // profit instead of exiting a runner on an AI opinion alone.
@@ -29779,9 +29807,9 @@ void ManagePositions()
                   if(protectRatchet && SafeModifySL(ticket, protectSL, curTP, isBuy, curPrice, "AI_EXIT_OVERRIDDEN_BY_STRUCTURE"))
                      Print("AI DIRECTOR EXIT OVERRIDDEN BY STRUCTURE #", ticket,
                            " | AI wanted CLOSE (reason: ", v.reason, ") but trend still aligned, no structure break, momentum=",
-                           momentumScoreEA, "/5 — protecting profit instead of panic-closing | newSL=", DoubleToString(protectSL, digits));
+                           momentumScoreEA, "/5 - protecting profit instead of panic-closing | newSL=", DoubleToString(protectSL, digits));
                   else
-                     Print("AI DIRECTOR EXIT — structure healthy, holding as-is (SL already at/beyond protect level) #", ticket);
+                     Print("AI DIRECTOR EXIT - structure healthy, holding as-is (SL already at/beyond protect level) #", ticket);
                }
                else
                {
@@ -29793,7 +29821,7 @@ void ManagePositions()
             }
             else if(v.action == 0)
             {
-               // AI says HOLD — log it, do nothing (CleanExits still manages normally)
+               // AI says HOLD - log it, do nothing (CleanExits still manages normally)
                Print("AI DIRECTOR EXIT HOLD #", ticket, " | conf=", v.confidence, "% | ", v.reason);
             }
          }
@@ -29811,18 +29839,18 @@ void ManagePositions()
                                         slDist, atr, emaF, emaS, close1, open1, digits, rsi,
                                         minsOpen, lotsOpen, peak, rDollars))
             continue;
-         // Skip ALL legacy trailing systems below — Clean Exits owns this ticket.
+         // Skip ALL legacy trailing systems below - Clean Exits owns this ticket.
          // The original SL set at order-open time remains as the hard downside
-         // cap. Clean Exits ratchets it forward through BE → Chandelier phases.
+         // cap. Clean Exits ratchets it forward through BE -> Chandelier phases.
          continue;
       }
 
-      // v4.7.3/v4.7.4 — TP AUTO-EXTEND (push TP forward as winner runs)
+      // v4.7.3/v4.7.4 - TP AUTO-EXTEND (push TP forward as winner runs)
       //   When profit reaches the effective TP extension threshold, add the
       //   effective ATR extension distance so entry quality guards get more room.
       //   on the original target. SL ratchets (Ladder/Peak/Moon) protect the
       //   gains; this just removes the artificial ceiling.
-      //   v4.7.4 — ONLY extend when market shows REAL continuation strength.
+      //   v4.7.4 - ONLY extend when market shows REAL continuation strength.
       //   In ranging / choppy / low-vol markets we let the original TP hit
       //   naturally because chasing TP in chop = trade gives back the win.
       if(InpTPAutoExtend && curTP > 0 && profit > 0 && atr > 0 &&
@@ -29855,7 +29883,7 @@ void ManagePositions()
                static datetime lastTPSkip = 0;
                if(TimeCurrent() - lastTPSkip > 60)
                {
-                  Print("TP_EXTEND SKIP #", ticket, " — market not strong enough to chase TP. Regime=",
+                  Print("TP_EXTEND SKIP #", ticket, " - market not strong enough to chase TP. Regime=",
                         RegimeName(), " emaConfirm=", emaConfirm?"Y":"N", " rsiHealthy=", rsiHealthy?"Y":"N",
                         ". Letting original TP hit at ", DoubleToString(curTP, digits), ".");
                   lastTPSkip = TimeCurrent();
@@ -29877,7 +29905,7 @@ void ManagePositions()
                   Print("TP_EXTEND #", ticket, " (", GetTPExtendCount(ticket), "/", InpTPExtendMaxTimes,
                         ") profit $", DoubleToString(profit,2),
                         " reached ", DoubleToString(EffTPExtendTriggerPct(),0), "% of TP, regime=",
-                        RegimeName(), " — TP pushed ", DoubleToString(tpAdd, digits),
+                        RegimeName(), " - TP pushed ", DoubleToString(tpAdd, digits),
                         " further to ", DoubleToString(newTP, digits), ". Runner keeps running.");
                }
                else if(tpSane)
@@ -29890,14 +29918,14 @@ void ManagePositions()
          }
       }
 
-      // ===== PATH 0: HARD LOSS PROTECTION (v4.4.5 — R-based, adaptive) =====
-      // R-BASED hard stop fires only at catastrophic loss (e.g. 3× original SL risk).
+      // ===== PATH 0: HARD LOSS PROTECTION (v4.4.5 - R-based, adaptive) =====
+      // R-BASED hard stop fires only at catastrophic loss (e.g. 3x original SL risk).
       // This prevents the bug where a big lot + small $-cap = stopped out on 1-point noise.
       if(InpHardStopRBased && profit <= -(rDollars * InpHardStopRMulti))
       {
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "HARD_STOP_R",
-                 StringFormat("Down %.1fR ($%.2f of %.2f) — %.1fR catastrophic cap hit. Capital preservation.",
+                 StringFormat("Down %.1fR ($%.2f of %.2f) - %.1fR catastrophic cap hit. Capital preservation.",
                               MathAbs(profit)/rDollars, profit, rDollars, InpHardStopRMulti));
          SafePositionClose(ticket, "HARD_STOP_R"); continue;
       }
@@ -29915,18 +29943,18 @@ void ManagePositions()
       {
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "EARLY_ADVERSE",
-                 StringFormat("Down %.1fR ($%.2f of %.2f) within first %d min. Entry was wrong — cut fast.",
+                 StringFormat("Down %.1fR ($%.2f of %.2f) within first %d min. Entry was wrong - cut fast.",
                               MathAbs(profit)/rDollars, profit, rDollars, InpEarlyAdverseMin));
          if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
                                    "EARLY_ADVERSE", structureConfirmedEA, false))
             SafePositionClose(ticket, "EARLY_ADVERSE");
          continue;
       }
-      // v4.7.2 — In Preservation Mode, PEAK_RETRACE only fires on DEEP retraces
-      //   from BIG peaks (90% retrace from $200+) — it's a runner-saver, not a scalper.
+      // v4.7.2 - In Preservation Mode, PEAK_RETRACE only fires on DEEP retraces
+      //   from BIG peaks (90% retrace from $200+) - it's a runner-saver, not a scalper.
       double effRetracePct = InpPreservationMode ? MathMax(InpPeakRetracePct, 90.0) : InpPeakRetracePct;
       double effPeakMin    = InpPreservationMode ? MathMax(EffPeakMinUSD(), 200.0)  : EffPeakMinUSD();
-      // v6.24.7 — horizon-aware tolerance, additive only: a SWING_RUNNER or
+      // v6.24.7 - horizon-aware tolerance, additive only: a SWING_RUNNER or
       // INTRADAY_TREND ticket (M15+ owns the thesis, ordinary M5 noise is
       // expected) gets MORE room before PEAK_RETRACE fires, never less than
       // whatever InpPreservationMode already established above. SCALP/
@@ -29949,7 +29977,7 @@ void ManagePositions()
             continue;
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "PEAK_RETRACE",
-                 StringFormat("Peak was $%.2f, now $%.2f — gave back %.0f%% (threshold %.0f%%).",
+                 StringFormat("Peak was $%.2f, now $%.2f - gave back %.0f%% (threshold %.0f%%).",
                               peak, profit, retracePct, effRetracePct));
          if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
                                    "PEAK_RETRACE", structureConfirmedEA, false))
@@ -29957,18 +29985,18 @@ void ManagePositions()
          continue;
       }
 
-      // ===== ADAPTIVE RUNNER (v4.7.7) — 2-stage tick-1 trailing =====
+      // ===== ADAPTIVE RUNNER (v4.7.7) - 2-stage tick-1 trailing =====
       //   Fixes: slow SL activation, giveback from +$3,938 peak to loss.
       //   Stage 0: Break-even at +0.5R (lock tiny profit cushion)
-      //   Stage 1: +0.3R → tight 1.0×ATR trail (protect early winners)
-      //   Stage 2: +1.0R → wider 2.2×ATR trail (let runner breathe)
+      //   Stage 1: +0.3R -> tight 1.0xATR trail (protect early winners)
+      //   Stage 2: +1.0R -> wider 2.2xATR trail (let runner breathe)
       //   Adaptive: tighter trail in strong momentum (faster ratchet).
       //   Anti-noise: SL never closer than InpARMinTrailPoints (prevents chop stops).
-      //   Runs every tick — no time-in-trade gate.
+      //   Runs every tick - no time-in-trade gate.
       //   Co-exists with Profit Ladder / Peak-Lock (those only move SL FURTHER,
-      //   and SafeModifySL ratchets only → no conflict).
-      // v4.9.1 — PROFIT RATCHET (user's spec: SL = 50% of current profit, fast, account-aware)
-      //   Arm at InpRatchetArmPct% of balance (floor $50). $100k → arms at $500.
+      //   and SafeModifySL ratchets only -> no conflict).
+      // v4.9.1 - PROFIT RATCHET (user's spec: SL = 50% of current profit, fast, account-aware)
+      //   Arm at InpRatchetArmPct% of balance (floor $50). $100k -> arms at $500.
       //   Every tick while armed: compute new SL price that would bank 50% of CURRENT profit.
       //   Only ratchet forward (never pull back). Respects broker stops-level.
       //   This replaces the old AR_BE + AR_S1 + AR_S2 staging when enabled.
@@ -29981,7 +30009,7 @@ void ManagePositions()
          if(profit >= armUSD)
          {
             double lockUSD = profit * InpRatchetLockPct / 100.0;
-            // Convert $ lock to price distance using R: (lockUSD / rDollars) × slDist
+            // Convert $ lock to price distance using R: (lockUSD / rDollars) x slDist
             double lockDist = (lockUSD / rDollars) * slDist;
             double newSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
                                   : NormalizeDouble(openPx - lockDist, digits);
@@ -29991,7 +30019,7 @@ void ManagePositions()
             double rBufPts = MathMax(rSlLvl * rPoint, rPoint * 30);
             bool rSane = isBuy ? (newSL > openPx && newSL < curPrice - rBufPts)
                                : (newSL < openPx && newSL > curPrice + rBufPts);
-            // Ratchet only — never move SL backward
+            // Ratchet only - never move SL backward
             bool rRatchet = isBuy ? (newSL > curSL) : (newSL < curSL || curSL == 0);
             if(rSane && rRatchet)
             {
@@ -30001,7 +30029,7 @@ void ManagePositions()
                   if(TimeCurrent() - lastRatchetLog > 30)
                   {
                      Print("P_RATCHET #", ticket, " profit $", DoubleToString(profit,0),
-                           " — SL locks $", DoubleToString(lockUSD,0),
+                           " - SL locks $", DoubleToString(lockUSD,0),
                            " (", DoubleToString(InpRatchetLockPct,0),
                            "%) at ", DoubleToString(newSL, digits));
                      lastRatchetLog = TimeCurrent();
@@ -30011,9 +30039,9 @@ void ManagePositions()
          }
       }
 
-      // v4.7.7 — ADAPTIVE RUNNER (legacy 2-stage — DISABLED when ProfitRatchet is on)
-      //   v4.8.8 — SKIPPED in SIMPLE mode (pyramid-style: only Peak-Lock + initial SL/TP).
-      //   Pyramid trades work well because they don't get active management — let's
+      // v4.7.7 - ADAPTIVE RUNNER (legacy 2-stage - DISABLED when ProfitRatchet is on)
+      //   v4.8.8 - SKIPPED in SIMPLE mode (pyramid-style: only Peak-Lock + initial SL/TP).
+      //   Pyramid trades work well because they don't get active management - let's
       //   apply that same simplicity to initial trades by default.
       if(InpMgmtMode != MGMT_SIMPLE && InpAdaptiveRunner && profit > 0 && rDollars > 0 && atr > 0)
       {
@@ -30021,7 +30049,7 @@ void ManagePositions()
          double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
          double minDist = InpARMinTrailPoints * point;
 
-         // v4.8.4 — TREND HOLD detection: H4+H1+M5 all aligned WITH trade direction
+         // v4.8.4 - TREND HOLD detection: H4+H1+M5 all aligned WITH trade direction
          bool trendHold = false;
          if(InpTrendHoldMode)
          {
@@ -30039,24 +30067,24 @@ void ManagePositions()
             }
          }
 
-         // Momentum detector: strong bar in our direction → tighten trail for faster lock
+         // Momentum detector: strong bar in our direction -> tighten trail for faster lock
          double barRange = MathAbs(close1 - open1);
          bool strongMomentum = (barRange > atr * 1.2) &&
                                ((isBuy && close1 > open1) || (!isBuy && close1 < open1));
          double trailMulti = 0;
 
          // Pick stage based on R profit
-         // v4.8.6 — Compute dollar thresholds from account balance
+         // v4.8.6 - Compute dollar thresholds from account balance
          double accBal = StrategyReferenceBalance();
          double arS1MinProfit = MathMax(30.0, accBal * InpARStage1MinPct / 100.0);
          double arBEMinProfit = MathMax(50.0, accBal * InpARBreakEvenMinPct / 100.0);
 
-         // v4.8.6 — Trend Hold: force wide trail regardless of stage thresholds
-         //   BUT still require profit ≥ arS1MinProfit so we don't micro-trail tiny wins
+         // v4.8.6 - Trend Hold: force wide trail regardless of stage thresholds
+         //   BUT still require profit >= arS1MinProfit so we don't micro-trail tiny wins
          if(trendHold && profitR >= InpARStage1ActivateR && profit >= arS1MinProfit)
          {
             trailMulti = InpTrendHoldTrailATR;  // wide trail, let it RUN
-            // no momentum-tightening in trend-hold — we want breathing room
+            // no momentum-tightening in trend-hold - we want breathing room
          }
          else if(profitR >= InpARStage2ActivateR)
          {
@@ -30070,7 +30098,7 @@ void ManagePositions()
          }
 
          // Stage 0: Break-even lock at +BreakEvenR (fires even before Stage 1 trail)
-         // v4.8.6 — ALSO require profit >= arBEMinProfit (scales with balance).
+         // v4.8.6 - ALSO require profit >= arBEMinProfit (scales with balance).
          if(profitR >= InpARBreakEvenR && profit >= arBEMinProfit)
          {
             double beProfitDist = slDist * InpARBreakEvenProfitR;
@@ -30083,7 +30111,7 @@ void ManagePositions()
             {
                if(SafeModifySL(ticket, beSL, curTP, isBuy, curPrice, "AR_BE"))
                   Print("AR_BE #", ticket, " profitR=", DoubleToString(profitR,2),
-                        " — locked BE+", DoubleToString(InpARBreakEvenProfitR,2), "R at ",
+                        " - locked BE+", DoubleToString(InpARBreakEvenProfitR,2), "R at ",
                         DoubleToString(beSL, digits));
             }
          }
@@ -30109,8 +30137,8 @@ void ManagePositions()
                   {
                      Print(tag, " #", ticket, " profitR=", DoubleToString(profitR,2),
                            strongMomentum ? " [MOM+]" : "",
-                           " — SL→", DoubleToString(newSL, digits),
-                           " (", DoubleToString(trailMulti,2), "×ATR, min ",
+                           " - SL->", DoubleToString(newSL, digits),
+                           " (", DoubleToString(trailMulti,2), "xATR, min ",
                            DoubleToString(InpARMinTrailPoints,0), "pts)");
                      lastARLog = TimeCurrent();
                   }
@@ -30141,7 +30169,7 @@ void ManagePositions()
 
       // ===== PATH B: SMART MANAGEMENT =====
 
-      // B1: Breakeven lock — SKIPPED if Profit Ladder OR Adaptive Runner OR Clean Exits is active.
+      // B1: Breakeven lock - SKIPPED if Profit Ladder OR Adaptive Runner OR Clean Exits is active.
       //   Clean Exits has its own BE logic at +1R (ManageCleanExits) that supersedes this.
       if(!InpProfitLadder && !InpAdaptiveRunner && !InpCleanExits)
       {
@@ -30153,7 +30181,7 @@ void ManagePositions()
             if(beSL > curSL)
             {
                if(SafeModifySL(ticket, beSL, curTP, true, curPrice, "BE_LOCK"))
-                  Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
+                  Print("BE_LOCK #", ticket, " SL->", DoubleToString(beSL, digits),
                         " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
                         DoubleToString(InpBELockProfitR,2), "R profit)");
             }
@@ -30164,19 +30192,19 @@ void ManagePositions()
             if(beSL < curSL || curSL == 0)
             {
                if(SafeModifySL(ticket, beSL, curTP, false, curPrice, "BE_LOCK"))
-                  Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
+                  Print("BE_LOCK #", ticket, " SL->", DoubleToString(beSL, digits),
                         " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
                         DoubleToString(InpBELockProfitR,2), "R profit)");
             }
          }
       }
 
-      // v4.6.7 / v4.8.3 / v4.8.6 — PEAK-LOCK BACKSTOP (dynamic scaling, account-size aware arm)
+      // v4.6.7 / v4.8.3 / v4.8.6 - PEAK-LOCK BACKSTOP (dynamic scaling, account-size aware arm)
       // Arm threshold now scales with balance: 0.3% of balance, min $8 floor.
-      //   $1k acc → arm at peak $8
-      //   $10k acc → arm at peak $30
-      //   $100k acc → arm at peak $300
-      //   $1M acc → arm at peak $3,000
+      //   $1k acc -> arm at peak $8
+      //   $10k acc -> arm at peak $30
+      //   $100k acc -> arm at peak $300
+      //   $1M acc -> arm at peak $3,000
       double plBal = StrategyReferenceBalance();
       double peakArmUSD = MathMax(20.0, plBal * InpPeakLockArmPct / 100.0);
       if(InpPeakLockBackstop && peak >= peakArmUSD && rDollars > 0 &&
@@ -30198,21 +30226,21 @@ void ManagePositions()
             double pBufPts   = MathMax(pStopsLvl * pPoint, pPoint * 30);
             bool pSane = isBuy ? (pBackSL > openPx && pBackSL < curPrice - pBufPts)
                                : (pBackSL < openPx && pBackSL > curPrice + pBufPts);
-            // Ratchet only — never move SL backward
+            // Ratchet only - never move SL backward
             bool pShould = isBuy ? (pBackSL > curSL)
                                  : (pBackSL < curSL || curSL == 0);
             if(pSane && pShould)
             {
                if(SafeModifySL(ticket, pBackSL, curTP, isBuy, curPrice, "PEAK_LOCK"))
                   Print("PEAK_LOCK #", ticket, " peak $", DoubleToString(peak,2),
-                        " — dynamic ", DoubleToString(effPct,0),
+                        " - dynamic ", DoubleToString(effPct,0),
                         "% = +$", DoubleToString(minLockUSD,2),
                         " locked (price ", DoubleToString(pBackSL, digits), "). Worst case = banked.");
             }
          }
       }
 
-      // v4.6.2 — PROFIT LADDER (account-scaled)
+      // v4.6.2 - PROFIT LADDER (account-scaled)
       // Once trade reaches each profit tier, push SL to lock guaranteed dollar profit.
       // Tiers are % of CURRENT BALANCE so a $500 account uses $5/$2 tier-1, a $50k
       // account uses $250/$100, etc. Absolute floors prevent micro accounts from
@@ -30270,10 +30298,10 @@ void ManagePositions()
             double newLockSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
                                      : NormalizeDouble(openPx - lockDist, digits);
 
-            // v4.6.4 — SANITY CHECK: lock SL must be in the PROFIT ZONE
+            // v4.6.4 - SANITY CHECK: lock SL must be in the PROFIT ZONE
             //   (between entry and current price, with broker stops-level buffer).
             //   Without this, profit retracing below the high-tier lock would
-            //   place SL on wrong side → broker rejects with "invalid stops".
+            //   place SL on wrong side -> broker rejects with "invalid stops".
             double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
             long stopsLvl = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
             double minStopsDist = stopsLvl * point;
@@ -30289,7 +30317,7 @@ void ManagePositions()
                   Print("LADDER SKIP: lock $", DoubleToString(lockProfitUSD,0),
                         " (price ", DoubleToString(newLockSL,digits), ") doesn't fit in profit zone (entry ",
                         DoubleToString(openPx,digits), ", price ", DoubleToString(curPrice,digits),
-                        "). Profit retraced below tier — waiting for it to rebuild.");
+                        "). Profit retraced below tier - waiting for it to rebuild.");
                   lastLadderSkip = TimeCurrent();
                }
             }
@@ -30302,14 +30330,14 @@ void ManagePositions()
                {
                   if(SafeModifySL(ticket, newLockSL, curTP, isBuy, curPrice, "LADDER"))
                      Print("PROFIT_LADDER #", ticket, " profit $", DoubleToString(profit,2),
-                           " ≥ tier $", DoubleToString(tierTriggered, 0),
+                           " >= tier $", DoubleToString(tierTriggered, 0),
                            " (bal $", DoubleToString(bal, 0), ")",
-                           " — SL locked at +$", DoubleToString(lockProfitUSD, 0),
+                           " - SL locked at +$", DoubleToString(lockProfitUSD, 0),
                            " (price ", DoubleToString(newLockSL, digits), "). Worst case = banked profit.");
                }
             }
 
-            // v4.6.6 — MOON TRAIL: once tier 7 is hit (massive profit), switch to a
+            // v4.6.6 - MOON TRAIL: once tier 7 is hit (massive profit), switch to a
             //   wide ATR trail so any NEW HIGH automatically pushes SL up, banking
             //   each fresh peak. This is what makes "let it run forever" actually
             //   capture the gains instead of giving them all back.
@@ -30318,7 +30346,7 @@ void ManagePositions()
                double moonDist = atr * InpLadderMoonTrailATR;
                double moonSL   = isBuy ? NormalizeDouble(curPrice - moonDist, digits)
                                        : NormalizeDouble(curPrice + moonDist, digits);
-               // Only ratchet — never give back ground
+               // Only ratchet - never give back ground
                bool moonShould = isBuy ? (moonSL > curSL && moonSL > newLockSL)
                                        : ((moonSL < curSL || curSL == 0) && moonSL < newLockSL);
                // Sanity: must still sit in profit zone vs current price
@@ -30328,24 +30356,24 @@ void ManagePositions()
                {
                   if(SafeModifySL(ticket, moonSL, curTP, isBuy, curPrice, "MOON"))
                      Print("MOON_TRAIL #", ticket, " profit $", DoubleToString(profit,2),
-                           " — SL ratcheted to ", DoubleToString(moonSL, digits),
-                           " (", DoubleToString(InpLadderMoonTrailATR,2), "×ATR behind price). Riding the giant.");
+                           " - SL ratcheted to ", DoubleToString(moonSL, digits),
+                           " (", DoubleToString(InpLadderMoonTrailATR,2), "xATR behind price). Riding the giant.");
                }
             }
          }
       }
 
-      // v4.5.4 — PARTIAL TAKE-PROFIT
+      // v4.5.4 - PARTIAL TAKE-PROFIT
       // At +1R (default), close a fraction of the position to lock guaranteed profit,
       // let the remainder ride the trailing SL. Fires ONCE per ticket.
-      // Skipped on high-conviction trades (>= InpConvRunMinConf) — those are meant
+      // Skipped on high-conviction trades (>= InpConvRunMinConf) - those are meant
       // to fully run via the conviction runner wide trail.
       if(InpPartialTP && !InpCloudSafeDisablePartials && !PartialAlreadyTaken(ticket))
       {
          bool skipHighConf = InpPartialSkipHighConf &&
                              currentTradeConfidence >= InpConvRunMinConf;
          double profitR = (rDollars > 0) ? (profit / rDollars) : 0;
-         // v4.6.0 — Don't fire partial within first N minutes; give the trade
+         // v4.6.0 - Don't fire partial within first N minutes; give the trade
          // time to develop. Premature partials cap winners on noise spikes.
          bool tooEarly = (minsOpen < InpPartialMinMinutes);
          if(!skipHighConf && !tooEarly && profitR >= InpPartialTPAtR)
@@ -30368,7 +30396,7 @@ void ManagePositions()
                if(SafePositionClosePartial(ticket, partialLots, "PARTIAL_TP"))
                {
                   MarkPartialTaken(ticket);
-                  // v4.5.6 — Use proportional profit math (closed_fraction × total P/L)
+                  // v4.5.6 - Use proportional profit math (closed_fraction x total P/L)
                   double lockedProfit = profit * (partialLots / curLots);
                   Print("PARTIAL_TP #", ticket, " closed ", DoubleToString(partialLots, lotDig),
                         " of ", DoubleToString(curLots, lotDig), " lots at +",
@@ -30387,7 +30415,7 @@ void ManagePositions()
          }
       }
 
-      // B2: Quick profit take — FOUR-factor confirmation for fading
+      // B2: Quick profit take - FOUR-factor confirmation for fading
       // v5.8.0 DATA-DRIVEN FIX: forensic analysis of 173 live trades showed
       // winners exiting at +0.19R median (vs planned 4R targets) while losers
       // hit -1.0R full stop. Net realized R:R was inverted. Root cause: this
@@ -30410,7 +30438,7 @@ void ManagePositions()
          if(ArraySize(bufRSI) >= 3)
          {
             double rsiPrev = bufRSI[2];
-            // RSI must be extreme AND turning back (not just high — that's normal in trends)
+            // RSI must be extreme AND turning back (not just high - that's normal in trends)
             if(isBuy)  rsiTurning = (rsi > 72 && rsi < rsiPrev);
             else       rsiTurning = (rsi < 28 && rsi > rsiPrev);
          }
@@ -30462,7 +30490,7 @@ void ManagePositions()
          bool timeExpired = minsOpen > InpQuickExitMin;
          bool capReached  = profit >= EffProfitTakeMax();
 
-         // v4.4.4 — MOMENTUM-FADE check FIRST (always wins, at any profit level)
+         // v4.4.4 - MOMENTUM-FADE check FIRST (always wins, at any profit level)
          //           "Real reversal" = exit regardless of cap.
          if(momentumFading)
          {
@@ -30477,7 +30505,7 @@ void ManagePositions()
             continue;
          }
 
-         // v4.4.4 — CAP REACHED: only force-close if smart cap disabled.
+         // v4.4.4 - CAP REACHED: only force-close if smart cap disabled.
          //           Otherwise, trail SL tight and LET THE RUNNER RUN up to ceiling.
          if(capReached && !InpSmartCapExit)
          {
@@ -30488,19 +30516,19 @@ void ManagePositions()
          }
          if(capReached && InpSmartCapExit)
          {
-            // v4.6.6 — When Profit Ladder is ON, the Ladder/Moon trail is the SOLE
-            //   SL ratcheter. CAP_RUNNER's tighter trail (1.5–2.5×ATR) was clipping
-            //   massive winners that the Moon trail (3.5×ATR) was meant to ride.
+            // v4.6.6 - When Profit Ladder is ON, the Ladder/Moon trail is the SOLE
+            //   SL ratcheter. CAP_RUNNER's tighter trail (1.5-2.5xATR) was clipping
+            //   massive winners that the Moon trail (3.5xATR) was meant to ride.
             //   Skip CAP_RUNNER's SL modify when Ladder is on; let Moon handle it.
             if(InpProfitLadder)
             {
-               // Still skip force-close (already letting it run) — just don't tighten SL.
+               // Still skip force-close (already letting it run) - just don't tighten SL.
                // Moon trail above already moved SL if appropriate.
             }
             else
             {
-            // v4.5.2 — Trend-aware, volatility-aware trailing distance.
-            // v4.5.3 — Pass profit/R ratio so conviction-runner upgrade can fire.
+            // v4.5.2 - Trend-aware, volatility-aware trailing distance.
+            // v4.5.3 - Pass profit/R ratio so conviction-runner upgrade can fire.
             double profitR = (rDollars > 0) ? (profit / rDollars) : 0;
             double trailATR = GetTrailATRMulti(profitR);
             double trailDist = atr * trailATR;
@@ -30514,7 +30542,7 @@ void ManagePositions()
                   if(SafeModifySL(ticket, lockSL, curTP, true, curPrice, "CAP_RUNNER"))
                      Print("CAP_RUNNER #", ticket, " profit $", DoubleToString(profit,2),
                            " peak $", DoubleToString(peak,2), " past cap $", DoubleToString(EffProfitTakeMax(),2),
-                           " — SL trailed to ", DoubleToString(lockSL, digits),
+                           " - SL trailed to ", DoubleToString(lockSL, digits),
                            " (", DoubleToString(trailATR,2), "xATR, regime=", RegimeName(), "). Letting it run.");
                }
             }
@@ -30526,7 +30554,7 @@ void ManagePositions()
                   if(SafeModifySL(ticket, lockSL, curTP, false, curPrice, "CAP_RUNNER"))
                      Print("CAP_RUNNER #", ticket, " profit $", DoubleToString(profit,2),
                            " peak $", DoubleToString(peak,2), " past cap $", DoubleToString(EffProfitTakeMax(),2),
-                           " — SL trailed to ", DoubleToString(lockSL, digits),
+                           " - SL trailed to ", DoubleToString(lockSL, digits),
                            " (", DoubleToString(trailATR,2), "xATR, regime=", RegimeName(), "). Letting it run.");
                }
             }
@@ -30544,11 +30572,11 @@ void ManagePositions()
             }
             // else: let it run, next tick evaluates again
          }
-         // v4.7.2 — When InpPreservationMode is ON, never close a profitable trade
+         // v4.7.2 - When InpPreservationMode is ON, never close a profitable trade
          //   on the clock alone. Time only matters when we're losing.
          if(timeExpired && profit > 0 && InpPreservationMode)
          {
-            // Skip — let the runner ride. Trail will catch the reversal.
+            // Skip - let the runner ride. Trail will catch the reversal.
          }
          else if(timeExpired && !(InpMomentumGuard && momentumStrong))
          {
@@ -30564,8 +30592,8 @@ void ManagePositions()
          }
          if(timeExpired && InpMomentumGuard && momentumStrong)
          {
-            // v4.5.2 — Same trend-aware trail on time-expired runners
-            // v4.5.3 — Pass profit/R ratio so conviction-runner upgrade can fire.
+            // v4.5.2 - Same trend-aware trail on time-expired runners
+            // v4.5.3 - Pass profit/R ratio so conviction-runner upgrade can fire.
             double profitR2 = (rDollars > 0) ? (profit / rDollars) : 0;
             double trailATR2 = GetTrailATRMulti(profitR2);
             double trailDist2 = atr * trailATR2;
@@ -30576,7 +30604,7 @@ void ManagePositions()
                lockSL = NormalizeDouble(curPrice - trailDist2, digits);
                if(lockSL > curSL && lockSL > openPx)
                { if(SafeModifySL(ticket, lockSL, curTP, true, curPrice, "RUNNER"))
-                   Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→",
+                   Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL->",
                          DoubleToString(lockSL, digits), " (", DoubleToString(trailATR2,2), "xATR, ", RegimeName(), ")"); }
             }
             else
@@ -30584,14 +30612,14 @@ void ManagePositions()
                lockSL = NormalizeDouble(curPrice + trailDist2, digits);
                if(lockSL < curSL && lockSL < openPx)
                { if(SafeModifySL(ticket, lockSL, curTP, false, curPrice, "RUNNER"))
-                   Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL→",
+                   Print("RUNNER #", ticket, " ", minsOpen, "min, score ", strongScore, "/4, SL->",
                          DoubleToString(lockSL, digits), " (", DoubleToString(trailATR2,2), "xATR, ", RegimeName(), ")"); }
             }
          }
       }
 
-      // B3: Smart loss cut — R-multiple based (scales to any account size)
-      // v4.7.2 — Preservation Mode raises threshold to -1.5R + needs MORE evidence
+      // B3: Smart loss cut - R-multiple based (scales to any account size)
+      // v4.7.2 - Preservation Mode raises threshold to -1.5R + needs MORE evidence
       //   so we don't bail on a -0.5R noise blip when bot direction is right.
       double scThresh = InpPreservationMode ? 1.5 : 0.25;
       double scDeep   = InpPreservationMode ? 2.0 : 0.5;
@@ -30616,8 +30644,8 @@ void ManagePositions()
          }
       }
 
-      // B4: Stale exit — regime-aware
-      // v4.7.2 — Preservation Mode raises stale-loss bar (-2R from -0.6R) and
+      // B4: Stale exit - regime-aware
+      // v4.7.2 - Preservation Mode raises stale-loss bar (-2R from -0.6R) and
       //   disables stale-DRIFT entirely (drift trades are usually winners catching breath).
       int staleCap = (currentRegime == REGIME_LOW_VOL || currentRegime == REGIME_CHOPPY) ? 35 : 90;
       double staleR = InpPreservationMode ? 2.0 : 0.6;
@@ -30638,7 +30666,7 @@ void ManagePositions()
       }
       // v5.9.0: Only close drifting trades when EMA confirms the flat position has NO thesis.
       // If EMA fast is still above EMA slow for a BUY (or below for SELL), the trade is
-      // aligned with the prevailing trend and may simply be consolidating — hold it.
+      // aligned with the prevailing trend and may simply be consolidating - hold it.
       bool emaAgainstDrift = isBuy ? (emaF < emaS) : (emaF > emaS);
       if(!InpPreservationMode && minsOpen > 60 && profit > -30 && profit < 30 && emaAgainstDrift)
       {
@@ -30648,7 +30676,7 @@ void ManagePositions()
             continue;
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "STALE_DRIFT",
-                 StringFormat("Open %d min (>60min cap) with P/L $%.2f and EMA opposing trade. No valid thesis — free margin.", minsOpen, profit));
+                 StringFormat("Open %d min (>60min cap) with P/L $%.2f and EMA opposing trade. No valid thesis - free margin.", minsOpen, profit));
          if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
                                    "STALE_DRIFT", structureConfirmedEA, false))
             SafePositionClose(ticket, "STALE_DRIFT");
@@ -30656,7 +30684,7 @@ void ManagePositions()
       }
 
       // ===== PATH C: CLAUDE SEMANTIC EXIT (proactive audit, every InpClaudeAuditSec) =====
-      // v4.7.0 — uses AIExitVerdict (HOLD / CLOSE / LOCK $X). Cooldown is shared
+      // v4.7.0 - uses AIExitVerdict (HOLD / CLOSE / LOCK $X). Cooldown is shared
       //   with the AI veto so we don't double-spend on Claude calls.
       static datetime lastClaudeCheck = 0;
       if(InpUseAI && !InpAIAdvisoryOnly && StringLen(InpServerURL) >= 10 && minsOpen >= 3 &&
@@ -30672,7 +30700,7 @@ void ManagePositions()
 
          if(v.action == 1 && v.lockUSD > 0 && rDollars > 0)
          {
-            // Claude wants to LOCK $X — bank profit without exiting
+            // Claude wants to LOCK $X - bank profit without exiting
             double lockDist = (v.lockUSD / rDollars) * slDist;
             double newSL = isBuy ? NormalizeDouble(openPx + lockDist, digits)
                                  : NormalizeDouble(openPx - lockDist, digits);
@@ -30683,7 +30711,7 @@ void ManagePositions()
                                  : (newSL < openPx && newSL > curPrice + bufPts);
             bool ratchet = isBuy ? (newSL > curSL) : (newSL < curSL || curSL == 0);
             if(sane && ratchet && SafeModifySL(ticket, newSL, curTP, isBuy, curPrice, "AI_LOCK"))
-               Print("AI LOCK (audit) #", ticket, " — locked +$", DoubleToString(v.lockUSD,2),
+               Print("AI LOCK (audit) #", ticket, " - locked +$", DoubleToString(v.lockUSD,2),
                      " at ", DoubleToString(newSL, digits), ". ", v.reason);
          }
          else if(v.action == -1) // CLOSE
@@ -30692,7 +30720,7 @@ void ManagePositions()
             if(profit < 0 && profit > -(rDollars * 0.3))
             {
                Print("CLAUDE_EXIT_BLOCKED #", ticket, " losing -$", DoubleToString(MathAbs(profit), 2),
-                     " but < 0.3R — letting SL handle");
+                     " but < 0.3R - letting SL handle");
             }
             else
             {
@@ -30951,8 +30979,8 @@ bool XAU_LocalAIReplayLookup(const string snapshot,string &response)
 
 // Market Edition compliance hardening (Task 20): these XAUAI_* telemetry
 // files (TradeBrain/BlockedMemory/ConsciousMemory/TimingProof/TradingIntel
-// CSV+JSON, plus the local-AI-replay snapshot cache below) are append-only —
-// FILE_READ|FILE_WRITE + FileSeek(SEEK_END) — with a single stable filename
+// CSV+JSON, plus the local-AI-replay snapshot cache below) are append-only -
+// FILE_READ|FILE_WRITE + FileSeek(SEEK_END) - with a single stable filename
 // per production scope, so on a long-running VPS they grow without bound
 // across weeks/months. This is a pure file-housekeeping fix: it only ever
 // deletes and lets the existing "not exists -> rewrite header" logic at each
@@ -30972,7 +31000,7 @@ void XAU_RotateTelemetryFileIfOversized(string fn)
    if(sz >= (ulong)XAU_TELEMETRY_FILE_MAX_BYTES)
    {
       FileDelete(fn, FILE_COMMON);
-      PrintFormat("TELEMETRY_FILE_ROTATED | file=%s | sizeBytes=%I64u | capBytes=%d — deleted, will be recreated fresh on next write",
+      PrintFormat("TELEMETRY_FILE_ROTATED | file=%s | sizeBytes=%I64u | capBytes=%d - deleted, will be recreated fresh on next write",
                   fn, sz, XAU_TELEMETRY_FILE_MAX_BYTES);
    }
 }
@@ -31207,7 +31235,7 @@ void XAU_AICheckOfflineAfterFailure()
       g_aiConsecutiveFails = 0;
       g_aiOffline = false;
       g_aiOfflineSince = 0;
-      Print("AI DIRECTOR AUTO-RECOVERY: 30 min elapsed — resetting AI failure counter for fresh retry.");
+      Print("AI DIRECTOR AUTO-RECOVERY: 30 min elapsed - resetting AI failure counter for fresh retry.");
    }
 }
 
@@ -31216,7 +31244,7 @@ void XAU_AICheckOfflineAfterFailure()
 // call sites anywhere in this file (entry-side AI confidence was never
 // actually reachable in production; see audits/xaucloud/17_market_edition_claude_xaucloud.md).
 
-// v4.7.0 — AI position auditor: returns AIExitVerdict struct (defined near top of file)
+// v4.7.0 - AI position auditor: returns AIExitVerdict struct (defined near top of file)
 AIExitVerdict CheckPositionWithAI(string dir, double entry, double current, double profit, double lots,
                                    double rsi, double emaF, double emaS, double atr, int minsOpen, double sl, double tp,
                                    double peakProfit, string pendingExitReason, string regime)
@@ -31237,7 +31265,7 @@ AIExitVerdict CheckPositionWithAI(string dir, double entry, double current, doub
 //| ML FUNCTIONS                                                     |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
-//| LOCAL ML — hierarchical signature matching (mirrors hive logic)  |
+//| LOCAL ML - hierarchical signature matching (mirrors hive logic)  |
 //| Input: current signature string + direction                      |
 //| Returns WR (0..1) at the MOST SPECIFIC level with >= 5 matches.  |
 //| Rollup levels: exact -> drop_mom -> drop_stoch -> drop_rsi ->    |
@@ -31324,7 +31352,7 @@ void RecordPattern(bool wasWin, double profit)
 void SavePatterns()
 {
    if(patternCount == 0) return;
-   // Local backup — v2 format adds signature string + magic header
+   // Local backup - v2 format adds signature string + magic header
    string fn = "AIS_Patterns_" + Symbol() + ".bin";
    int h = FileOpen(fn, FILE_WRITE | FILE_BIN);
    if(h != INVALID_HANDLE)
@@ -31349,18 +31377,18 @@ void SavePatterns()
 
 void LoadPatterns()
 {
-   // FRESH START option — skip loading legacy patterns from old EA versions
+   // FRESH START option - skip loading legacy patterns from old EA versions
    if(InpResetML)
    {
       string fn = "AIS_Patterns_" + Symbol() + ".bin";
       if(FileIsExist(fn)) FileDelete(fn);
       patternCount = 0;
       ArrayResize(patterns, 0);
-      Print("═══════════════════════════════════════════════════════");
+      Print("=======================================================");
       Print("ML RESET: Local patterns wiped per InpResetML=true.");
       Print("  Fresh learning starts now. Cloud patterns untouched.");
       Print("  Adaptive grade threshold resets to default.");
-      Print("═══════════════════════════════════════════════════════");
+      Print("=======================================================");
       return;
    }
 
@@ -31375,9 +31403,9 @@ void LoadPatterns()
    int magic = FileReadInteger(h);
    if(magic != 0xA15E2)
    {
-      // Old format — discard and start fresh with signature-aware store
+      // Old format - discard and start fresh with signature-aware store
       FileClose(h);
-      Print("ML LOCAL: old pattern file detected (no signatures) — starting fresh for v4.2");
+      Print("ML LOCAL: old pattern file detected (no signatures) - starting fresh for v4.2");
       patternCount = 0;
       ArrayResize(patterns, 0);
       return;
@@ -31514,10 +31542,10 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    // so an OUT_BY close would silently skip R-exit state cleanup entirely.
    if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY) return;
 
-   // v4.5.9 — Detect PARTIAL close vs FULL close.
+   // v4.5.9 - Detect PARTIAL close vs FULL close.
    // A partial close still leaves the position open with the same posId.
    // If we treat partials as full closes, we double-count wins/losses, corrupt
-   // streak/drawdown tracking, and PartialAlreadyTaken gets cleared → repeat fires.
+   // streak/drawdown tracking, and PartialAlreadyTaken gets cleared -> repeat fires.
    ulong posId = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
    // Snapshot the authoritative persisted R state before the normal close
    // cleanup removes it. These locals are consumed only by the passive
@@ -31624,12 +31652,12 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
 
    if(stillOpen)
    {
-      // Partial close — log and skip all counters/cleanup.
+      // Partial close - log and skip all counters/cleanup.
       double partProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
                         + HistoryDealGetDouble(dealTicket, DEAL_SWAP)
                         + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
       Print("PARTIAL CLOSE event #", posId, " profit $", DoubleToString(partProfit, 2),
-            " — position still open, NOT counted as full trade.");
+            " - position still open, NOT counted as full trade.");
       if(CloudEnabled())
       {
          double closeVol = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
@@ -31652,7 +31680,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
             CloudPostSignalPartial(sigId, HistoryDealGetDouble(dealTicket, DEAL_PRICE),
                                    pct, "master partial close");
          else
-            Print("☁  CLOUD partial skipped: no signal map or invalid percent for posId=", posId);
+            Print("[CLOUD]  CLOUD partial skipped: no signal map or invalid percent for posId=", posId);
       }
       return;
    }
@@ -31664,7 +31692,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    double dPrice      = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
    double dVolume     = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
    ENUM_DEAL_TYPE dType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE);
-   // v6.24.9 — the closing deal is the opposite side of the position that
+   // v6.24.9 - the closing deal is the opposite side of the position that
    // closed (same logic dirStr below uses), so this is the ORIGINAL
    // position's direction, not the closing order's direction.
    int closedDirection = (dType == DEAL_TYPE_SELL) ? 1 : -1;
@@ -31676,7 +31704,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                             ? "PYRAMID" : "CORE";
    bool campaignWasActiveBeforeClose = g_campaign[closeSlot].active;
    XAU_CampaignRegisterClose(closedDirection, profit);
-   // v6.24.15 — entry-quality classification, computed once at the same
+   // v6.24.15 - entry-quality classification, computed once at the same
    // full-close point every other per-position cleanup already uses.
    // Learning/telemetry only (see XAU_ClassifyEntryQuality's own header
    // comment) -- never influences this close, which has already happened.
@@ -31719,7 +31747,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                      posId);
       }
    }
-   // v6.24.14 — universal five-minute post-trade cooldown starts exactly
+   // v6.24.14 - universal five-minute post-trade cooldown starts exactly
    // once, at the moment the LAST position in a direction's campaign fully
    // closes (activePositionCount reaching 0 inside XAU_CampaignRegisterClose
    // above, mirrored here as g_campaign[].active flipping true->false).
@@ -31768,11 +31796,11 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    if(wasWin) wins++;
    else if(wasLoss) losses++;
 
-   // v6.13.0 ANTI-REPEAT-LOSS GUARD — update the session's same-direction
+   // v6.13.0 ANTI-REPEAT-LOSS GUARD - update the session's same-direction
    // loss streak. A win in either direction clears it (the EA is clearly
    // reading the market fine again); a loss in a NEW direction restarts the
    // streak at 1; a loss in the SAME direction as the last loss extends it.
-   // Deliberately independent of TRI/recovery mode — this tracks the
+   // Deliberately independent of TRI/recovery mode - this tracks the
    // session's directional bias of losses, not any single trade's health.
    {
       int closedDir = (dirStr == "BUY") ? 1 : -1;
@@ -31794,7 +31822,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       }
       XAU_PersistLossStreakState(); // multi-instance fix: survive an EA restart mid-streak
    }
-   // v6.3.9: forward-test report tracking — record this trade close
+   // v6.3.9: forward-test report tracking - record this trade close
    FTReport_RecordTrade(lastSignalSetup, wasWin, profit);
    RegisterClosedTradeCooldown(wasWin, wasLoss, profit);
    // v6.0 STI: record profitable closes so re-entry intelligence can watch
@@ -31805,7 +31833,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       int origDir = (dType == DEAL_TYPE_SELL) ? 1 : -1; // closing SELL = was a BUY
       STI_AfterProfitableClose(origDir, dPrice);
    }
-   // else: break-even — don't count either way
+   // else: break-even - don't count either way
    lastTradeClose = TimeCurrent();
    Print("CLOSED: ", wasWin ? "WIN" : wasLoss ? "LOSS" : "BREAK-EVEN",
          " $", DoubleToString(profit, 2),
@@ -32037,9 +32065,9 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       { int bfIdx = FindPeakIdx(posId); if(bfIdx >= 0) bestFloatingPnl = peakProfits[bfIdx]; }
       double shieldMeaningfulUSD = StrategyReferenceBalance() * 0.015;
       if(outcome == "BREAK_EVEN" && bestFloatingPnl >= shieldMeaningfulUSD)
-         outcome = "APLUS_PROTECTED_BE";   // had real profit, shield moved SL to entry — correct outcome
+         outcome = "APLUS_PROTECTED_BE";   // had real profit, shield moved SL to entry - correct outcome
       else if(outcome == "LOSS" && bestFloatingPnl >= shieldMeaningfulUSD)
-         outcome = "APLUS_GIVEBACK_LOSS";  // had real profit, still took a loss — shield may need tuning
+         outcome = "APLUS_GIVEBACK_LOSS";  // had real profit, still took a loss - shield may need tuning
       string shieldExtra = StringFormat("bestFloating=%.2f shieldArmed=%s",
                                         bestFloatingPnl, APlusShieldArmed(posId) ? "Y" : "N");
 
@@ -32083,7 +32111,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    // Fetch it by looking at the position's first deal (entry) with same position ID.
    lastClose.entryPrice = dPrice;   // fallback
    lastClose.slDist     = lastSignalATR > 0 ? lastSignalATR * InpSLMultiplier : 3.0;
-   // v6.25.3 — same entry-deal scan as above, also captures the real
+   // v6.25.3 - same entry-deal scan as above, also captures the real
    // opened_at broker time for rich trade-ledger telemetry (Command Center
    // Phase 7A real equity curve/analytics) -- never a locally-estimated time.
    datetime openedAtTime = 0;
@@ -32112,7 +32140,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    RecordCloseForStreak(wasLoss);
    UpdateDrawdownState(wasLoss);
 
-   // v4.5.9 — Position fully closed (verified above) — clear trackers.
+   // v4.5.9 - Position fully closed (verified above) - clear trackers.
    // v5.8.52: also clear A+ shield armed state.
    if(posId > 0) { ClearPeakProfit(posId); XAU_ClearProfitFloor(posId); ClearPartialTaken(posId); ClearAIVeto(posId); ClearTPExtend(posId); APlusClearShield(posId); }
    // Clear active thesis (no open position now until next entry)
@@ -32126,7 +32154,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    }
 
    RecordPattern(wasWin, profit);
-   // v5.0.0 — XAUAI CLOUD fanout: mirror this close to subscribers
+   // v5.0.0 - XAUAI CLOUD fanout: mirror this close to subscribers
    if(CloudEnabled() && posId > 0)
    {
       string sigId = CloudMapPop(posId);
@@ -32332,7 +32360,7 @@ bool ExpectancyDayGivebackGuard()
 }
 
 //+------------------------------------------------------------------+
-//| v5.1.0 — PROFIT GUARDIAN                                          |
+//| v5.1.0 - PROFIT GUARDIAN                                          |
 //| 1. Tracks daily HWM and tightens risk in 3 tiers as gain grows.   |
 //| 2. Hard halt if equity gives back >25% of HWM-gain (stops bleed). |
 //| 3. HTF trend lock blocks counter-trend SELLs in H4 uptrends, etc. |
@@ -32353,16 +32381,16 @@ int PG_Tier()
 }
 
 // Risk size multiplier based on guardian tier (composes with existing logic).
-// v5.1.3: returns 1.0 when InpProfitGuardian=false → no automatic risk reduction.
+// v5.1.3: returns 1.0 when InpProfitGuardian=false -> no automatic risk reduction.
 double PG_RiskMultiplier()
 {
    if(XAU_NoLimitTradingModeActive()) return 1.0;
-   // v6.4.16: Lot reductions removed. Tier 3 hard block remains (returns 0.0 → trade skipped).
-   // Tiers 1/2 no longer halve lots — if profit-guardian concern is high, use selective mode
+   // v6.4.16: Lot reductions removed. Tier 3 hard block remains (returns 0.0 -> trade skipped).
+   // Tiers 1/2 no longer halve lots - if profit-guardian concern is high, use selective mode
    // (quality gate) not lot-size reduction.
    if(!InpProfitGuardian) return 1.0;
    int tier = PG_Tier();
-   if(tier == 3) return 0.0;    // tier 3: hard block (acceptable — skip trade, not micro-lot)
+   if(tier == 3) return 0.0;    // tier 3: hard block (acceptable - skip trade, not micro-lot)
    return 1.0;                  // tiers 0/1/2: normal lot size, quality gates handle selectivity
 }
 
@@ -32372,10 +32400,10 @@ double PG_RiskMultiplier()
 double PG_HWMGivebackPctEffective(double gainPct)
 {
    if(!InpPG_EscalatingGiveback) return InpPG_HWMGivebackPct;
-   if(gainPct >= InpPG_Tier3Pct) return InpPG_GivebackAt75Pct;  // ≥75% gain → 10% giveback
-   if(gainPct >= InpPG_Tier2Pct) return InpPG_GivebackAt50Pct;  // ≥50% gain → 15% giveback
-   if(gainPct >= InpPG_Tier1Pct) return InpPG_GivebackAt30Pct;  // ≥30% gain → 20% giveback
-   return InpPG_HWMGivebackPct;                                  // <30% gain → 25% giveback (base)
+   if(gainPct >= InpPG_Tier3Pct) return InpPG_GivebackAt75Pct;  // >=75% gain -> 10% giveback
+   if(gainPct >= InpPG_Tier2Pct) return InpPG_GivebackAt50Pct;  // >=50% gain -> 15% giveback
+   if(gainPct >= InpPG_Tier1Pct) return InpPG_GivebackAt30Pct;  // >=30% gain -> 20% giveback
+   return InpPG_HWMGivebackPct;                                  // <30% gain -> 25% giveback (base)
 }
 
 void PG_UpdateHWM()
@@ -32391,15 +32419,15 @@ void PG_UpdateHWM()
    datetime today = StringToTime(StringFormat("%04d.%02d.%02d", dt.year, dt.mon, dt.day));
    if(pg_dayHaltDay != today) { pg_dayHaltActive = false; }
 
-   // hard giveback brake: if profit shrinks below (HWM gain × giveback%) of starting equity
+   // hard giveback brake: if profit shrinks below (HWM gain x giveback%) of starting equity
    double hwmGain   = pg_dayHWM - dailyStartEquity;
    double dayGainPct = (equity - dailyStartEquity) / dailyStartEquity * 100.0;
    double hwmGainPct = hwmGain / dailyStartEquity * 100.0;
    double effectiveGivebackPct = PG_HWMGivebackPctEffective(dayGainPct);
-   // v5.1.4: don't arm the brake on noise — require meaningful HWM gain first.
+   // v5.1.4: don't arm the brake on noise - require meaningful HWM gain first.
    if(hwmGainPct < InpPG_GivebackMinGainPct) return;
-   // v5.1.9: extra gate — Profit Guardian only triggers after the day has
-   // genuinely run (≥ InpPG_SelectiveMinDayGain%). Below that, no PG block at all.
+   // v5.1.9: extra gate - Profit Guardian only triggers after the day has
+   // genuinely run (>= InpPG_SelectiveMinDayGain%). Below that, no PG block at all.
    bool bigDayRun = (hwmGainPct >= InpPG_SelectiveMinDayGain);
    if(hwmGain > 0)
    {
@@ -32411,7 +32439,7 @@ void PG_UpdateHWM()
          if(!bigDayRun) return;
          if(InpPG_SelectiveMode)
          {
-            // Selective Mode: don't halt — restrict to A/A+ only.
+            // Selective Mode: don't halt - restrict to A/A+ only.
             if(!pg_selectiveActive)
             {
                pg_selectiveActive      = true;
@@ -32420,13 +32448,13 @@ void PG_UpdateHWM()
                pg_selectiveLowEq       = equity;
                pg_selectiveLowAt       = TimeCurrent();
                pg_selectiveSkippedCnt  = 0;
-               Print("🛡 PG SELECTIVE MODE ACTIVATED — high-confidence trades only. ",
+               Print("[SHIELD] PG SELECTIVE MODE ACTIVATED - high-confidence trades only. ",
                      "HWM gain $", DoubleToString(hwmGain,2),
                      " | giveback $", DoubleToString(currentDrawback,2),
                      " (>=", DoubleToString(effectiveGivebackPct,1), "% of gain @ dayGain=",
                      DoubleToString(dayGainPct,1), "%). ",
                      "Min combined score=", DoubleToString(InpPG_SelectiveMinScore,1),
-                     " | lot×=", DoubleToString(InpPG_SelectiveLotMulti,2),
+                     " | lotx=", DoubleToString(InpPG_SelectiveLotMulti,2),
                      " | confirm=", InpPG_SelectiveRequireHTF ? "adaptive XAU fast" : "off");
             }
          }
@@ -32436,7 +32464,7 @@ void PG_UpdateHWM()
             // Keep monitoring and managing positions, then resume fresh entries.
             pg_dayHaltActive = false;
             pg_pauseUntil = TimeCurrent() + MathMax(1, InpProfitLockCooldownMin) * 60;
-            Print("🛡 PROFIT-LOCK COOLDOWN: HWM gain $",
+            Print("[SHIELD] PROFIT-LOCK COOLDOWN: HWM gain $",
                   DoubleToString(hwmGain,2), " | giveback $",
                   DoubleToString(currentDrawback,2), " (>=",
                   DoubleToString(effectiveGivebackPct,1), "% of gain @ dayGain=",
@@ -32461,7 +32489,7 @@ void PG_UpdateHWM()
          int stableMin = (int)((TimeCurrent() - pg_selectiveLowAt) / 60);
          if(stableMin >= InpPG_SelectiveRecoverMin && equity >= pg_selectiveTriggerEq)
          {
-            Print("🛡 PG SELECTIVE MODE → NORMAL — equity stabilized for ",
+            Print("[SHIELD] PG SELECTIVE MODE -> NORMAL - equity stabilized for ",
                   stableMin, "min, no further drawdown. Skipped ",
                   pg_selectiveSkippedCnt, " sub-A trades while restricted.");
             pg_selectiveActive = false;
@@ -32472,7 +32500,7 @@ void PG_UpdateHWM()
 
 // HTF trend strength check. Returns +1 strong up, -1 strong down, 0 neutral.
 // v5.1.2: if last InpPG_ConsolidationLookback bars are RANGING (true range / ATR
-// < InpPG_ConsolidationATR), return 0 → trend lock disabled, scalping allowed.
+// < InpPG_ConsolidationATR), return 0 -> trend lock disabled, scalping allowed.
 int PG_HTFTrend()
 {
    if(!InpPG_HTFTrendLock) return 0;
@@ -32505,7 +32533,7 @@ int PG_HTFTrend()
    double diff  = price - ema[0];
    double thr   = atr[0] * InpPG_HTFTrendATR;
 
-   // v5.1.2 — consolidation carve-out: in a ranging market the trend lock is
+   // v5.1.2 - consolidation carve-out: in a ranging market the trend lock is
    // useless (and blocks all the easy mean-reversion scalps). If the last 10
    // M30 bars' aggregate range is small relative to ATR, treat as neutral.
    if(InpPG_ConsolidationCarveout)
@@ -32518,7 +32546,7 @@ int PG_HTFTrend()
          double hi = highs[0], lo = lows[0];
          for(int i=1; i<10; i++) { if(highs[i] > hi) hi = highs[i]; if(lows[i] < lo) lo = lows[i]; }
          double rangeAtr = (hi - lo) / atr[0];
-         if(rangeAtr < InpPG_ConsolidationATR) { lastTrend = 0; return 0; }  // chop → no lock
+         if(rangeAtr < InpPG_ConsolidationATR) { lastTrend = 0; return 0; }  // chop -> no lock
       }
    }
 
@@ -32528,7 +32556,7 @@ int PG_HTFTrend()
    return lastTrend;
 }
 
-// v5.2.1 — Startup cooldown gate. Returns "" if OK to trade, otherwise a reason.
+// v5.2.1 - Startup cooldown gate. Returns "" if OK to trade, otherwise a reason.
 // v6.21.2 audit fix: this used to stack a 5-minute-default wait with a
 // requirement for a fresh M5 bar to close (potentially another ~5 minutes on
 // top) -- a second, independent five-minute-style entry wait, separate from
@@ -32558,7 +32586,7 @@ string StartupCooldownReason()
       static bool warnedStartupBarWaitRemoved = false;
       if(!warnedStartupBarWaitRemoved)
       {
-         Print("ENTRY_TIMING_LEGACY_BAR_WAIT_REMOVED — InpStartupRequireNewBar is inert; startup uses the bounded 2-3-minute wall-clock warm-up only");
+         Print("ENTRY_TIMING_LEGACY_BAR_WAIT_REMOVED - InpStartupRequireNewBar is inert; startup uses the bounded 2-3-minute wall-clock warm-up only");
          warnedStartupBarWaitRemoved = true;
       }
    }
@@ -32570,7 +32598,7 @@ string StartupCooldownReason()
       return StringFormat("startup cooldown (%d/%.0f sec elapsed, wall-clock only)",
                           waitedSec, resolvedStartupSec);
    g_startupCooldownDone = true;
-   Print("🟢 Startup cooldown complete — trading enabled.");
+   Print("[GREEN] Startup cooldown complete - trading enabled.");
    return "";
 }
 
@@ -32579,13 +32607,13 @@ bool AdaptiveXAUConfirm(int signal, string gateName, double combinedScore, strin
                         double &lotMulti, string &reason, bool logDecision);
 bool IsXAUConfirmedBreakoutContinuation(int signal, string setupName);
 
-// v5.8.25 — Adaptive XAU volatility gate.
+// v5.8.25 - Adaptive XAU volatility gate.
 // Old behavior hard-blocked at 2x ATR. On gold that often blocked the first
 // clean flush/pump, then allowed a late bottom/top entry after ATR cooled.
 // New behavior:
-//   • normal symbols keep the old hard 2x gate
-//   • XAU/GOLD hard-blocks only extreme chaos
-//   • moderate ATR expansion soft-passes if fast confirmation/breakout agrees
+//   - normal symbols keep the old hard 2x gate
+//   - XAU/GOLD hard-blocks only extreme chaos
+//   - moderate ATR expansion soft-passes if fast confirmation/breakout agrees
 string VolatilityKillReason(int signal, string setupName)
 {
    if(!InpVolKillEnabled) return "";
@@ -32612,11 +32640,11 @@ string VolatilityKillReason(int signal, string setupName)
    bool xauFast = (InpVolKillXAUAdaptiveBypass && IsXAUFastSymbol() && signal != 0);
    double hardMult = MathMax(InpVolKillHardMultiplier, InpVolKillMultiplier);
    if(!xauFast)
-      return StringFormat("ATR turbulent (%.2f / median %.2f = %.2fx ≥ %.2fx)",
+      return StringFormat("ATR turbulent (%.2f / median %.2f = %.2fx >= %.2fx)",
                           cur, median, ratio, InpVolKillMultiplier);
 
    if(ratio >= hardMult)
-      return StringFormat("ATR extreme chaos (%.2f / median %.2f = %.2fx ≥ hard %.2fx)",
+      return StringFormat("ATR extreme chaos (%.2f / median %.2f = %.2fx >= hard %.2fx)",
                           cur, median, ratio, hardMult);
 
    double lm = 1.0;
@@ -32638,13 +32666,13 @@ string VolatilityKillReason(int signal, string setupName)
       return "";
    }
 
-   return StringFormat("ATR turbulent without fast XAU confirmation (%.2f / median %.2f = %.2fx ≥ %.2fx; hard %.2fx)",
+   return StringFormat("ATR turbulent without fast XAU confirmation (%.2f / median %.2f = %.2fx >= %.2fx; hard %.2fx)",
                        cur, median, ratio, InpVolKillMultiplier, hardMult);
 }
 
-// v5.3.0 — Phase 1: Spread spike protection.
+// v5.3.0 - Phase 1: Spread spike protection.
 // Compares current spread to the median spread sampled over the last 60 ticks
-// (we just store the most recent reading on each call — cheap rolling sample).
+// (we just store the most recent reading on each call - cheap rolling sample).
 double  g_spreadSamples[60];
 int     g_spreadIdx = 0;
 int     g_spreadCount = 0;
@@ -32674,18 +32702,18 @@ string SpreadKillReason()
       // recovery window so a brief dip below the threshold does not
       // immediately allow a new entry into still-unstable conditions.
       g_spreadSpikeUntil = TimeCurrent() + 90;
-      return StringFormat("spread spike %.0f pt / median %.0f pt = %.2fx ≥ %.2fx",
+      return StringFormat("spread spike %.0f pt / median %.0f pt = %.2fx >= %.2fx",
                           sp, median, ratio, InpSpreadKillMultiplier);
    }
    // v5.8.51: spread is currently normal but we may be in a post-spike window
    if(!XAU_NoLimitTradingModeActive() && g_spreadSpikeUntil > 0 && TimeCurrent() < g_spreadSpikeUntil)
-      return StringFormat("spread recovery (90s cooldown after spike — %ds remaining)",
+      return StringFormat("spread recovery (90s cooldown after spike - %ds remaining)",
                           (int)(g_spreadSpikeUntil - TimeCurrent()));
    return "";
 }
 
-// v5.3.0/v5.3.1 — Daily DD guards.
-// SOFT mode (default -2.5%): A/A+ only + 0.7× lots + tighter ML — keeps trading.
+// v5.3.0/v5.3.1 - Daily DD guards.
+// SOFT mode (default -2.5%): A/A+ only + 0.7x lots + tighter ML - keeps trading.
 // HARD halt (default -6%): true emergency, blocks new entries.
 // Replaces the old hard -3% blanket which was killing recovery cycles.
 bool IsSoftDDMode()
@@ -32701,12 +32729,12 @@ string HardDailyDDReason()
    if(InpHardDailyDDPct <= 0 || dailyStartEquity <= 0) return "";
    double pnlPct = (accInfo.Equity() - dailyStartEquity) / dailyStartEquity * 100.0;
    if(pnlPct <= -InpHardDailyDDPct)
-      return StringFormat("hard daily DD floor (%.2f%% ≤ -%.2f%% — extreme DD lockout)",
+      return StringFormat("hard daily DD floor (%.2f%% <= -%.2f%% - extreme DD lockout)",
                           pnlPct, InpHardDailyDDPct);
    return "";
 }
 
-// v5.3.0 — Phase 2: RSI divergence (entry exhaustion gate).
+// v5.3.0 - Phase 2: RSI divergence (entry exhaustion gate).
 // For BUY: bearish-divergence = price made new HH but RSI made LOWER HH.
 // For SELL: bullish-divergence = price made new LL but RSI made HIGHER LL.
 bool HasExhaustionDivergence(int signal)
@@ -32748,7 +32776,7 @@ bool HasExhaustionDivergence(int signal)
    return diverged;
 }
 
-// v5.3.0 — Phase 2: Momentum slowdown (entry-bar weakness check).
+// v5.3.0 - Phase 2: Momentum slowdown (entry-bar weakness check).
 // Block if the most recent close sits in the LOWER 30% of the last 3 candles'
 // combined high-low range for buys, or upper 30% for sells.
 bool IsMomentumWeak(int signal)
@@ -32770,8 +32798,8 @@ bool IsMomentumWeak(int signal)
    if(range <= 0) return false;
    double loc_lastClose = cl[0];
    double posPct = (loc_lastClose - minL) / range;
-   if(signal == +1 && posPct < 0.30) return true;       // close in lower 30% — buyers exhausted
-   if(signal == -1 && posPct > 0.70) return true;       // close in upper 30% — sellers exhausted
+   if(signal == +1 && posPct < 0.30) return true;       // close in lower 30% - buyers exhausted
+   if(signal == -1 && posPct > 0.70) return true;       // close in upper 30% - sellers exhausted
    return false;
 }
 
@@ -32863,7 +32891,7 @@ bool IsXAUConfirmedBreakoutContinuation(int signal, string setupName)
           (brokePriorSwing || bodyATR >= 0.35 || rangeATR >= 0.80);
 }
 
-// v5.3.0 — Phase 2: ML score smoothing (WMA over last N).
+// v5.3.0 - Phase 2: ML score smoothing (WMA over last N).
 double  g_mlHistory[10];
 int     g_mlHistIdx = 0;
 int     g_mlHistCount = 0;
@@ -32895,7 +32923,7 @@ double SmoothedMLScore(double rawScore, string signature)
    return den > 0 ? num / den : rawScore;
 }
 
-// v5.3.0 — Phase 3: Fake-breakout guard. After a Donchian-N break, require the
+// v5.3.0 - Phase 3: Fake-breakout guard. After a Donchian-N break, require the
 // subsequent bar to CLOSE beyond the breakout level (not just wick through).
 bool IsFakeBreakout(int signal)
 {
@@ -32913,7 +32941,7 @@ bool IsFakeBreakout(int signal)
    double maxH = hi[ArrayMaximum(hi)];
    double minL = lo[ArrayMinimum(lo)];
    if(signal == +1) {
-      // If price wicked above maxH but the most recent CLOSE is back below it → fake.
+      // If price wicked above maxH but the most recent CLOSE is back below it -> fake.
       if(cl[1] > maxH && cl[0] < maxH) return true;
    } else {
       if(cl[1] < minL && cl[0] > minL) return true;
@@ -33277,7 +33305,7 @@ bool XAU_MemoryRecommendation(int signal, string setupName, string grade,
    else if(st.samples >= 20 && st.winRate <= 15.0)
    {
       // v6.13.0: a flat 0.65x treated an 11% win rate the same as a 34%
-      // win rate — no escalation for genuinely catastrophic expectancy.
+      // win rate - no escalation for genuinely catastrophic expectancy.
       // Escalated tier: still a reduction (not a hard block, this is
       // aggregate/broad evidence, not certainty for THIS specific setup),
       // but a much smaller one.
@@ -33303,7 +33331,7 @@ bool XAU_MemoryRecommendation(int signal, string setupName, string grade,
    // v6.13.0 ANTI-REPEAT-LOSS GUARD: this floor exists to trust HTF consensus
    // over a thin/negative sample, but HTF consensus is exactly the slow,
    // laggy signal that stayed wrongly bullish through the 2026.07.03 incident.
-   // Lot size must reduce after a loss, not increase — so while this
+   // Lot size must reduce after a loss, not increase - so while this
    // session has an active same-direction loss streak for `signal`, the
    // win-rate-driven reduction above is respected as-is and never raised
    // back up by this floor.
@@ -33314,7 +33342,7 @@ bool XAU_MemoryRecommendation(int signal, string setupName, string grade,
    }
    else if(memoryFloor > 0.0 && lotMulti < memoryFloor)
    {
-      rec += StringFormat(" | broad aggregate memory floor SUPPRESSED (ANTI_REPEAT_LOSS_GUARD active, streak=%d) — reduction kept instead of raised", g_sameDirLossStreak);
+      rec += StringFormat(" | broad aggregate memory floor SUPPRESSED (ANTI_REPEAT_LOSS_GUARD active, streak=%d) - reduction kept instead of raised", g_sameDirLossStreak);
    }
    reason = StringFormat("AI-MEMORY: Found %d similar %s %s setups. Win rate: %.1f%% Avg MFE $%.0f Avg MAE $%.0f Early exits %.1f%%. Confidence: %s. Recommendation: %s.",
                          st.samples, setupName, signal > 0 ? "BUY" : "SELL",
@@ -33654,7 +33682,7 @@ void XAU_TradeBrainPrepareCollectionRun()
    PrintFormat("GLOBAL_FORENSIC_RUN_RESET | timing=%s blocked=%s",timingFn,blockedFn);
 }
 
-// v6.20.5 (TELEMETRY ONLY -- Change A) — durable, structured record of the
+// v6.20.5 (TELEMETRY ONLY -- Change A) - durable, structured record of the
 // full timing path for every executed trade, independent of and additional
 // to XAUAI_ExecutedTradeBrain (which is posId-keyed and does not capture
 // pre-execution candidate timing). See XAU_TimingProofRecord for field
@@ -35055,7 +35083,7 @@ void XAU_UpdateClosedTradeOutcomes()
 }
 
 
-// v6.25.15 — restart-safe recovery of the immutable OPEN snapshot from the
+// v6.25.15 - restart-safe recovery of the immutable OPEN snapshot from the
 // run-scoped v2 collection file. This prevents an EA/terminal reload while a
 // trade is open from downgrading a complete entry to guessed live-position
 // fields. The function is read-only to trading decisions.
@@ -35167,18 +35195,18 @@ bool XAU_TradeBrainRestoreOpenFromCsv(ulong positionId, TradeBrainOpen &restored
    return found;
 }
 
-// v6.20.3 — TELEMETRY-ONLY reconciliation, called once from OnInit().
+// v6.20.3 - TELEMETRY-ONLY reconciliation, called once from OnInit().
 //
 // Root cause this addresses (xau_lifecycle_forensic_audit_FINAL_2026-07-09.md
 // and xau_remediation_map_PRE_IMPLEMENTATION_2026-07-09.md, Phase 0 item 7):
 // g_brainOpenTrades[] is the ONLY place OPEN-side entry reasoning is stored
 // while a position is running, and it lives in memory only. If the EA
-// reloads (a new version attach, a terminal restart, a chart recompile —
+// reloads (a new version attach, a terminal restart, a chart recompile -
 // this account's own VPS journal shows 8 reloads in a single day) while a
 // position is open, that in-memory record is lost. When the position later
 // closes, OnTradeTransaction's DEAL_ENTRY_OUT handler cannot find it via
 // XAU_FindBrainOpen() and falls back to a blank record ("fallback: open
-// record not found" — confirmed in real data on posId 2938698098). If the
+// record not found" - confirmed in real data on posId 2938698098). If the
 // CLOSE deal itself arrives while the EA is not attached at all (not just a
 // mid-life reload), MQL5 does not replay missed OnTradeTransaction events,
 // so no CLOSE row is ever written (confirmed in real data on posId
@@ -35313,7 +35341,7 @@ void XAU_ReconcileTradeBrainOnInit()
       }
       restored++;
       Print("RECONCILIATION: restored in-memory brain record for still-open posId=", posId,
-            " after EA reload — original entry reasoning is not recoverable, future CLOSE will be traceable instead of blank.");
+            " after EA reload - original entry reasoning is not recoverable, future CLOSE will be traceable instead of blank.");
    }
 
    // --- Part B: backfill CLOSE rows for deals the EA never got to record ---
@@ -35338,7 +35366,7 @@ void XAU_ReconcileTradeBrainOnInit()
       for(int s = 0; s < ArraySize(seenPosIds); s++) if(seenPosIds[s] == posId) { already = true; break; }
       if(already) continue;
 
-      // Still genuinely open? Then it's not a missed close — skip.
+      // Still genuinely open? Then it's not a missed close - skip.
       bool stillOpen = false;
       for(int i = 0; i < PositionsTotal(); i++)
       {
@@ -35364,7 +35392,7 @@ void XAU_ReconcileTradeBrainOnInit()
       else
       {
          // No open-side record at all (missed both OPEN and CLOSE, or OPEN
-         // predates this reconciliation's lookback) — reconstruct the
+         // predates this reconciliation's lookback) - reconstruct the
          // minimum from the closing deal itself so the row is not blank.
          r.posId = posId;
          r.entryTime = 0;
@@ -35410,7 +35438,7 @@ void XAU_ReconcileTradeBrainOnInit()
       Print("RECONCILIATION SUMMARY: restored=", restored, " open record(s), backfilled=", backfilled, " missing close row(s).");
 }
 
-// v6.20.3 — cheap linear scan of the brain CSV to check whether a CLOSE row
+// v6.20.3 - cheap linear scan of the brain CSV to check whether a CLOSE row
 // already exists for posId, used only by XAU_ReconcileTradeBrainOnInit()
 // above so it never double-writes a close that was already recorded
 // normally. Column order matches XAU_AppendTradeBrain's header exactly:
@@ -35425,7 +35453,7 @@ bool XAU_TradeBrainHasCloseRow(ulong posId)
    string posIdStr = (string)posId;
    // Column order: event(0), time(1), posId(2), then everything else.
    // Read exactly those three, then skip whatever remains of the row using
-   // FileIsLineEnding() rather than a fixed count — the schema grew from 26
+   // FileIsLineEnding() rather than a fixed count - the schema grew from 26
    // to 39 columns in v6.20.3, so older rows in an existing file have fewer
    // trailing fields than newer ones, and a fixed skip-count would
    // misalign the parser for the rest of the file.
@@ -36359,7 +36387,7 @@ bool XAU_RequestCounterExcursionClose(string reason)
    return false;
 }
 
-// v6.21.3 — SHADOW OUTCOME TRACKING (owner rule 2026-07-13). For every
+// v6.21.3 - SHADOW OUTCOME TRACKING (owner rule 2026-07-13). For every
 // candidate that passes mandatory checks but misses InpCounterOpportunityMinScore,
 // track what price actually does afterward, exactly as if the trade had been
 // taken, without risking real money. This is the live evidence stream that
@@ -36556,7 +36584,7 @@ bool XAU_CounterExcursionEligible(int signal, string reason, string &category)
 // g_pendingTimingProof, or any shared timing-engine state -- the normal
 // 2-minute delay path is completely untouched and this exemption cannot
 // leak into it.
-// v6.21.3 — owner rule 2026-07-13: replaces the old all-or-nothing
+// v6.21.3 - owner rule 2026-07-13: replaces the old all-or-nothing
 // PASS/FAIL micro-confirmation with a weighted opportunity score. Live VPS
 // counterfactual evidence (6 real rejected candidates, all rejected on the
 // old all-or-nothing gate): 4/6 (67%) reached 0.5R before their hypothetical
@@ -36864,7 +36892,7 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
                   InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_SHADOW?"SHADOW":"OFF");
       if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && !counterLocationAllows)
       {
-         Print("COUNTER_EXCURSION_SKIP: REVERSAL_LOCATION_CONTEXT_ONLY — Counter remains isolated but cannot chase a consumed adaptive reversal opportunity");
+         Print("COUNTER_EXCURSION_SKIP: REVERSAL_LOCATION_CONTEXT_ONLY - Counter remains isolated but cannot chase a consumed adaptive reversal opportunity");
          return;
       }
    }
@@ -36976,7 +37004,7 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
                TimeToString(executionTime, TIME_DATE | TIME_SECONDS),
                (double)(executionTime - candidateFirstSeen));
 
-   // v6.21.2 Part 11 (owner directive 2026-07-13) — required COUNTER_AUDIT line.
+   // v6.21.2 Part 11 (owner directive 2026-07-13) - required COUNTER_AUDIT line.
    // normalPathUnaffected=true is a structural fact, not a claim: this function
    // never writes todayTradeCount, never calls XAU_TryClaimEntryLock, and never
    // touches CountMyPositions()'s InpMagicNumber-filtered count.
@@ -37295,8 +37323,8 @@ void XAU_CounterExcursionEmergencyClose(string reason)
 }
 
 // ===========================================================================
-// v6.24.18 owner directive 2026-07-16 — TRADE_FAMILY_EXHAUSTION_COUNTER
-// v6.25.0 owner directive 2026-07-17 — RETIRED_NO_NEW_ENTRIES (superseded)
+// v6.24.18 owner directive 2026-07-16 - TRADE_FAMILY_EXHAUSTION_COUNTER
+// v6.25.0 owner directive 2026-07-17 - RETIRED_NO_NEW_ENTRIES (superseded)
 // ===========================================================================
 // HISTORICAL (v6.24.18, no longer true): this family used to trigger a
 // same-tick, temporary, opposite-direction order the instant exhaustionProbability
@@ -39609,7 +39637,7 @@ bool XAU_FreshnessExtensionAuthority(int signal, string setupName, double setupS
    return true;
 }
 
-// v6.24.17 — owner's exhaustion-to-opposite-pressure transparency. Reuses
+// v6.24.17 - owner's exhaustion-to-opposite-pressure transparency. Reuses
 // the already-existing XAU_AdaptiveMarketTransitionEngine()/g_transitionDecision
 // (13+ existing call sites: pyramid, counter-excursion, management, entry
 // readiness) rather than building a second, duplicate exhaustion engine.
@@ -39645,7 +39673,7 @@ void XAU_LogDirectionTransitionState(int signal)
                td.oppositeEntryAllowed?"Y":"N", oppositeConfirmedNow?"Y":"N", freshOppositeAllowed?"Y":"N", action);
 }
 
-// v6.24.3 — the one new caution authority.  It owns neither position sizing
+// v6.24.3 - the one new caution authority.  It owns neither position sizing
 // nor time: it evaluates the already-preserved candidate only after the
 // existing 2-3 minute timer.  All uncertain timing evidence resolves to WAIT.
 ENUM_XAU_SMART_ENTRY_CAUTION_DECISION XAU_SmartEntryCautionGate(
@@ -39924,7 +39952,7 @@ ENUM_XAU_SMART_ENTRY_CAUTION_DECISION XAU_SmartEntryCautionGate(
    return result.decision;
 }
 
-// v5.3.0 — master pre-trade gate aggregator. Anything returned non-empty
+// v5.3.0 - master pre-trade gate aggregator. Anything returned non-empty
 // blocks new entries (but lets EXISTING positions trail/manage).
 string PreTradeBlockReason(int signal, string setupName = "")
 {
@@ -39965,7 +39993,7 @@ bool XAU_NoLimitTradingModeActive()
    // June 17-18 reconstruction: Restore Mode always keeps the daily/weekly
    // circuit breakers active, regardless of the no-limit inputs below. This is
    // an explicit, single-flag opt-in rather than flipping the three defaults
-   // directly — those three flags gate ~30 independent code paths across the
+   // directly - those three flags gate ~30 independent code paths across the
    // file (growth guard, re-entry limits, spread-spike pause, remote stop,
    // news aftermath, startup cooldown, etc.), so re-activating all of them
    // silently as a side effect of an unrelated default change is exactly the
@@ -39983,22 +40011,22 @@ string XAU_BoolText(bool value)
 // sites in this file are actually two different categories, and treating
 // them identically was more conservative than necessary.
 //
-//   Category A — STRUCTURAL/MARKET-FACT gates: SmartGuard fast-TF confirm,
+//   Category A - STRUCTURAL/MARKET-FACT gates: SmartGuard fast-TF confirm,
 //   STI/TRI re-entry watch, news-aftermath, AI_LOW_CONF_SKIP (grouped with
 //   the anti-repeat-loss trio per the existing v6.13.0 design), SMC hard
-//   conflict. These represent the market itself contradicting the trade —
+//   conflict. These represent the market itself contradicting the trade -
 //   "a real contradiction," in the language of the request that drove this
 //   fix. Grade must never buy these off by default; see
 //   XAU_StructuralBypassAllowed() below. This is the actual July 3 fix.
 //
-//   Category B — AI-OPINION-ESCALATION gates: AI HTF-override, weak AI
+//   Category B - AI-OPINION-ESCALATION gates: AI HTF-override, weak AI
 //   disagreement, no-confidence skip, confident-B-skip, and the (unrelated)
 //   Strong Momentum Precheck feature-gate. These are AI's own confidence
 //   threshold, not a structural fact, and were already effectively inert
 //   under AI_ADVISOR_ONLY/AI_OFF/RestoreMode (the whole AI Director cascade
 //   short-circuits earlier via XAU_AIIsAdvisoryOnly() before reaching any of
 //   them). Under the default AI_FILTER_ONLY this function keeps its
-//   original trade-mode-only logic — "AI can filter/reduce a weak-
+//   original trade-mode-only logic - "AI can filter/reduce a weak-
 //   confidence disagreement, but that's a judgment call, not a market fact,
 //   so it follows the same SAFE/BALANCED/AGGRESSIVE profile every other
 //   soft judgment call in the file already does."
@@ -40058,33 +40086,33 @@ bool XAU_StrongContextForSoftBypass(string grade, double combinedScore)
    return false;
 }
 
-// v6.13.0 ANTI-REPEAT-LOSS GUARD — true when the session has an active
+// v6.13.0 ANTI-REPEAT-LOSS GUARD - true when the session has an active
 // same-direction loss streak for `signal` AND price hasn't genuinely
 // recovered since the last loss. When true, none of the "downgrade hard
 // block to warning" bypass sites (SMART_GUARD_FAST_CONFIRM, REMOVED_STI_REENTRY_DELAY,
-// AI_LOW_CONF_SKIP) may convert their hard block into a mere warning — this
+// AI_LOW_CONF_SKIP) may convert their hard block into a mere warning - this
 // closes the loophole that let repeated same-direction entries through
 // during a real adverse move (root cause: g_htfConsensusDir is a slow H1/M30
 // structural measure that cannot flip within a couple of hours, so
 // HTF_TREND_FOLLOW/TREND_PULLBACK kept re-qualifying the losing direction
 // off a stale reading, while XAU_StrongContextForSoftBypass unconditionally
 // bypassed every hard block for any A/A+ grade with no memory of how many
-// times that had already happened this session — see incident writeup on
+// times that had already happened this session - see incident writeup on
 // g_sameDirLossStreak above).
 //
 // Deliberately adaptive, not a blanket ban: the moment price closes back in
-// signal's favor by the recovery threshold below — a real, fresh
-// confirmation, not noise — this returns false again and every bypass works
+// signal's favor by the recovery threshold below - a real, fresh
+// confirmation, not noise - this returns false again and every bypass works
 // exactly as before. Never a session-length ban, never a fixed-time
 // cooldown: it is purely evidence-gated and can clear on the very next bar.
 //
 // June 17-18 reconstruction: graduated evidence requirement, not a single
 // on/off switch at InpAntiRepeatLossStreak losses. The guard now engages
 // from the FIRST same-direction loss (a modest 0.25xATR fresh-confirmation
-// bar — "don't immediately re-fire the exact same read that just failed")
+// bar - "don't immediately re-fire the exact same read that just failed")
 // and only tightens to the fuller 0.5xATR recovery bar once the streak
 // reaches InpAntiRepeatLossStreak (default 2). Two same-direction losses do
-// NOT ban that direction — they raise the bar for evidence; the direction is
+// NOT ban that direction - they raise the bar for evidence; the direction is
 // eligible again the instant that bar is met, however soon that is.
 bool XAU_AntiRepeatLossActive(int signal)
 {
@@ -40115,7 +40143,7 @@ bool XAU_AntiRepeatLossActive(int signal)
    }
 
    double atr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
-   if(atr <= 0.0) return true; // no ATR data yet — stay conservative, keep the guard active
+   if(atr <= 0.0) return true; // no ATR data yet - stay conservative, keep the guard active
 
    double recoveryATR = (g_sameDirLossStreak >= InpAntiRepeatLossStreak) ? 0.5 : 0.25;
    double curPrice = (signal == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
@@ -40182,7 +40210,7 @@ int TFDirectionByEMA(int signal, ENUM_TIMEFRAMES tf, double atrThreshold, string
    return dir;
 }
 
-// v5.8.16 — shared adaptive confirmation engine.
+// v5.8.16 - shared adaptive confirmation engine.
 // v6.25.16 TRUE-M10: M5/M10/M15 carry the hard decision; H1 is soft context.
 // M30 is not read by this entry-confirmation authority.
 // Non-gold symbols retain the older strict M15+H1 behavior.
@@ -40294,7 +40322,7 @@ bool AdaptiveXAUConfirm(int signal, string gateName, double combinedScore, strin
 
    if(logDecision && InpXAU_LogAdaptiveConfirm && TimeCurrent() - g_lastAdaptiveConfirmLog >= 45)
    {
-      Print("ADAPTIVE-CONFIRM: ", allow ? "ALLOW — " : "BLOCK — ", reason);
+      Print("ADAPTIVE-CONFIRM: ", allow ? "ALLOW - " : "BLOCK - ", reason);
       g_lastAdaptiveConfirmLog = TimeCurrent();
    }
    return allow;
@@ -40315,15 +40343,15 @@ bool PG_HTFAlignedM15H1(int signal)
 // Returns "" if OK to open, otherwise the reason to block.
 // signal: +1 buy, -1 sell. grade: "A+","A","B"... (we keep counter-trend open for A+ only).
 // v5.1.3: when InpProfitGuardian=false but InpProfitLock=true, ONLY the day-halt
-// (escalating giveback brake) blocks new entries — restores v4.9.7 trading aggression.
+// (escalating giveback brake) blocks new entries - restores v4.9.7 trading aggression.
 // v5.1.9: replaces day-halt with Selective Mode (A/A+ only, lot reduction).
 string PG_BlockReason(int signal, string grade, double combinedScore, string setupName = "")
 {
-   // v5.3.0 — Phase 1-3 master gate. Aggregates startup cooldown + DD floor +
+   // v5.3.0 - Phase 1-3 master gate. Aggregates startup cooldown + DD floor +
    // volatility/spread kill + RSI divergence + momentum slowdown + fake breakout.
    string preBlock = PreTradeBlockReason(signal, setupName);
    if(StringLen(preBlock) > 0)
-      return "Trade blocked — " + preBlock;
+      return "Trade blocked - " + preBlock;
    if(XAU_NoLimitTradingModeActive()) return "";
 
    // v6.4.5 ADAPTIVE COOLDOWN: pg_pauseUntil no longer fully blocks entries.
@@ -40338,10 +40366,10 @@ string PG_BlockReason(int signal, string grade, double combinedScore, string set
       if(!isAGrade)
       {
          int secs = (int)(pg_pauseUntil - TimeCurrent());
-         return StringFormat("ADAPTIVE_COOLDOWN: %s grade blocked after %d losses — A/A+ setups still active. %d:%02d remaining.",
+         return StringFormat("ADAPTIVE_COOLDOWN: %s grade blocked after %d losses - A/A+ setups still active. %d:%02d remaining.",
                              grade, pg_consecutiveLosses, secs/60, secs%60);
       }
-      // A/A+ passes — lot reduction is handled by pg_selectiveActive / g_adaptiveRecoveryMode
+      // A/A+ passes - lot reduction is handled by pg_selectiveActive / g_adaptiveRecoveryMode
       static datetime lastCooldownPassLog = 0;
       if(TimeCurrent() - lastCooldownPassLog >= 60)
       {
@@ -40352,23 +40380,23 @@ string PG_BlockReason(int signal, string grade, double combinedScore, string set
       }
    }
 
-   // v5.3.1 — Soft DD mode: keep trading but A/A+ only with high score.
+   // v5.3.1 - Soft DD mode: keep trading but A/A+ only with high score.
    //   This REPLACES the old -3% hard halt that was killing recovery cycles.
    if(IsSoftDDMode())
    {
       bool isAGrade = (StringCompare(grade, "A") == 0 || StringFind(grade, "A+") >= 0);
       if(!isAGrade)
-         return StringFormat("soft-DD mode (%.1f%% drawdown) — only A/A+ allowed, this is %s",
+         return StringFormat("soft-DD mode (%.1f%% drawdown) - only A/A+ allowed, this is %s",
                              (accInfo.Equity() - dailyStartEquity) / dailyStartEquity * 100.0, grade);
       if(combinedScore < InpPG_SelectiveMinScore)
-         return StringFormat("soft-DD mode — combined %.1f < min %.1f required",
+         return StringFormat("soft-DD mode - combined %.1f < min %.1f required",
                              combinedScore, InpPG_SelectiveMinScore);
    }
 
    if(!InpProfitGuardian && !InpProfitLock) return "";
    PG_UpdateHWM();
 
-   // 1a. Selective Mode active — allow only A/A+ with strict score + HTF alignment.
+   // 1a. Selective Mode active - allow only A/A+ with strict score + HTF alignment.
    if(pg_selectiveActive)
    {
       bool isAPlus = (StringFind(grade, "A+") >= 0);
@@ -40392,38 +40420,38 @@ string PG_BlockReason(int signal, string grade, double combinedScore, string set
                              pgConfirmLot, pgConfirmWhy, true))
       {
          pg_selectiveSkippedCnt++;
-         return "PG selective: adaptive fast confirmation failed — " + pgConfirmWhy;
+         return "PG selective: adaptive fast confirmation failed - " + pgConfirmWhy;
       }
-      // Passed all selective gates → trade may proceed (lot reduction applied at OpenTrade)
+      // Passed all selective gates -> trade may proceed (lot reduction applied at OpenTrade)
    }
 
-   // When Profit Guardian master is OFF, skip everything below — v4.9.7 trading style.
+   // When Profit Guardian master is OFF, skip everything below - v4.9.7 trading style.
    if(!InpProfitGuardian) return "";
 
    // 2. Tier 3 (no new lots, just trail)
    int tier = PG_Tier();
-   if(tier >= 3) return "PG tier3 (>=75% daily gain — preservation mode, no new entries)";
+   if(tier >= 3) return "PG tier3 (>=75% daily gain - preservation mode, no new entries)";
 
-   // 3. HTF trend lock — block counter-trend unless A+ grade
+   // 3. HTF trend lock - block counter-trend unless A+ grade
    int htf = PG_HTFTrend();
    bool isAPlusOuter = (StringFind(grade, "A+") >= 0);
    if(htf == +1 && signal == -1 && !isAPlusOuter)
-      return "PG HTF lock (M30 strong UP — sells blocked, A+ only would pass)";
+      return "PG HTF lock (M30 strong UP - sells blocked, A+ only would pass)";
    if(htf == -1 && signal == +1 && !isAPlusOuter)
-      return "PG HTF lock (M30 strong DOWN — buys blocked, A+ only would pass)";
+      return "PG HTF lock (M30 strong DOWN - buys blocked, A+ only would pass)";
 
-   // 5. Tier 2 — v6.3.2: allow A AND A+ through (only block B-grade at Tier 2).
+   // 5. Tier 2 - v6.3.2: allow A AND A+ through (only block B-grade at Tier 2).
    // A-grade setups (score 4.0-5.4) scored through every structural gate and deserve
-   // to run on good days — blocking them at Tier 2 was capping earning on the bot's
+   // to run on good days - blocking them at Tier 2 was capping earning on the bot's
    // best days.
    bool isAOuter = (grade == "A" || isAPlusOuter);
    if(tier >= 2 && !isAOuter)
-      return "PG tier2 (>=50% daily gain — A/A+ pass, B-grade blocked)";
+      return "PG tier2 (>=50% daily gain - A/A+ pass, B-grade blocked)";
 
    // Log tier transitions once
    if(tier != pg_lastReportedTier)
    {
-      Print("🛡 PROFIT GUARDIAN tier=", tier, " HWM=$",
+      Print("[SHIELD] PROFIT GUARDIAN tier=", tier, " HWM=$",
             DoubleToString(pg_dayHWM,2), " gain=",
             DoubleToString((accInfo.Equity()-dailyStartEquity)/dailyStartEquity*100.0,1),
             "% effGiveback=",
@@ -40434,7 +40462,7 @@ string PG_BlockReason(int signal, string grade, double combinedScore, string set
 }
 
 // Called when a basket flush happens. lossPct is % of starting equity given back.
-// v5.1.2 — adaptive cooldown: 1 loss=base, 2 consecutive=3×, 3+=8×.
+// v5.1.2 - adaptive cooldown: 1 loss=base, 2 consecutive=3x, 3+=8x.
 int PG_AdaptiveCooldownMin()
 {
    if(!InpPG_AdaptiveCooldown) return InpPG_PostLossCooldown;
@@ -40452,26 +40480,26 @@ void PG_OnBasketLoss(double lossPct)
    {
       int cdMin = PG_AdaptiveCooldownMin();
       pg_pauseUntil = TimeCurrent() + cdMin * 60;
-      Print("🛡 PROFIT GUARDIAN: Adaptive cooldown ", cdMin,
+      Print("[SHIELD] PROFIT GUARDIAN: Adaptive cooldown ", cdMin,
             "min triggered (basket loss ", DoubleToString(lossPct,2),
             "% of balance, consecutive=", pg_consecutiveLosses, ").");
    }
 }
 
-// Call this when a TP / winner closes — keeps consecutive-loss streak honest.
+// Call this when a TP / winner closes - keeps consecutive-loss streak honest.
 void PG_OnBasketWin()
 {
    if(pg_consecutiveLosses != 0)
    {
-      Print("🛡 PROFIT GUARDIAN: winner reset cooldown streak (was ",
+      Print("[SHIELD] PROFIT GUARDIAN: winner reset cooldown streak (was ",
             pg_consecutiveLosses, ").");
       pg_consecutiveLosses = 0;
    }
-   // v6.4.4: a winning trade proves the strategy is working — exit adaptive recovery mode
+   // v6.4.4: a winning trade proves the strategy is working - exit adaptive recovery mode
    if(g_adaptiveRecoveryMode)
    {
       g_adaptiveRecoveryMode = false;
-      Print("ADAPTIVE_RECOVERY_CLEARED: profitable trade closed — resuming normal operation");
+      Print("ADAPTIVE_RECOVERY_CLEARED: profitable trade closed - resuming normal operation");
    }
 }
 
@@ -40511,12 +40539,12 @@ void RegisterClosedTradeCooldown(bool wasWin, bool wasLoss, double profit)
 }
 
 // +------------------------------------------------------------------+
-// | v6.0.1 — AI TRADING COMMITTEE                                   |
+// | v6.0.1 - AI TRADING COMMITTEE                                   |
 // | Three reasoning modules vote before every entry.                |
-// |   1. Market Director  — what is the market doing and why?       |
-// |   2. Human Reasoning  — would a professional actually enter?    |
-// |   3. Trade Memory     — how has this pattern performed lately?  |
-// | Votes aggregate into a lot multiplier (0.50–1.25×) and a       |
+// |   1. Market Director  - what is the market doing and why?       |
+// |   2. Human Reasoning  - would a professional actually enter?    |
+// |   3. Trade Memory     - how has this pattern performed lately?  |
+// | Votes aggregate into a lot multiplier (0.50-1.25x) and a       |
 // | one-line thesis printed before every trade. No extra blocking.  |
 // +------------------------------------------------------------------+
 
@@ -40577,50 +40605,50 @@ CommitteeVote MarketDirector_Assess(int signal)
       h4Aligned = isBuy ? (bufEMAFast_H4[1] > bufEMASlow_H4[1])
                         : (bufEMAFast_H4[1] < bufEMASlow_H4[1]);
 
-   // Late / Extended — highest priority (price already ran far from value)
+   // Late / Extended - highest priority (price already ran far from value)
    if(lateRisk >= 65 || (runLast6 >= 2.8 && emaDist >= 3.0))
    {
       v.label = MD_LATE_EXTENDED; v.score = -2;
-      v.reasoning = StringFormat("%.1f×ATR from EMA, %.1f×ATR run in 6 bars, late risk %.0f — chasing a mature move", emaDist, runLast6, lateRisk);
+      v.reasoning = StringFormat("%.1fxATR from EMA, %.1fxATR run in 6 bars, late risk %.0f - chasing a mature move", emaDist, runLast6, lateRisk);
       return v;
    }
-   // Exhaustion — trend momentum genuinely fading
+   // Exhaustion - trend momentum genuinely fading
    if(exhaust >= 62 && tcpScore < 55)
    {
       v.label = MD_NEAR_EXHAUSTION; v.score = -1;
-      v.reasoning = StringFormat("Exhaustion %.0f, TCP %.0f — momentum fading, reversal risk elevated", exhaust, tcpScore);
+      v.reasoning = StringFormat("Exhaustion %.0f, TCP %.0f - momentum fading, reversal risk elevated", exhaust, tcpScore);
       return v;
    }
-   // Counter-trend — both M5 and H1 oppose the signal
+   // Counter-trend - both M5 and H1 oppose the signal
    if(!m5Aligned && !h1Aligned)
    {
       v.label = MD_COUNTER_TREND; v.score = -2;
-      v.reasoning = "M5 and H1 EMAs both oppose this direction — genuine counter-trend entry";
+      v.reasoning = "M5 and H1 EMAs both oppose this direction - genuine counter-trend entry";
       return v;
    }
-   // Fresh impulse — all TFs aligned near EMA, TCP high (best setups)
+   // Fresh impulse - all TFs aligned near EMA, TCP high (best setups)
    if(m5Aligned && h1Aligned && h4Aligned && tcpScore >= 70 && regOK && emaDist <= 2.0)
    {
       v.label = MD_FRESH_IMPULSE; v.score = +2;
-      v.reasoning = StringFormat("M5+H1+H4 aligned, TCP %.0f, price near EMA — early trend entry with full multi-TF backing", tcpScore);
+      v.reasoning = StringFormat("M5+H1+H4 aligned, TCP %.0f, price near EMA - early trend entry with full multi-TF backing", tcpScore);
       return v;
    }
-   // Trend running — established trend, clean continuation
+   // Trend running - established trend, clean continuation
    if(m5Aligned && h1Aligned && tcpScore >= 57 && regOK)
    {
       v.label = MD_TREND_RUNNING; v.score = +1;
-      v.reasoning = StringFormat("H1+M5 aligned, TCP %.0f, regime confirms — established trend, continuation is valid", tcpScore);
+      v.reasoning = StringFormat("H1+M5 aligned, TCP %.0f, regime confirms - established trend, continuation is valid", tcpScore);
       return v;
    }
-   // Pullback entry — temporarily against M5 but H1 trend intact
+   // Pullback entry - temporarily against M5 but H1 trend intact
    if(!m5Aligned && h1Aligned && emaDist <= 1.8)
    {
       v.label = MD_PULLBACK_ENTRY; v.score = +1;
-      v.reasoning = "M5 temporarily against H1 trend — price pulling back to EMA in a valid trend (not reversing)";
+      v.reasoning = "M5 temporarily against H1 trend - price pulling back to EMA in a valid trend (not reversing)";
       return v;
    }
    // Default neutral
-   v.reasoning = StringFormat("TCP %.0f, H1 %s, H4 %s, regime %s — no strong directional conviction",
+   v.reasoning = StringFormat("TCP %.0f, H1 %s, H4 %s, regime %s - no strong directional conviction",
                                tcpScore, h1Aligned?"aligned":"mixed", h4Aligned?"aligned":"mixed", regOK?"OK":"mixed");
    return v;
 }
@@ -40658,100 +40686,100 @@ CommitteeVote HumanReasoning_Assess(int signal, string setupName, string grade)
    bool asianMid    = (dt.hour >= 2  && dt.hour < 6);
    bool lnNyOverlap = (dt.hour >= 13 && dt.hour < 17);
 
-   // ---- PRIMARY RULES (early return — highest priority) ----
+   // ---- PRIMARY RULES (early return - highest priority) ----
 
-   // Rule 1: Chasing — price ran hard without pause (non-A+ only)
+   // Rule 1: Chasing - price ran hard without pause (non-A+ only)
    if(run6 >= 3.0 && grade != "A+")
    {
       v.label = "WAIT_FOR_PULLBACK"; v.score = -1;
-      v.reasoning = StringFormat("%.1f×ATR move in 6 bars without pause — professional waits for retrace, not chasing now", run6);
+      v.reasoning = StringFormat("%.1fxATR move in 6 bars without pause - professional waits for retrace, not chasing now", run6);
       return v;
    }
-   // Rule 2: RSI extreme — momentum over-extended
+   // Rule 2: RSI extreme - momentum over-extended
    if((isBuy && rsi > 74) || (!isBuy && rsi < 26))
    {
       v.label = "RSI_OVEREXTENDED"; v.score = -1;
-      v.reasoning = StringFormat("RSI %.0f is extreme — sharp counter-reversal risk; A+ only here", rsi);
+      v.reasoning = StringFormat("RSI %.0f is extreme - sharp counter-reversal risk; A+ only here", rsi);
       return v;
    }
-   // Rule 3: Clean EMA retest in intact trend — professional entry zone
+   // Rule 3: Clean EMA retest in intact trend - professional entry zone
    if(h1OK && emaDist <= 1.0 && rsi > 42 && rsi < 60)
    {
       v.label = "EMA_RETEST_VALID"; v.score = +2;
-      v.reasoning = StringFormat("Price %.1f×ATR from EMA, RSI %.0f neutral, H1 aligned — textbook institutional entry zone", emaDist, rsi);
+      v.reasoning = StringFormat("Price %.1fxATR from EMA, RSI %.0f neutral, H1 aligned - textbook institutional entry zone", emaDist, rsi);
       return v;
    }
    // Rule 4: Session open caution (London 07:00-07:45 GMT / NY 13:00-13:45 GMT)
    if(londonOpen || nyOpen)
    {
       v.label = "SESSION_OPEN_CAUTION"; v.score = -1;
-      v.reasoning = StringFormat("%s first 45 min — direction frequently false-breaks before true move begins",
+      v.reasoning = StringFormat("%s first 45 min - direction frequently false-breaks before true move begins",
                                   londonOpen ? "London open" : "New York open");
       return v;
    }
-   // Rule 5: A+ with full alignment — pro takes full size without hesitation
+   // Rule 5: A+ with full alignment - pro takes full size without hesitation
    if(grade == "A+" && m5OK && h1OK && rsi > 44 && rsi < 72)
    {
       v.label = "HIGH_QUALITY_ENTRY"; v.score = +1;
-      v.reasoning = "A+ grade, M5+H1 aligned, RSI healthy — professional takes full size, no hesitation";
+      v.reasoning = "A+ grade, M5+H1 aligned, RSI healthy - professional takes full size, no hesitation";
       return v;
    }
 
    // ---- SECONDARY RULES (first match wins; ordered risk-before-opportunity) ----
 
-   // Rule 6: Against both H4 AND H1 trend — fighting the full daily flow
+   // Rule 6: Against both H4 AND H1 trend - fighting the full daily flow
    if(!h4OK && !h1OK)
    {
       v.label = "AGAINST_H4_TREND"; v.score = -1;
-      v.reasoning = "H4 and H1 EMAs both oppose this direction — counter-trend vs daily flow, professional reduces size";
+      v.reasoning = "H4 and H1 EMAs both oppose this direction - counter-trend vs daily flow, professional reduces size";
       return v;
    }
-   // Rule 7: Consecutive losses today on B-grade — emotional discipline
+   // Rule 7: Consecutive losses today on B-grade - emotional discipline
    if(pg_consecutiveLosses >= 2 && grade == "B")
    {
       v.label = "LOSS_STREAK_CAUTION"; v.score = -1;
-      v.reasoning = StringFormat("%d consecutive losses — professional tightens criteria after a losing streak; B-grade reduced", pg_consecutiveLosses);
+      v.reasoning = StringFormat("%d consecutive losses - professional tightens criteria after a losing streak; B-grade reduced", pg_consecutiveLosses);
       return v;
    }
-   // Rule 8: Asian mid-session, B-grade — low liquidity, false breakouts common
+   // Rule 8: Asian mid-session, B-grade - low liquidity, false breakouts common
    if(asianMid && grade == "B")
    {
       v.label = "ASIAN_RANGING"; v.score = -1;
-      v.reasoning = "Asian mid-session (02:00-06:00 GMT) — low-liquidity, choppy range-bound; B-grade entries often reverse";
+      v.reasoning = "Asian mid-session (02:00-06:00 GMT) - low-liquidity, choppy range-bound; B-grade entries often reverse";
       return v;
    }
-   // Rule 9: Spread elevated vs recent baseline — microstructure risk
+   // Rule 9: Spread elevated vs recent baseline - microstructure risk
    if(g_spreadEMA > 5.0)
    {
       double curSpreadPts = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
       if(curSpreadPts > g_spreadEMA * 1.8)
       {
          v.label = "SPREAD_ELEVATED"; v.score = -1;
-         v.reasoning = StringFormat("Spread %.0f pts (%.1f× baseline %.0f) — elevated microstructure risk, likely news or low liquidity", curSpreadPts, curSpreadPts / g_spreadEMA, g_spreadEMA);
+         v.reasoning = StringFormat("Spread %.0f pts (%.1fx baseline %.0f) - elevated microstructure risk, likely news or low liquidity", curSpreadPts, curSpreadPts / g_spreadEMA, g_spreadEMA);
          return v;
       }
    }
-   // Rule 10: Triple TF alignment — highest conviction setup, daily flow trade
+   // Rule 10: Triple TF alignment - highest conviction setup, daily flow trade
    if(h4OK && h1OK && m5OK)
    {
       v.label = "TRIPLE_TF_ALIGNED"; v.score = +1;
-      v.reasoning = "H4+H1+M5 all aligned in same direction — trading with full daily flow, highest timeframe conviction";
+      v.reasoning = "H4+H1+M5 all aligned in same direction - trading with full daily flow, highest timeframe conviction";
       return v;
    }
-   // Rule 11: London-NY overlap with aligned H1 — highest liquidity window
+   // Rule 11: London-NY overlap with aligned H1 - highest liquidity window
    if(lnNyOverlap && h1OK && m5OK)
    {
       v.label = "LN_NY_OVERLAP"; v.score = +1;
-      v.reasoning = "London-NY overlap (13:00-17:00 GMT), H1+M5 aligned — peak liquidity, institutional flows dominate, trend continuation most reliable";
+      v.reasoning = "London-NY overlap (13:00-17:00 GMT), H1+M5 aligned - peak liquidity, institutional flows dominate, trend continuation most reliable";
       return v;
    }
-   // Rule 12: H1 aligned, RSI healthy, spread normal — clean entry environment
+   // Rule 12: H1 aligned, RSI healthy, spread normal - clean entry environment
    double liveSpread12 = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
    bool spreadOK12 = (g_spreadEMA <= 5.0 || liveSpread12 < g_spreadEMA * 1.3);
    if(h1OK && rsi > 40 && rsi < 65 && spreadOK12)
    {
       v.label = "CLEAN_ENTRY_CONDITIONS"; v.score = +1;
-      v.reasoning = StringFormat("H1 aligned, RSI %.0f in healthy range, spread normal — clean conditions for entry", rsi);
+      v.reasoning = StringFormat("H1 aligned, RSI %.0f in healthy range, spread normal - clean conditions for entry", rsi);
       return v;
    }
    return v;
@@ -40788,7 +40816,7 @@ double TradeMemory_LotAdjust(string pattern)
       double priorWeight = 1.0 - (double)samples / 8.0; // 1.0 at 0 samples, 0.0 at 8 samples
       double dataWeight  = 1.0 - priorWeight;
       if(samples == 0) return priorAdj;
-      // Blend: prior × priorWeight + real_data_adj × dataWeight
+      // Blend: prior x priorWeight + real_data_adj x dataWeight
       double realWR  = (double)loc_wins / samples;
       double realAvgR = totalR / samples;
       double realAdj = (realWR >= 0.65 && realAvgR >= 0.5) ? MathMin(1.20, 1.0 + (realWR - 0.60) * 0.80)
@@ -40862,7 +40890,7 @@ void TradeMemory_Record(string pattern, string dirLabel, int conf, double rMult,
             else                         newWeight = 0.75;
             // Clamp target
             newWeight = MathMax(0.70, MathMin(1.20, newWeight));
-            // EMA smoothing — max change per trade ~0.025 (10% of [newWeight - current])
+            // EMA smoothing - max change per trade ~0.025 (10% of [newWeight - current])
             double smoothed = g_stratWeight[sidx] * 0.90 + newWeight * 0.10;
             smoothed = MathMax(0.70, MathMin(1.20, smoothed));
             // Log significant changes (>= 0.01 delta)
@@ -40880,7 +40908,7 @@ void TradeMemory_Record(string pattern, string dirLabel, int conf, double rMult,
 }
 
 // ============================================================
-// v6.3.8 UPGRADE 1 — TradeBrain disk persistence
+// v6.3.8 UPGRADE 1 - TradeBrain disk persistence
 // File: MQL5/Files/XAUAI_TradeBrain_v1.csv (common files folder)
 // ============================================================
 #define TRADEBBRAIN_HEADER "#XAUAI_TradeBrain_v2"
@@ -40939,7 +40967,7 @@ void LoadTradeBrainMemory()
 {
    if(InpBacktestMode) return;
    string fn = XAU_LegacyTradeBrainFile();
-   if(!FileIsExist(fn, FILE_COMMON)) return; // first run — start empty
+   if(!FileIsExist(fn, FILE_COMMON)) return; // first run - start empty
    int h = FileOpen(fn, FILE_READ | FILE_CSV | FILE_COMMON, ',');
    if(h == INVALID_HANDLE) { Print("TRADEBRAIN LOAD: cannot open file (err=", GetLastError(), ")"); return; }
 
@@ -40948,7 +40976,7 @@ void LoadTradeBrainMemory()
    bool legacyV1=(hdr == TRADEBBRAIN_HEADER_V1);
    if(hdr != TRADEBBRAIN_HEADER && !legacyV1)
    {
-      Print("TRADEBRAIN LOAD: header mismatch ('", hdr, "') — skipping file (version mismatch)");
+      Print("TRADEBRAIN LOAD: header mismatch ('", hdr, "') - skipping file (version mismatch)");
       FileClose(h); return;
    }
    // Skip column name row
@@ -41025,7 +41053,7 @@ void LoadTradeBrainMemory()
 }
 
 // ============================================================
-// v6.3.8 UPGRADE 2 — ATR-normalized pattern matching
+// v6.3.8 UPGRADE 2 - ATR-normalized pattern matching
 // Enhanced win-rate lookup with ATR regime, session, trend, recency weighting
 // ============================================================
 double TradeBrain_GetATRNormWinRate(int signal, string pattern, string session, int htfTrend, double atrAtEntry)
@@ -41094,22 +41122,22 @@ double TradeBrain_GetATRNormWinRate(int signal, string pattern, string session, 
    }
    if(w3 > 0) { winRate = wW3 / w3; return winRate; }
 
-   return 0.5; // neutral default — never return zero
+   return 0.5; // neutral default - never return zero
 }
 
 // ============================================================
-// v6.3.8 UPGRADE 6 — Gate Analytics Report
+// v6.3.8 UPGRADE 6 - Gate Analytics Report
 // ============================================================
 string XAU_ReportTextSafe(string s, int maxLen)
 {
    StringReplace(s, "\r", " ");
    StringReplace(s, "\n", " ");
    StringReplace(s, "\t", " ");
-   StringReplace(s, "—", "-");
-   StringReplace(s, "–", "-");
-   StringReplace(s, "→", "->");
-   StringReplace(s, "≤", "<=");
-   StringReplace(s, "≥", ">=");
+   StringReplace(s, "-", "-");
+   StringReplace(s, "-", "-");
+   StringReplace(s, "->", "->");
+   StringReplace(s, "<=", "<=");
+   StringReplace(s, ">=", ">=");
    if(StringLen(s) > maxLen) s = StringSubstr(s, 0, maxLen);
    return s;
 }
@@ -41296,7 +41324,7 @@ void PrintGateReport()
 }
 
 // ============================================================
-// v6.3.9 UPGRADE — Gate Analytics File Report
+// v6.3.9 UPGRADE - Gate Analytics File Report
 // ============================================================
 void WriteGateReportToFile()
 {
@@ -41365,9 +41393,9 @@ void WriteGateReportToFile()
    if(g_totalSignals > 20)
    {
       double passRate = allowPct;
-      if(passRate < 10.0)       FileWrite(fh, "DIAGNOSIS: SEVERE over-filtering — fewer than 10% of signals pass");
-      else if(passRate < 20.0)  FileWrite(fh, "DIAGNOSIS: Moderate over-filtering — fewer than 20% pass");
-      else if(passRate > 60.0)  FileWrite(fh, "DIAGNOSIS: Possible under-filtering — over 60% of signals pass");
+      if(passRate < 10.0)       FileWrite(fh, "DIAGNOSIS: SEVERE over-filtering - fewer than 10% of signals pass");
+      else if(passRate < 20.0)  FileWrite(fh, "DIAGNOSIS: Moderate over-filtering - fewer than 20% pass");
+      else if(passRate > 60.0)  FileWrite(fh, "DIAGNOSIS: Possible under-filtering - over 60% of signals pass");
       else                      FileWrite(fh, "DIAGNOSIS: Pass rate is in normal range (20-60%)");
    }
    FileClose(fh);
@@ -41375,7 +41403,7 @@ void WriteGateReportToFile()
 }
 
 // ============================================================
-// v6.3.9 UPGRADE — 24h Forward-Test Report
+// v6.3.9 UPGRADE - 24h Forward-Test Report
 // ============================================================
 void FTReport_RecordTrade(string stratName, bool wasWin, double pnl)
 {
@@ -41510,13 +41538,13 @@ void WriteForwardTestReport()
    if(totalSig > 20)
    {
       if(passRate2 < 10.0)
-         FileWrite(fh, "DIAGNOSIS: SEVERE over-filtering — fewer than 10% of signals passed.");
+         FileWrite(fh, "DIAGNOSIS: SEVERE over-filtering - fewer than 10% of signals passed.");
       else if(passRate2 < 20.0)
-         FileWrite(fh, "DIAGNOSIS: Pass rate " + DoubleToString(passRate2, 1) + "% — moderate, check gate counters above.");
+         FileWrite(fh, "DIAGNOSIS: Pass rate " + DoubleToString(passRate2, 1) + "% - moderate, check gate counters above.");
       else if(passRate2 > 60.0)
-         FileWrite(fh, "DIAGNOSIS: Pass rate " + DoubleToString(passRate2, 1) + "% — high, possible under-filtering.");
+         FileWrite(fh, "DIAGNOSIS: Pass rate " + DoubleToString(passRate2, 1) + "% - high, possible under-filtering.");
       else
-         FileWrite(fh, "DIAGNOSIS: Pass rate " + DoubleToString(passRate2, 1) + "% — normal range.");
+         FileWrite(fh, "DIAGNOSIS: Pass rate " + DoubleToString(passRate2, 1) + "% - normal range.");
    }
    if(g_ftReport_AIBlocked > 0 && g_ftReport_AIAllowed > 0)
    {
@@ -41529,20 +41557,20 @@ void WriteForwardTestReport()
 }
 
 // ============================================================
-// v6.3.8 UPGRADE 7 — Performance multiplier (anti-martingale)
+// v6.3.8 UPGRADE 7 - Performance multiplier (anti-martingale)
 // ============================================================
 double GetPerformanceMultiplier()
 {
    // v6.4.16 disabled all 9 loss-based lot-reduction mechanisms on the theory
    // that "loss streaks are addressed by improved signal selection, never by
    // shrinking position size on a valid signal." That's only safe if the
-   // signal-selection gates are airtight — the July 3 incident (see file
+   // signal-selection gates are airtight - the July 3 incident (see file
    // header, v6.13.0 section) proved they weren't: a grade-label bypass let a
    // structurally-invalid signal through repeatedly, at full, non-shrinking
    // size (0.40/0.18/0.28/0.05/0.26/0.05 lots across six straight losses).
    //
-   // June 17-18 reconstruction: restore ONE bounded, auditable brake — not the
-   // old 9-mechanism stack that could compound unpredictably — keyed off the
+   // June 17-18 reconstruction: restore ONE bounded, auditable brake - not the
+   // old 9-mechanism stack that could compound unpredictably - keyed off the
    // same g_sameDirLossStreak counter the anti-repeat-loss guard already
    // tracks correctly (direction-aware, reset on any win). Only ever reduces;
    // never boosts above 1.0. Active whenever InpJune18RestoreMode is on, so it
@@ -41574,7 +41602,7 @@ CommitteeDecision Committee_Assemble(int signal, string setupName, string grade,
    double memAdj  = InpCommitteeLotAdj ? TradeMemory_LotAdjust(setupName + "_" + grade) : 1.0;
    memVote.score  = (memAdj >= 1.12) ? +1 : (memAdj <= 0.78) ? -1 : 0;
    memVote.label  = (memAdj >= 1.12) ? "PROVEN" : (memAdj <= 0.78) ? "WEAK" : "NEUTRAL";
-   memVote.reasoning = StringFormat("30d '%s_%s' → lot×%.2f", setupName, grade, memAdj);
+   memVote.reasoning = StringFormat("30d '%s_%s' -> lotx%.2f", setupName, grade, memAdj);
 
    int total = dirVote.score + humVote.score + memVote.score;
 
@@ -41588,7 +41616,7 @@ CommitteeDecision Committee_Assemble(int signal, string setupName, string grade,
       else if(total == -1) lotMult = 0.92;
       else if(total == -2) lotMult = 0.82;
       else                 lotMult = 0.70;
-      lotMult = MathMax(0.70, MathMin(1.25, lotMult * memAdj)); // v6.0.3: floor raised 0.50→0.70 — prevents committee+STI stacking to microscopic lots on small account
+      lotMult = MathMax(0.70, MathMin(1.25, lotMult * memAdj)); // v6.0.3: floor raised 0.50->0.70 - prevents committee+STI stacking to microscopic lots on small account
    }
 
    int baseConf = (grade == "A+") ? 82 : (grade == "A") ? 68 : 50;
@@ -41599,7 +41627,7 @@ CommitteeDecision Committee_Assemble(int signal, string setupName, string grade,
    dec.directorLabel = dirVote.label;
    dec.confidence    = conf;
    dec.thesis = StringFormat(
-      "COMMITTEE | DIR:%s(%+d) %s | HUMAN:%s(%+d) | MEM:%s(%+d) → lot×%.2f conf:%d%%",
+      "COMMITTEE | DIR:%s(%+d) %s | HUMAN:%s(%+d) | MEM:%s(%+d) -> lotx%.2f conf:%d%%",
       dirVote.label, dirVote.score, dirVote.reasoning,
       humVote.label, humVote.score,
       memVote.label, memVote.score,
@@ -41663,7 +41691,7 @@ void InTradeClassifier_Update()
 
       if(g_posClassState[slot] != ns)
          Print("TRADE-CLASS #", tk, " ", isBuy?"BUY":"SELL",
-               " ", snames[g_posClassState[slot]], " → ", snames[ns],
+               " ", snames[g_posClassState[slot]], " -> ", snames[ns],
                " | profitATR=", DoubleToString(profitATR,2), " mom=", mom,
                " m5=", m5OK?"OK":"x", " h1=", h1OK?"OK":"x");
       g_posClassTicket[slot] = tk;
@@ -41671,10 +41699,10 @@ void InTradeClassifier_Update()
    }
 }
 
-// v6.0.1 — RatchetExitContext: determines how aggressively to tighten SL based on real trend state.
-// Returns: 2=trend confirmed (DEFER — don't move SL at all, original SL protects against catastrophe)
-//          1=trend weakening  (CUSHION — move SL to entry + InpRatchetBECushionATR×ATR, lock small profit)
-//          0=reversal confirmed (HARD — move SL to exact entry, old behaviour, protect capital)
+// v6.0.1 - RatchetExitContext: determines how aggressively to tighten SL based on real trend state.
+// Returns: 2=trend confirmed (DEFER - don't move SL at all, original SL protects against catastrophe)
+//          1=trend weakening  (CUSHION - move SL to entry + InpRatchetBECushionATRxATR, lock small profit)
+//          0=reversal confirmed (HARD - move SL to exact entry, old behaviour, protect capital)
 // posTicket: if provided and InTradeClassifier has classified this position, uses that state first.
 // Called once per position per tick inside PG_PerPositionRatchet.
 int RatchetExitContext(bool isBuy, ulong posTicket = 0)
@@ -41683,18 +41711,18 @@ int RatchetExitContext(bool isBuy, ulong posTicket = 0)
    if(posTicket > 0 && InpInTradeClassify)
    {
       int cls = GetPositionClassState(posTicket);
-      if(cls == PSTATE_REVERSING)                    return 0; // confirmed reversal → fire hard
-      if(cls == PSTATE_WEAKENING)                    return 1; // trend losing power → cushion
-      if(cls == PSTATE_EXHAUSTING)                   return 1; // near top/bottom → cushion
-      if(cls == PSTATE_CONSOLIDATING)                return 1; // unclear → cushion
-      if(cls == PSTATE_PULLBACK || cls == PSTATE_HEALTHY) return 2; // intact → defer
+      if(cls == PSTATE_REVERSING)                    return 0; // confirmed reversal -> fire hard
+      if(cls == PSTATE_WEAKENING)                    return 1; // trend losing power -> cushion
+      if(cls == PSTATE_EXHAUSTING)                   return 1; // near top/bottom -> cushion
+      if(cls == PSTATE_CONSOLIDATING)                return 1; // unclear -> cushion
+      if(cls == PSTATE_PULLBACK || cls == PSTATE_HEALTHY) return 2; // intact -> defer
       // PSTATE_UNKNOWN falls through to indicator-based logic below
    }
 
    bool hasM5  = (ArraySize(bufEMAFast) >= 3 && ArraySize(bufEMASlow) >= 3 && ArraySize(bufRSI) >= 2);
    bool hasH1  = (ArraySize(bufEMAFast_H1) >= 2 && ArraySize(bufEMASlow_H1) >= 2 &&
                   bufEMAFast_H1[1] > 0 && bufEMASlow_H1[1] > 0);
-   if(!hasM5) return 1; // insufficient data — default to cushioned BE
+   if(!hasM5) return 1; // insufficient data - default to cushioned BE
 
    double emaF   = bufEMAFast[1];
    double emaS   = bufEMASlow[1];
@@ -41714,24 +41742,24 @@ int RatchetExitContext(bool isBuy, ulong posTicket = 0)
       h1Aligned = isBuy ? (bufEMAFast_H1[1] > bufEMASlow_H1[1])
                         : (bufEMAFast_H1[1] < bufEMASlow_H1[1]);
 
-   // ---- REVERSAL CONFIRMED: 0 — fire hard BE ----
+   // ---- REVERSAL CONFIRMED: 0 - fire hard BE ----
    if(!m5Aligned && rsiExtreme && mom <= 1) return 0;  // M5 crossed + RSI extreme + flat momentum
    if(!m5Aligned && !h1Aligned && mom <= 2) return 0;  // both M5 and H1 EMAs against the trade
 
-   // ---- TREND CONFIRMED: 2 — defer BE, original SL holds ----
+   // ---- TREND CONFIRMED: 2 - defer BE, original SL holds ----
    if(m5Aligned && h1Aligned && rsiOK && mom >= InpRatchetTrendMinMoment && regimeOK) return 2;
    if(m5Aligned && h1Aligned && mom >= (InpRatchetTrendMinMoment + 1)) return 2; // very strong momentum
 
-   // ---- WEAKENING: 1 — cushioned BE (default) ----
+   // ---- WEAKENING: 1 - cushioned BE (default) ----
    return 1;
 }
 
-// v5.1.2 — per-position ratchet: lock individual winners (v6.0.1: context-aware).
-//   Context 2 (trend confirmed)  → DEFERRED: don't move SL; original SL protects; avoid unnecessary BE exit
-//   Context 1 (trend weakening)  → CUSHION:  SL = entry ± InpRatchetBECushionATR×ATR (lock small profit)
-//   Context 0 (reversal)         → HARD BE:  SL = exact entry (original behaviour, protect capital)
-//   Trail phase (profitInAtr >= trailStartATR) → adaptive width based on momentum score
-// Called every tick (cheap — O(positions)).
+// v5.1.2 - per-position ratchet: lock individual winners (v6.0.1: context-aware).
+//   Context 2 (trend confirmed)  -> DEFERRED: don't move SL; original SL protects; avoid unnecessary BE exit
+//   Context 1 (trend weakening)  -> CUSHION:  SL = entry +/- InpRatchetBECushionATRxATR (lock small profit)
+//   Context 0 (reversal)         -> HARD BE:  SL = exact entry (original behaviour, protect capital)
+//   Trail phase (profitInAtr >= trailStartATR) -> adaptive width based on momentum score
+// Called every tick (cheap - O(positions)).
 void PG_PerPositionRatchet()
 {
    if(!InpPG_PerPositionRatchet) return;
@@ -41767,7 +41795,7 @@ void PG_PerPositionRatchet()
       if(profitDist <= 0) continue;
       double profitInAtr = profitDist / atr;
 
-      // v5.3.1 — HIGH-GRADE BREATHING ROOM. A/A+ trades use looser thresholds
+      // v5.3.1 - HIGH-GRADE BREATHING ROOM. A/A+ trades use looser thresholds
       // so winners run further. Grade is read from position comment (set at entry).
       string posCmt    = PositionGetString(POSITION_COMMENT);
       bool isHighGrade = (StringFind(posCmt, "[A]") >= 0 || StringFind(posCmt, "[A+]") >= 0);
@@ -41788,19 +41816,19 @@ void PG_PerPositionRatchet()
       {
          if(trendCtx == 2)
          {
-            // Trend confirmed → defer BE entirely; original SL is the backstop.
+            // Trend confirmed -> defer BE entirely; original SL is the backstop.
             // newSL stays == curSL; position loops continues to stage 2 (won't fire yet).
          }
          else
          {
             // trendCtx 1=cushion (small locked profit), 0=hard (zero profit = old behaviour)
-            // v6.0.4: mid-zone step — at 2×ATR in CUSHIONED mode, lock 0.75×ATR instead of 0.35×ATR.
-            // Addresses the profit giveback gap between initial BE lock (1.5×ATR) and trail start (3.0×ATR).
+            // v6.0.4: mid-zone step - at 2xATR in CUSHIONED mode, lock 0.75xATR instead of 0.35xATR.
+            // Addresses the profit giveback gap between initial BE lock (1.5xATR) and trail start (3.0xATR).
             double cushion;
             if(trendCtx == 1 && profitInAtr >= 2.0)
                cushion = atr * 0.75;   // mid-zone lock: 75% of ATR preserved
             else if(trendCtx == 1)
-               cushion = atr * InpRatchetBECushionATR; // initial BE cushion (default 0.35×ATR)
+               cushion = atr * InpRatchetBECushionATR; // initial BE cushion (default 0.35xATR)
             else
                cushion = 0.0;          // HARD: lock to exact entry
             double beSL = isBuy ? (entry + cushion) : (entry - cushion);
@@ -41820,8 +41848,8 @@ void PG_PerPositionRatchet()
             double o1 = iOpen(Symbol(), PERIOD_M5, 1);
             double c2 = iClose(Symbol(), PERIOD_M5, 2);
             int mom = CleanMomentumScore(isBuy, c1, o1, c2, emaF2, emaS2, rsi2);
-            // Strong momentum → wider trail (survive pullbacks in running trends)
-            // Weak momentum   → normal trail (protect locked profit on reversals)
+            // Strong momentum -> wider trail (survive pullbacks in running trends)
+            // Weak momentum   -> normal trail (protect locked profit on reversals)
             adaptiveMult = (mom >= 4) ? InpRatchetStrongMomMulti
                          : (mom <= 2) ? InpRatchetWeakMomMulti
                          : 1.0;
@@ -41868,15 +41896,15 @@ void PG_PerPositionRatchet()
 }
 
 //+------------------------------------------------------------------+
-//| XAUAI CLOUD — broadcast master signals to subscribers            |
+//| XAUAI CLOUD - broadcast master signals to subscribers            |
 //| When InpCloudFanout=true, every trade OPEN and CLOSE is posted   |
 //| to the XauAi Cloud backend, which fans the signal out (shadow or |
 //| live) to all connected subscriber MT5 accounts via VPS workers.  |
 //+------------------------------------------------------------------+
-ulong   g_cloudPosIds[];     // parallel arrays: posId → signalId
+ulong   g_cloudPosIds[];     // parallel arrays: posId -> signalId
 string  g_cloudSigIds[];
 
-// v5.2.0 — persistence file. Without this, an EA restart/recompile wipes the
+// v5.2.0 - persistence file. Without this, an EA restart/recompile wipes the
 // in-memory map, so when the master later closes a position the mirrored cloud
 // trades stay open forever. Persist after every Add/Pop and load on OnInit.
 string XAU_CloudMapFile() { return "xauai_cloud_map_" + XAU_ProductionStateScope() + ".csv"; }
@@ -41918,7 +41946,7 @@ void CloudMapLoad()
       }
    }
    FileClose(h);
-   Print("☁  CloudMapLoad: restored ", ArraySize(g_cloudPosIds), " open position→signal mappings");
+   Print("[CLOUD]  CloudMapLoad: restored ", ArraySize(g_cloudPosIds), " open position->signal mappings");
 }
 
 bool CloudEnabled()
@@ -41935,13 +41963,13 @@ bool BotMonitorEnabled()
            && StringLen(InpLicensePIN) >= 10);
 }
 
-// v6.13.0 — shared cloud reliability state across all three cloud calls
+// v6.13.0 - shared cloud reliability state across all three cloud calls
 // (decision/activity POST, heartbeat POST, command GET). Every call site
 // reports its own success/failure here so the EA can tell "one isolated
 // blip" apart from "the cloud has actually been unreachable for a while"
 // and log that transition exactly once in each direction, instead of
 // spamming a POST/GET-failed line every single occurrence with no context
-// on whether this is new or ongoing. Trading itself never reads this state —
+// on whether this is new or ongoing. Trading itself never reads this state -
 // it exists purely for observability; every trade decision in this EA is
 // computed and acted on locally regardless of cloud reachability.
 int      g_cloudConsecutiveFails = 0;
@@ -41968,7 +41996,7 @@ void XAU_CloudRecordFailure(string context, int httpCode, int err)
    {
       g_cloudOffline = true;
       g_cloudOfflineSince = TimeCurrent();
-      PrintFormat("CLOUD_OFFLINE_LOCAL_MODE | context=%s | %d consecutive cloud failures (http=%d err=%d) | trading continues locally, unaffected — monitoring/remote-command only",
+      PrintFormat("CLOUD_OFFLINE_LOCAL_MODE | context=%s | %d consecutive cloud failures (http=%d err=%d) | trading continues locally, unaffected - monitoring/remote-command only",
                   context, g_cloudConsecutiveFails, httpCode, err);
    }
 }
@@ -41980,11 +42008,11 @@ string BotMonitorJsonSafe(string s, int maxLen)
    StringReplace(s, "\r", " ");
    StringReplace(s, "\n", " ");
    StringReplace(s, "\t", " ");
-   StringReplace(s, "—", "-");
-   StringReplace(s, "–", "-");
-   StringReplace(s, "→", "->");
-   StringReplace(s, "≤", "<=");
-   StringReplace(s, "≥", ">=");
+   StringReplace(s, "-", "-");
+   StringReplace(s, "-", "-");
+   StringReplace(s, "->", "->");
+   StringReplace(s, "<=", "<=");
+   StringReplace(s, ">=", ">=");
    if(StringLen(s) > maxLen) s = StringSubstr(s, 0, maxLen);
    return s;
 }
@@ -42089,7 +42117,7 @@ void CloudMapAdd(ulong posId, string sigId)
    ArrayResize(g_cloudSigIds, n + 1);
    g_cloudPosIds[n] = posId;
    g_cloudSigIds[n] = sigId;
-   CloudMapSave();        // v5.2.0 — survive restart/recompile
+   CloudMapSave();        // v5.2.0 - survive restart/recompile
 }
 
 string CloudMapPop(ulong posId)
@@ -42108,7 +42136,7 @@ string CloudMapPop(ulong posId)
          }
          ArrayResize(g_cloudPosIds, n - 1);
          ArrayResize(g_cloudSigIds, n - 1);
-         CloudMapSave();   // v5.2.0 — survive restart/recompile
+         CloudMapSave();   // v5.2.0 - survive restart/recompile
          return sig;
       }
    }
@@ -42125,7 +42153,7 @@ string CloudMapGet(ulong posId)
 }
 
 // Extract a substring between the first occurrence of `needle` followed by
-// `"` and the next `"`. Tiny JSON-value extractor — we only need `signal_id`.
+// `"` and the next `"`. Tiny JSON-value extractor - we only need `signal_id`.
 string JsonStr(string src, string key)
 {
    string probe = "\"" + key + "\":\"";
@@ -42160,7 +42188,7 @@ void CloudHeartbeat()
    // Market Edition (Claude XauCloud) Task 17R: copy-trading master heartbeat removed -- no WebRequest calls in this build.
 }
 
-// v5.1.8 — pull the admin-set bot mode every ~60s so admins can flip
+// v5.1.8 - pull the admin-set bot mode every ~60s so admins can flip
 // Conservative/Balanced/Aggressive from the dashboard without restarting MT5.
 void FetchBotMode()
 {
@@ -42169,7 +42197,7 @@ void FetchBotMode()
    // retune grade/score-floor/context-TF/HTF-bias/adaptive-tighten live.)
 }
 
-// Tiny JSON helpers — extract one top-level field as string or number.
+// Tiny JSON helpers - extract one top-level field as string or number.
 // Good enough for the flat config payload we own (no nested objects there).
 string JsonStringField(const string body, const string key)
 {
@@ -42185,7 +42213,7 @@ string JsonStringField(const string body, const string key)
       if(end < 0) return "";
       return StringSubstr(body, p + 1, end - p - 1);
    }
-   // bool / non-string scalar — return up to next , } ]
+   // bool / non-string scalar - return up to next , } ]
    int e1 = StringFind(body, ",", p); int e2 = StringFind(body, "}", p); int e3 = StringFind(body, "]", p);
    int end = StringLen(body);
    if(e1 >= 0 && e1 < end) end = e1;
@@ -42236,19 +42264,19 @@ string CloudJsonSafe(string s, int maxLen)
    StringReplace(s, "\r", " ");
    StringReplace(s, "\n", " ");
    StringReplace(s, "\t", " ");
-   StringReplace(s, "—", "-");
-   StringReplace(s, "–", "-");
-   StringReplace(s, "→", "->");
-   StringReplace(s, "≤", "<=");
-   StringReplace(s, "≥", ">=");
-   StringReplace(s, "☁", "cloud");
-   StringReplace(s, "🛡", "guard");
-   StringReplace(s, "⚙", "fix");
+   StringReplace(s, "-", "-");
+   StringReplace(s, "-", "-");
+   StringReplace(s, "->", "->");
+   StringReplace(s, "<=", "<=");
+   StringReplace(s, ">=", ">=");
+   StringReplace(s, "[CLOUD]", "cloud");
+   StringReplace(s, "[SHIELD]", "guard");
+   StringReplace(s, "[CFG]", "fix");
    if(StringLen(s) > maxLen) s = StringSubstr(s, 0, maxLen);
    return s;
 }
 
-// v5.1.5 — push every "TRADE BLOCKED BECAUSE: <reason>" + "TRADE FIRED" event
+// v5.1.5 - push every "TRADE BLOCKED BECAUSE: <reason>" + "TRADE FIRED" event
 // to the cloud so subscribers see WHY their copy account isn't trading. Throttled
 // in caller so we don't spam (only on state change or signal).
 void CloudPostReasoning(string event_type, string reason, string regime, string setup,
@@ -42580,7 +42608,7 @@ string XAUAI_DiagnosticsText()
 //+------------------------------------------------------------------+
 //| DASHBOARD                                                        |
 //+------------------------------------------------------------------+
-// v6.24.11 COMMAND CENTER MARKET-THESIS DISPLAY — every field below is read
+// v6.24.11 COMMAND CENTER MARKET-THESIS DISPLAY - every field below is read
 // from the real, live g_campaign[]/g_transitionDecision/g_latestDecisionSnapshot
 // state already computed elsewhere in this file; nothing here is fabricated
 // for display. Matches the requested MARKET THESIS template format.
@@ -42625,7 +42653,7 @@ string XAU_MarketThesisDisplayBlock(int direction)
    d += StringFormat("Move consumed: %.0f%%\n", g_campaign[slot].movementConsumedPct);
    d += StringFormat("Exhaustion: %.0f%%\n", g_campaign[slot].exhaustionPct);
    d += StringFormat("Remaining room: %.1f R\n", g_campaign[slot].remainingRoomR);
-   // v6.24.12 — fresh pressure read (same convention as the pyramid cross-
+   // v6.24.12 - fresh pressure read (same convention as the pyramid cross-
    // check: call the engine directly rather than trust a global was
    // refreshed this bar by someone else).
    XAU_AdaptiveTransitionDecision pressureTd = XAU_AdaptiveMarketTransitionEngine();
@@ -42644,7 +42672,7 @@ string XAU_MarketThesisDisplayBlock(int direction)
    return d;
 }
 
-// v6.24.14 — on-chart POST-TRADE STATE block (spec section 10). Same
+// v6.24.14 - on-chart POST-TRADE STATE block (spec section 10). Same
 // g_postClose/live-transition-engine source as the web
 // "post_trade_state" JSON block in BotMonitorDecisionEvent -- one data
 // source, two presentations, matching the existing market-thesis pattern.
@@ -42679,7 +42707,7 @@ string XAU_PostTradeStateDisplayBlock()
    return d;
 }
 
-// v6.24.15 — on-chart ENTRY READINESS block (spec section 16). Reads the
+// v6.24.15 - on-chart ENTRY READINESS block (spec section 16). Reads the
 // SAME g_lastEntryReadiness object the OpenTrade() gate itself acted on
 // most recently -- one data source, two presentations, same pattern as the
 // v6.24.11 market-thesis block and the v6.24.14 post-trade-state block.
@@ -42759,14 +42787,14 @@ void UpdateDashboard(int signal, double score, string grade)
    if(IsInStreakPause()) d += StringFormat("STREAK PAUSE until %s\n", TimeToString(streakPauseUntil, TIME_SECONDS));
    if(buyLockoutUntil  > TimeCurrent()) d += StringFormat("DIR-LOCK BUY until %s\n",  TimeToString(buyLockoutUntil,  TIME_SECONDS));
    if(sellLockoutUntil > TimeCurrent()) d += StringFormat("DIR-LOCK SELL until %s\n", TimeToString(sellLockoutUntil, TIME_SECONDS));
-   // v4.9.4 — Basket Protect live state
+   // v4.9.4 - Basket Protect live state
    if(InpBasketMode && CountMyPositions() > 0)
    {
       double bskPnL = 0;
       for(int bi = PositionsTotal() - 1; bi >= 0; bi--)
          if(posInfo.SelectByIndex(bi) && posInfo.Magic() == InpMagicNumber && posInfo.Symbol() == Symbol())
             bskPnL += posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
-      d += StringFormat("BASKET │ PnL $%.2f │ Peak $%.2f │ Floor $%.2f │ %s%s\n",
+      d += StringFormat("BASKET | PnL $%.2f | Peak $%.2f | Floor $%.2f | %s%s\n",
            bskPnL, g_basketPeakUSD, g_basketFloorUSD,
            g_basketArmed ? "ARMED" : "watching",
            g_basketBEHit ? " +BE" : "");
@@ -42781,7 +42809,7 @@ void UpdateDashboard(int signal, double score, string grade)
       if(StringLen(currentTradeTarget) > 0)       d += "Target: " + currentTradeTarget + "\n";
    }
    if(StringLen(lastExitReason) > 0) d += StringFormat("Last Exit: %s\n", lastExitReason);
-   // v6.24.11 — real campaign-state market-thesis block, both directions
+   // v6.24.11 - real campaign-state market-thesis block, both directions
    // (a campaign only prints if g_campaign[slot].active is true).
    d += XAU_MarketThesisDisplayBlock(1);
    d += XAU_MarketThesisDisplayBlock(-1);
@@ -42789,23 +42817,23 @@ void UpdateDashboard(int signal, double score, string grade)
    d += XAU_EntryReadinessDisplayBlock();
    d += XAUAI_DiagnosticsText();
    d += "==========================================\n";
-   if(weeklyTargetHit) d += ">> WEEKLY TARGET HIT — RESTING <<\n";
-   if(weeklyLossHit) d += "!! ADAPTIVE WEEKLY RECOVERY — A/A+ only (lot size NOT reduced) | EA active !!\n";
-   if(g_adaptiveRecoveryMode) d += "!! ADAPTIVE RECOVERY — A/A+ only (lot size NOT reduced) | EA active !!\n";
+   if(weeklyTargetHit) d += ">> WEEKLY TARGET HIT - RESTING <<\n";
+   if(weeklyLossHit) d += "!! ADAPTIVE WEEKLY RECOVERY - A/A+ only (lot size NOT reduced) | EA active !!\n";
+   if(g_adaptiveRecoveryMode) d += "!! ADAPTIVE RECOVERY - A/A+ only (lot size NOT reduced) | EA active !!\n";
    // v6.4.6: Post-news state
    if(g_postNewsState == PNS_AFTERMATH)
-      d += StringFormat(">> POST-NEWS: AFTERMATH — entries blocked, %ds remaining\n",
+      d += StringFormat(">> POST-NEWS: AFTERMATH - entries blocked, %ds remaining\n",
                         (int)MathMax(0, g_newsAftermathUntil - TimeCurrent()));
    else if(g_postNewsState == PNS_DISCOVERY)
-      d += StringFormat(">> POST-NEWS: DISCOVERY — watching reaction | bias=%s | %d/%d confirm bars\n",
+      d += StringFormat(">> POST-NEWS: DISCOVERY - watching reaction | bias=%s | %d/%d confirm bars\n",
                         g_postNewsBias > 0 ? "BULLISH" : g_postNewsBias < 0 ? "BEARISH" : "UNCLEAR",
                         g_postNewsConfirmCnt, InpPostNewsConfirmBars);
    else if(g_postNewsState == PNS_CONFIRMED || g_postNewsState == PNS_ALLOWED)
-      d += StringFormat(">> POST-NEWS: %s | bias=%s — A/A+ entries permitted in confirmed direction\n",
+      d += StringFormat(">> POST-NEWS: %s | bias=%s - A/A+ entries permitted in confirmed direction\n",
                         g_postNewsState == PNS_ALLOWED ? "ALLOWED" : "CONFIRMED",
                         g_postNewsBias > 0 ? "BULLISH" : "BEARISH");
    else if(g_postNewsState == PNS_AVOID)
-      d += StringFormat(">> POST-NEWS: AVOID — chop/reversal | %ds until normal\n",
+      d += StringFormat(">> POST-NEWS: AVOID - chop/reversal | %ds until normal\n",
                         (int)MathMax(0, g_postNewsAvoidUntil - TimeCurrent()));
    Comment(d);
 }

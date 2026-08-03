@@ -1,5 +1,13 @@
 # FAQ
 
+**Can I use XauCloud on EURUSD or other instruments?**
+No. XauCloud is engineered and validated exclusively for Gold. Attach it
+only to your broker's XAUUSD or GOLD symbol. At startup it checks the
+attached chart's symbol name (covering common broker suffixes/prefixes
+like XAUUSDm, XAUUSD.a, XAUUSD.pro, GOLD) and, if it isn't Gold, never
+creates an indicator, never generates a trade candidate, and never sends
+an order -- it shows a plain message instead and stays idle.
+
 **Does this need an internet connection to trade?**
 No. It makes zero outbound network calls of any kind — confirmed by
 direct source inspection (`WebRequest`, `#import`, `ShellExecute`, and

@@ -1,5 +1,10 @@
 # Installation
 
+**Gold only:** XauCloud is built exclusively for Gold (XAUUSD). Attaching
+it to any other symbol will not cause an error or crash — it will simply
+display a plain-English notice and remain idle until moved to a Gold
+chart.
+
 ## 1. Copy the file
 
 Copy `XauCloud.ex5` (the compiled binary — this is what most buyers

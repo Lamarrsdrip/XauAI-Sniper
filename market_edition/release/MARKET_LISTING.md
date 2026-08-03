@@ -8,6 +8,16 @@ that isn't already backed by those documents.
 
 **XauCloud**
 
+**XauCloud is built exclusively for Gold (XAUUSD). It does not trade forex
+pairs, cryptocurrencies, or indices.** Enforced in code, not just stated:
+`OnInit()` checks the attached chart's symbol first, before anything else,
+and if it isn't Gold (XAUUSD and common broker suffixes/prefixes like
+XAUUSDm, XAUUSD.a, XAUUSD.pro, GOLD), the EA creates no indicators,
+generates no candidates, sends no orders, and shows a plain-English notice
+instead. This is exactly the scenario MetaQuotes' own automated Market
+validation exercises (it tested this build on EURUSD H1) — confirmed
+producing zero trading operations and a clean notice, not an error.
+
 ## Suggested category
 
 Expert Advisors → Forex / Metals (Gold). MQL5 Market's category tree is

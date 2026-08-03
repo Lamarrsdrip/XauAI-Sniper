@@ -1,5 +1,16 @@
 # XauCloud
 
+**XauCloud is built exclusively for Gold (XAUUSD). It does not trade forex
+pairs, cryptocurrencies, or indices.** At startup it checks the attached
+chart's symbol and refuses to trade — safely, with a plain-English notice,
+never a crash or error — on anything that isn't Gold.
+
+- **Recommended symbol:** XAUUSD / GOLD (including common broker suffixes
+  like XAUUSDm, XAUUSD.a, XAUUSD.pro)
+- **Primary strategy timeframe:** M10 (used internally regardless of the
+  chart's own timeframe)
+- **Product category:** Expert Advisor
+
 ## What this is
 
 A self-contained MetaTrader 5 Expert Advisor for XAUUSD (gold), decision
