@@ -9911,6 +9911,32 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       }
    }
 
+   // Market Edition compliance fix (Phase 22, second pass): MetaQuotes'
+   // automated validation counts each rejected broker request itself, not
+   // just log lines -- reclassifying the log line (first pass) didn't
+   // change the actual number of PositionModify() calls sent. When the
+   // exact same (ticket, target SL) was just rejected with retcode 10016
+   // (INVALID_STOPS -- "order or position being close to market"), skip
+   // resubmitting it until either the target changes (price moved enough
+   // for a caller to compute a new level) or the cooldown elapses -- don't
+   // keep hammering a request that cannot succeed until price itself moves.
+   // No effect on which SL value is computed or when a *different* target
+   // is attempted; only suppresses re-sending an identical just-rejected one.
+   // Both static variables are declared once, in this outer scope, so the
+   // check below and the write further down (after a real rejection) refer
+   // to the same persistent storage.
+   static ulong    g_lastInvalidStopsTicket = 0;
+   static double   g_lastInvalidStopsSL     = 0.0;
+   static datetime g_lastInvalidStopsAt     = 0;
+   {
+      double slTol = MathMax(point * 2, 0.00001);
+      if(g_lastInvalidStopsTicket == ticket && MathAbs(g_lastInvalidStopsSL - newSL) < slTol &&
+         TimeCurrent() - g_lastInvalidStopsAt < 5)
+      {
+         return false;
+      }
+   }
+
    // Execute modify - log any failure so they're no longer silent
    if(!trade.PositionModify(ticket, newSL, tp))
    {
@@ -9929,6 +9955,15 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
          }
          ret = trade.ResultRetcode();
          err = GetLastError();
+      }
+      // Record a genuine invalid-stops rejection so the next identical
+      // request within the cooldown window (above) is skipped entirely
+      // rather than resent to the broker.
+      if(ret == 10016)
+      {
+         g_lastInvalidStopsTicket = ticket;
+         g_lastInvalidStopsSL     = newSL;
+         g_lastInvalidStopsAt     = TimeCurrent();
       }
       // v4.6.5 - Downgrade common non-fatal retcodes to throttled INFO (1/min).
       //   10025 NO_CHANGES, 10004 REQUOTE, 10021 OFF_QUOTES, 4756 invalid stops
