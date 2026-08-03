@@ -7,7 +7,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depend
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os, logging, io, zipfile, random, string, time, uuid, secrets, smtplib, bcrypt, jwt, httpx, asyncio, re, hashlib, json as _json
+import os, logging, io, zipfile, random, string, time, uuid, secrets, smtplib, bcrypt, jwt, httpx, asyncio, re, hashlib, hmac, json as _json
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
@@ -492,6 +492,55 @@ def generate_unique_pin():
     chars = string.ascii_uppercase + string.digits
     return f"ASE-{''.join(secrets.choice(chars) for _ in range(4))}-{''.join(secrets.choice(chars) for _ in range(4))}"
 
+async def _issue_pin_license(buyer_name: str, buyer_email: str, payment_ref: Optional[str], notes: str) -> str:
+    """Generate a fresh, collision-checked PIN and persist the license.
+    Callers that fulfill a paid transaction must first win the atomic claim
+    in _claim_transaction_fulfillment() so this never runs twice for the
+    same order (previously the webhook path skipped the collision check
+    that this path has, and both the webhook and /purchase/verify could
+    race each other into minting two PINs for one payment)."""
+    pin = generate_unique_pin()
+    while await db.pin_licenses.find_one({"pin": pin}):
+        pin = generate_unique_pin()
+    doc = PinLicense(pin=pin, buyer_name=buyer_name, buyer_email=buyer_email, notes=notes, payment_ref=payment_ref).model_dump()
+    await db.pin_licenses.insert_one(doc)
+    return pin
+
+async def _claim_transaction_fulfillment(reference: str) -> Optional[dict]:
+    """Atomically claim the right to fulfill a payment_transactions doc
+    exactly once. Returns the pre-claim document if this call won the race
+    (caller must proceed to mint a license), or None if the reference
+    doesn't exist or was already claimed/fulfilled by another caller (the
+    webhook and the customer's browser polling /purchase/verify can arrive
+    concurrently for the same reference)."""
+    return await db.payment_transactions.find_one_and_update(
+        {"reference": reference, "pin_generated": None},
+        {"$set": {"fulfillment_claimed_at": datetime.now(timezone.utc).isoformat()}},
+    )
+
+def _paystack_amounts_match(provider_data: dict, tx: dict) -> bool:
+    amount_ok = provider_data.get("amount") == tx.get("amount_kobo")
+    currency_ok = (provider_data.get("currency") or "").upper() == (tx.get("currency") or "NGN").upper()
+    return amount_ok and currency_ok
+
+def _verify_paystack_signature(raw_body: bytes, signature: str, secret: str) -> bool:
+    if not secret or not signature:
+        return False
+    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha512).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+async def _log_webhook_event(source: str, event_type: str, reference: str, signature_valid: bool, outcome: str, detail: str = ""):
+    await db.webhook_events.insert_one({
+        "id": str(uuid.uuid4()),
+        "source": source,
+        "event_type": event_type,
+        "reference": reference,
+        "signature_valid": signature_valid,
+        "outcome": outcome,
+        "detail": detail,
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    })
+
 async def get_settings():
     s = await db.admin_settings.find_one({"key": "main"}, {"_id": 0})
     if not s:
@@ -625,31 +674,62 @@ async def verify_purchase(reference: str):
                 resp = await http.get(f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}", headers={"Authorization": f"Bearer {pk}"})
             if resp.status_code == 200:
                 data = resp.json()
-                if data.get("status") and data["data"].get("status") == "success" and not tx.get("pin_generated"):
-                    pin = generate_unique_pin()
-                    while await db.pin_licenses.find_one({"pin": pin}): pin = generate_unique_pin()
-                    doc = PinLicense(pin=pin, buyer_name=tx.get("buyer_name",""), buyer_email=tx.get("buyer_email",""), notes=f"Paystack - {reference}", payment_ref=reference).model_dump()
-                    await db.pin_licenses.insert_one(doc)
-                    await db.payment_transactions.update_one({"reference": reference}, {"$set": {"pin_generated": pin, "payment_status": "success"}})
-                    await send_pin_email(tx.get("buyer_email",""), tx.get("buyer_name",""), pin)
-                    return {"status": "success", "payment_status": "success", "pin": pin, "buyer_name": tx.get("buyer_name","")}
-                if data.get("status") and data["data"].get("status") == "success" and tx.get("pin_generated"):
-                    return {"status": "success", "payment_status": "success", "pin": tx["pin_generated"], "buyer_name": tx.get("buyer_name","")}
+                provider_tx = data.get("data", {}) if data.get("status") else {}
+                if provider_tx.get("status") == "success":
+                    if not _paystack_amounts_match(provider_tx, tx):
+                        logger.error(f"Purchase verify amount/currency mismatch for {reference}: paystack={provider_tx.get('amount')} {provider_tx.get('currency')} expected={tx.get('amount_kobo')} {tx.get('currency')}")
+                        await _log_webhook_event("purchase_verify", "charge.success", reference, True, "amount_mismatch")
+                        return {"status": "pending", "payment_status": "pending", "pin": None}
+                    claimed = await _claim_transaction_fulfillment(reference)
+                    if claimed:
+                        pin = await _issue_pin_license(claimed.get("buyer_name",""), claimed.get("buyer_email",""), reference, f"Paystack - {reference}")
+                        await db.payment_transactions.update_one({"reference": reference}, {"$set": {"pin_generated": pin, "payment_status": "success"}})
+                        await send_pin_email(claimed.get("buyer_email",""), claimed.get("buyer_name",""), pin)
+                        await _log_webhook_event("purchase_verify", "charge.success", reference, True, "fulfilled")
+                        return {"status": "success", "payment_status": "success", "pin": pin, "buyer_name": claimed.get("buyer_name","")}
+                    fresh = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+                    if fresh and fresh.get("pin_generated"):
+                        return {"status": "success", "payment_status": "success", "pin": fresh["pin_generated"], "buyer_name": fresh.get("buyer_name","")}
         except Exception as e: logger.error(f"Verify err: {e}")
     return {"status": "pending", "payment_status": "pending", "pin": None}
 
 @api_router.post("/webhook/paystack")
 async def paystack_webhook(request: Request):
-    body = await request.json()
-    if body.get("event") == "charge.success":
-        ref = body.get("data",{}).get("reference","")
-        tx = await db.payment_transactions.find_one({"reference": ref}, {"_id": 0})
-        if tx and not tx.get("pin_generated"):
-            pin = generate_unique_pin()
-            doc = PinLicense(pin=pin, buyer_name=tx.get("buyer_name",""), buyer_email=tx.get("buyer_email",""), notes=f"Webhook - {ref}", payment_ref=ref).model_dump()
-            await db.pin_licenses.insert_one(doc)
-            await db.payment_transactions.update_one({"reference": ref}, {"$set": {"pin_generated": pin, "payment_status": "success"}})
-            await send_pin_email(tx.get("buyer_email",""), tx.get("buyer_name",""), pin)
+    raw_body = await request.body()
+    signature = request.headers.get("x-paystack-signature", "")
+    s = await get_settings()
+    secret = s.get("paystack_secret_key", "")
+    if not _verify_paystack_signature(raw_body, signature, secret):
+        logger.warning("Rejected Paystack webhook: missing/invalid X-Paystack-Signature")
+        await _log_webhook_event("paystack", "unknown", "", False, "invalid_signature")
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    try:
+        body = _json.loads(raw_body)
+    except ValueError:
+        await _log_webhook_event("paystack", "unknown", "", True, "invalid_json")
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    event_type = body.get("event", "")
+    data = body.get("data", {}) or {}
+    ref = data.get("reference", "")
+    if event_type != "charge.success" or not ref:
+        await _log_webhook_event("paystack", event_type, ref, True, "ignored_event_type")
+        return {"status": "ok"}
+    tx = await db.payment_transactions.find_one({"reference": ref}, {"_id": 0})
+    if not tx:
+        await _log_webhook_event("paystack", event_type, ref, True, "unknown_reference")
+        return {"status": "ok"}
+    if not _paystack_amounts_match(data, tx):
+        logger.error(f"Webhook amount/currency mismatch for {ref}: paystack={data.get('amount')} {data.get('currency')} expected={tx.get('amount_kobo')} {tx.get('currency')}")
+        await _log_webhook_event("paystack", event_type, ref, True, "amount_mismatch")
+        return {"status": "ok"}
+    claimed = await _claim_transaction_fulfillment(ref)
+    if not claimed:
+        await _log_webhook_event("paystack", event_type, ref, True, "duplicate_or_already_fulfilled")
+        return {"status": "ok"}
+    pin = await _issue_pin_license(claimed.get("buyer_name",""), claimed.get("buyer_email",""), ref, f"Webhook - {ref}")
+    await db.payment_transactions.update_one({"reference": ref}, {"$set": {"pin_generated": pin, "payment_status": "success"}})
+    await send_pin_email(claimed.get("buyer_email",""), claimed.get("buyer_name",""), pin)
+    await _log_webhook_event("paystack", event_type, ref, True, "fulfilled")
     return {"status": "ok"}
 
 # --- Public Docs ---
@@ -1070,11 +1150,8 @@ async def admin_generate_pins(req: PinGenerateRequest):
     count = min(req.count, 50)
     pins = []
     for _ in range(count):
-        pin = generate_unique_pin()
-        while await db.pin_licenses.find_one({"pin": pin}): pin = generate_unique_pin()
-        doc = PinLicense(pin=pin, buyer_name=req.buyer_name or "", buyer_email=req.buyer_email or "", notes=req.notes or "").model_dump()
-        await db.pin_licenses.insert_one(doc)
-        doc.pop('_id', None)
+        pin = await _issue_pin_license(req.buyer_name or "", req.buyer_email or "", None, req.notes or "")
+        doc = await db.pin_licenses.find_one({"pin": pin}, {"_id": 0})
         pins.append(doc)
     return {"pins_created": len(pins), "pins": pins}
 
