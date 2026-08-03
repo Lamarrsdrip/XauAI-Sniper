@@ -1,5 +1,10 @@
 {
   "current_version": "v6.25.30",
+  "internal_codename": "XauCloud_m10_private_vps_ai",
+  "production_branch": "XauCloud_m10_private_vps_ai",
+  "production_branch_source_commit": "8498c47eefec0e3cba71ec0c3bb5967feb0de096",
+  "website_product_name": "XauCloud",
+  "mt5_market_product_name": "Claude XauCloud",
   "releases": {
     "v6.25.2": {
       "version": "v6.25.2",
