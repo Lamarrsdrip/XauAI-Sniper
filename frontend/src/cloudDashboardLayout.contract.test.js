@@ -59,7 +59,10 @@ describe("owner-required Command Center card order", () => {
   });
 
   test("one reusable comparison implementation is used by Home and Outlook page", () => {
-    expect(dashboard).toContain('import M10VsOutlookCard from "./M10VsOutlookCard"');
+    // Dashboard also imports the shared M10 decision/freshness label maps
+    // from the same module (see the raw-decision-code fix), so this checks
+    // the default import specifically rather than the whole import line.
+    expect(dashboard).toMatch(/import M10VsOutlookCard,?\s*(\{[^}]*\}\s*)?from "\.\/M10VsOutlookCard"/);
     expect(outlookPage).toContain('import M10VsOutlookCard from "@/components/cloud/M10VsOutlookCard"');
     expect(outlookPage).not.toContain("function M10VsOutlookCard(");
     expect(comparisonCard).toContain("export default function M10VsOutlookCard");
@@ -72,11 +75,16 @@ describe("owner-required Command Center card order", () => {
     expect(comparisonCard).not.toMatch(/axios|fetch\(|setInterval|setTimeout/);
   });
 
-  test("offline, stale, loading, empty, and request-failure states are honest", () => {
-    expect(outlookCard).toMatch(/EA offline/);
+  test("offline, stale, loading, empty, and request-failure states are honest and customer-friendly", () => {
+    // Owner-approved rule (2026-08-04): a customer never sees a red "DATA
+    // STALE" warning with the old BUY/SELL signal still rendered
+    // underneath it -- each state below is its own distinct, plain-
+    // language block, never raw developer terms.
+    expect(outlookCard).toMatch(/connected right now/);
     expect(outlookCard).toMatch(/Loading outlook/);
-    expect(outlookCard).toMatch(/No outlook published yet/);
-    expect(outlookCard).toMatch(/Outlook request failed/);
+    expect(outlookCard).toMatch(/No signal right now/);
+    expect(outlookCard).toMatch(/reach the market data service/);
+    expect(outlookCard).not.toMatch(/DATA STALE/);
     expect(comparisonCard).toMatch(/no live agreement is claimed/);
     expect(comparisonCard).toMatch(/waiting for fresh data before showing agreement/);
     expect(comparisonCard).toMatch(/No comparison data yet/);

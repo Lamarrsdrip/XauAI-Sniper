@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import axios from "axios";
 import { Link } from "react-router-dom";
-import { Bell, BellOff, Compass, ArrowUpRight, ArrowDownRight, Minus } from "lucide-react";
+import { Bell, BellOff, Compass, ArrowUpRight, ArrowDownRight, Minus, Radar, WifiOff, CloudOff } from "lucide-react";
 import { API } from "@/lib/api";
 
 // Mirrors AIThoughtFeed's local axios convention -- self-contained, droppable panel.
@@ -91,7 +91,24 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
   const style = directionStyle(dir);
   const generatedAt = outlook?.generated_at || outlook?.published_at || outlook?.created_at || outlook?.ts;
   const ageMinutes = generatedAt ? (Date.now() - new Date(generatedAt).getTime()) / 60000 : Infinity;
-  const stale = !Number.isFinite(ageMinutes) || ageMinutes > 75;
+  const isStale = !Number.isFinite(ageMinutes) || ageMinutes > 75;
+  const lastCheckedText = generatedAt ? new Date(generatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+
+  // Bug fix: this card used to show a red stale-data warning while still
+  // rendering the OLD BUY/SELL direction, entry zone, SL, and confidence
+  // underneath it -- exactly the "old signal underneath a warning" defect.
+  // A customer could see a red alert and a seemingly-live trade card at the
+  // same time. Once a signal is stale/offline/missing, its actionable
+  // details are never shown -- only a calm "no fresh signal" message.
+  const hasFreshDirectionalSignal = !isStale && online && (dir === "BUY" || dir === "SELL");
+
+  let bodyState = "FRESH_SIGNAL";
+  if (!linked) bodyState = "NOT_LINKED";
+  else if (loading) bodyState = "LOADING";
+  else if (requestFailed && !outlook) bodyState = "DATA_CONNECTION_ERROR";
+  else if (!online) bodyState = "EA_OFFLINE";
+  else if (!outlook || isStale || dir === "BLOCKED") bodyState = "NO_FRESH_SIGNAL";
+  else if (!hasFreshDirectionalSignal) bodyState = "SIGNAL_FORMING";
 
   return (
     <Link to="/ai-market-outlook" className={`${CARD} block p-4 hover:border-amber-300/20 transition`} data-testid="ai-market-outlook-card">
@@ -113,62 +130,83 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
         )}
       </div>
 
-      {(!online || stale) && (
-        <p className="mt-3 rounded-lg border border-rose-400/25 bg-rose-400/[0.06] px-3 py-2 text-[11px] font-semibold text-rose-300">
-          {!online
-            ? "EA offline — showing no live outlook until a fresh heartbeat arrives."
-            : "DATA STALE — do not rely on this outlook until fresh EA evidence arrives."}
-        </p>
+      {bodyState === "NOT_LINKED" && (
+        <p className="mt-3 text-[12px] text-white/40">Connect your license to receive hourly outlooks.</p>
       )}
 
-      {!linked ? (
-        <p className="mt-3 text-[12px] text-white/40">Connect your license to receive hourly outlooks.</p>
-      ) : loading ? (
+      {bodyState === "LOADING" && (
         <p className="mt-3 text-[12px] text-white/40">Loading outlook…</p>
-      ) : requestFailed && !outlook ? (
-        <p className="mt-3 text-[12px] text-rose-300">Outlook request failed — no current outlook is being claimed.</p>
-      ) : !outlook ? (
-        <p className="mt-3 text-[12px] text-white/40">No outlook published yet — first hourly analysis is generating.</p>
-      ) : (
+      )}
+
+      {/* Reserved for genuine system failures only -- red styling. */}
+      {bodyState === "DATA_CONNECTION_ERROR" && (
+        <div className="mt-3 rounded-lg border border-rose-400/20 bg-rose-400/[0.05] px-3 py-2.5" data-testid="outlook-data-connection-error">
+          <div className="flex items-center gap-2">
+            <CloudOff className="h-3.5 w-3.5 flex-none text-rose-300" />
+            <span className="text-[12px] font-semibold text-rose-200">Can&apos;t reach the market data service</span>
+          </div>
+          <p className="mt-1 text-[11px] text-white/40">Showing last known data. Trying again shortly.</p>
+        </div>
+      )}
+
+      {bodyState === "EA_OFFLINE" && (
+        <div className="mt-3 rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2.5" data-testid="outlook-ea-offline">
+          <div className="flex items-center gap-2">
+            <WifiOff className="h-3.5 w-3.5 flex-none text-white/40" />
+            <span className="text-[12px] font-semibold text-white/70">Your EA isn&apos;t connected right now</span>
+          </div>
+          <p className="mt-1 text-[11px] text-white/40">No live outlook until a fresh heartbeat arrives from your MT5 terminal.</p>
+        </div>
+      )}
+
+      {/* Normal, expected state -- not an error. Neutral/premium styling,
+          never red. */}
+      {bodyState === "NO_FRESH_SIGNAL" && (
+        <div className="mt-3 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2.5" data-testid="outlook-no-fresh-signal">
+          <div className="flex items-center gap-2">
+            <Radar className="h-3.5 w-3.5 flex-none text-white/35" />
+            <span className="text-[12px] font-semibold text-white/70">No signal right now</span>
+          </div>
+          <p className="mt-1 text-[11px] text-white/40">XauCloud is waiting for new Gold market data. This updates automatically.</p>
+          {lastCheckedText && <p className="mt-1 text-[10px] text-white/25">Last checked: {lastCheckedText}</p>}
+        </div>
+      )}
+
+      {bodyState === "SIGNAL_FORMING" && (
         <div className="mt-3">
           <div className="flex items-center gap-2">
             <div className={`flex items-center gap-1 rounded-full border ${style.border} ${style.bg} px-2.5 py-1`}>
               <style.Icon className={`h-3 w-3 ${style.text}`} />
-              <span className={`font-mono text-[12px] font-bold ${style.text}`}>{dir.replace(/_/g, " ")}</span>
+              <span className={`font-mono text-[12px] font-bold ${style.text}`}>Setup forming</span>
             </div>
-            {dir !== "NO_VALID_OUTLOOK" && (
-              <span className="font-mono text-[11px] text-white/40">
-                {(outlook.confidence_category || "").replace(/_/g, " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase()) || `${outlook.confidence_pct}%`} confidence
-              </span>
-            )}
           </div>
-          {(dir === "BUY" || dir === "SELL") && (
-            <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
-              Manual advisory · not an automated XauCloud entry
-              {outlook.automated_entry_approved === false && " · Automated entry: not approved"}
-              {outlook.automated_entry_approved === true && " · Automated entry: approved"}
-            </p>
-          )}
-          {/* Audit fix: was excluding NO_VALID_OUTLOOK/NEUTRAL/RANGE only,
-              which INCLUDED TRANSITION -- inconsistent with the full page's
-              `isDirectional = dir === "BUY" || dir === "SELL"` guard. The
-              backend never actually emits TRANSITION today (dormant), but
-              if it ever did, zone/SL/TP would all be null for it and this
-              card -- unlike the page -- would have rendered a visibly
-              broken "Entry: – SL:" block. Aligned to the page's check. */}
-          {(dir === "BUY" || dir === "SELL") && (
-            <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-white/45">
-              <div>Entry: <span className="text-white/70">{outlook.preferred_entry_zone_low}–{outlook.preferred_entry_zone_high}</span></div>
-              <div>SL: <span className="text-white/70">{outlook.suggested_sl}</span></div>
-              <div>Status: <span className="text-white/70">{(outlook.status || "").replace(/_/g, " ")}</span></div>
-              <div>Next: <span className="text-white/70">hourly</span></div>
+          <p className="mt-1.5 text-[11px] text-white/40">Not ready to trade yet.</p>
+          {lastCheckedText && <p className="mt-2 text-[10px] text-white/25">Last checked: {lastCheckedText}</p>}
+        </div>
+      )}
+
+      {bodyState === "FRESH_SIGNAL" && (
+        <div className="mt-3">
+          <div className="flex items-center gap-2">
+            <div className={`flex items-center gap-1 rounded-full border ${style.border} ${style.bg} px-2.5 py-1`}>
+              <style.Icon className={`h-3 w-3 ${style.text}`} />
+              <span className={`font-mono text-[12px] font-bold ${style.text}`}>{dir} active signal</span>
             </div>
-          )}
-          <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-white/35">{outlook.reasoning}</p>
-          <p className="mt-2 text-[10px] text-white/25">
-            Updated {outlook.generated_at || outlook.published_at || outlook.created_at || outlook.ts || "time unavailable"}
-            {requestFailed ? " · refresh failed; showing last known data" : ""}
+            <span className="font-mono text-[11px] text-white/40">
+              {(outlook.confidence_category || "").replace(/_/g, " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase()) || `${outlook.confidence_pct}%`} confidence
+            </span>
+          </div>
+          <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
+            Manual advisory · not an automated XauCloud entry
+            {outlook.automated_entry_approved === false && " · Not eligible for automated trading"}
+            {outlook.automated_entry_approved === true && " · Eligible for automated trading"}
           </p>
+          <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-white/45">
+            <div>Entry: <span className="text-white/70">{outlook.preferred_entry_zone_low}–{outlook.preferred_entry_zone_high}</span></div>
+            <div>SL: <span className="text-white/70">{outlook.suggested_sl}</span></div>
+          </div>
+          <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-white/35">{outlook.reasoning}</p>
+          {lastCheckedText && <p className="mt-2 text-[10px] text-white/25">Last checked: {lastCheckedText}</p>}
         </div>
       )}
     </Link>
