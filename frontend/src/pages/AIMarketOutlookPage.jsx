@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft, Bell, BellOff, ArrowUpRight, ArrowDownRight, Minus, Compass,
   ChevronDown, ChevronUp, Filter, TrendingUp, TrendingDown, Activity,
-  AlertTriangle, CheckCircle2, Clock3, Database, Radio, ShieldCheck,
+  AlertTriangle, CheckCircle2, Clock3, Database, Radio, ShieldCheck, Wallet,
 } from "lucide-react";
 import { API } from "@/lib/api";
 import { ensureOneSignalDeviceRegistered } from "@/lib/onesignal";
@@ -443,29 +443,60 @@ function safeJoin(values, separator) {
 }
 
 function HistoryCard({ outlook }) {
+  const [expanded, setExpanded] = useState(false);
   const color = COLOR_STYLE[outlook.color_state] || COLOR_STYLE.AMBER;
   const signalTime = outlook.published_at || outlook.generated_at;
   const time = signalTime ? new Date(signalTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  const tradeResult = outlook.automated_trade_result;
+  const tradeOutcome = tradeResult?.status === "matched" ? (AUTOMATED_RESULT_COPY[tradeResult.result] || { label: humanEnum(tradeResult.result), tone: "slate" }) : null;
+  const tradeToneText = tradeOutcome ? { emerald: "text-emerald-300", rose: "text-rose-300", slate: "text-white/60" }[tradeOutcome.tone] : "";
   return (
     <div className={`rounded-xl border border-white/[0.06] border-l-4 ${color.border} ${color.bg} p-3`}>
       <div className="flex items-center justify-between">
         <span className="font-mono text-[12px] font-bold">{time} {outlook.primary_direction} · {outlook.confidence_pct}%</span>
         <span className={`font-mono text-[11px] font-bold ${color.text}`}>{resultLabel(outlook)}</span>
       </div>
+
+      {tradeOutcome && (
+        <div className={`mt-2 rounded-lg border border-current/15 px-2.5 py-1.5 text-[11px] font-semibold ${tradeToneText}`}>
+          Your account: {tradeOutcome.label} ({moneyText(tradeResult.realized_profit)})
+        </div>
+      )}
+      {tradeResult?.status === "uncertain" && (
+        <div className="mt-2 rounded-lg border border-amber-300/15 px-2.5 py-1.5 text-[11px] text-amber-200">
+          Your account: real trade result can&apos;t be confirmed (multiple candidates)
+        </div>
+      )}
+
       {["BUY", "SELL"].includes(outlook.primary_direction) ? (
-        <div className="mt-2 space-y-1 text-[11px] text-white/45">
-          <div>Signal entry <span className="font-mono text-white/75">{outlook.tracking_entry_price ?? "—"}</span> · Suggested zone {outlook.preferred_entry_zone_low}–{outlook.preferred_entry_zone_high}</div>
-          <div>SL {outlook.original_sl ?? outlook.suggested_sl} · TP1 {outlook.tp1_price} · TP2 {outlook.tp2_price} · TP3 {outlook.tp3_price}</div>
-          <div>Current {rText(outlook.current_r)} · MFE {rText(outlook.mfe_r)} · MAE {rText(outlook.mae_r)}</div>
-          <div>Elapsed {elapsedText(signalTime, outlook.classification_at)} · Deadline {timeText(outlook.evaluation_deadline)} · Last monitored {timeText(outlook.last_monitored_at)}</div>
-          {(outlook.first_half_r_at || outlook.tp1_hit_at || outlook.tp2_hit_at || outlook.tp3_hit_at || outlook.sl_hit_at) && (
-            <div className="text-[10px] text-white/35">
-              +0.50R {timeText(outlook.first_half_r_at)} · TP1 {timeText(outlook.tp1_hit_at)} · TP2 {timeText(outlook.tp2_hit_at)} · TP3 {timeText(outlook.tp3_hit_at)} · SL {timeText(outlook.sl_hit_at)}
+        <>
+          <div className="mt-2 text-[11px] text-white/45">
+            Signal entry <span className="font-mono text-white/75">{outlook.tracking_entry_price ?? "—"}</span> · SL {outlook.original_sl ?? outlook.suggested_sl} · TP1 {outlook.tp1_price}
+          </div>
+          <button onClick={() => setExpanded((e) => !e)} className="mt-2 flex items-center gap-1 text-[10px] text-white/35 hover:text-white/65">
+            {expanded ? "Hide" : "Show"} technical details {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
+          {expanded && (
+            <div className="mt-2 space-y-1 border-t border-white/[0.05] pt-2 text-[11px] text-white/45">
+              <div>Suggested zone {outlook.preferred_entry_zone_low}–{outlook.preferred_entry_zone_high}</div>
+              <div>TP2 {outlook.tp2_price} · TP3 {outlook.tp3_price}</div>
+              <div>Current {rText(outlook.current_r)} · MFE {rText(outlook.mfe_r)} · MAE {rText(outlook.mae_r)}</div>
+              <div>Elapsed {elapsedText(signalTime, outlook.classification_at)} · Deadline {timeText(outlook.evaluation_deadline)} · Last monitored {timeText(outlook.last_monitored_at)}</div>
+              {(outlook.first_half_r_at || outlook.tp1_hit_at || outlook.tp2_hit_at || outlook.tp3_hit_at || outlook.sl_hit_at) && (
+                <div className="text-[10px] text-white/35">
+                  +0.50R {timeText(outlook.first_half_r_at)} · TP1 {timeText(outlook.tp1_hit_at)} · TP2 {timeText(outlook.tp2_hit_at)} · TP3 {timeText(outlook.tp3_hit_at)} · SL {timeText(outlook.sl_hit_at)}
+                </div>
+              )}
+              {outlook.latest_path_event && <div className={`text-[10px] ${color.text}`}>Path: {outlook.latest_path_event.replace(/_/g, " ")}</div>}
+              {outlook.historical_data_unavailable_reason && <div className="text-[10px] text-white/35">{outlook.historical_data_unavailable_reason}</div>}
+              {tradeResult?.status === "matched" && (
+                <div className="text-[10px] text-white/35">
+                  Real trade: entry {tradeResult.entry_price} · exit {tradeResult.exit_price} · {rText(tradeResult.realized_r)} · ticket {tradeResult.ticket} · {tradeResult.close_reason}
+                </div>
+              )}
             </div>
           )}
-          {outlook.latest_path_event && <div className={`text-[10px] ${color.text}`}>Path: {outlook.latest_path_event.replace(/_/g, " ")}</div>}
-          {outlook.historical_data_unavailable_reason && <div className="text-[10px] text-white/35">{outlook.historical_data_unavailable_reason}</div>}
-        </div>
+        </>
       ) : outlook.primary_direction !== "NO_VALID_OUTLOOK" ? (
         // v6.25.2 owner directive 2026-07-17 -- a non-directional hourly
         // update (TRANSITION/NEUTRAL/RANGE) is informational only and must
@@ -658,6 +689,89 @@ function DataHealthStrip({ contract, diagnostics, notificationStatus }) {
   );
 }
 
+// "automated_trade_result" is real, broker-confirmed truth about a trade
+// XauCloud actually executed -- separate from and never merged into the
+// advisory M10/hourly tracking above (a prior owner directive keeps those
+// two clearly apart: one is "what if you had taken this setup," the other
+// is "what your account actually did"). Rendered in plain English first,
+// with the underlying broker fields available on demand.
+const AUTOMATED_RESULT_COPY = {
+  TP_HIT: { label: "Hit take-profit", tone: "emerald", icon: CheckCircle2 },
+  WIN: { label: "Closed in profit", tone: "emerald", icon: CheckCircle2 },
+  SL_HIT: { label: "Hit stop-loss", tone: "rose", icon: AlertTriangle },
+  LOSS: { label: "Closed at a loss", tone: "rose", icon: AlertTriangle },
+  BREAK_EVEN: { label: "Closed break-even", tone: "slate", icon: Minus },
+};
+
+function moneyText(value) {
+  if (value == null || Number.isNaN(Number(value))) return "—";
+  const n = Number(value);
+  return `${n >= 0 ? "+" : "-"}$${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function AutomatedTradeResultCard({ result }) {
+  const [showDetails, setShowDetails] = useState(false);
+  if (!result || !["matched", "uncertain"].includes(result.status)) return null;
+
+  if (result.status === "uncertain") {
+    return (
+      <section className={`${CARD} border-l-4 border-l-amber-300 bg-amber-300/[0.04] p-5`}>
+        <div className={MONO_LABEL}>Your account · real trade result</div>
+        <div className="mt-2 flex items-center gap-2">
+          <AlertTriangle className="h-5 w-5 text-amber-300" />
+          <span className="text-lg font-bold text-amber-100">Can&apos;t confirm which trade this was yet</span>
+        </div>
+        <p className="mt-2 text-[12px] leading-5 text-white/55">
+          More than one trade in your account matched this signal&apos;s timing, so XauCloud is not guessing which one it was.
+          This will stay unresolved rather than show a possibly-wrong result.
+        </p>
+      </section>
+    );
+  }
+
+  const outcome = AUTOMATED_RESULT_COPY[result.result] || { label: humanEnum(result.result), tone: "slate", icon: Wallet };
+  const Icon = outcome.icon;
+  const toneClass = { emerald: "border-l-emerald-400 bg-emerald-300/[0.04] text-emerald-200",
+    rose: "border-l-rose-400 bg-rose-300/[0.04] text-rose-200",
+    slate: "border-l-white/25 bg-white/[0.02] text-white/70" }[outcome.tone];
+
+  return (
+    <section className={`${CARD} border-l-4 p-5 ${toneClass}`}>
+      <div className="flex items-center justify-between">
+        <div className={MONO_LABEL}>Your account · real trade result</div>
+        <span className="rounded-full border border-current/20 px-2.5 py-1 font-mono text-[9px] uppercase tracking-widest opacity-70">
+          Broker-confirmed
+        </span>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Icon className="h-5 w-5" />
+        <span className="text-lg font-bold">{result.direction} {result.symbol} {outcome.label}</span>
+      </div>
+      <p className="mt-1 text-[13px] font-semibold">
+        {moneyText(result.realized_profit)}
+        {result.realized_r != null && <span className="ml-2 font-mono text-[12px] opacity-75">{rText(result.realized_r)}</span>}
+      </p>
+      <p className="mt-2 text-[11px] leading-4 text-white/45">
+        This is what your account actually did, confirmed by your broker — it is shown separately from the advisory outlook above,
+        which only tracks a hypothetical "if you had taken this setup" outcome.
+      </p>
+      <button onClick={() => setShowDetails((s) => !s)} className="mt-3 flex items-center gap-1 text-[10px] text-white/40 hover:text-white/70">
+        {showDetails ? "Hide" : "Show"} trade details {showDetails ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+      </button>
+      {showDetails && (
+        <div className="mt-3 grid grid-cols-2 gap-3 border-t border-current/10 pt-3 sm:grid-cols-4">
+          <Metric label="Entry" value={result.entry_price} />
+          <Metric label="Exit" value={result.exit_price} />
+          <Metric label="Ticket" value={result.ticket} />
+          <Metric label="Close reason" value={result.close_reason} />
+          <Metric label="Opened" value={result.opened_at ? new Date(result.opened_at).toLocaleString() : "—"} />
+          <Metric label="Closed" value={result.closed_at ? new Date(result.closed_at).toLocaleString() : "—"} />
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SignalEventCard({ event }) {
   const state = event.event_type || event.state;
   return (
@@ -678,6 +792,7 @@ export default function AIMarketOutlookPage() {
   const previewMode = process.env.NODE_ENV !== "production" && searchParams.get("preview") === "actionable";
 
   const [contract, setContract] = useState(null);
+  const [currentOutlook, setCurrentOutlook] = useState(null);
   const [diagnostics, setDiagnostics] = useState(null);
   const [prefs, setPrefs] = useState(null);
   const [history, setHistory] = useState([]);
@@ -693,6 +808,7 @@ export default function AIMarketOutlookPage() {
     try {
       const { data } = await outlookAxios.get("/outlook/current");
       setContract(data?.contract || null);
+      setCurrentOutlook(data?.outlook || null);
       setDiagnostics(data?.diagnostics || null);
     } catch (_) { /* advisory only */ }
   }, [previewMode]);
@@ -780,6 +896,7 @@ export default function AIMarketOutlookPage() {
             online={contract?.dataHealth === "HEALTHY"}
             loading={!contract}
           />
+          <AutomatedTradeResultCard result={currentOutlook?.automated_trade_result} />
           <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
             <section className={`${CARD} p-5 sm:p-6`}>
               <div className="flex items-center justify-between"><span className={MONO_LABEL}>Meaningful signal history</span><span className="text-[10px] text-white/30">Informational repeats grouped</span></div>
