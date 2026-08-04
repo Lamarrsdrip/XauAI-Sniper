@@ -5215,6 +5215,17 @@ async def log_trade_journal(entry: TradeJournalEntry, request: Request):
                 })
             except Exception as e:
                 logger.error(f"Hive index error: {e}")
+        if doc.get("has_rich_ledger_data") and entry.closed_at > 0:
+            # Real-time trigger -- reconciles any awaiting Outlook signal for
+            # this account/symbol/direction the moment MT5 confirms a close,
+            # never waiting for the hourly Outlook job. Never allowed to
+            # affect this endpoint's own success response (matches the
+            # existing hive-index try/except discipline just above).
+            try:
+                import market_outlook as _mo
+                await _mo.reconcile_trade_journal_entry(doc)
+            except Exception as e:
+                logger.error(f"Outlook reconciliation error: {e}")
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Journal log error: {e}")
