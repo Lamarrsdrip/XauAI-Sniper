@@ -42,7 +42,7 @@ function SignalCard({ signal }) {
       </div>
       <div className="mt-1.5 text-[11px] text-white/45">
         Entry <span className="font-mono text-white/70">{fmt(signal.entry_price, 2)}</span>
-        {" · "}{signal.direction === "BUY" ? "TP1" : "TP1"} <span className="font-mono text-white/70">{fmt(signal.take_profit_1, 2)}</span>
+        {" · "}TP1 <span className="font-mono text-white/70">{fmt(signal.take_profit_1, 2)}</span>
         {" · "}SL <span className="font-mono text-white/70">{fmt(signal.stop_loss, 2)}</span>
       </div>
       <div className={`mt-1.5 font-mono text-[12px] font-semibold ${style.text}`}>Result: {resultText}</div>

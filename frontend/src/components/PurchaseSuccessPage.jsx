@@ -84,8 +84,8 @@ export default function PurchaseSuccessPage() {
               <h3 className="text-sm font-bold">What to do next:</h3>
               <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
                 <li>Save your PIN somewhere safe (screenshot it!)</li>
-                <li>Download the AI Sniper EA from our website</li>
-                <li>Follow the Setup Guide to install on MetaTrader 5</li>
+                <li>Sign in to Command Center and link this PIN</li>
+                <li>Download the EA from Command Center and install it on MetaTrader 5</li>
                 <li>Enter this PIN in the EA settings</li>
                 <li>Enable Auto Trading and start making money!</li>
               </ol>
@@ -95,9 +95,9 @@ export default function PurchaseSuccessPage() {
                 className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
                 <ArrowLeft size={14} /> Back to Dashboard
               </button>
-              <a href={`${API}/download/ea`}
+              <a href="/command"
                 className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground font-bold text-sm hover:-translate-y-[1px] transition-transform duration-150">
-                DOWNLOAD EA
+                OPEN COMMAND CENTER
               </a>
             </div>
           </div>
