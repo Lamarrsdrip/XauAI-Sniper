@@ -3879,6 +3879,13 @@ async def startup():
         # lifecycle scan, restart quote replay, and one authoritative outcome
         # row per outlook. These indexes affect monitoring latency only; they
         # do not alter any trading or classification rule.
+        # Unique constraint on the signal's own natural key -- there must
+        # never be two documents claiming to be the same Outlook signal,
+        # which would otherwise let two different "final results" exist
+        # for what a customer/the public performance feed treats as one
+        # signal. Fails loudly at startup if a duplicate somehow already
+        # exists rather than silently tolerating it.
+        await db.cloud_market_outlooks.create_index("id", unique=True)
         await db.cloud_market_outlooks.create_index([("account", 1), ("generated_at", -1)])
         await db.cloud_market_outlooks.create_index([("monitoring_closed", 1), ("primary_direction", 1), ("account", 1)])
         await db.cloud_market_outlook_outcomes.create_index("outlook_id", unique=True)

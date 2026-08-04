@@ -1890,8 +1890,17 @@ async def track_outlook_lifecycle_tick(account: str = "", bid: Optional[float] =
                 committed = (merged, [])
                 break
 
+            update_filter = {"id": doc["id"], "last_monitored_at": doc.get("last_monitored_at")}
+            if "analytics_outcome" in price_updates and doc.get("analytics_outcome") is None:
+                # This write is the FIRST classification (unclassified ->
+                # WIN/LOSS) -- guard against a duplicate final result even
+                # in the (very unlikely) case two concurrent quote-journey
+                # replays coincidentally share the same last_monitored_at:
+                # only the writer that still finds this signal unclassified
+                # at the moment of write can commit the classification.
+                update_filter["analytics_outcome"] = None
             result = await db.cloud_market_outlooks.update_one(
-                {"id": doc["id"], "last_monitored_at": doc.get("last_monitored_at")},
+                update_filter,
                 {"$set": price_updates},
             )
             if result.modified_count:
