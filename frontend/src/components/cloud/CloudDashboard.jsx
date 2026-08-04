@@ -838,7 +838,7 @@ function M10SignalCard({ events, heartbeat }) {
     <div className={`${CARD} p-5`} data-testid="m10-signal-card">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className={MONO_LABEL}>M10 Signal Engine · Evidence #{latest.evidence_id ?? "—"}</div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className={pill(freshnessTone)}>{humanEnumLabel(freshnessState, FRESHNESS_LABELS)}{latest.age_seconds != null ? ` · ${latest.age_seconds}s old` : ""}</span>
           <span className={pill(decisionTone)}>{isStaleOrUnknown ? "Data delayed" : humanEnumLabel(decision, M10_DECISION_LABELS)}</span>
         </div>

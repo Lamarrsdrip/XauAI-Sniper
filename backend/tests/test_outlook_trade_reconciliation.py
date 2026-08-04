@@ -200,6 +200,42 @@ class TestClassification:
         assert result == "BREAK_EVEN"
 
 
+class TestResultConversion:
+    """Owner-approved XauCloud convention: 1.00 Gold price move = 10
+    XauCloud pips, so TP1 (+0.50R) = +5.00 Gold moves = +50 XauCloud pips.
+    This is the one function every customer-facing surface must use."""
+
+    def test_sell_example_from_spec(self):
+        # entry 4061.00, TP1 4056.00 -> +5.00 price move in the profitable direction
+        conversion = mo.build_result_conversion(price_move=4061.00 - 4056.00, r=0.5)
+        assert conversion == {"result_r": 0.5, "result_gold_moves": 5.0, "result_pips": 50.0}
+
+    def test_buy_example_from_spec(self):
+        # entry 4050.00, TP1 4055.00 -> same +5.00 result
+        conversion = mo.build_result_conversion(price_move=4055.00 - 4050.00, r=0.5)
+        assert conversion == {"result_r": 0.5, "result_gold_moves": 5.0, "result_pips": 50.0}
+
+    def test_derives_price_move_from_r_and_risk_distance(self):
+        conversion = mo.build_result_conversion(r=1.0, risk_distance=10.0)
+        assert conversion == {"result_r": 1.0, "result_gold_moves": 10.0, "result_pips": 100.0}
+
+    def test_derives_r_from_price_move_and_risk_distance(self):
+        conversion = mo.build_result_conversion(price_move=-17.59, risk_distance=17.59)
+        assert conversion["result_r"] == -1.0
+        assert conversion["result_pips"] == -175.9
+
+    def test_missing_inputs_return_none_not_zero(self):
+        conversion = mo.build_result_conversion(r=0.5)
+        assert conversion == {"result_r": 0.5, "result_gold_moves": None, "result_pips": None}
+
+    def test_automated_trade_result_includes_conversion_fields(self):
+        trade = _trade(direction="SELL", entry_price=4061.00, price=4056.00, final_r=0.5)
+        result = mo._build_automated_trade_result(trade)
+        assert result["result_gold_moves"] == 5.0
+        assert result["result_pips"] == 50.0
+        assert result["result_r"] == 0.5
+
+
 class TestReconcileAutomatedTradeResult:
     def test_persists_matched_result_with_real_fields(self):
         async def go():

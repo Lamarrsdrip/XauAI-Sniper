@@ -25,26 +25,39 @@ const COLOR_STYLE = {
 
 const DIRECTION_ICON = { BUY: ArrowUpRight, SELL: ArrowDownRight, NEUTRAL: Minus, RANGE: Minus, TRANSITION: Compass, NO_VALID_OUTLOOK: Minus };
 
-const HISTORY_FILTERS = ["All", "BUY", "SELL", "Green", "Red", "Gray", "Amber", "TP1", "TP2", "TP3", "Stopped", "Unavailable"];
-// Maps each filter chip to the /outlook/history query params the backend
-// already supports (direction/color/tp/result) -- this constant used to be
-// defined and never wired to anything, so the filter row simply didn't
-// exist despite the backend already being able to filter.
-const HISTORY_FILTER_PARAMS = {
-  All: {},
-  BUY: { direction: "BUY" },
-  SELL: { direction: "SELL" },
-  Green: { color: "GREEN" },
-  Red: { color: "RED" },
-  Gray: { color: "GRAY" },
-  Amber: { color: "AMBER" },
-  TP1: { tp: "TP1" },
-  TP2: { tp: "TP2" },
-  TP3: { tp: "TP3" },
-  Stopped: { result: "LOSS_RED_SL" },
-  Unavailable: { result: "HISTORICAL_DATA_UNAVAILABLE" },
-};
+// Two independent filter dimensions, customer-meaning labels only -- color
+// names (Green/Red/Gray/Amber) are internal styling references, never
+// customer-facing filter labels.
+const DIRECTION_FILTERS = ["All", "BUY", "SELL"];
+const RESULT_FILTERS = ["All", "Wins", "Losses", "Active"];
+// Maps each Result chip to the /outlook/history query params the backend
+// already supports. "Active" uses color=AMBER (still-tracking/unresolved) --
+// the backend doesn't yet distinguish "expired" from "still active" as a
+// separate queryable state, so that split isn't offered rather than
+// fabricating a filter that doesn't correspond to real data.
+const RESULT_FILTER_PARAMS = { All: {}, Wins: { color: "GREEN" }, Losses: { color: "RED" }, Active: { color: "AMBER" } };
 const HISTORY_PAGE_SIZE = 12;
+
+// The one authoritative XauCloud result-display conversion, mirroring
+// backend market_outlook.py's build_result_conversion()/
+// XAUCLOUD_PIPS_PER_GOLD_MOVE exactly: 1.00 Gold price move = 10 XauCloud
+// pips, so TP1 (+0.50R) = +5.00 Gold moves = +50 XauCloud pips. Used for
+// the advisory tracking's own R (current_r/mfe_r/mae_r), which only ever
+// carries R + risk_distance client-side; real automated trade results
+// already arrive with result_pips/result_gold_moves computed server-side
+// by that same function and must never be recomputed here.
+const XAUCLOUD_PIPS_PER_GOLD_MOVE = 10;
+function goldMoveConversion(r, riskDistance) {
+  if (r == null || !riskDistance) return { r, goldMoves: null, pips: null };
+  const priceMove = r * riskDistance;
+  return { r, goldMoves: Math.round(priceMove * 100) / 100, pips: Math.round(priceMove * XAUCLOUD_PIPS_PER_GOLD_MOVE * 10) / 10 };
+}
+function resultText(r, riskDistance) {
+  const { goldMoves, pips } = goldMoveConversion(r, riskDistance);
+  if (goldMoves == null || pips == null) return rText(r);
+  const sign = r >= 0 ? "+" : "";
+  return `${sign}${pips}${" pips · "}${sign}${goldMoves} Gold moves · ${rText(r)}`;
+}
 
 const DEVELOPMENT_PREVIEW_CONTRACT = {
   state: "ACTIONABLE_SIGNAL", stateReason: "M10_EXECUTION_READY", canonicalSource: "M10",
@@ -489,8 +502,8 @@ function HistoryCard({ outlook }) {
   const tradeToneText = tradeOutcome ? { emerald: "text-emerald-300", rose: "text-rose-300", slate: "text-white/60" }[tradeOutcome.tone] : "";
   const color = (tradeOutcome && REAL_RESULT_TONE_COLOR[tradeOutcome.tone]) || COLOR_STYLE[outlook.color_state] || COLOR_STYLE.AMBER;
   return (
-    <div className={`rounded-xl border border-white/[0.06] border-l-4 ${color.border} ${color.bg} p-3`}>
-      <div className="flex items-center justify-between">
+    <div className={`min-w-0 rounded-xl border border-white/[0.06] border-l-4 ${color.border} ${color.bg} p-3`}>
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
         <span className="font-mono text-[12px] font-bold">{time} {outlook.primary_direction} · {outlook.confidence_pct}%</span>
         <span className={`font-mono text-[11px] font-bold ${color.text}`}>{resultLabel(outlook)}</span>
       </div>
@@ -509,8 +522,13 @@ function HistoryCard({ outlook }) {
       {["BUY", "SELL"].includes(outlook.primary_direction) ? (
         <>
           <div className="mt-2 text-[11px] text-white/45">
-            Signal entry <span className="font-mono text-white/75">{outlook.tracking_entry_price ?? "—"}</span> · SL {outlook.original_sl ?? outlook.suggested_sl} · TP1 {outlook.tp1_price}
+            Entry <span className="font-mono text-white/75">{outlook.tracking_entry_price ?? "—"}</span> · SL {outlook.original_sl ?? outlook.suggested_sl} · TP1 {outlook.tp1_price}
           </div>
+          {["WIN_GREEN_TP1", "WIN_GREEN_0_5R", "LOSS_RED_SL", "LOSS_RED_TIMEOUT"].includes(outlook.signal_state) && (
+            <div className={`mt-1 font-mono text-[11px] font-semibold ${color.text}`}>
+              Result: {resultText(outlook.analytics_r ?? outlook.current_r, outlook.risk_distance)}
+            </div>
+          )}
           <button onClick={() => setExpanded((e) => !e)} className="mt-2 flex items-center gap-1 text-[10px] text-white/35 hover:text-white/65">
             {expanded ? "Hide" : "Show"} technical details {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
           </button>
@@ -649,8 +667,8 @@ function PrimaryStateCard({ contract }) {
 function SuggestedLevelsCard({ outlook }) {
   if (!outlook || !["BUY", "SELL"].includes(outlook.primary_direction)) return null;
   return (
-    <section className={`${CARD} p-5`} data-testid="suggested-levels-card">
-      <div className="flex items-center justify-between">
+    <section className={`${CARD} min-w-0 p-5`} data-testid="suggested-levels-card">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
         <span className={MONO_LABEL}>Suggested {outlook.primary_direction === "BUY" ? "buy" : "sell"} levels (advisory)</span>
         <span className="font-mono text-[9px] text-white/30">Next update {timeText(outlook.evaluation_deadline)}</span>
       </div>
@@ -804,10 +822,10 @@ function AutomatedTradeResultCard({ result }) {
     slate: "border-l-white/25 bg-white/[0.02] text-white/70" }[outcome.tone];
 
   return (
-    <section className={`${CARD} border-l-4 p-5 ${toneClass}`}>
-      <div className="flex items-center justify-between">
+    <section className={`${CARD} min-w-0 border-l-4 p-5 ${toneClass}`}>
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
         <div className={MONO_LABEL}>Your account · real trade result</div>
-        <span className="rounded-full border border-current/20 px-2.5 py-1 font-mono text-[9px] uppercase tracking-widest opacity-70">
+        <span className="flex-none rounded-full border border-current/20 px-2.5 py-1 font-mono text-[9px] uppercase tracking-widest opacity-70">
           Broker-confirmed
         </span>
       </div>
@@ -817,8 +835,14 @@ function AutomatedTradeResultCard({ result }) {
       </div>
       <p className="mt-1 text-[13px] font-semibold">
         {moneyText(result.realized_profit)}
-        {result.realized_r != null && <span className="ml-2 font-mono text-[12px] opacity-75">{rText(result.realized_r)}</span>}
       </p>
+      {(result.result_pips != null || result.realized_r != null) && (
+        <p className="mt-0.5 font-mono text-[12px] opacity-75">
+          {result.result_pips != null
+            ? `${result.result_pips >= 0 ? "+" : ""}${result.result_pips} pips · ${result.result_gold_moves >= 0 ? "+" : ""}${result.result_gold_moves} Gold moves · ${rText(result.result_r)}`
+            : rText(result.realized_r)}
+        </p>
+      )}
       <p className="mt-2 text-[11px] leading-4 text-white/45">
         This is what your account actually did, confirmed by your broker — it is shown separately from the advisory outlook above,
         which only tracks a hypothetical "if you had taken this setup" outcome.
@@ -840,19 +864,6 @@ function AutomatedTradeResultCard({ result }) {
   );
 }
 
-function SignalEventCard({ event }) {
-  const state = event.event_type || event.state;
-  return (
-    <div className="rounded-xl border border-white/[0.06] bg-black/15 px-4 py-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-[12px] font-semibold text-white/75">{event.direction ? `${event.direction} · ` : ""}{humanEnum(state)}</div>
-        <time className="font-mono text-[9px] text-white/30">{event.event_time ? new Date(event.event_time).toLocaleString() : "—"}</time>
-      </div>
-      <div className="mt-1 text-[10px] text-white/35">{event.confidence != null ? `${Math.round(event.confidence)}% · ` : ""}{humanEnum(event.notification_reason || event.blocker_code)}</div>
-    </div>
-  );
-}
-
 export default function AIMarketOutlookPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -864,9 +875,9 @@ export default function AIMarketOutlookPage() {
   const [diagnostics, setDiagnostics] = useState(null);
   const [prefs, setPrefs] = useState(null);
   const [history, setHistory] = useState([]);
-  const [signalEvents, setSignalEvents] = useState([]);
   const [stats, setStats] = useState({});
-  const [historyFilter, setHistoryFilter] = useState("All");
+  const [directionFilter, setDirectionFilter] = useState("All");
+  const [resultFilter, setResultFilter] = useState("All");
   const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState(false);
@@ -899,8 +910,13 @@ export default function AIMarketOutlookPage() {
 
   const loadHistory = useCallback(async () => {
     if (previewMode) {
-      setSignalEvents([{ id: "preview-event", event_type: "ACTIONABLE_SIGNAL", direction: "SELL", confidence: 72, event_time: new Date().toISOString(), notification_reason: "ELIGIBLE" }]);
-      setHistory([]); setStats({
+      setHistory([{
+        id: "preview-history", primary_direction: "SELL", confidence_pct: 72, color_state: "GREEN",
+        signal_state: "WIN_GREEN_TP1", highest_tp_reached: 1, published_at: new Date().toISOString(),
+        tracking_entry_price: 2661.0, preferred_entry_zone_low: 2660.5, preferred_entry_zone_high: 2661.5,
+        original_sl: 2666.0, tp1_price: 2656.0, current_r: 0.5, risk_distance: 5.0,
+      }]);
+      setStats({
         wins: 8, losses: 3, win_rate: 8 / 11, total_r: 4.7, average_r: 0.43,
         average_mfe: 0.81, average_mae: -0.24, active_unresolved_count: 1,
         unavailable_historical_count: 0,
@@ -909,11 +925,10 @@ export default function AIMarketOutlookPage() {
     }
     setHistoryLoading(true);
     try {
-      const { data } = await outlookAxios.get("/outlook/history", {
-        params: { ...HISTORY_FILTER_PARAMS[historyFilter], limit: historyLimit },
-      });
+      const params = { ...RESULT_FILTER_PARAMS[resultFilter], limit: historyLimit };
+      if (directionFilter !== "All") params.direction = directionFilter;
+      const { data } = await outlookAxios.get("/outlook/history", { params });
       setHistory(data?.timeline || data?.outlooks || []);
-      setSignalEvents(data?.signal_events || []);
       setStats(data?.stats || {});
       setHistoryError(false);
     } catch (_) {
@@ -921,7 +936,7 @@ export default function AIMarketOutlookPage() {
     } finally {
       setHistoryLoading(false);
     }
-  }, [previewMode, historyFilter, historyLimit]);
+  }, [previewMode, directionFilter, resultFilter, historyLimit]);
 
   useEffect(() => {
     if (highlightId) {
@@ -939,8 +954,12 @@ export default function AIMarketOutlookPage() {
 
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
-  const changeHistoryFilter = useCallback((filter) => {
-    setHistoryFilter(filter);
+  const changeDirectionFilter = useCallback((filter) => {
+    setDirectionFilter(filter);
+    setHistoryLimit(HISTORY_PAGE_SIZE);
+  }, []);
+  const changeResultFilter = useCallback((filter) => {
+    setResultFilter(filter);
     setHistoryLimit(HISTORY_PAGE_SIZE);
   }, []);
 
@@ -959,7 +978,7 @@ export default function AIMarketOutlookPage() {
   } : null;
 
   return (
-    <div className="min-h-screen bg-[#07090d] text-white">
+    <div className="min-h-screen overflow-x-hidden bg-[#07090d] text-white">
       <Seo
         title="AI Gold Market Outlook — XauCloud M10 Execution Truth"
         description="M10 execution truth with hourly advisory context for XAUUSD Gold trading, from the XauCloud AI Director."
@@ -974,8 +993,8 @@ export default function AIMarketOutlookPage() {
         </div>
 
         {currentError && (
-          <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.05] px-4 py-3">
-            <p className="text-[12px] text-rose-200">The live outlook couldn't be refreshed. Showing the last known data.</p>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.05] px-4 py-3">
+            <p className="min-w-0 text-[12px] text-rose-200">The live outlook couldn't be refreshed. Showing the last known data.</p>
             <button onClick={loadCurrent} className="flex-none text-[11px] text-rose-100 underline decoration-dotted">Retry</button>
           </div>
         )}
@@ -997,7 +1016,7 @@ export default function AIMarketOutlookPage() {
           <AutomatedTradeResultCard result={currentOutlook?.automated_trade_result} />
           <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
             <section className={`${CARD} p-5 sm:p-6`}>
-              <div className="flex items-center justify-between"><span className={MONO_LABEL}>Meaningful signal history</span><span className="text-[10px] text-white/30">Informational repeats grouped</span></div>
+              <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1"><span className={MONO_LABEL}>Meaningful signal history</span><span className="text-[10px] text-white/30">Informational repeats grouped</span></div>
               <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Metric label="Win rate" value={stats.win_rate != null ? `${Math.round(stats.win_rate * 100)}%` : "—"} />
               <Metric label="Wins / Losses" value={`${stats.wins ?? 0} / ${stats.losses ?? 0}`} />
@@ -1008,29 +1027,53 @@ export default function AIMarketOutlookPage() {
               <Metric label="Unavailable history" value={stats.unavailable_historical_count ?? 0} />
               </div>
 
-              <div className="mt-4 flex gap-1.5 overflow-x-auto pb-1" data-testid="history-filters">
-                {HISTORY_FILTERS.map((f) => (
-                  <button key={f} onClick={() => changeHistoryFilter(f)}
-                          className={`flex-none rounded-full border px-3 py-1.5 font-mono text-[10px] font-bold transition ${historyFilter === f ? "border-amber-300/40 bg-amber-300/[0.08] text-amber-100" : "border-white/[0.06] text-white/40 hover:border-white/15"}`}>
-                    {f}
-                  </button>
-                ))}
+              <div className="mt-4 min-w-0 space-y-2" data-testid="history-filters">
+                <div className="min-w-0">
+                  <div className="mb-1 font-mono text-[9px] uppercase tracking-widest text-white/25">Direction</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {DIRECTION_FILTERS.map((f) => (
+                      <button key={f} onClick={() => changeDirectionFilter(f)}
+                              className={`rounded-full border px-3 py-1.5 font-mono text-[10px] font-bold transition ${directionFilter === f ? "border-amber-300/40 bg-amber-300/[0.08] text-amber-100" : "border-white/[0.06] text-white/40 hover:border-white/15"}`}>
+                        {f}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <div className="mb-1 font-mono text-[9px] uppercase tracking-widest text-white/25">Result</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {RESULT_FILTERS.map((f) => (
+                      <button key={f} onClick={() => changeResultFilter(f)}
+                              className={`rounded-full border px-3 py-1.5 font-mono text-[10px] font-bold transition ${resultFilter === f ? "border-amber-300/40 bg-amber-300/[0.08] text-amber-100" : "border-white/[0.06] text-white/40 hover:border-white/15"}`}>
+                        {f}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
-              <div className="mt-5 space-y-2">
+              <div className="mt-5 min-w-0 space-y-2">
                 {historyError && (
                   <div className="rounded-xl border border-rose-400/20 bg-rose-400/[0.05] p-4 text-center">
                     <p className="text-[12px] text-rose-200">Signal history couldn't be loaded right now.</p>
                     <button onClick={loadHistory} className="mt-2 text-[11px] text-rose-100 underline decoration-dotted">Retry</button>
                   </div>
                 )}
-                {!historyError && historyFilter === "All" && signalEvents.slice(0, 12).map((event) => <SignalEventCard key={event.id || `${event.candidate_id}-${event.event_type}`} event={event} />)}
-                {!historyError && (historyFilter !== "All" || signalEvents.length === 0) && history.map((o) => <HistoryCard key={o.id} outlook={o} />)}
-                {!historyError && historyFilter === "All" && signalEvents.length === 0 && history.length === 0 && !historyLoading && (
-                  <p className="py-6 text-center text-[12px] text-white/35">No completed or active signals yet. Informational heartbeats are not counted as trades.</p>
-                )}
-                {!historyError && historyFilter !== "All" && history.length === 0 && !historyLoading && (
-                  <p className="py-6 text-center text-[12px] text-white/35">No signals match this filter yet.</p>
+                {/* Bug fix: this used to render the raw, ungrouped
+                    cloud_outlook_signal_events log (every Watching/
+                    Actionable/Blocked transition as its own uncolored card)
+                    for the default "All" view, while filtered views used
+                    the deduplicated, colored HistoryCard -- the exact
+                    "All doesn't show colors, and shows repeated states"
+                    complaint. Every filter state now renders the same
+                    one-card-per-signal, real-result-colored HistoryCard. */}
+                {!historyError && history.map((o) => <HistoryCard key={o.id} outlook={o} />)}
+                {!historyError && history.length === 0 && !historyLoading && (
+                  <p className="py-6 text-center text-[12px] text-white/35">
+                    {directionFilter === "All" && resultFilter === "All"
+                      ? "No completed or active signals yet. Informational heartbeats are not counted as trades."
+                      : "No signals match this filter yet."}
+                  </p>
                 )}
                 {historyLoading && history.length === 0 && (
                   <div className="space-y-2" aria-label="Loading signal history">

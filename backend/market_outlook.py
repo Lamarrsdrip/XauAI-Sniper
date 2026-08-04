@@ -71,6 +71,42 @@ MAX_HISTORICAL_ANCHOR_AGE_SECONDS = 90
 MAX_HISTORICAL_QUOTE_GAP_SECONDS = 10
 ROOM_COLLAPSE_R = 0.3      # same threshold the EA's readiness engine uses -- invalidates a candidate
 
+# Owner-approved XauCloud result-display convention (distinct from broker
+# point/tick size, which stays internal to price math). For XAUUSD:
+#   1.00 Gold price move  = 10 XauCloud pips
+#   +0.50R (TP1)           = +5.00 Gold price moves = +50 XauCloud pips
+# Every customer-facing surface (Outlook cards, stats, public website,
+# trade details, notifications, emails, admin dashboard) must derive its
+# displayed pips/Gold-moves/R from THIS function, never a separate
+# calculation -- see build_result_conversion() below.
+XAUCLOUD_PIPS_PER_GOLD_MOVE = 10
+
+
+def build_result_conversion(
+    r: Optional[float] = None, price_move: Optional[float] = None, risk_distance: Optional[float] = None,
+) -> Dict[str, Optional[float]]:
+    """The single authoritative XauCloud result-conversion function.
+
+    Accepts whichever of (r, risk_distance) or (price_move) is actually
+    known -- a real automated trade has genuine entry/exit prices (pass
+    price_move directly); the advisory outlook's ongoing tracking only has
+    R and risk_distance (pass those, price_move is derived: r * risk_distance).
+    Returns all three of result_r / result_gold_moves / result_pips so every
+    caller displays a consistent, complete result rather than partially
+    computing it inline.
+    """
+    if price_move is None and r is not None and risk_distance:
+        price_move = r * risk_distance
+    if r is None and price_move is not None and risk_distance:
+        r = price_move / risk_distance
+    gold_moves = round(price_move, 2) if price_move is not None else None
+    pips = round(price_move * XAUCLOUD_PIPS_PER_GOLD_MOVE, 1) if price_move is not None else None
+    return {
+        "result_r": round(r, 2) if r is not None else None,
+        "result_gold_moves": gold_moves,
+        "result_pips": pips,
+    }
+
 PRIMARY_DIRECTIONS = ("BUY", "SELL", "NEUTRAL", "RANGE", "TRANSITION", "NO_VALID_OUTLOOK")
 EXPECTED_PATHS = ("PULLBACK_FIRST_THEN_BUY", "RALLY_FIRST_THEN_SELL", "DIRECT_CONTINUATION",
                   "RANGE_ROTATION", "REVERSAL_FORMING", "NO_CLEAR_PATH")
@@ -2283,6 +2319,11 @@ def _build_automated_trade_result(trade: Dict) -> Dict:
     # in server.py -- entry_price was added later as an explicit rich-ledger
     # field; the original "price" field is populated at close time).
     exit_price = float(trade.get("price") or 0) or None
+    direction = str(trade.get("direction") or "").upper()
+    price_move = None
+    if entry_price is not None and exit_price is not None and direction in ("BUY", "SELL"):
+        price_move = (exit_price - entry_price) if direction == "BUY" else (entry_price - exit_price)
+    conversion = build_result_conversion(r=trade.get("final_r"), price_move=price_move)
     return {
         "ticket": trade.get("ticket"),
         "direction": trade.get("direction"),
@@ -2291,6 +2332,7 @@ def _build_automated_trade_result(trade: Dict) -> Dict:
         "exit_price": exit_price,
         "realized_profit": trade.get("profit"),
         "realized_r": trade.get("final_r"),
+        **conversion,
         "close_reason": trade.get("exit_reason") or "",
         "result": _classify_automated_close(trade),
         "opened_at": datetime.fromtimestamp(trade["opened_at"], tz=timezone.utc).isoformat() if trade.get("opened_at") else None,
