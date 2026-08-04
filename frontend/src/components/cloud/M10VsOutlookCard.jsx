@@ -14,7 +14,7 @@ function timestampLabel(value) {
 // "TRANSITION WATCH") -- still a raw system code, not plain English. These
 // are the complete, real decision values the EA sends (see M10_DECISION_*
 // in XAUUSD_AI_Sniper_EA.mq5), written as a customer would actually read them.
-const M10_DECISION_LABELS = {
+export const M10_DECISION_LABELS = {
   BUY_CANDIDATE: "Buy setup forming",
   SELL_CANDIDATE: "Sell setup forming",
   WAIT_FOR_BUY_RETRACE: "Waiting for a pullback to buy",
@@ -27,14 +27,14 @@ const M10_DECISION_LABELS = {
   WAITING: "Waiting for signal",
 };
 
-const FRESHNESS_LABELS = {
+export const FRESHNESS_LABELS = {
   FRESH: "Up to date",
   STALE: "Delayed",
   NO_DATA: "No data yet",
   "NO DATA": "No data yet",
 };
 
-function humanEnumLabel(value, map) {
+export function humanEnumLabel(value, map) {
   if (!value) return "—";
   const key = String(value).toUpperCase().trim();
   if (map && map[key]) return map[key];

@@ -11,7 +11,7 @@ import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
 import AIThoughtFeed from "./AIThoughtFeed";
 import AIMarketOutlookCard from "./AIMarketOutlookCard";
-import M10VsOutlookCard from "./M10VsOutlookCard";
+import M10VsOutlookCard, { M10_DECISION_LABELS, FRESHNESS_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
 import { API } from "@/lib/api";
 import { logoutOneSignalUser } from "@/lib/onesignal";
@@ -803,6 +803,7 @@ function M10SignalCard({ events, heartbeat }) {
   // account+symbol before trusting it -- a stale event from a previous
   // session/build must never be silently displayed as current.
   const latest = latestM10Signal(events, heartbeat);
+  const [showTechnical, setShowTechnical] = useState(false);
   if (!latest) return null;
 
   const decision = latest.decision || "DATA_UNAVAILABLE";
@@ -838,8 +839,8 @@ function M10SignalCard({ events, heartbeat }) {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className={MONO_LABEL}>M10 Signal Engine · Evidence #{latest.evidence_id ?? "—"}</div>
         <div className="flex items-center gap-2">
-          <span className={pill(freshnessTone)}>{freshnessState}{latest.age_seconds != null ? ` · ${latest.age_seconds}s old` : ""}</span>
-          <span className={pill(decisionTone)}>{isStaleOrUnknown ? "DATA STALE" : decision.replace(/_/g, " ")}</span>
+          <span className={pill(freshnessTone)}>{humanEnumLabel(freshnessState, FRESHNESS_LABELS)}{latest.age_seconds != null ? ` · ${latest.age_seconds}s old` : ""}</span>
+          <span className={pill(decisionTone)}>{isStaleOrUnknown ? "Data delayed" : humanEnumLabel(decision, M10_DECISION_LABELS)}</span>
         </div>
       </div>
 
@@ -868,27 +869,32 @@ function M10SignalCard({ events, heartbeat }) {
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 text-[11px]">
-            <div><div className="text-white/35">Trend</div><div className="mt-0.5 font-mono text-white/80">{latest.trend_state || "—"}</div></div>
-            <div><div className="text-white/35">Structure</div><div className="mt-0.5 font-mono text-white/80">{latest.structure_state || "—"}</div></div>
-            <div><div className="text-white/35">Location</div><div className="mt-0.5 font-mono text-white/80">{latest.location_state || "—"}</div></div>
-            <div><div className="text-white/35">{confidenceLabel}</div><div className="mt-0.5 font-mono text-white/80">{Number(latest.confidence || 0).toFixed(0)}%</div></div>
-          </div>
-
-          <p className="mt-3 text-[11px] leading-4 text-white/45">
-            Preferred direction: <span className="text-white/70 font-semibold">{preferredDir}</span>
-            {latest.retracement_required ? " · location evidence noted inside the single entry timer" : ""}
-            {" — "}{displayReason}
+          <p className="mt-4 text-[12px] leading-5 text-white/70">
+            <span className="font-semibold text-white/85">{preferredDir}</span> evidence is {leadingScore.toFixed(0)}% strong{isActionable ? "." : ", but the setup is not ready for execution yet."}
           </p>
+          {displayReason && <p className="mt-1.5 text-[11px] leading-4 text-white/45">{displayReason}</p>}
 
-          <p className="mt-3 rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 text-[10px] leading-4 text-white/40">
-            Evidence scores describe the current setup; they are not next-candle probabilities. High evidence at a late or exhausted location can describe a move that is already mature.
-          </p>
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
-            <span className={pill("neutral")}>Exhaustion evidence-only: {(latest.exhaustion_decision || "—").replace(/_/g, " ")}</span>
-            {latest.post_profit_buy_pending && <span className={pill("amber")}>Buy location evidence: extended</span>}
-            {latest.post_profit_sell_pending && <span className={pill("amber")}>Sell location evidence: extended</span>}
-          </div>
+          <button onClick={() => setShowTechnical((s) => !s)} className="mt-3 flex items-center gap-1 text-[10px] text-white/35 hover:text-white/65">
+            {showTechnical ? "Hide" : "Show"} technical details
+          </button>
+          {showTechnical && (
+            <>
+              <div className="mt-2 grid grid-cols-2 gap-3 border-t border-white/[0.05] pt-3 sm:grid-cols-4 text-[11px]">
+                <div><div className="text-white/35">Trend</div><div className="mt-0.5 font-mono text-white/80">{humanEnumLabel(latest.trend_state)}</div></div>
+                <div><div className="text-white/35">Structure</div><div className="mt-0.5 font-mono text-white/80">{humanEnumLabel(latest.structure_state)}</div></div>
+                <div><div className="text-white/35">Location</div><div className="mt-0.5 font-mono text-white/80">{humanEnumLabel(latest.location_state)}</div></div>
+                <div><div className="text-white/35">{confidenceLabel}</div><div className="mt-0.5 font-mono text-white/80">{Number(latest.confidence || 0).toFixed(0)}%</div></div>
+              </div>
+              <p className="mt-3 rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 text-[10px] leading-4 text-white/40">
+                Evidence scores describe the current setup; they are not next-candle probabilities. High evidence at a late or exhausted location can describe a move that is already mature.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
+                <span className={pill("neutral")}>Exhaustion evidence-only: {humanEnumLabel(latest.exhaustion_decision)}</span>
+                {latest.post_profit_buy_pending && <span className={pill("amber")}>Buy location evidence: extended</span>}
+                {latest.post_profit_sell_pending && <span className={pill("amber")}>Sell location evidence: extended</span>}
+              </div>
+            </>
+          )}
         </>
       )}
 
