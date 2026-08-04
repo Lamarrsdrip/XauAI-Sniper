@@ -107,4 +107,22 @@ describe("owner-required Command Center card order", () => {
     expect(dashboard).toContain("pb-[env(safe-area-inset-bottom)]");
     expect(dashboard).toContain("overflow-x-hidden");
   });
+
+  test("raw EA bot_state never reaches a customer-visible label outside developer diagnostics", () => {
+    // Full Command Center audit (2026-08-04): heartbeat.bot_state is a raw
+    // EA-internal string (e.g. "MANAGING_TRADES", "STARTUP_SYNCING",
+    // "EA_TRADING_DISABLED" -- see XAUUSD_AI_Sniper_EA.mq5 BotMonitorHeartbeat).
+    // Every customer-visible surface must run it through humanBotState()
+    // first. The one legitimate exception is the collapsed "Developer
+    // diagnostics" panel on Settings, explicitly labeled "Raw bot state".
+    const diagStart = dashboard.indexOf("Hidden diagnostics");
+    const diagEnd = dashboard.indexOf("Setup checks", diagStart);
+    const withoutDiagnostics = dashboard.slice(0, diagStart) + dashboard.slice(diagEnd);
+    const rawUses = withoutDiagnostics.match(/heartbeat\.bot_state/g) || [];
+    // Every remaining reference must be an argument to humanBotState(...),
+    // never used bare as a display value (e.g. `heartbeat.bot_state||"X"`).
+    const bareDisplay = withoutDiagnostics.match(/heartbeat\.bot_state\s*\|\|/g) || [];
+    expect(rawUses.length).toBeGreaterThan(0);
+    expect(bareDisplay).toHaveLength(0);
+  });
 });

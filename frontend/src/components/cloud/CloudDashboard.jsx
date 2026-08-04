@@ -696,7 +696,7 @@ export default function CloudDashboard() {
   const licenseInfo = license?.license || status?.license || {};
   const online      = Boolean(status && !status.offline && heartbeat.account_number);
   const tradingOk   = Boolean(heartbeat.algo_trading && heartbeat.trading_allowed && heartbeat.mt5_connected);
-  const statusText  = online ? heartbeat.bot_state||"ONLINE" : "NO HEARTBEAT";
+  const statusText  = online ? humanBotState(heartbeat.bot_state, heartbeat.open_positions||0, tradingOk, online) : "NO HEARTBEAT";
   // Customer-facing product identity -- ALWAYS from the authoritative
   // release manifest via status.release, never the raw heartbeat.ea_version
   // (an internal EA build/experiment string, e.g.
@@ -731,7 +731,7 @@ export default function CloudDashboard() {
   return (
     <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online} eaVersion={eaVersion}>
       {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} />}
-      {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} linked={Boolean(license?.linked||status?.license?.linked)} openCommand={setModalCommand} />}
+      {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} tradingOk={tradingOk} linked={Boolean(license?.linked||status?.license?.linked)} openCommand={setModalCommand} />}
       {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} analytics={analytics} />}
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
       {active==="activity"     && <ActivityPage events={events} filter={filter} setFilter={setFilter} onForceOpen={setModalCommand} />}
@@ -1281,14 +1281,15 @@ function SetupHealth({ checks=[] }) {
 }
 
 // ─── Trading ──────────────────────────────────────────────────────────────────
-function TradingPage({ heartbeat, events, online, linked, openCommand }) {
+function TradingPage({ heartbeat, events, online, tradingOk, linked, openCommand }) {
+  const openTrades = online ? Number(heartbeat.open_positions||0) : 0;
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Open trades" value={online?heartbeat.open_positions||0:0} detail="EA-reported" icon={History} tone="amber" />
+        <Metric label="Open trades" value={openTrades} detail="EA-reported" icon={History} tone="amber" />
         <Metric label="Symbol"      value={online?heartbeat.symbol||"XAUUSD":"—"} detail={heartbeat.timeframe||"UNKNOWN"} icon={TerminalSquare} tone="blue" />
         <Metric label="Spread"      value={online?`${heartbeat.spread??"-"}pts`:"—"} detail="Current quote" icon={Activity} tone="amber" />
-        <Metric label="Bot state"   value={heartbeat.bot_state||"Waiting"} detail={heartbeat.last_action||"No action yet"} icon={Bot} tone={online?"green":"neutral"} />
+        <Metric label="Bot state"   value={humanBotState(heartbeat.bot_state, openTrades, tradingOk, online)} detail={heartbeat.last_action||"No action yet"} icon={Bot} tone={online?"green":"neutral"} />
       </div>
       {/* AI Trading Assistant — the conversational feed lives here now,
           not under Activity. Activity tab still has the raw log for anyone
@@ -1424,7 +1425,7 @@ function IntelligencePage({ heartbeat, events, status }) {
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Regime"    value={heartbeat.bot_state||"Unknown"} detail={heartbeat.symbol||"XAUUSD"} icon={Activity} tone="blue" />
+        <Metric label="Regime"    value={getEventField(latest, "regime", "") || getEventField(aiEvent, "regime", "") || "Unknown"} detail={heartbeat.symbol||"XAUUSD"} icon={Activity} tone="blue" />
         <Metric label="Spread"    value={heartbeat.spread?`${heartbeat.spread}pts`:"—"} detail="Live quote" icon={Flame} tone="amber" />
         <Metric label="EPF"       value={heartbeat.epf_state||status?.equity_protection_state||"—"} detail="Equity protection" icon={RefreshCw} tone="amber" />
         <Metric label="Blocks"    value={blocks.length} detail="Recent veto events" icon={Shield} tone={blocks.length?"amber":"green"} />
