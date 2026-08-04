@@ -12,6 +12,7 @@ from pymongo.errors import DuplicateKeyError
 from pymongo import ReturnDocument
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formataddr
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
@@ -538,6 +539,20 @@ class AdminSettingsUpdate(BaseModel):
     # frontend SDK needs it directly); onesignal_api_key is.
     onesignal_app_id: Optional[str] = None
     onesignal_api_key: Optional[str] = None
+    # Customer email & admin notification redesign (owner spec, 2026-08-04):
+    # every one of these is admin-editable without a code change, and each
+    # has a sane, brand-correct default applied at read time (see
+    # get_admin_settings/_email_branding below) rather than requiring the
+    # admin to fill in every field before emails work at all.
+    email_sender_name: Optional[str] = None
+    admin_notification_email: Optional[str] = None
+    support_email: Optional[str] = None
+    support_phone: Optional[str] = None
+    community_link: Optional[str] = None
+    mt5_download_url: Optional[str] = None
+    vps_guide_url: Optional[str] = None
+    installation_guide_url: Optional[str] = None
+    command_center_url: Optional[str] = None
 
 class AdminAccountUpdate(BaseModel):
     new_email: Optional[str] = None
@@ -632,6 +647,26 @@ async def get_settings():
         s.pop('_id', None)
     return s
 
+# Customer email & admin notification redesign (owner spec, 2026-08-04):
+# one place that resolves every brand-facing email field to a real value,
+# admin override first, then a sane default -- so emails are fully
+# functional and correctly branded even before an admin visits Settings,
+# and every URL/name becomes editable there without a code change.
+async def _email_branding() -> dict:
+    s = await get_settings()
+    default_command_center = f"{PUBLIC_SITE_URL}/command"
+    return {
+        "sender_name": (s.get("email_sender_name") or "XauCloud").strip(),
+        "admin_notification_email": (s.get("admin_notification_email") or "").strip(),
+        "support_email": (s.get("support_email") or s.get("smtp_email") or "").strip(),
+        "support_phone": (s.get("support_phone") or "").strip(),
+        "community_link": (s.get("community_link") or "").strip(),
+        "mt5_download_url": (s.get("mt5_download_url") or "https://www.metatrader5.com/en/download").strip(),
+        "vps_guide_url": (s.get("vps_guide_url") or default_command_center).strip(),
+        "installation_guide_url": (s.get("installation_guide_url") or default_command_center).strip(),
+        "command_center_url": (s.get("command_center_url") or default_command_center).strip(),
+    }
+
 # -------------------------------------------------------------------
 # NOMBA PAYMENT CONFIG -- separate collection from admin_settings
 # (which stores Paystack/SMTP/OneSignal as plaintext) because Nomba
@@ -711,17 +746,23 @@ async def _log_nomba_config_audit(admin_email: str, changed_fields: list, enviro
 async def _send_email(to_email: str, subject: str, html: str) -> bool:
     """v6.25.3 owner directive 2026-07-17 (Phase 6 P0) -- shared SMTP sender,
     extracted from send_pin_email's own inline logic so the new password-
-    reset flow doesn't duplicate the same Gmail SMTP_SSL boilerplate."""
+    reset flow doesn't duplicate the same Gmail SMTP_SSL boilerplate.
+    Owner spec 2026-08-04: the From header used to be the raw Gmail
+    address (e.g. "miristech1@gmail.com"), so every customer email showed
+    the Gmail account name/handle instead of the brand. Now uses the
+    admin-editable sender name (default "XauCloud") via formataddr, while
+    the actual SMTP envelope/login address is unchanged."""
     settings = await get_settings()
     smtp_email = settings.get("smtp_email", "")
     smtp_password = settings.get("smtp_password", "")
     if not smtp_email or not smtp_password:
         logger.info(f"Email not configured. Message to {to_email} ({subject}) not sent.")
         return False
+    sender_name = (settings.get("email_sender_name") or "XauCloud").strip()
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = smtp_email
+        msg["From"] = formataddr((sender_name, smtp_email))
         msg["To"] = to_email
         msg.attach(MIMEText(html, "html"))
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
@@ -735,47 +776,165 @@ async def _send_email(to_email: str, subject: str, html: str) -> bool:
 
 TELEGRAM_SUPPORT_URL = "https://t.me/emrizeth"
 
-async def send_pin_email(to_email: str, buyer_name: str, pin: str):
-    """Fulfillment email -- resolves the current approved release from the
-    one authoritative manifest (_current_ea_release()) at SEND time, never a
-    hardcoded version. The download button deep-links to the Command Center
-    rather than embedding a direct file URL: the actual signed download
-    token (GET /download/request-token -> /download/ea-release) is only
-    ever minted for whatever release is current at the moment the customer
-    is authenticated and clicks it, so an old purchase email always resolves
-    to the newest approved build, never the version that existed when the
-    email was first sent."""
-    release = _current_ea_release()
-    version_line = f"Current version: <strong>{release['version']}</strong>" if release else "Current version: check Command Center"
-    changelog = (release or {}).get("release_notes", "")
-    changelog_html = f'<p style="margin-top:12px;color:#555;font-size:13px;line-height:1.5;">{changelog}</p>' if changelog else ""
-    command_center_url = f"{PUBLIC_SITE_URL}/command"
-    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
-<h2 style="color:#B8860B;">XauCloud - Payment Confirmed</h2>
-<p>Hello {buyer_name or 'Trader'},</p>
-<p>Thank you for your purchase! Here is your unique license PIN:</p>
-<div style="background:#f5f5f5;border:2px solid #B8860B;padding:20px;text-align:center;margin:20px 0;">
-<span style="font-family:monospace;font-size:28px;font-weight:bold;letter-spacing:3px;">{pin}</span>
-</div>
-<p style="font-size:13px;color:#333;">{version_line}</p>
-{changelog_html}
-<div style="text-align:center;margin:24px 0;">
-<a href="{command_center_url}" style="display:inline-block;background:#B8860B;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold;font-size:14px;margin:6px;">Download Latest XauCloud</a>
-<a href="{command_center_url}" style="display:inline-block;background:#222;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold;font-size:14px;margin:6px;">Open Command Center</a>
-</div>
-<p><strong>Quick start:</strong></p>
-<ol><li>Sign in to Command Center and link this PIN</li><li>Download the compiled EX5 from your Command Center dashboard</li><li>Install on MetaTrader 5 (see the full install guide in Command Center)</li><li>Enter this PIN in the EA settings and enable Algo Trading</li></ol>
-<div style="text-align:center;margin:20px 0;">
-<a href="{TELEGRAM_SUPPORT_URL}" style="display:inline-block;background:#229ED9;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:bold;font-size:13px;">Message XauCloud Support on Telegram</a>
-</div>
-<p style="color:#888;font-size:12px;">Keep this PIN private. Each PIN works on one MT5 account. Trading involves risk; past results do not guarantee future performance.</p>
-</div>"""
-    return await _send_email(to_email, "Your XauCloud License PIN", html)
 
-_ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@aisniper.com").lower()
+def _email_step(n: int, title: str, body_html: str) -> str:
+    return f"""<tr><td style="padding:0 0 18px 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+<td width="36" valign="top" style="padding-right:12px;">
+<div style="width:28px;height:28px;border-radius:50%;background:#D4AF37;color:#0A0A0A;font-weight:800;font-size:13px;line-height:28px;text-align:center;font-family:Arial,sans-serif;">{n}</div>
+</td>
+<td valign="top">
+<div style="color:#F5F0E1;font-weight:700;font-size:14px;font-family:Arial,sans-serif;margin-bottom:3px;">{title}</div>
+<div style="color:#A8A29E;font-size:13px;line-height:19px;font-family:Arial,sans-serif;">{body_html}</div>
+</td>
+</tr></table>
+</td></tr>"""
+
+
+def _email_link_button(label: str, url: str, primary: bool = False) -> str:
+    bg = "#D4AF37" if primary else "#1C1C1E"
+    fg = "#0A0A0A" if primary else "#F5F0E1"
+    border = "border:1px solid #3A3A3C;" if not primary else ""
+    return f"""<tr><td style="padding-bottom:10px;">
+<a href="{url}" style="display:block;{border}background:{bg};color:{fg};text-decoration:none;padding:14px 20px;border-radius:12px;font-weight:700;font-size:14px;font-family:Arial,sans-serif;text-align:center;">{label}</a>
+</td></tr>"""
+
+
+async def send_pin_email(to_email: str, buyer_name: str, pin: str):
+    """Fulfillment / onboarding email -- premium 2026 SaaS-style, mobile-first.
+
+    Owner spec 2026-08-04: this used to interpolate release['release_notes']
+    verbatim -- a raw developer changelog written for other developers (e.g.
+    "LogTradeToServer() now reports rich per-trade data...", "SafeModifySL /
+    MetaQuotes freeze-level fix") straight into a first-time customer's
+    payment confirmation email. That's removed entirely. In its place: a
+    beginner-friendly, numbered "Getting Started" guide plus a Helpful Links
+    button stack, so a first-time customer can install and start using
+    XauCloud without contacting support. Every URL/name below is
+    admin-editable (see _email_branding()); nothing here is hardcoded to a
+    specific build, dev term, or internal codename."""
+    b = await _email_branding()
+    release = _current_ea_release()
+    version_text = release["version"] if release else "your Command Center dashboard"
+    support_line = (
+        f'<a href="mailto:{b["support_email"]}" style="color:#D4AF37;text-decoration:none;">{b["support_email"]}</a>'
+        if b["support_email"] else "your Command Center Support button"
+    )
+
+    steps = "".join([
+        _email_step(1, "Download MetaTrader 5", f'If you don\'t already have it installed, grab the free official app. <a href="{b["mt5_download_url"]}" style="color:#D4AF37;">Download MT5 &rarr;</a>'),
+        _email_step(2, "Connect or purchase a VPS (optional)", "A VPS keeps MetaTrader 5 running 24/7 so XauCloud can trade around the clock, even when your computer is off."),
+        _email_step(3, "Download the latest XauCloud", f'Sign in to Command Center to get the current verified build ({version_text}).'),
+        _email_step(4, "Copy the EA into your Experts folder", "In MetaTrader 5: File &rarr; Open Data Folder &rarr; MQL5 &rarr; Experts. Paste the downloaded file there."),
+        _email_step(5, "Restart MetaTrader 5", "So it picks up the new Expert Advisor."),
+        _email_step(6, "Open an XAUUSD chart", "Attach XauCloud to the chart from the Navigator panel."),
+        _email_step(7, "Enter your License PIN", "Paste the PIN above into the EA's settings."),
+        _email_step(8, "Enable Algo Trading", "Click ✅ Allow Algo Trading in the MT5 toolbar so the EA can place trades."),
+        _email_step(9, "Open your Command Center", "This is where you monitor XauCloud live -- signals, positions, and history."),
+        _email_step(10, "Turn on Signal Notifications", "In Command Center, open Notifications and enable alerts so you never miss a signal."),
+    ])
+
+    links = "".join([
+        _email_link_button("Download Latest XauCloud", b["command_center_url"], primary=True),
+        _email_link_button("Open Command Center", b["command_center_url"]),
+        _email_link_button("Download MT5", b["mt5_download_url"]),
+        _email_link_button("Installation Guide", b["installation_guide_url"]),
+        _email_link_button("Contact Support", f"mailto:{b['support_email']}" if b["support_email"] else TELEGRAM_SUPPORT_URL),
+        _email_link_button("Join Community", b["community_link"]) if b["community_link"] else "",
+    ])
+
+    html = f"""<div style="background:#0A0A0A;padding:28px 16px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;">
+<tr><td style="text-align:center;padding-bottom:22px;">
+<div style="color:#D4AF37;font-family:Arial,sans-serif;font-size:20px;font-weight:800;letter-spacing:0.5px;">{b['sender_name']}</div>
+</td></tr>
+<tr><td style="background:#131313;border:1px solid #2A2A2A;border-radius:20px;padding:28px 24px;">
+<div style="color:#F5F0E1;font-family:Arial,sans-serif;font-size:22px;font-weight:800;text-align:center;margin-bottom:6px;">Payment Confirmed</div>
+<div style="color:#A8A29E;font-family:Arial,sans-serif;font-size:14px;text-align:center;margin-bottom:22px;">Welcome{f', {buyer_name}' if buyer_name else ''} -- your license is ready.</div>
+
+<div style="background:#0A0A0A;border:1.5px solid #D4AF37;border-radius:14px;padding:18px;text-align:center;margin-bottom:24px;">
+<div style="color:#A8A29E;font-family:Arial,sans-serif;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;">Your License PIN</div>
+<div style="color:#F5F0E1;font-family:'Courier New',monospace;font-size:26px;font-weight:800;letter-spacing:2px;">{pin}</div>
+</div>
+
+<div style="color:#D4AF37;font-family:Arial,sans-serif;font-size:13px;font-weight:800;letter-spacing:1px;text-transform:uppercase;margin-bottom:14px;">Getting Started</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{steps}</table>
+
+<div style="height:1px;background:#2A2A2A;margin:8px 0 20px 0;"></div>
+<div style="color:#D4AF37;font-family:Arial,sans-serif;font-size:13px;font-weight:800;letter-spacing:1px;text-transform:uppercase;margin-bottom:14px;">Helpful Links</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{links}</table>
+
+<div style="color:#6E6E73;font-family:Arial,sans-serif;font-size:12px;line-height:18px;margin-top:20px;">
+Need help? Email {support_line} and we'll walk you through it.
+</div>
+</td></tr>
+<tr><td style="padding:20px 8px 0 8px;text-align:center;">
+<div style="color:#5A5A5E;font-family:Arial,sans-serif;font-size:11px;line-height:17px;">
+Keep this PIN private -- it works on one MT5 account. Trading involves risk; past results do not guarantee future performance.
+</div>
+</td></tr>
+</table>
+</div>"""
+    return await _send_email(to_email, f"Your {b['sender_name']} License PIN", html)
 
 async def _notify_admin(subject: str, html: str) -> bool:
-    return await _send_email(_ADMIN_NOTIFICATION_EMAIL, subject, html)
+    """Owner spec 2026-08-04: used to fall back to a hardcoded, unowned
+    domain (admin@aisniper.com) whenever ADMIN_EMAIL wasn't set in the
+    environment -- which it never was in this deployment (.env.example
+    ships it blank), so every admin notification silently vanished. Now
+    reads the admin-editable Settings field; if genuinely never
+    configured, this logs and skips rather than emailing a fake address."""
+    to = (await _email_branding())["admin_notification_email"]
+    if not to:
+        logger.info(f"Admin notification email not configured. '{subject}' not sent.")
+        return False
+    return await _send_email(to, subject, html)
+
+
+def _admin_notify_row(label: str, value: str) -> str:
+    return f'<p style="margin:4px 0;font-family:Arial,sans-serif;font-size:13px;"><strong>{label}:</strong> {value}</p>'
+
+
+async def notify_admin_payment_started(channel: str, reference: str, buyer_name: str, buyer_email: str,
+                                        amount_formatted: str, plan: str = "") -> bool:
+    """Fired the moment a customer begins checkout (order created, before
+    any money has actually moved) -- owner spec: 'Whenever someone starts a
+    purchase: Immediately send the admin an email... Status = Payment
+    Started'. Lets the owner see checkout activity in real time, not just
+    completed sales."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:520px;">
+<h3 style="color:#B8860B;margin-bottom:12px;">Payment Started</h3>
+{_admin_notify_row("Customer Name", buyer_name or "-")}
+{_admin_notify_row("Customer Email", buyer_email or "-")}
+{_admin_notify_row("Plan", plan or "XauCloud EA License")}
+{_admin_notify_row("Amount", amount_formatted)}
+{_admin_notify_row("Payment Method", channel)}
+{_admin_notify_row("Date &amp; Time", now)}
+{_admin_notify_row("Status", "Payment Started")}
+{_admin_notify_row("Reference", reference)}
+</div>"""
+    return await _notify_admin(f"Payment Started — {reference}", html)
+
+
+async def notify_admin_new_sale(reference: str, buyer_name: str, buyer_email: str, amount_formatted: str,
+                                 pin: str, gateway: str, plan: str = "", transaction_id: str = "") -> bool:
+    """Fired once a sale is actually fulfilled (license minted) -- owner
+    spec: subject '✅ New XauCloud Sale', full field list below, 'allows
+    the owner to monitor every sale in real time'."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:520px;">
+<h3 style="color:#1a7f37;margin-bottom:12px;">✅ New XauCloud Sale</h3>
+{_admin_notify_row("Customer Name", buyer_name or "-")}
+{_admin_notify_row("Customer Email", buyer_email or "-")}
+{_admin_notify_row("Amount", amount_formatted)}
+{_admin_notify_row("Plan Purchased", plan or "XauCloud EA License")}
+{_admin_notify_row("License PIN Generated", pin)}
+{_admin_notify_row("Transaction ID", transaction_id or reference)}
+{_admin_notify_row("Payment Gateway", gateway)}
+{_admin_notify_row("Date &amp; Time", now)}
+</div>"""
+    return await _notify_admin(f"✅ New XauCloud Sale — {reference}", html)
 
 async def send_bank_transfer_instructions_email(to_email: str, buyer_name: str, order: dict):
     """Sent immediately after a bank-transfer order is created -- the
@@ -813,13 +972,6 @@ async def send_bank_transfer_rejected_email(to_email: str, buyer_name: str, refe
 </div>
 </div>"""
     return await _send_email(to_email, f"XauCloud Bank Transfer Not Approved — {reference}", html)
-
-async def notify_admin_new_order(channel: str, reference: str, buyer_name: str, buyer_email: str, amount_formatted: str):
-    html = f"""<div style="font-family:Arial,sans-serif;">
-<h3>New XauCloud order — {channel}</h3>
-<p>Reference: {reference}<br>Buyer: {buyer_name} &lt;{buyer_email}&gt;<br>Amount: {amount_formatted}</p>
-</div>"""
-    return await _notify_admin(f"New {channel} order — {reference}", html)
 
 async def notify_admin_bank_transfer_submitted(tx: dict):
     naira = tx.get("amount_kobo", 0) / 100
@@ -925,7 +1077,7 @@ def _admin_mfa_pending_token(email: str) -> str:
 
 def _issue_admin_session(user: dict) -> JSONResponse:
     token = create_access_token(str(user["_id"]), user["email"])
-    response = JSONResponse(content={"email": user["email"], "name": user.get("name","Admin"), "role": user.get("role","admin")})
+    response = JSONResponse(content={"email": user["email"], "name": user.get("name","Admin"), "role": user.get("role","admin"), "mfa_enabled": bool(user.get("mfa_enabled"))})
     # v6.5.0 (audit bug #9): secure=False meant the admin session cookie could
     # be sent over plain HTTP, exposing it to network interception. Default to
     # secure=True (safe for the production HTTPS deployment); COOKIE_SECURE=false
@@ -1059,7 +1211,16 @@ async def admin_mfa_disable(req: AdminMfaDisableReq, admin: dict = Depends(get_c
 
 @api_router.get("/auth/me")
 async def auth_me(admin: dict = Depends(get_current_admin)):
-    return admin
+    # get_current_admin only strips _id/password_hash -- mfa_secret_enc and
+    # mfa_pending_secret_enc (encrypted at rest, but still not something the
+    # frontend needs) would otherwise ride along on every session check.
+    # Only mfa_enabled (a bool the account/MFA-setup UI needs) is exposed.
+    return {
+        "email": admin["email"],
+        "name": admin.get("name", "Admin"),
+        "role": admin.get("role", "admin"),
+        "mfa_enabled": bool(admin.get("mfa_enabled")),
+    }
 
 @api_router.post("/auth/logout")
 async def logout():
@@ -1251,6 +1412,7 @@ async def initialize_purchase(req: PurchaseInitRequest, request: Request):
           "fx_rate_as_of": display_price["fx_rate_as_of"],
           "created_at": datetime.now(timezone.utc).isoformat(), "state_transitions": {}}
     await db.payment_transactions.insert_one(tx)
+    await notify_admin_payment_started("Nomba (card/transfer/USSD)", ref, req.buyer_name, req.buyer_email, f"₦{naira:,.0f}")
 
     import nomba_service as _nomba
     try:
@@ -1303,6 +1465,7 @@ async def initialize_paystack_purchase(req: PurchaseInitRequest, request: Reques
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.payment_transactions.insert_one(tx)
+    await notify_admin_payment_started("Paystack", ref, req.buyer_name, req.buyer_email, f"₦{naira:,.0f}")
     async with httpx.AsyncClient(timeout=15.0) as http:
         resp = await http.post(
             f"{PAYSTACK_BASE_URL}/transaction/initialize",
@@ -1443,7 +1606,8 @@ async def _fulfill_payment(reference: str, source: str) -> dict:
         {"reference": reference}, {"$set": {"pin_generated": pin, "payment_status": "FULFILLED"}})
     email_sent = await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
     await _record_fulfillment_email_result(reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), pin, email_sent)
-    await notify_admin_new_order("card payment confirmed", reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), f"₦{tx.get('amount_kobo', 0) / 100:,.0f}")
+    await notify_admin_new_sale(reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""),
+                                 f"₦{tx.get('amount_kobo', 0) / 100:,.0f}", pin, "Paystack", transaction_id=reference)
     logger.info(f"PAYSTACK_FULFILLED ref={reference} source={source}")
     return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
 
@@ -1532,7 +1696,8 @@ async def _fulfill_nomba_payment(reference: str, source: str) -> dict:
     )
     email_sent = await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
     await _record_fulfillment_email_result(reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), pin, email_sent)
-    await notify_admin_new_order("card payment confirmed", reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), f"₦{tx.get('amount_kobo', 0) / 100:,.0f}")
+    await notify_admin_new_sale(reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""),
+                                 f"₦{tx.get('amount_kobo', 0) / 100:,.0f}", pin, "Nomba", transaction_id=result.nomba_transaction_id or reference)
     logger.info(f"NOMBA_FULFILLED ref={reference} source={source}")
     return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
 
@@ -1741,7 +1906,7 @@ async def initiate_bank_transfer(req: BankTransferInitiateRequest, request: Requ
     # Never let an email hiccup fail order creation -- _send_email already
     # catches its own exceptions and returns False rather than raising.
     await send_bank_transfer_instructions_email(req.buyer_email, req.buyer_name, order)
-    await notify_admin_new_order("bank transfer", ref, req.buyer_name, req.buyer_email, order["amount_formatted"])
+    await notify_admin_payment_started("Bank Transfer", ref, req.buyer_name, req.buyer_email, order["amount_formatted"])
     return order
 
 @api_router.post("/purchase/bank-transfer/{reference}/submitted")
@@ -2605,12 +2770,35 @@ async def admin_list_performance_periods(admin: dict = Depends(get_current_admin
     periods = await db.performance_periods.find({}, {"_id": 0}).sort("epoch_started_at", -1).to_list(length=200)
     enriched = []
     for period in periods:
+        scope = period.get("scope") or {}
+        # Bug fix (Command Center admin audit, 2026-08-04): this used to
+        # return the raw performance_periods document plus a bare
+        # qualifying_trade_count -- the admin Performance tab expects the
+        # same computed shape the public /performance/* routes already
+        # produce via period_stats_to_dict() (total_trades, win_rate,
+        # sufficient_data, minimum_sample, ...), so every period showed as
+        # "0 trades / collecting" regardless of real trade history. Reuse
+        # the same computation instead of inventing a second one.
         try:
             trades = await _fetch_period_trades(period)
-            qualifying = len(trades)
+            stats_dict = performance_engine.period_stats_to_dict(performance_engine.compute_period_stats(
+                trades,
+                be_tolerance_usd=scope.get("break_even_tolerance_usd", performance_engine.DEFAULT_BREAK_EVEN_TOLERANCE_USD),
+                minimum_sample=scope.get("minimum_sample", performance_engine.DEFAULT_MINIMUM_SAMPLE),
+            ))
         except Exception:
-            qualifying = None
-        enriched.append({**period, "qualifying_trade_count": qualifying})
+            stats_dict = {"total_trades": None, "win_rate": None, "sufficient_data": False,
+                          "minimum_sample": scope.get("minimum_sample", performance_engine.DEFAULT_MINIMUM_SAMPLE)}
+        enriched.append({
+            **period,
+            **stats_dict,
+            "qualifying_trade_count": stats_dict.get("total_trades"),
+            "period_id": period["id"],
+            "period_name": period["name"],
+            "account_logins": scope.get("account_logins"),
+            "ea_versions": scope.get("ea_versions"),
+            "started_by_admin": period.get("created_by_admin_email"),
+        })
     return {"periods": enriched}
 
 
@@ -2742,6 +2930,20 @@ async def get_admin_settings(admin: dict = Depends(get_current_admin)):
         "onesignal_app_id": s.get("onesignal_app_id", ""),
         "onesignal_api_key_configured": bool(osk),
         "onesignal_api_key_preview": f"{osk[:6]}...{osk[-4:]}" if len(osk) > 10 else ("set" if osk else "not set"),
+        # Customer email & admin notification redesign (owner spec,
+        # 2026-08-04) -- none of these are secrets, so returned as plain
+        # editable values (unlike the masked keys above). Defaults come
+        # from _email_branding() so the admin sees what's actually in
+        # effect right now, not just what's literally stored.
+        "email_sender_name": s.get("email_sender_name") or "XauCloud",
+        "admin_notification_email": s.get("admin_notification_email", ""),
+        "support_email": s.get("support_email", ""),
+        "support_phone": s.get("support_phone", ""),
+        "community_link": s.get("community_link", ""),
+        "mt5_download_url": s.get("mt5_download_url", ""),
+        "vps_guide_url": s.get("vps_guide_url", ""),
+        "installation_guide_url": s.get("installation_guide_url", ""),
+        "command_center_url": s.get("command_center_url", ""),
     }
 
 @api_router.get("/admin/notifications/health")
@@ -2789,6 +2991,15 @@ async def update_admin_settings(req: AdminSettingsUpdate, admin: dict = Depends(
     if req.smtp_password is not None: updates["smtp_password"] = req.smtp_password
     if req.onesignal_app_id is not None: updates["onesignal_app_id"] = req.onesignal_app_id.strip()
     if req.onesignal_api_key is not None: updates["onesignal_api_key"] = req.onesignal_api_key.strip()
+    if req.email_sender_name is not None: updates["email_sender_name"] = req.email_sender_name.strip()
+    if req.admin_notification_email is not None: updates["admin_notification_email"] = req.admin_notification_email.strip().lower()
+    if req.support_email is not None: updates["support_email"] = req.support_email.strip().lower()
+    if req.support_phone is not None: updates["support_phone"] = req.support_phone.strip()
+    if req.community_link is not None: updates["community_link"] = req.community_link.strip()
+    if req.mt5_download_url is not None: updates["mt5_download_url"] = req.mt5_download_url.strip()
+    if req.vps_guide_url is not None: updates["vps_guide_url"] = req.vps_guide_url.strip()
+    if req.installation_guide_url is not None: updates["installation_guide_url"] = req.installation_guide_url.strip()
+    if req.command_center_url is not None: updates["command_center_url"] = req.command_center_url.strip()
     if updates:
         await db.admin_settings.update_one({"key": "main"}, {"$set": updates}, upsert=True)
     return {"updated": True}
@@ -3083,6 +3294,8 @@ async def admin_approve_bank_transfer(reference: str, admin: dict = Depends(get_
     )
     email_sent = await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
     await _record_fulfillment_email_result(reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), pin, email_sent)
+    await notify_admin_new_sale(reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""),
+                                 f"₦{tx.get('amount_kobo', 0) / 100:,.0f}", pin, "Bank Transfer", transaction_id=reference)
     logger.info(f"BANK_TRANSFER_APPROVED ref={reference} admin={admin['email']}")
     return {"status": "approved", "pin": pin}
 

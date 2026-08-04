@@ -1,7 +1,9 @@
 """Tests that the fulfillment email (send_pin_email) resolves the current
 approved version from the release manifest at SEND time rather than using
-a hardcoded version, and includes the required onboarding elements
-(Telegram support link, Command Center link, changelog).
+a hardcoded version, includes the required onboarding elements (Telegram
+support link, Command Center link, beginner-friendly Getting Started
+guide), and never leaks the raw developer changelog (release_notes) that
+used to be pasted verbatim into a customer's payment confirmation email.
 
 Uses a sandboxed manifest (never touches the real checked-in one) and
 monkeypatches _send_email to capture the rendered HTML instead of actually
@@ -70,9 +72,25 @@ def test_email_includes_current_version(sandbox):
     assert "v7.1.0" in sandbox["html"]
 
 
-def test_email_includes_changelog(sandbox):
+def test_email_never_includes_raw_developer_changelog(sandbox):
+    # Bug fix (owner spec, 2026-08-04): this email used to paste
+    # release['release_notes'] verbatim -- a raw developer changelog (e.g.
+    # real production text like "SafeModifySL... MetaQuotes... Freeze
+    # level...") straight into a first-time customer's payment confirmation.
+    # It must never appear here again, regardless of what release_notes
+    # currently says.
     _run(srv.send_pin_email("buyer@example.com", "Test Buyer", "ASE-TEST-0001"))
-    assert "Fixed the exit-timing bug." in sandbox["html"]
+    assert "Fixed the exit-timing bug." not in sandbox["html"]
+
+
+def test_email_includes_beginner_onboarding_guide(sandbox):
+    _run(srv.send_pin_email("buyer@example.com", "Test Buyer", "ASE-TEST-0001"))
+    html = sandbox["html"]
+    assert "Getting Started" in html
+    assert "Download MetaTrader 5" in html
+    assert "Enable Algo Trading" in html
+    assert "Turn on Signal Notifications" in html
+    assert "Helpful Links" in html
 
 
 def test_email_includes_pin(sandbox):
@@ -104,7 +122,7 @@ def test_email_does_not_hardcode_a_different_version(sandbox, monkeypatch):
     p.write_text(json.dumps(manifest), encoding="utf-8")
     _run(srv.send_pin_email("buyer@example.com", "Test Buyer", "ASE-TEST-0005"))
     assert "v8.0.0" in sandbox["html"]
-    assert "new release notes" in sandbox["html"]
+    assert "new release notes" not in sandbox["html"]
 
 
 def test_email_handles_no_release_published_gracefully(sandbox):
@@ -112,4 +130,4 @@ def test_email_handles_no_release_published_gracefully(sandbox):
     p.write_text(json.dumps({"current_version": None, "releases": {}}), encoding="utf-8")
     result = _run(srv.send_pin_email("buyer@example.com", "Test Buyer", "ASE-TEST-0006"))
     assert result is True
-    assert "check Command Center" in sandbox["html"]
+    assert "your Command Center dashboard" in sandbox["html"]

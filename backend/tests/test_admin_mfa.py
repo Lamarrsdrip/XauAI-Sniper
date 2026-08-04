@@ -252,5 +252,48 @@ def test_login_without_mfa_enabled_still_issues_session_directly():
     assert result.status_code == 200
 
 
+# ---------------------------------------------------------------------
+# Bug fix regression (Command Center admin audit, 2026-08-04): the frontend
+# had no MFA UI at all -- an admin who completed MFA setup (via direct API
+# call, since setup itself also had no UI) could pass the code challenge
+# and still render as "logged in" with mfa_enabled missing from the session
+# payload, so the newly-added Account tab MFA panel would incorrectly show
+# "NOT ENABLED" right after a real MFA login until the next page load.
+# Both session-issuing paths must carry mfa_enabled explicitly.
+# ---------------------------------------------------------------------
+import json  # noqa: E402
+
+
+def test_direct_login_session_reports_mfa_enabled_false():
+    _run(_seed_admin(email="mfa-flag-off@test.com"))
+    req = srv.LoginRequest(email="mfa-flag-off@test.com", password="AdminPass123")
+    response = _run(srv.login(req, _FakeRequest(ip="24.24.24.24")))
+    body = json.loads(response.body)
+    assert body["mfa_enabled"] is False
+
+
+def test_mfa_completed_login_session_reports_mfa_enabled_true():
+    _run(_seed_admin(email="mfa-flag-on@test.com"))
+    secret = _enable_mfa_for("mfa-flag-on@test.com", "AdminPass123")
+    login_req = srv.LoginRequest(email="mfa-flag-on@test.com", password="AdminPass123")
+    login_result = _run(srv.login(login_req, _FakeRequest(ip="25.25.25.25")))
+    code = srv._totp_code(secret, time.time())
+    mfa_req = srv.AdminMfaLoginReq(mfa_token=login_result["mfa_token"], code=code)
+    response = _run(srv.login_mfa(mfa_req, _FakeRequest(ip="25.25.25.25")))
+    body = json.loads(response.body)
+    assert body["mfa_enabled"] is True
+
+
+def test_auth_me_never_leaks_encrypted_mfa_secrets():
+    _run(_seed_admin(email="mfa-secret-leak@test.com"))
+    secret = _enable_mfa_for("mfa-secret-leak@test.com", "AdminPass123")
+    assert secret  # sanity: MFA really is enabled with a real secret on the doc
+    admin_doc = _run(_get_current_admin_dict("mfa-secret-leak@test.com"))
+    result = _run(srv.auth_me(admin=admin_doc))
+    assert result == {"email": "mfa-secret-leak@test.com", "name": "Admin", "role": "admin", "mfa_enabled": True}
+    assert "mfa_secret_enc" not in result
+    assert "mfa_pending_secret_enc" not in result
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

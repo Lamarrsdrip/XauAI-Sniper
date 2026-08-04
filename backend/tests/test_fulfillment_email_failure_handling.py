@@ -84,6 +84,11 @@ async def _enable_bank_transfer():
 def test_record_fulfillment_email_result_flags_order_on_failure():
     async def go():
         await _clear()
+        # Bug fix regression (2026-08-04): admin notification destination is
+        # now an admin-editable Settings field, not a hardcoded env fallback
+        # -- must be configured for _notify_admin to actually send.
+        await srv.db.admin_settings.update_one(
+            {"key": "main"}, {"$set": {"admin_notification_email": "owner@xaucloud.example"}}, upsert=True)
         await srv.db.payment_transactions.insert_one({"reference": "ASE-FAIL-1", "buyer_name": "A", "buyer_email": "a@example.com"})
         recorder = _Recorder()
         with patch.object(srv, "_send_email", recorder):
@@ -92,8 +97,19 @@ def test_record_fulfillment_email_result_flags_order_on_failure():
         assert tx["fulfillment_email_failed"] is True
         assert "fulfillment_email_failed_at" in tx
         assert len(recorder.sent) == 1
-        assert recorder.sent[0]["to"] == srv._ADMIN_NOTIFICATION_EMAIL
+        assert recorder.sent[0]["to"] == "owner@xaucloud.example"
         assert "ASE-PIN-0001" in recorder.sent[0]["html"]
+    _run(go())
+
+
+def test_notify_admin_skips_cleanly_when_no_admin_email_configured():
+    async def go():
+        await _clear()
+        recorder = _Recorder()
+        with patch.object(srv, "_send_email", recorder):
+            sent = await srv._notify_admin("Test subject", "<p>test</p>")
+        assert sent is False
+        assert len(recorder.sent) == 0
     _run(go())
 
 

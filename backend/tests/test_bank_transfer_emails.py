@@ -60,6 +60,9 @@ async def _clear():
     await srv.db.admin_settings.delete_many({})
 
 
+ADMIN_NOTIFICATION_EMAIL = "owner@xaucloud.example"
+
+
 async def _enable_bank_transfer():
     await srv.admin_update_bank_transfer_settings(
         srv.AdminBankTransferSettingsUpdate(
@@ -67,6 +70,10 @@ async def _enable_bank_transfer():
         ),
         admin=ADMIN,
     )
+    # Bug fix regression (2026-08-04): admin notification destination is now
+    # an admin-editable Settings field, not a hardcoded env fallback.
+    await srv.db.admin_settings.update_one(
+        {"key": "main"}, {"$set": {"admin_notification_email": ADMIN_NOTIFICATION_EMAIL}}, upsert=True)
 
 
 class _Recorder:
@@ -91,10 +98,12 @@ def test_initiate_sends_instructions_to_buyer_and_notifies_admin():
         assert len(recorder.sent) == 2
         to_addrs = {m["to"] for m in recorder.sent}
         assert "buyer@example.com" in to_addrs
-        assert srv._ADMIN_NOTIFICATION_EMAIL in to_addrs
+        assert ADMIN_NOTIFICATION_EMAIL in to_addrs
         buyer_email = next(m for m in recorder.sent if m["to"] == "buyer@example.com")
         assert "Test Bank" in buyer_email["html"]
         assert "0123456789" in buyer_email["html"]
+        admin_email = next(m for m in recorder.sent if m["to"] == ADMIN_NOTIFICATION_EMAIL)
+        assert "Payment Started" in admin_email["subject"]
     _run(go())
 
 
@@ -111,7 +120,7 @@ def test_marking_submitted_notifies_admin_only():
         with patch.object(srv, "_send_email", recorder):
             await srv.bank_transfer_mark_submitted(init["reference"], _fake_request("NG"))
         assert len(recorder.sent) == 1
-        assert recorder.sent[0]["to"] == srv._ADMIN_NOTIFICATION_EMAIL
+        assert recorder.sent[0]["to"] == ADMIN_NOTIFICATION_EMAIL
         assert init["reference"] in recorder.sent[0]["html"]
     _run(go())
 
@@ -139,7 +148,9 @@ def test_reject_sends_rejection_email_to_buyer():
 
 def test_approve_does_not_send_a_second_instructions_email():
     """Approval sends the fulfillment PIN email (send_pin_email, tested
-    elsewhere) -- it must not also resend bank-transfer instructions."""
+    elsewhere) to the buyer, plus one "New Sale" notification to the admin
+    (owner spec, 2026-08-04) -- it must not also resend bank-transfer
+    instructions or send the buyer more than one email."""
     async def go():
         await _clear()
         await _enable_bank_transfer()
@@ -152,21 +163,48 @@ def test_approve_does_not_send_a_second_instructions_email():
         recorder = _Recorder()
         with patch.object(srv, "_send_email", recorder):
             await srv.admin_approve_bank_transfer(init["reference"], admin=ADMIN)
-        assert len(recorder.sent) == 1
-        assert recorder.sent[0]["to"] == "buyer@example.com"
-        assert "License PIN" in recorder.sent[0]["subject"]
+        assert len(recorder.sent) == 2
+        buyer_msgs = [m for m in recorder.sent if m["to"] == "buyer@example.com"]
+        assert len(buyer_msgs) == 1
+        assert "License PIN" in buyer_msgs[0]["subject"]
+        admin_msgs = [m for m in recorder.sent if m["to"] == ADMIN_NOTIFICATION_EMAIL]
+        assert len(admin_msgs) == 1
+        assert "New XauCloud Sale" in admin_msgs[0]["subject"]
     _run(go())
 
 
 class TestNotificationHelpersDirectly:
-    def test_notify_admin_new_order(self):
+    def test_notify_admin_payment_started(self):
         async def go():
+            await srv.db.admin_settings.update_one(
+                {"key": "main"}, {"$set": {"admin_notification_email": ADMIN_NOTIFICATION_EMAIL}}, upsert=True)
             recorder = _Recorder()
             with patch.object(srv, "_send_email", recorder):
-                await srv.notify_admin_new_order("card", "ASE-1", "Buyer", "buyer@example.com", "₦300,000")
-            assert recorder.sent[0]["to"] == srv._ADMIN_NOTIFICATION_EMAIL
+                await srv.notify_admin_payment_started("Card", "ASE-1", "Buyer", "buyer@example.com", "₦300,000")
+            assert recorder.sent[0]["to"] == ADMIN_NOTIFICATION_EMAIL
             assert "ASE-1" in recorder.sent[0]["html"]
+            assert "Payment Started" in recorder.sent[0]["subject"]
         _run(go())
 
-    def test_admin_notification_email_defaults_to_admin_email_env(self):
-        assert srv._ADMIN_NOTIFICATION_EMAIL  # non-empty, resolved from ADMIN_EMAIL env var
+    def test_notify_admin_new_sale(self):
+        async def go():
+            await srv.db.admin_settings.update_one(
+                {"key": "main"}, {"$set": {"admin_notification_email": ADMIN_NOTIFICATION_EMAIL}}, upsert=True)
+            recorder = _Recorder()
+            with patch.object(srv, "_send_email", recorder):
+                await srv.notify_admin_new_sale("ASE-2", "Buyer", "buyer@example.com", "₦300,000", "ASE-PIN-0001", "Paystack")
+            assert recorder.sent[0]["to"] == ADMIN_NOTIFICATION_EMAIL
+            assert "ASE-2" in recorder.sent[0]["html"]
+            assert "ASE-PIN-0001" in recorder.sent[0]["html"]
+            assert "New XauCloud Sale" in recorder.sent[0]["subject"]
+        _run(go())
+
+    def test_admin_notification_email_not_configured_skips_cleanly(self):
+        async def go():
+            await srv.db.admin_settings.delete_many({})
+            recorder = _Recorder()
+            with patch.object(srv, "_send_email", recorder):
+                sent = await srv.notify_admin_payment_started("Card", "ASE-3", "Buyer", "buyer@example.com", "₦300,000")
+            assert sent is False
+            assert len(recorder.sent) == 0
+        _run(go())

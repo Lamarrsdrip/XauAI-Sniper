@@ -180,15 +180,38 @@ function LoginPage({ api, onLogin }) {
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // Bug fix (Command Center admin audit, 2026-08-04): POST /auth/login
+  // returns {mfa_required: true, mfa_token} instead of a session when the
+  // account has MFA enabled -- no cookie is set for that response. This
+  // used to be passed straight to onLogin(), which made the portal render
+  // as "logged in" with no real session, so every subsequent API call
+  // 401'd silently. Now handled as its own step.
+  const [mfaToken, setMfaToken] = useState(null);
+  const [mfaCode, setMfaCode] = useState("");
 
   const handleSubmit = async (e) => {
     e.preventDefault(); setError(""); setLoading(true);
     try {
       const res = await ax.post(`${api}/auth/login`, { email, password });
-      onLogin(res.data);
+      if (res.data?.mfa_required) {
+        setMfaToken(res.data.mfa_token);
+      } else {
+        onLogin(res.data);
+      }
     } catch (err) {
       const d = err.response?.data?.detail;
       setError(typeof d === "string" ? d : "Login failed");
+    } finally { setLoading(false); }
+  };
+
+  const handleMfaSubmit = async (e) => {
+    e.preventDefault(); setError(""); setLoading(true);
+    try {
+      const res = await ax.post(`${api}/auth/login/mfa`, { mfa_token: mfaToken, code: mfaCode });
+      onLogin(res.data);
+    } catch (err) {
+      const d = err.response?.data?.detail;
+      setError(typeof d === "string" ? d : "Incorrect code.");
     } finally { setLoading(false); }
   };
 
@@ -203,30 +226,52 @@ function LoginPage({ api, onLogin }) {
           <p className="mt-1 text-[13px] text-white/38">Published-release management portal</p>
         </div>
 
-        <form onSubmit={handleSubmit} className={`${CARD} p-6 space-y-4`}>
-          <Field label="Email">
-            <div className="relative">
-              <Envelope size={14} className="absolute left-3 top-3 text-white/30" />
-              <Input data-testid="admin-email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@xauaisniper.com" className="pl-9" />
+        {!mfaToken ? (
+          <form onSubmit={handleSubmit} className={`${CARD} p-6 space-y-4`}>
+            <Field label="Email">
+              <div className="relative">
+                <Envelope size={14} className="absolute left-3 top-3 text-white/30" />
+                <Input data-testid="admin-email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@xauaisniper.com" className="pl-9" />
+              </div>
+            </Field>
+
+            <Field label="Password">
+              <div className="relative">
+                <Lock size={14} className="absolute left-3 top-3 text-white/30" />
+                <Input data-testid="admin-password" type={showPw ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" className="pl-9 pr-9" />
+                <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-3 text-white/30 hover:text-white/60">
+                  {showPw ? <EyeSlash size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+            </Field>
+
+            {error && <p className="text-[12px] text-red-300" data-testid="login-error">{error}</p>}
+
+            <Btn type="submit" disabled={loading} className="w-full" data-testid="admin-login-btn">
+              {loading ? "Logging in..." : "Log in"}
+            </Btn>
+          </form>
+        ) : (
+          <form onSubmit={handleMfaSubmit} className={`${CARD} p-6 space-y-4`} data-testid="admin-mfa-form">
+            <div>
+              <div className="text-[14px] font-semibold text-white">Two-factor code</div>
+              <p className="mt-1 text-[12px] text-white/40">Enter the 6-digit code from your authenticator app.</p>
             </div>
-          </Field>
-
-          <Field label="Password">
-            <div className="relative">
-              <Lock size={14} className="absolute left-3 top-3 text-white/30" />
-              <Input data-testid="admin-password" type={showPw ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" className="pl-9 pr-9" />
-              <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-3 text-white/30 hover:text-white/60">
-                {showPw ? <EyeSlash size={14} /> : <Eye size={14} />}
-              </button>
-            </div>
-          </Field>
-
-          {error && <p className="text-[12px] text-red-300" data-testid="login-error">{error}</p>}
-
-          <Btn type="submit" disabled={loading} className="w-full" data-testid="admin-login-btn">
-            {loading ? "Logging in..." : "Log in"}
-          </Btn>
-        </form>
+            <Field label="Code">
+              <Input data-testid="admin-mfa-code" inputMode="numeric" autoFocus maxLength={6}
+                value={mfaCode} onChange={e => setMfaCode(e.target.value.replace(/\D/g, ""))}
+                placeholder="123456" className="text-center font-mono text-lg tracking-[0.3em]" />
+            </Field>
+            {error && <p className="text-[12px] text-red-300" data-testid="mfa-error">{error}</p>}
+            <Btn type="submit" disabled={loading || mfaCode.length !== 6} className="w-full" data-testid="admin-mfa-submit">
+              {loading ? "Verifying..." : "Verify and log in"}
+            </Btn>
+            <button type="button" onClick={() => { setMfaToken(null); setMfaCode(""); setError(""); }}
+              className="w-full text-center text-[11px] text-white/35 hover:text-white/60">
+              ← Use a different account
+            </button>
+          </form>
+        )}
 
         <div className="mt-4 text-center">
           <a href="/" className="text-[11px] text-white/28 hover:text-white/55">← Back to site</a>
@@ -619,7 +664,10 @@ function PinsTab({ api }) {
   };
   const revoke   = async (pin) => { await ax.put(`${api}/admin/pins/${pin}/revoke`,   {}, h); fetchPins(); };
   const activate = async (pin) => { await ax.put(`${api}/admin/pins/${pin}/activate`, {}, h); fetchPins(); };
-  const del      = async (pin) => { await ax.delete(`${api}/admin/pins/${pin}`,            h); fetchPins(); };
+  const del      = async (pin) => {
+    if (!window.confirm(`Permanently delete license ${pin}? This cannot be undone -- use Revoke instead if you just want to deactivate it.`)) return;
+    await ax.delete(`${api}/admin/pins/${pin}`, h); fetchPins();
+  };
   const copy = (pin) => { navigator.clipboard.writeText(pin); setCopiedPin(pin); setTimeout(() => setCopiedPin(null), 2000); };
 
   return (
@@ -1012,6 +1060,16 @@ function SettingsTab({ api }) {
   const [smtpPw, setSmtpPw] = useState("");
   const [onesignalAppId, setOnesignalAppId] = useState("");
   const [onesignalApiKey, setOnesignalApiKey] = useState("");
+  // Customer email & admin notification redesign (owner spec, 2026-08-04)
+  const [emailSenderName, setEmailSenderName] = useState("");
+  const [adminNotificationEmail, setAdminNotificationEmail] = useState("");
+  const [supportEmail, setSupportEmail] = useState("");
+  const [supportPhone, setSupportPhone] = useState("");
+  const [communityLink, setCommunityLink] = useState("");
+  const [mt5DownloadUrl, setMt5DownloadUrl] = useState("");
+  const [vpsGuideUrl, setVpsGuideUrl] = useState("");
+  const [installationGuideUrl, setInstallationGuideUrl] = useState("");
+  const [commandCenterUrl, setCommandCenterUrl] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const h = useMemo(() => auth(), []);
@@ -1046,6 +1104,15 @@ function SettingsTab({ api }) {
     ax.get(`${api}/admin/settings`, h).then(r => {
       setSettings(r.data); setPriceNaira(r.data.pin_price_naira || 300000); setSmtpEmail(r.data.smtp_email || "");
       setOnesignalAppId(r.data.onesignal_app_id || "");
+      setEmailSenderName(r.data.email_sender_name || "XauCloud");
+      setAdminNotificationEmail(r.data.admin_notification_email || "");
+      setSupportEmail(r.data.support_email || "");
+      setSupportPhone(r.data.support_phone || "");
+      setCommunityLink(r.data.community_link || "");
+      setMt5DownloadUrl(r.data.mt5_download_url || "");
+      setVpsGuideUrl(r.data.vps_guide_url || "");
+      setInstallationGuideUrl(r.data.installation_guide_url || "");
+      setCommandCenterUrl(r.data.command_center_url || "");
     }).catch(() => {});
   }, [api, h]);
 
@@ -1058,6 +1125,15 @@ function SettingsTab({ api }) {
     if (smtpPw) updates.smtp_password = smtpPw;
     if (onesignalAppId) updates.onesignal_app_id = onesignalAppId;
     if (onesignalApiKey) updates.onesignal_api_key = onesignalApiKey;
+    updates.email_sender_name = emailSenderName;
+    updates.admin_notification_email = adminNotificationEmail;
+    updates.support_email = supportEmail;
+    updates.support_phone = supportPhone;
+    updates.community_link = communityLink;
+    updates.mt5_download_url = mt5DownloadUrl;
+    updates.vps_guide_url = vpsGuideUrl;
+    updates.installation_guide_url = installationGuideUrl;
+    updates.command_center_url = commandCenterUrl;
     try {
       await ax.put(`${api}/admin/settings`, updates, h);
       setSaved(true); setPk(""); setSmtpPw(""); setOnesignalApiKey(""); setTimeout(() => setSaved(false), 3000);
@@ -1115,6 +1191,54 @@ function SettingsTab({ api }) {
             <p className="mt-1 text-[11px] text-white/35">Status: <span className={settings?.smtp_configured ? "text-emerald-400" : "text-red-400"}>{settings?.smtp_configured ? "Configured" : "Not set"}</span></p>
           </Field>
         </div>
+      </CardSection>
+
+      {/* Customer email & admin notification redesign (owner spec,
+          2026-08-04) -- everything here is editable without a code
+          change, per the spec's explicit requirement. */}
+      <CardSection title="Customer email branding">
+        <p className="text-[12px] text-white/40 mb-4 leading-5">
+          Controls how every customer email looks -- sender name, and the links shown in the "Getting Started" guide and Helpful Links buttons.
+        </p>
+        <div className="space-y-4">
+          <Field label="Email sender name">
+            <Input data-testid="settings-email-sender-name" value={emailSenderName} onChange={e => setEmailSenderName(e.target.value)} placeholder="XauCloud" />
+            <p className="mt-1 text-[11px] text-white/35">Shown as the "From" name on every customer email, instead of the raw Gmail address.</p>
+          </Field>
+          <Field label="Support email">
+            <Input data-testid="settings-support-email" type="email" value={supportEmail} onChange={e => setSupportEmail(e.target.value)} placeholder="support@xaucloud.com" />
+          </Field>
+          <Field label="Support phone">
+            <Input data-testid="settings-support-phone" value={supportPhone} onChange={e => setSupportPhone(e.target.value)} placeholder="+234 800 000 0000" />
+          </Field>
+          <Field label="Community link (optional)">
+            <Input data-testid="settings-community-link" value={communityLink} onChange={e => setCommunityLink(e.target.value)} placeholder="https://t.me/your-community" />
+          </Field>
+          <Field label="MT5 download URL">
+            <Input data-testid="settings-mt5-url" value={mt5DownloadUrl} onChange={e => setMt5DownloadUrl(e.target.value)} placeholder="https://www.metatrader5.com/en/download" />
+          </Field>
+          <Field label="VPS guide URL">
+            <Input data-testid="settings-vps-url" value={vpsGuideUrl} onChange={e => setVpsGuideUrl(e.target.value)} placeholder="https://yoursite.com/vps-guide" />
+          </Field>
+          <Field label="Installation guide URL">
+            <Input data-testid="settings-install-guide-url" value={installationGuideUrl} onChange={e => setInstallationGuideUrl(e.target.value)} placeholder="https://yoursite.com/install" />
+          </Field>
+          <Field label="Command Center URL">
+            <Input data-testid="settings-command-center-url" value={commandCenterUrl} onChange={e => setCommandCenterUrl(e.target.value)} placeholder="https://yoursite.com/command" />
+          </Field>
+        </div>
+      </CardSection>
+
+      <CardSection title="Admin sale notifications">
+        <p className="text-[12px] text-white/40 mb-4 leading-5">
+          Real-time email alerts to you whenever a customer starts checkout or completes a purchase. Leave blank to disable -- no notification is sent to a placeholder address.
+        </p>
+        <Field label="Admin notification email">
+          <Input data-testid="settings-admin-notification-email" type="email" value={adminNotificationEmail} onChange={e => setAdminNotificationEmail(e.target.value)} placeholder="admin@xaucloud.com" />
+          <p className="mt-1 text-[11px] text-white/35">
+            Status: <span className={adminNotificationEmail ? "text-emerald-400" : "text-red-400"}>{adminNotificationEmail ? "Configured" : "Not set -- sale notifications are off"}</span>
+          </p>
+        </Field>
       </CardSection>
 
       {/* v6.25.3 owner directive 2026-07-17 -- OneSignal replaces the retired
@@ -1583,6 +1707,126 @@ function CommandOpsTab({ api }) {
 }
 
 // ─── Account ──────────────────────────────────────────────────────────────────
+// ─── Two-factor authentication ─────────────────────────────────────────────
+// Bug fix (Command Center admin audit, 2026-08-04): the backend's TOTP MFA
+// system (/auth/mfa/setup|enable|disable, /auth/login/mfa) was fully built
+// but had no frontend anywhere -- an admin with mfa_enabled=true could
+// never actually get past login (see the LoginPage fix above), and there
+// was no way to turn it on in the first place. Manual-entry secret only
+// (no QR image) to avoid adding a new dependency for this; every
+// authenticator app supports typing the secret in directly.
+function MfaSection({ api, admin, onLogin }) {
+  const [pending, setPending] = useState(null); // {secret, otpauth_uri}
+  const [enableCode, setEnableCode] = useState("");
+  const [disablePassword, setDisablePassword] = useState("");
+  const [disableCode, setDisableCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  const startSetup = async () => {
+    setError(""); setMessage(""); setBusy(true);
+    try {
+      const res = await ax.post(`${api}/auth/mfa/setup`);
+      setPending(res.data);
+    } catch (err) {
+      setError(err.response?.data?.detail || "Could not start MFA setup.");
+    } finally { setBusy(false); }
+  };
+
+  const confirmEnable = async () => {
+    setError(""); setMessage(""); setBusy(true);
+    try {
+      await ax.post(`${api}/auth/mfa/enable`, { code: enableCode });
+      setPending(null); setEnableCode("");
+      setMessage("Two-factor authentication is now enabled.");
+      onLogin({ ...admin, mfa_enabled: true });
+    } catch (err) {
+      setError(err.response?.data?.detail || "Incorrect code.");
+    } finally { setBusy(false); }
+  };
+
+  const disable = async () => {
+    setError(""); setMessage(""); setBusy(true);
+    try {
+      await ax.post(`${api}/auth/mfa/disable`, { password: disablePassword, code: disableCode });
+      setDisablePassword(""); setDisableCode("");
+      setMessage("Two-factor authentication is now disabled.");
+      onLogin({ ...admin, mfa_enabled: false });
+    } catch (err) {
+      setError(err.response?.data?.detail || "Could not disable MFA.");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <CardSection title="Two-factor authentication">
+      {error   && <p className="mb-3 text-[12px] text-red-300"     data-testid="mfa-section-error">{error}</p>}
+      {message && <p className="mb-3 text-[12px] text-emerald-400" data-testid="mfa-section-success">{message}</p>}
+
+      {admin?.mfa_enabled ? (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Badge tone="green">ENABLED</Badge>
+            <span className="text-[12px] text-white/45">A code from your authenticator app is required on every login.</span>
+          </div>
+          <div className="pt-3 border-t border-white/[0.06] space-y-3">
+            <p className="text-[12px] text-white/40">Turn off two-factor authentication:</p>
+            <Field label="Current password">
+              <Input type="password" value={disablePassword} onChange={e => setDisablePassword(e.target.value)} placeholder="Current password" />
+            </Field>
+            <Field label="Current 6-digit code">
+              <Input inputMode="numeric" maxLength={6} value={disableCode} onChange={e => setDisableCode(e.target.value.replace(/\D/g, ""))} placeholder="123456" />
+            </Field>
+            <Btn variant="danger" onClick={disable} disabled={busy || !disablePassword || disableCode.length !== 6} className="w-full">
+              Disable two-factor authentication
+            </Btn>
+          </div>
+        </div>
+      ) : pending ? (
+        <div className="space-y-4">
+          <p className="text-[12px] text-white/45">
+            Add this account to your authenticator app (Google Authenticator, Authy, 1Password, etc.), then enter the current 6-digit code to confirm.
+          </p>
+          <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3 space-y-2">
+            <div>
+              <div className={LABEL}>Secret (manual entry)</div>
+              <div className="mt-1 flex items-center gap-2">
+                <code className="flex-1 break-all font-mono text-[12px] text-amber-200">{pending.secret}</code>
+                <CopyIconBtn value={pending.secret} />
+              </div>
+            </div>
+          </div>
+          <Field label="6-digit code from your app">
+            <Input inputMode="numeric" autoFocus maxLength={6} value={enableCode} onChange={e => setEnableCode(e.target.value.replace(/\D/g, ""))} placeholder="123456" className="text-center font-mono text-lg tracking-[0.3em]" />
+          </Field>
+          <div className="flex gap-2">
+            <Btn onClick={confirmEnable} disabled={busy || enableCode.length !== 6} className="flex-1">Confirm and enable</Btn>
+            <Btn variant="ghost" onClick={() => { setPending(null); setEnableCode(""); }}>Cancel</Btn>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <Badge tone="neutral">NOT ENABLED</Badge>
+            <p className="mt-2 max-w-sm text-[12px] text-white/45">Require a 6-digit authenticator code in addition to your password on every login.</p>
+          </div>
+          <Btn onClick={startSetup} disabled={busy}>Set up</Btn>
+        </div>
+      )}
+    </CardSection>
+  );
+}
+
+function CopyIconBtn({ value }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button type="button" onClick={() => { navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
+      className="flex-none rounded-lg border border-white/[0.08] p-1.5 text-white/40 hover:text-white transition">
+      {copied ? <Check size={13} /> : <Copy size={13} />}
+    </button>
+  );
+}
+
 function AccountTab({ api, admin, onLogin, onLogout }) {
   const [newEmail, setNewEmail] = useState(admin?.email || "");
   const [newPassword, setNewPassword] = useState("");
@@ -1680,6 +1924,8 @@ function AccountTab({ api, admin, onLogin, onLogout }) {
           </Btn>
         </div>
       </CardSection>
+
+      <MfaSection api={api} admin={admin} onLogin={onLogin} />
     </div>
   );
 }
