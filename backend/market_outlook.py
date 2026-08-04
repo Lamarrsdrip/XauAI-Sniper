@@ -1888,6 +1888,10 @@ async def track_outlook_lifecycle_tick(account: str = "", bid: Optional[float] =
             await dispatch_pending_trade_notifications()
         except Exception as exc:
             logger.warning("PENDING_TRADE_NOTIFICATION_RETRY_FAILED: %s", exc)
+        try:
+            await dispatch_pending_automated_trade_notifications()
+        except Exception as exc:
+            logger.warning("PENDING_AUTOMATED_TRADE_NOTIFICATION_RETRY_FAILED: %s", exc)
     return updated_count
 
 
@@ -2317,7 +2321,52 @@ async def reconcile_automated_trade_result(doc: Dict) -> Optional[Dict]:
         result = {"status": match["status"], "reconciled_at": datetime.now(timezone.utc).isoformat()}
 
     await db.cloud_market_outlooks.update_one({"id": doc["id"]}, {"$set": {"automated_trade_result": result}})
+    if result.get("status") == "matched":
+        await _dispatch_automated_trade_notification({**doc, "automated_trade_result": result})
     return result
+
+
+async def _dispatch_automated_trade_notification(doc: Dict) -> None:
+    """Fires the real-trade-result push exactly once per outlook, mirroring
+    _dispatch_signal_event's notification_flags gate/retry discipline. Never
+    raises -- reconciliation must never fail because a push send failed."""
+    if (doc.get("notification_flags") or {}).get("AUTOMATED_TRADE_RESULT"):
+        return
+    try:
+        from notifications import send_automated_trade_result_notification
+        dispatch_result = await send_automated_trade_result_notification(doc)
+    except Exception as exc:
+        logger.error(f"AUTOMATED_TRADE_NOTIFICATION_FAILED outlook_id={doc.get('id')}: {exc}")
+        return
+    if dispatch_result is None:
+        return
+    from notifications import RETRYABLE_FAILURES
+    retryable = await _db().cloud_notification_log.find_one({
+        "outlook_id": doc["id"],
+        "notification_type": "AUTOMATED_TRADE_RESULT",
+        "failure_reason": {"$in": list(RETRYABLE_FAILURES)},
+    })
+    if not retryable:
+        await _db().cloud_market_outlooks.update_one(
+            {"id": doc["id"]},
+            {"$set": {"notification_flags.AUTOMATED_TRADE_RESULT": datetime.now(timezone.utc).isoformat()}},
+        )
+
+
+async def dispatch_pending_automated_trade_notifications() -> int:
+    """Crash-recovery pass: retries any matched automated_trade_result whose
+    notification_flags.AUTOMATED_TRADE_RESULT was never set (e.g. the
+    process died between the DB write and the push send)."""
+    db = _db()
+    rows = db.cloud_market_outlooks.find({
+        "automated_trade_result.status": "matched",
+        "notification_flags.AUTOMATED_TRADE_RESULT": {"$exists": False},
+    }, {"_id": 0}).sort("published_at", -1)
+    dispatched = 0
+    async for doc in rows:
+        await _dispatch_automated_trade_notification(doc)
+        dispatched += 1
+    return dispatched
 
 
 async def reconcile_trade_journal_entry(entry: Dict) -> Optional[Dict]:

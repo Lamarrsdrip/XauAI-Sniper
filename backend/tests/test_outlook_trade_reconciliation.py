@@ -288,6 +288,137 @@ class TestRealTimeTrigger:
             assert result["result"]["status"] == "matched"
         _run(go())
 
+
+USER_ID = "user-notif-1"
+
+
+async def _clear_notifications():
+    await srv.db.cloud_notification_prefs.delete_many({})
+    await srv.db.cloud_notification_log.delete_many({})
+
+
+async def _seed_prefs(tier="HOURLY_PLUS_RESULTS", user_id=USER_ID, account=ACCOUNT):
+    await srv.db.cloud_notification_prefs.update_one(
+        {"account": account, "user_id": user_id},
+        {"$set": {"account": account, "user_id": user_id, "tier": tier}},
+        upsert=True,
+    )
+
+
+class TestAutomatedTradeNotification:
+    def test_matched_result_dispatches_notification_and_sets_flag(self):
+        async def go():
+            await _clear()
+            await _clear_notifications()
+            await _seed_prefs()
+            await srv.db.trade_journal.insert_one(_trade())
+            doc = _outlook_doc()
+            await srv.db.cloud_market_outlooks.insert_one(dict(doc))
+
+            await mo.reconcile_automated_trade_result(doc)
+
+            log_entry = await srv.db.cloud_notification_log.find_one(
+                {"outlook_id": doc["id"], "notification_type": "AUTOMATED_TRADE_RESULT"})
+            assert log_entry is not None
+            assert log_entry["delivery_status"] in ("NO_DEVICE", "SENT", "FAILED")
+
+            persisted = await srv.db.cloud_market_outlooks.find_one({"id": doc["id"]}, {"_id": 0})
+            assert persisted["notification_flags"]["AUTOMATED_TRADE_RESULT"]
+        _run(go())
+
+    def test_below_tier_recipient_not_notified(self):
+        async def go():
+            await _clear()
+            await _clear_notifications()
+            await _seed_prefs(tier="HOURLY_ONLY")
+            await srv.db.trade_journal.insert_one(_trade())
+            doc = _outlook_doc()
+            await srv.db.cloud_market_outlooks.insert_one(dict(doc))
+
+            await mo.reconcile_automated_trade_result(doc)
+
+            log_entry = await srv.db.cloud_notification_log.find_one(
+                {"outlook_id": doc["id"], "notification_type": "AUTOMATED_TRADE_RESULT"})
+            assert log_entry is None
+        _run(go())
+
+    def test_notification_never_sent_twice_for_same_outlook(self):
+        async def go():
+            await _clear()
+            await _clear_notifications()
+            await _seed_prefs()
+            await srv.db.trade_journal.insert_one(_trade(ticket=1001))
+            doc = _outlook_doc()
+            await srv.db.cloud_market_outlooks.insert_one(dict(doc))
+
+            await mo.reconcile_automated_trade_result(doc)
+            first_count = await srv.db.cloud_notification_log.count_documents(
+                {"outlook_id": doc["id"], "notification_type": "AUTOMATED_TRADE_RESULT"})
+            assert first_count == 1
+
+            # Re-running reconciliation against the already-matched doc is a
+            # no-op (tested elsewhere) so dispatch must not be reinvoked either.
+            refetched = await srv.db.cloud_market_outlooks.find_one({"id": doc["id"]}, {"_id": 0})
+            await mo.reconcile_automated_trade_result(refetched)
+            second_count = await srv.db.cloud_notification_log.count_documents(
+                {"outlook_id": doc["id"], "notification_type": "AUTOMATED_TRADE_RESULT"})
+            assert second_count == 1
+        _run(go())
+
+    def test_uncertain_and_no_trade_found_never_notify(self):
+        async def go():
+            await _clear()
+            await _clear_notifications()
+            await _seed_prefs()
+            doc = _outlook_doc()
+            await srv.db.cloud_market_outlooks.insert_one(dict(doc))
+            await mo.reconcile_automated_trade_result(doc)  # no_trade_found
+            log_entry = await srv.db.cloud_notification_log.find_one(
+                {"outlook_id": doc["id"], "notification_type": "AUTOMATED_TRADE_RESULT"})
+            assert log_entry is None
+        _run(go())
+
+
+class TestAutomatedTradePayload:
+    def test_tp_hit_payload(self):
+        doc = _outlook_doc()
+        doc["automated_trade_result"] = {
+            "status": "matched", "result": "TP_HIT", "direction": "BUY", "symbol": "XAUUSD",
+            "realized_profit": 150.0, "realized_r": 2.0, "entry_price": 2650.5, "exit_price": 2660.0,
+            "close_reason": "TAKE_PROFIT_1R", "ticket": 1001,
+        }
+        from notifications import _build_automated_trade_payload
+        payload = _build_automated_trade_payload(doc)
+        assert "hit take-profit" in payload["title"]
+        assert "BUY" in payload["title"] and "XAUUSD" in payload["title"]
+        assert "P/L +$150.00" in payload["body"]
+        assert "2.00R" in payload["body"]
+        assert payload["outlook_id"] == doc["id"]
+        assert payload["event"] == "AUTOMATED_TRADE_RESULT"
+
+    def test_sl_hit_payload(self):
+        doc = _outlook_doc()
+        doc["automated_trade_result"] = {
+            "status": "matched", "result": "SL_HIT", "direction": "SELL", "symbol": "XAUUSD",
+            "realized_profit": -80.0, "realized_r": -1.0, "entry_price": 2650.5, "exit_price": 2640.0,
+            "close_reason": "STOP_LOSS", "ticket": 1002,
+        }
+        from notifications import _build_automated_trade_payload
+        payload = _build_automated_trade_payload(doc)
+        assert "hit stop-loss" in payload["title"]
+        assert "P/L -$80.00" in payload["body"]
+
+    def test_break_even_payload(self):
+        doc = _outlook_doc()
+        doc["automated_trade_result"] = {
+            "status": "matched", "result": "BREAK_EVEN", "direction": "BUY", "symbol": "XAUUSD",
+            "realized_profit": 0.0, "realized_r": 0.0, "entry_price": 2650.5, "exit_price": 2650.5,
+            "close_reason": "MANUAL_CLOSE", "ticket": 1003,
+        }
+        from notifications import _build_automated_trade_payload
+        payload = _build_automated_trade_payload(doc)
+        assert "closed break-even" in payload["title"]
+
     def test_open_trade_never_triggers_reconciliation(self):
         async def go():
             await _clear()

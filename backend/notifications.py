@@ -90,6 +90,7 @@ _EVENT_MIN_TIER = {
     "TP2_HIT": "HOURLY_PLUS_RESULTS",
     "TP3_HIT": "HOURLY_PLUS_RESULTS",
     "SL_HIT": "HOURLY_PLUS_RESULTS",
+    "AUTOMATED_TRADE_RESULT": "HOURLY_PLUS_RESULTS",
 }
 
 
@@ -542,6 +543,122 @@ async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> Opt
         return sent
     except Exception as exc:
         logger.error("NOTIFICATION_DISPATCH_FAILED event=%s outlook=%s: %s", event, doc.get("id"), exc)
+        return None
+
+
+def _build_automated_trade_payload(doc: Dict) -> Dict:
+    """Builds the push payload for a real, broker-confirmed automated trade
+    result (doc["automated_trade_result"], written by
+    market_outlook.reconcile_automated_trade_result). Deliberately separate
+    from _build_payload's advisory TP/SL events -- this describes a trade
+    that XauCloud actually executed, not the advisory "if you had taken
+    this setup" tracking."""
+    result = doc.get("automated_trade_result") or {}
+    outcome = result.get("result", "")
+    direction = result.get("direction") or doc.get("primary_direction", "")
+    symbol = result.get("symbol") or doc.get("symbol", "XAUUSD")
+    profit_raw = result.get("realized_profit")
+    r_multiple = _fmt_number(result.get("realized_r"))
+    entry = result.get("entry_price")
+    exit_price = result.get("exit_price")
+    close_reason = result.get("close_reason") or ""
+    deep_link = f"/ai-market-outlook?outlook_id={doc.get('id')}"
+
+    icon = {"TP_HIT": "✅", "WIN": "✅", "SL_HIT": "❌", "LOSS": "❌", "BREAK_EVEN": "➖"}.get(outcome, "📊")
+    label = {
+        "TP_HIT": "hit take-profit", "SL_HIT": "hit stop-loss", "WIN": "closed in profit",
+        "LOSS": "closed at a loss", "BREAK_EVEN": "closed break-even",
+    }.get(outcome, "closed")
+    title = f"{icon} {direction} {symbol} automated trade {label}"
+
+    parts = []
+    try:
+        numeric_profit = float(profit_raw)
+        signed_amount = f"+${numeric_profit:,.2f}" if numeric_profit >= 0 else f"-${abs(numeric_profit):,.2f}"
+        parts.append(f"P/L {signed_amount}")
+    except (TypeError, ValueError):
+        pass
+    if r_multiple: parts.append(f"{r_multiple}R")
+    if entry is not None: parts.append(f"Entry {entry}")
+    if exit_price is not None: parts.append(f"Exit {exit_price}")
+    if close_reason: parts.append(close_reason)
+    if result.get("ticket"): parts.append(f"Ticket {result.get('ticket')}")
+    body = " · ".join(parts) or "Your automated trade result has been confirmed by your broker."
+
+    return {
+        "title": title, "body": body, "deep_link": deep_link,
+        "outlook_id": doc.get("id"), "event": "AUTOMATED_TRADE_RESULT",
+    }
+
+
+async def send_automated_trade_result_notification(doc: Dict) -> Optional[int]:
+    """Sends the real, broker-confirmed automated-trade-result push.
+
+    Unlike send_outlook_notification, this never applies the
+    market-open/bot-heartbeat suppression gate -- that gate exists only to
+    hide notifications about the *advisory* tracking process while the bot
+    is offline/market is closed (owner directive 2026-07-24). This event
+    reports something that has already genuinely happened (the trade is
+    closed), so it is always eligible to send, subject only to the
+    recipient's own notification tier preference."""
+    try:
+        db = _db()
+        account = doc.get("account", "")
+        outlook_id = doc.get("id", "")
+        event = "AUTOMATED_TRADE_RESULT"
+        prefs_cursor = db.cloud_notification_prefs.find({"account": account})
+        sent = 0
+        async for prefs in prefs_cursor:
+            user_id = prefs.get("user_id", "")
+            tier = prefs.get("tier", "OFF")
+            required_tier = _EVENT_MIN_TIER.get(event, "HOURLY_PLUS_RESULTS")
+            if _TIER_RANK.get(tier, 0) < _TIER_RANK.get(required_tier, 99):
+                continue
+            idem_key = _idempotency_key(outlook_id, event, user_id)
+            already = await db.cloud_notification_log.find_one({"idempotency_key": idem_key})
+            if already and (already.get("delivery_status") == "SENT"
+                            or already.get("failure_reason") not in RETRYABLE_FAILURES):
+                continue
+
+            payload = _build_automated_trade_payload(doc)
+            devices = await complete_active_devices(user_id)
+            log_entry = {
+                "id": (already or {}).get("id") or str(uuid.uuid4()),
+                "idempotency_key": idem_key,
+                "user_id": user_id,
+                "outlook_id": outlook_id,
+                "notification_type": event,
+                "scheduled_time": (already or {}).get("scheduled_time") or datetime.now(timezone.utc).isoformat(),
+                "sent_time": None,
+                "delivery_status": "PENDING",
+                "opened_time": None,
+                "device_count": len(devices),
+                "retry_count": int((already or {}).get("retry_count", 0) or 0),
+                "failure_reason": None,
+            }
+            if not devices:
+                log_entry.update({"delivery_status": "NO_DEVICE", "failure_reason": "SUBSCRIPTION_MISSING"})
+            else:
+                ok, failure_class, provider = _coerce_send_result(await _send_onesignal(user_id, payload))
+                log_entry.update({
+                    "sent_time": datetime.now(timezone.utc).isoformat(),
+                    "delivery_status": "SENT" if ok else "FAILED",
+                    "failure_reason": None if ok else (failure_class or UNKNOWN_FAILURE),
+                    "provider_http_status": provider.get("http_status"),
+                    "provider_message_id": provider.get("message_id"),
+                    "provider_errors": provider.get("errors"),
+                    "provider_warnings": provider.get("warnings"),
+                })
+                if ok:
+                    sent += 1
+            if already:
+                log_entry["retry_count"] = int(already.get("retry_count", 0) or 0) + 1
+                await db.cloud_notification_log.update_one({"idempotency_key": idem_key}, {"$set": log_entry})
+            else:
+                await db.cloud_notification_log.insert_one(log_entry)
+        return sent
+    except Exception as exc:
+        logger.error("AUTOMATED_TRADE_NOTIFICATION_DISPATCH_FAILED outlook=%s: %s", doc.get("id"), exc)
         return None
 
 
