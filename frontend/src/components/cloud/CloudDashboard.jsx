@@ -12,6 +12,7 @@ import XauAiLogo from "./XauAiLogo";
 import AIThoughtFeed from "./AIThoughtFeed";
 import AIMarketOutlookCard from "./AIMarketOutlookCard";
 import M10VsOutlookCard from "./M10VsOutlookCard";
+import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
 import { API } from "@/lib/api";
 import { logoutOneSignalUser } from "@/lib/onesignal";
 
@@ -499,6 +500,7 @@ function useAuthGuard() {
 
 function AppShell({ active, setActive, children, logout, statusText, online, eaVersion }) {
   const [moreOpen, setMoreOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
   const moreActive = MORE_NAV.some(([id])=>id===active);
   const go = (id)=>{ setActive(id); setMoreOpen(false); };
 
@@ -524,12 +526,15 @@ function AppShell({ active, setActive, children, logout, statusText, online, eaV
               {online && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />}
               {statusText}
             </div>
+            <NotificationBell onClick={() => setNotifOpen(true)} />
             <button onClick={logout} className="rounded-full border border-white/[0.07] bg-white/[0.03] p-2 text-white/45 hover:text-white transition">
               <LogOut className="h-4 w-4" />
             </button>
           </div>
         </div>
       </header>
+
+      <NotificationCenterPanel open={notifOpen} onClose={() => setNotifOpen(false)} />
 
       {/* Page content */}
       <main className="relative z-10 mx-auto max-w-5xl overflow-x-hidden px-4 py-5 pb-8">
