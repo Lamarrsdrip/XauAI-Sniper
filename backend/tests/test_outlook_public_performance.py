@@ -160,6 +160,48 @@ class TestOrderingAndLimit:
             assert result["stats"]["count"] == 1
         _run(go())
 
+    def test_stats_reflect_all_completed_signals_not_just_the_displayed_window(self):
+        # Bug fix (owner audit, 2026-08-04): stats used to be computed from
+        # only the displayed (most recent 10) signals -- once more than 10
+        # completed signals existed, "win rate"/"total R" silently excluded
+        # every older one while still being presented as overall
+        # performance. 15 wins + 5 losses seeded; only 10 signal cards are
+        # returned for display, but stats must count all 20.
+        async def go():
+            await _clear()
+            for i in range(15):
+                await srv.db.cloud_market_outlooks.insert_one(_completed_outlook(
+                    id=f"win-{i}", classification_at=(_REF + timedelta(hours=i)).isoformat(),
+                    analytics_outcome=mo.ANALYTICS_WIN, analytics_r=1.0, risk_distance=10.0,
+                ))
+            for i in range(5):
+                await srv.db.cloud_market_outlooks.insert_one(_completed_outlook(
+                    id=f"loss-{i}", classification_at=(_REF + timedelta(hours=15 + i)).isoformat(),
+                    analytics_outcome=mo.ANALYTICS_LOSS, analytics_r=-1.0, risk_distance=10.0,
+                ))
+            result = await routes.build_public_outlook_performance(srv.db)
+            assert len(result["signals"]) == 10  # display window unchanged
+            stats = result["stats"]
+            assert stats["count"] == 20
+            assert stats["wins"] == 15
+            assert stats["losses"] == 5
+            assert stats["win_rate"] == 0.75
+            assert stats["total_r"] == 10.0  # 15*(+1) + 5*(-1)
+        _run(go())
+
+    def test_limit_query_param_expands_display_window(self):
+        async def go():
+            await _clear()
+            for i in range(15):
+                await srv.db.cloud_market_outlooks.insert_one(_completed_outlook(
+                    id=f"sig-{i}", classification_at=(_REF + timedelta(hours=i)).isoformat(),
+                ))
+            result = await routes.build_public_outlook_performance(srv.db, limit=15)
+            assert len(result["signals"]) == 15
+            # stats are identical regardless of the display-window limit
+            assert result["stats"]["count"] == 15
+        _run(go())
+
     def test_no_signals_returns_empty_not_error(self):
         async def go():
             await _clear()

@@ -94,12 +94,30 @@ def compute_outlook_stats(rows: list) -> dict:
     }
 
 
-async def build_public_outlook_performance(db) -> dict:
-    """The last 10 genuinely completed Market Outlook advisory signals, for
-    the public marketing site -- never watching/blocked/active/unavailable/
-    excluded records, and never duplicated repeats (cloud_market_outlooks
-    already holds one row per signal lifecycle, mutated in place as it
-    progresses, not appended to).
+def _outlook_to_signal_card(row: dict) -> dict:
+    conversion = mo.build_result_conversion(r=row.get("analytics_r"), risk_distance=row.get("risk_distance"))
+    outcome = "WIN" if row.get("analytics_outcome") == mo.ANALYTICS_WIN else "LOSS"
+    return {
+        "id": row.get("id"),
+        "direction": row.get("primary_direction"),
+        "closed_at": row.get("classification_at"),
+        "entry_price": row.get("tracking_entry_price"),
+        "stop_loss": row.get("original_sl") or row.get("suggested_sl"),
+        "take_profit_1": row.get("tp1_price"),
+        "result": outcome,
+        "confidence_pct": row.get("confidence_pct"),
+        "setup_type": row.get("setup_type"),
+        **conversion,
+    }
+
+
+async def build_public_outlook_performance(db, limit: int = 10) -> dict:
+    """Genuinely completed Market Outlook advisory signals, for the public
+    marketing site -- never watching/blocked/active/unavailable/excluded
+    records, and never duplicated repeats (cloud_market_outlooks already
+    holds one row per signal lifecycle, keyed by a deterministic per-slot
+    _id plus a DB-level unique index on id, mutated in place as it
+    progresses, never appended to).
 
     Deliberately reads analytics_outcome/analytics_r (the advisory
     tracking's own WIN/LOSS resolution against its own suggested levels),
@@ -109,8 +127,13 @@ async def build_public_outlook_performance(db) -> dict:
     mixing them here would make an advisory opinion look like verified
     account profit.
 
-    Stats are computed from exactly the same 10 rows being displayed, so
-    the public page's numbers can never disagree with what it's showing.
+    Bug fix (owner audit, 2026-08-04): stats used to be computed from only
+    the most recent `limit` (10) signals -- the same rows being displayed
+    -- so a customer's "win rate"/"total R" silently excluded every older
+    completed signal once more than 10 existed, while still being labeled
+    as overall performance. Stats are now computed from every genuinely
+    completed signal (no limit); `limit` only bounds how many recent
+    signal cards are returned for display.
     """
     query = {
         "primary_direction": {"$in": ["BUY", "SELL"]},
@@ -118,16 +141,16 @@ async def build_public_outlook_performance(db) -> dict:
         "excluded_from_stats": {"$ne": True},
         "excluded_from_signal_analytics": {"$ne": True},
     }
-    rows = await db.cloud_market_outlooks.find(query, {"_id": 0}).sort("classification_at", -1).limit(10).to_list(10)
+    all_rows = await db.cloud_market_outlooks.find(
+        query, {"_id": 0}
+    ).sort("classification_at", -1).to_list(None)
 
-    signals = []
     total_pips, total_gold_moves = 0.0, 0.0
     wins = losses = 0
     rs = []
-    for row in rows:
+    for row in all_rows:
         conversion = mo.build_result_conversion(r=row.get("analytics_r"), risk_distance=row.get("risk_distance"))
-        outcome = "WIN" if row.get("analytics_outcome") == mo.ANALYTICS_WIN else "LOSS"
-        if outcome == "WIN":
+        if row.get("analytics_outcome") == mo.ANALYTICS_WIN:
             wins += 1
         else:
             losses += 1
@@ -137,31 +160,20 @@ async def build_public_outlook_performance(db) -> dict:
             total_pips += conversion["result_pips"]
         if conversion["result_gold_moves"] is not None:
             total_gold_moves += conversion["result_gold_moves"]
-        signals.append({
-            "id": row.get("id"),
-            "direction": row.get("primary_direction"),
-            "closed_at": row.get("classification_at"),
-            "entry_price": row.get("tracking_entry_price"),
-            "stop_loss": row.get("original_sl") or row.get("suggested_sl"),
-            "take_profit_1": row.get("tp1_price"),
-            "result": outcome,
-            "confidence_pct": row.get("confidence_pct"),
-            "setup_type": row.get("setup_type"),
-            **conversion,
-        })
 
+    signals = [_outlook_to_signal_card(row) for row in all_rows[:limit]]
     win_rate = round(wins / (wins + losses), 3) if (wins + losses) else None
     return {
         "signals": signals,
         "stats": {
-            "count": len(signals),
+            "count": wins + losses,
             "wins": wins,
             "losses": losses,
             "win_rate": win_rate,
             "total_r": round(sum(rs), 2) if rs else None,
             "average_r": round(sum(rs) / len(rs), 2) if rs else None,
-            "total_pips": round(total_pips, 1) if signals else None,
-            "total_gold_moves": round(total_gold_moves, 2) if signals else None,
+            "total_pips": round(total_pips, 1) if (wins + losses) else None,
+            "total_gold_moves": round(total_gold_moves, 2) if (wins + losses) else None,
         },
     }
 
@@ -319,9 +331,9 @@ def build_router() -> APIRouter:
     # queries live so a signal that just resolved is reflected on the next
     # request, no stale-cache invalidation needed.
     @r.get("/outlook/public-performance")
-    async def get_public_outlook_performance(request: Request):
+    async def get_public_outlook_performance(request: Request, limit: int = Query(10, ge=1, le=200)):
         srv._rate_limit(f"outlook_public_performance_ip:{srv._client_ip(request)}", max_requests=60, window_seconds=60)
-        return await build_public_outlook_performance(srv.db)
+        return await build_public_outlook_performance(srv.db, limit=limit)
 
     @r.get("/outlook/{outlook_id}")
     async def get_outlook_by_id(outlook_id: str, user: dict = Depends(srv.get_cloud_user)):
