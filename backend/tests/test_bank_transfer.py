@@ -102,12 +102,16 @@ class TestEligibility:
             assert result["eligible"] is True
         _run(go())
 
-    def test_not_eligible_when_non_nigeria(self):
+    def test_eligible_regardless_of_detected_country(self):
+        """Owner directive: Nigeria Bank Transfer must be available to every
+        visitor once configured, never gated on IP-geolocated country --
+        that check used to reject genuine Nigerian customers whenever
+        geo-IP detection guessed wrong."""
         async def go():
             await _clear()
             await _enable_bank_transfer()
             result = await srv.bank_transfer_eligibility(_fake_request("US"))
-            assert result["eligible"] is False
+            assert result["eligible"] is True
         _run(go())
 
     def test_not_eligible_when_disabled(self):
@@ -134,19 +138,20 @@ class TestInitiate:
             assert tx["provider"] == "BANK_TRANSFER"
         _run(go())
 
-    def test_initiate_rejected_for_non_nigeria_even_if_ui_bypassed(self):
-        """The exact attack this guards against: a non-Nigerian caller hits
-        the API directly (no frontend involved at all) trying to create a
-        bank-transfer order."""
+    def test_initiate_succeeds_regardless_of_detected_country(self):
+        """Owner directive: available to every visitor, not gated on
+        IP-geolocated country -- detected_country is still recorded on the
+        order for admin visibility, just no longer used to reject."""
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            with pytest.raises(HTTPException) as exc:
-                await srv.initiate_bank_transfer(
-                    srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
-                    _fake_request("US"),
-                )
-            assert exc.value.status_code == 403
+            result = await srv.initiate_bank_transfer(
+                srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
+                _fake_request("US"),
+            )
+            tx = await srv.db.payment_transactions.find_one({"reference": result["reference"]})
+            assert tx["payment_status"] == "BANK_TRANSFER_PENDING"
+            assert tx["detected_country"] == "US"
         _run(go())
 
     def test_initiate_rejected_when_not_enabled(self):

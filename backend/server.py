@@ -1580,8 +1580,8 @@ def _bank_transfer_is_configured(settings: dict) -> bool:
 _DEFAULT_PAYMENT_METHOD_ORDER = ["bank_transfer", "paystack", "nomba"]
 _PAYMENT_METHOD_COPY = {
     "bank_transfer": {
-        "label": "Manual Bank Transfer",
-        "description": "Recommended for Nigerian customers. Admin verification required. Order fulfilled after confirmation.",
+        "label": "Nigeria Bank Transfer",
+        "description": "Transfer to our Nigerian bank account. Admin verification required. Order fulfilled after confirmation.",
         "instant": False,
     },
     "paystack": {
@@ -1614,12 +1614,18 @@ async def _payment_method_availability(request: Request) -> dict:
     each computed independently; a broken/misconfigured provider only ever
     turns ITS OWN flag False, never raises, never affects the others."""
     settings = await _get_payment_methods_settings()
-    country = _detect_country_code(request)
 
+    # Owner directive: bank transfer (destination account is Nigerian, hence
+    # "Nigeria Bank Transfer") is available to every visitor, not gated on
+    # IP-geolocated country. The old country=="NG" check was unreliable --
+    # it blocked genuine Nigerian customers whenever geo-IP detection
+    # guessed wrong (VPNs, mobile carriers, no CDN country header on this
+    # deployment, etc). Availability now depends only on whether the admin
+    # has actually enabled and configured real bank details.
     bank_transfer_available = False
     try:
         bt_settings = await _get_bank_transfer_settings()
-        bank_transfer_available = country == "NG" and bt_settings.get("enabled", False) and _bank_transfer_is_configured(bt_settings)
+        bank_transfer_available = bt_settings.get("enabled", False) and _bank_transfer_is_configured(bt_settings)
     except Exception as e:
         logger.error(f"PAYMENT_METHOD_AVAILABILITY_CHECK_FAILED method=bank_transfer: {e}")
 
@@ -1687,23 +1693,24 @@ async def _bank_transfer_effective_status(tx: dict) -> str:
 @api_router.get("/purchase/bank-transfer/eligibility")
 async def bank_transfer_eligibility(request: Request):
     _rate_limit(f"bank_transfer_eligibility_ip:{_client_ip(request)}", max_requests=60, window_seconds=60)
+    # Owner directive: available to every visitor regardless of geo-IP
+    # detected country -- see _payment_method_availability for why.
     country = _detect_country_code(request)
     settings = await _get_bank_transfer_settings()
-    eligible = country == "NG" and settings.get("enabled", False) and _bank_transfer_is_configured(settings)
+    eligible = settings.get("enabled", False) and _bank_transfer_is_configured(settings)
     return {"eligible": eligible, "detected_country": country or None}
 
 @api_router.post("/purchase/bank-transfer/initiate")
 async def initiate_bank_transfer(req: BankTransferInitiateRequest, request: Request):
     _rate_limit(f"bank_transfer_init_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
-    # Re-validated here regardless of what the UI showed -- a non-Nigerian
-    # visitor manually calling this API directly must not be able to create
-    # a bank-transfer order just because the frontend hid the button.
+    # Owner directive: available to every visitor regardless of geo-IP
+    # detected country -- the old NG-only gate blocked genuine Nigerian
+    # customers whenever geo-IP guessed wrong. Still recorded on the order
+    # for admin visibility, just no longer used to reject the request.
     country = _detect_country_code(request)
     settings = await _get_bank_transfer_settings()
     if not settings.get("enabled"):
         raise HTTPException(status_code=503, detail="Bank transfer is not currently available.")
-    if country != "NG":
-        raise HTTPException(status_code=403, detail="Bank transfer is only available to customers in Nigeria.")
     if not _bank_transfer_is_configured(settings):
         raise HTTPException(status_code=503, detail="Bank transfer is not fully configured yet.")
     kobo = (await get_settings()).get("pin_price_kobo", 30000000)

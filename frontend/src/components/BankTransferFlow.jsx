@@ -266,7 +266,7 @@ function BankTransferPanel({ api, buyerName, buyerEmail, onBack, onClose }) {
         </button>
 
         <div className="flex items-center justify-between">
-          <h3 className="font-heading text-lg font-bold text-white">Bank Transfer</h3>
+          <h3 className="font-heading text-lg font-bold text-white">Nigeria Bank Transfer</h3>
           <div className="flex items-center gap-1.5 rounded-full bg-amber-300/10 px-2.5 py-1 font-mono text-[11px] font-bold text-amber-300" data-testid="bank-transfer-countdown">
             <Clock size={12} /> {formatCountdown(remaining)}
           </div>

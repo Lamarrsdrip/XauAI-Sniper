@@ -726,7 +726,7 @@ function NombaCredentialFields({ env, values, onChange, existing }) {
   );
 }
 
-const PAYMENT_METHOD_LABELS = { bank_transfer: "Manual Bank Transfer", paystack: "Paystack", nomba: "Nomba" };
+const PAYMENT_METHOD_LABELS = { bank_transfer: "Nigeria Bank Transfer", paystack: "Paystack", nomba: "Nomba" };
 
 function PaymentMethodPrioritySettings({ api }) {
   const [settings, setSettings] = useState(null);
@@ -1085,7 +1085,7 @@ function SettingsTab({ api }) {
 
       <CardSection title="Paystack (active — second payment option)">
         <p className="text-[12px] text-white/40 mb-4 leading-5">
-          Paystack is active as the second checkout option, after Manual Bank Transfer. See "Payment
+          Paystack is active as the second checkout option, after Nigeria Bank Transfer. See "Payment
           method priority" above to enable/disable it or change the default.
         </p>
         <div className="space-y-4">
@@ -1355,7 +1355,7 @@ function BankTransfersTab({ api }) {
               <label className="flex items-center gap-2 text-[13px] text-white/70">
                 <input type="checkbox" checked={Boolean(settings.enabled)}
                   onChange={e => setSettings({ ...settings, enabled: e.target.checked })} />
-                Offer bank transfer to Nigerian customers
+                Enable Nigeria Bank Transfer at checkout (available to every visitor, not just those detected as being in Nigeria)
               </label>
             </Field>
             <Field label="Timeout (minutes)">

@@ -108,12 +108,18 @@ class TestAvailabilityPerVisitor:
             assert availability["bank_transfer"] is True
         _run(go())
 
-    def test_bank_transfer_unavailable_for_non_nigeria(self):
+    def test_bank_transfer_available_regardless_of_detected_country(self):
+        """Owner directive: Nigeria Bank Transfer (the destination account is
+        Nigerian) is available to every visitor once configured -- it must
+        never depend on IP-geolocated country, which is unreliable enough
+        that it was blocking genuine Nigerian customers."""
         async def go():
             await _clear()
             await _enable_bank_transfer()
             availability = await srv._payment_method_availability(_fake_request("US"))
-            assert availability["bank_transfer"] is False
+            assert availability["bank_transfer"] is True
+            availability_no_country = await srv._payment_method_availability(_fake_request(None))
+            assert availability_no_country["bank_transfer"] is True
         _run(go())
 
     def test_default_method_falls_back_when_bank_transfer_unavailable(self):
