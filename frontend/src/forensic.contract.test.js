@@ -21,11 +21,11 @@ describe("forensic operating-company browser contracts", () => {
 
   test("homepage contains no invented drawdown or AI rating", () => {
     const hero = read("components/HeroSection.jsx");
-    const performance = read("components/PerformanceSection.jsx");
+    const performance = read("components/OutlookPerformanceSection.jsx");
     expect(hero).not.toContain('value: "5%"');
     expect(hero).not.toContain('value: "90 / 100"');
-    expect(performance).toContain("sufficient_data");
-    expect(performance).toContain("First-party trading records, not independently verified");
+    expect(performance).toContain("not independently verified");
+    expect(performance).toContain("separate from automated EA account performance");
   });
 
   test("public ticker renders only a provider-marked available quote", () => {

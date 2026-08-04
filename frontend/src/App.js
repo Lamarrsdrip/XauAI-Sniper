@@ -6,7 +6,7 @@ import Header from "@/components/Header";
 import HeroSection from "@/components/HeroSection";
 import TrustStrip from "@/components/TrustStrip";
 import FeaturesSection from "@/components/FeaturesSection";
-import PerformanceSection from "@/components/PerformanceSection";
+import OutlookPerformanceSection from "@/components/OutlookPerformanceSection";
 import HowItWorksSection from "@/components/HowItWorksSection";
 import ReassuranceSection from "@/components/ReassuranceSection";
 import PurchaseSection from "@/components/PurchaseSection";
@@ -28,17 +28,7 @@ import { API } from "@/lib/api";
 
 function MainDashboard() {
   const [activeSection, setActiveSection] = useState("overview");
-  const [performance, setPerformance] = useState(null);
   const [goldPrice, setGoldPrice] = useState(null);
-
-  const fetchPerformance = useCallback(async () => {
-    try {
-      const r = await axios.get(`${API}/performance/summary`);
-      setPerformance(r.data);
-    } catch (e) {
-      process.env.NODE_ENV === "development" && console.error(e);
-    }
-  }, []);
 
   const fetchGoldPrice = useCallback(async () => {
     try {
@@ -49,11 +39,10 @@ function MainDashboard() {
   }, []);
 
   useEffect(() => {
-    fetchPerformance();
     fetchGoldPrice();
     const iv = setInterval(fetchGoldPrice, 10000);
     return () => clearInterval(iv);
-  }, [fetchPerformance, fetchGoldPrice]);
+  }, [fetchGoldPrice]);
 
   const scrollTo = (id) => {
     setActiveSection(id);
@@ -66,7 +55,7 @@ function MainDashboard() {
       <main>
         <section id="overview"><HeroSection goldPrice={goldPrice} /></section>
         <TrustStrip />
-        <section id="performance"><PerformanceSection data={performance} /></section>
+        <section id="performance"><OutlookPerformanceSection api={API} /></section>
         <section id="how-it-works"><HowItWorksSection /></section>
         <section id="features"><FeaturesSection /></section>
         <ReassuranceSection />

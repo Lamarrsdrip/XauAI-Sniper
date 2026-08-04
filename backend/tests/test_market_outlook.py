@@ -387,6 +387,8 @@ def test_all_new_endpoints_require_cloud_user_auth():
     for h in handlers:
         if "get_onesignal_app_id" in h:
             continue  # OneSignal App ID is not secret, no auth needed to fetch it
+        if "get_public_outlook_performance" in h:
+            continue  # deliberately public -- this is what the marketing site shows signed-out visitors
         assert "Depends(srv.get_cloud_user)" in h, f"endpoint missing auth dependency: {h}"
 
 

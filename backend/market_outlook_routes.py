@@ -94,6 +94,78 @@ def compute_outlook_stats(rows: list) -> dict:
     }
 
 
+async def build_public_outlook_performance(db) -> dict:
+    """The last 10 genuinely completed Market Outlook advisory signals, for
+    the public marketing site -- never watching/blocked/active/unavailable/
+    excluded records, and never duplicated repeats (cloud_market_outlooks
+    already holds one row per signal lifecycle, mutated in place as it
+    progresses, not appended to).
+
+    Deliberately reads analytics_outcome/analytics_r (the advisory
+    tracking's own WIN/LOSS resolution against its own suggested levels),
+    never automated_trade_result (the real account's trade outcome) --
+    those two are owner-directive-separate concepts (see
+    market_outlook.py's automated-trade-result-reconciliation section) and
+    mixing them here would make an advisory opinion look like verified
+    account profit.
+
+    Stats are computed from exactly the same 10 rows being displayed, so
+    the public page's numbers can never disagree with what it's showing.
+    """
+    query = {
+        "primary_direction": {"$in": ["BUY", "SELL"]},
+        "analytics_outcome": {"$in": [mo.ANALYTICS_WIN, mo.ANALYTICS_LOSS]},
+        "excluded_from_stats": {"$ne": True},
+        "excluded_from_signal_analytics": {"$ne": True},
+    }
+    rows = await db.cloud_market_outlooks.find(query, {"_id": 0}).sort("classification_at", -1).limit(10).to_list(10)
+
+    signals = []
+    total_pips, total_gold_moves = 0.0, 0.0
+    wins = losses = 0
+    rs = []
+    for row in rows:
+        conversion = mo.build_result_conversion(r=row.get("analytics_r"), risk_distance=row.get("risk_distance"))
+        outcome = "WIN" if row.get("analytics_outcome") == mo.ANALYTICS_WIN else "LOSS"
+        if outcome == "WIN":
+            wins += 1
+        else:
+            losses += 1
+        if conversion["result_r"] is not None:
+            rs.append(conversion["result_r"])
+        if conversion["result_pips"] is not None:
+            total_pips += conversion["result_pips"]
+        if conversion["result_gold_moves"] is not None:
+            total_gold_moves += conversion["result_gold_moves"]
+        signals.append({
+            "id": row.get("id"),
+            "direction": row.get("primary_direction"),
+            "closed_at": row.get("classification_at"),
+            "entry_price": row.get("tracking_entry_price"),
+            "stop_loss": row.get("original_sl") or row.get("suggested_sl"),
+            "take_profit_1": row.get("tp1_price"),
+            "result": outcome,
+            "confidence_pct": row.get("confidence_pct"),
+            "setup_type": row.get("setup_type"),
+            **conversion,
+        })
+
+    win_rate = round(wins / (wins + losses), 3) if (wins + losses) else None
+    return {
+        "signals": signals,
+        "stats": {
+            "count": len(signals),
+            "wins": wins,
+            "losses": losses,
+            "win_rate": win_rate,
+            "total_r": round(sum(rs), 2) if rs else None,
+            "average_r": round(sum(rs) / len(rs), 2) if rs else None,
+            "total_pips": round(total_pips, 1) if signals else None,
+            "total_gold_moves": round(total_gold_moves, 2) if signals else None,
+        },
+    }
+
+
 def build_router() -> APIRouter:
     """Called from server.py AFTER server.py's own globals exist, so the
     real get_cloud_user dependency can be bound here without circularity."""
@@ -224,6 +296,15 @@ def build_router() -> APIRouter:
             "signal_events": signal_events,
             "stats": stats,
         }
+
+    # Public marketing-site feed -- unauthenticated by design (this is what
+    # the homepage shows visitors before they sign up). No caching layer:
+    # queries live so a signal that just resolved is reflected on the next
+    # request, no stale-cache invalidation needed.
+    @r.get("/outlook/public-performance")
+    async def get_public_outlook_performance(request: Request):
+        srv._rate_limit(f"outlook_public_performance_ip:{srv._client_ip(request)}", max_requests=60, window_seconds=60)
+        return await build_public_outlook_performance(srv.db)
 
     @r.get("/outlook/{outlook_id}")
     async def get_outlook_by_id(outlook_id: str, user: dict = Depends(srv.get_cloud_user)):
