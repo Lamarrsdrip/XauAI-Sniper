@@ -11,7 +11,7 @@ import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
 import AIThoughtFeed from "./AIThoughtFeed";
 import AIMarketOutlookCard from "./AIMarketOutlookCard";
-import M10VsOutlookCard, { M10_DECISION_LABELS, FRESHNESS_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
+import M10VsOutlookCard, { M10_DECISION_LABELS, M30_LIFECYCLE_LABELS, FRESHNESS_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
 import { API } from "@/lib/api";
 import { logoutOneSignalUser } from "@/lib/onesignal";
@@ -954,7 +954,7 @@ function M30ConsensusCard({ events, heartbeat }) {
     <div className={`${CARD} p-5`} data-testid="m30-consensus-card">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className={MONO_LABEL}>M30 Consensus Mode · {latest.decision_mode || "—"}</div>
-        <span className={pill(decisionTone)}>{decision.replace(/_/g, " ")}</span>
+        <span className={pill(decisionTone)}>{humanEnumLabel(decision, M10_DECISION_LABELS)}</span>
       </div>
 
       <p className="mt-3 text-[11px] leading-4 text-white/45">
@@ -992,7 +992,7 @@ function M30ConsensusCard({ events, heartbeat }) {
           <>
             <div className="mt-2 flex items-center gap-2 flex-wrap">
               <span className={pill(c.lifecycle_state === "ENTRY_TIMER_ACTIVE" ? "amber" : "blue")}>
-                {(c.lifecycle_state || "UNKNOWN").replace(/_/g, " ")}
+                {humanEnumLabel(c.lifecycle_state, M30_LIFECYCLE_LABELS)}
               </span>
               <span className="text-[10px] text-white/35 font-mono truncate">{c.candidate_id || "—"}</span>
             </div>
@@ -1009,7 +1009,7 @@ function M30ConsensusCard({ events, heartbeat }) {
           </>
         ) : (
           <p className="mt-2 text-[11px] leading-4 text-white/45">
-            No active candidate{c.lifecycle_state ? ` — ${c.lifecycle_state.replace(/_/g, " ").toLowerCase()}` : ""}.
+            No active candidate{c.lifecycle_state ? ` — ${humanEnumLabel(c.lifecycle_state, M30_LIFECYCLE_LABELS)}` : ""}.
           </p>
         )}
         {c.last_outcome_result && (

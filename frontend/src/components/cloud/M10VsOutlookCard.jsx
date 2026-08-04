@@ -24,7 +24,19 @@ export const M10_DECISION_LABELS = {
   RANGE_NO_TRADE: "Market ranging, no trade",
   NO_VALID_SIGNAL: "No valid signal right now",
   DATA_UNAVAILABLE: "Waiting for data",
+  DATA_PENDING: "Waiting for data",
   WAITING: "Waiting for signal",
+};
+
+// M30 consensus candidate-lifecycle values (XAU_BuildM30ConsensusDecision,
+// XAUUSD_AI_Sniper_EA.mq5) -- same "raw enum shown to a customer" bug class
+// as M10_DECISION_LABELS above, in the adjacent M30ConsensusCard.
+export const M30_LIFECYCLE_LABELS = {
+  MODE_INACTIVE: "M30 mode inactive",
+  ENTRY_TIMER_ACTIVE: "Entry timer running",
+  TIMER_ELAPSED_AWAITING_REVALIDATION: "Timer elapsed, re-checking setup",
+  NO_ACTIVE_CANDIDATE: "No active candidate",
+  AWAITING_SLOT_DATA: "Waiting for slot data",
 };
 
 export const FRESHNESS_LABELS = {
