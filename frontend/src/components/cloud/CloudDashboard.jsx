@@ -1836,7 +1836,7 @@ function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
           </div>
           <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
             <div className={MONO_LABEL}>Connected EA</div>
-            <div className="mt-2 text-[14px] font-semibold">{heartbeat.ea_version||"No EA heartbeat yet"}</div>
+            <div className="mt-2 text-[14px] font-semibold">{heartbeat.ea_version ? (status?.release?.public_display_name || "XauCloud") : "No EA heartbeat yet"}</div>
             <div className="mt-0.5 text-[12px] text-white/40">{heartbeat.broker_server||"Broker waiting"}</div>
           </div>
           <button onClick={logout} className="w-full rounded-xl border border-red-400/20 bg-red-500/[0.06] px-4 py-3 text-[13px] font-semibold text-red-300 hover:bg-red-500/[0.1] transition">
