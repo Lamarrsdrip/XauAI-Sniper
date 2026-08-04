@@ -19,15 +19,29 @@ export default function PurchaseSection({ api }) {
   const [currency,   setCurrency]   = useState(null); // null = let the server detect it
   const [error,      setError]      = useState("");
   const [showMethodModal, setShowMethodModal] = useState(false);
+  // Bug fix (purchase-flow audit, 2026-08-04): a failed /purchase/price
+  // fetch used to be silently swallowed, leaving priceData null and the
+  // widget showing a hardcoded "₦300,000" fallback with checkout still
+  // enabled -- if the admin had actually changed the price and this fetch
+  // failed, the customer saw a stale/wrong number here and a different
+  // (correct) one later in the Bank Transfer step, looking like a
+  // bait-and-switch. Now tracked explicitly and checkout is blocked until
+  // a real price is loaded.
+  const [priceLoading, setPriceLoading] = useState(true);
+  const [priceLoadFailed, setPriceLoadFailed] = useState(false);
 
-  useEffect(() => {
+  const loadPrice = React.useCallback(() => {
+    setPriceLoading(true); setPriceLoadFailed(false);
     const params = currency ? { display_currency: currency } : {};
     axios.get(`${api}/purchase/price`, { params })
-      .then(r => setPriceData(r.data))
-      .catch(() => {});
+      .then(r => { setPriceData(r.data); setPriceLoading(false); })
+      .catch(() => { setPriceLoadFailed(true); setPriceLoading(false); });
   }, [api, currency]);
 
+  useEffect(() => { loadPrice(); }, [loadPrice]);
+
   const paymentUnavailable = priceData?.payment_method === "unavailable";
+  const checkoutBlocked = paymentUnavailable || priceLoadFailed || (priceLoading && !priceData);
 
   const validateBuyer = () => {
     if (!buyerName.trim() || !buyerEmail.trim()) { setError("Please enter your name and email."); return false; }
@@ -36,6 +50,7 @@ export default function PurchaseSection({ api }) {
   };
 
   const openMethodChoice = () => {
+    if (priceLoadFailed) { setError("Could not load the current price. Please try again."); return; }
     if (paymentUnavailable) { setError("Payments are temporarily unavailable. Please try again shortly."); return; }
     if (!validateBuyer()) return;
     setError("");
@@ -62,7 +77,7 @@ export default function PurchaseSection({ api }) {
   const payByPaystack = () => payViaProvider("/purchase/paystack/initialize");
   const payByNomba = () => payViaProvider("/purchase/initialize");
 
-  const displayPrice = priceData?.formatted || "₦300,000";
+  const displayPrice = priceData?.formatted || (priceLoading ? "Loading…" : "—");
   const showingConverted = priceData?.display_currency && priceData.display_currency !== "NGN" && priceData.display_amount_formatted;
 
   return (
@@ -143,16 +158,22 @@ export default function PurchaseSection({ api }) {
                 placeholder="Email address"
                 className="w-full rounded-2xl border border-white/[0.1] bg-white/[0.05] px-4 py-3 font-mono text-sm text-white placeholder-white/25 outline-none transition focus:border-amber-300/40 focus:bg-white/[0.08]"
               />
+              {priceLoadFailed && (
+                <div className="flex items-center justify-between gap-3 rounded-2xl border border-rose-400/25 bg-rose-400/[0.06] px-4 py-3 text-[12px] text-rose-300" data-testid="purchase-price-error">
+                  <span>Could not load the current price.</span>
+                  <button type="button" onClick={loadPrice} className="font-bold underline underline-offset-2 hover:text-rose-200">Retry</button>
+                </div>
+              )}
               {error && (
                 <div className="text-sm text-rose-400 font-mono" data-testid="purchase-error">{error}</div>
               )}
               <button
                 data-testid="purchase-btn"
                 onClick={openMethodChoice}
-                disabled={loading || paymentUnavailable}
+                disabled={loading || checkoutBlocked}
                 className="mt-1 w-full inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-4 text-[14px] font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-50">
                 <ShoppingCart size={17} weight="bold" />
-                {loading ? "Redirecting…" : paymentUnavailable ? "Payments Unavailable" : `Continue to Payment · ${displayPrice}`}
+                {loading ? "Redirecting…" : priceLoadFailed ? "Price Unavailable" : paymentUnavailable ? "Payments Unavailable" : priceLoading ? "Loading…" : `Continue to Payment · ${displayPrice}`}
               </button>
             </div>
 

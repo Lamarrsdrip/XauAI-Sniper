@@ -1984,6 +1984,14 @@ async def verify_purchase(reference: str, request: Request):
         return {"status": "success", "payment_status": "success", "pin": result["pin"], "buyer_name": result.get("buyer_name", "")}
     if result["status"] == "not_found":
         raise HTTPException(status_code=404, detail="Not found")
+    if result["status"] == "failed":
+        # Bug fix (purchase-flow audit, 2026-08-04): _fulfill_payment/
+        # _fulfill_nomba_payment can genuinely return status="failed" (e.g.
+        # amount_mismatch) -- this used to fall through to the generic
+        # "pending" branch below, so the frontend's dedicated failure
+        # screen could never fire; a rejected payment just looked like it
+        # was still confirming until the poll loop timed out.
+        return {"status": "failed", "payment_status": "failed", "pin": None, "reason": result.get("reason", "")}
     return {"status": "pending", "payment_status": "pending", "pin": None}
 
 

@@ -91,4 +91,19 @@ describe("forensic operating-company browser contracts", () => {
     expect(admin).not.toContain("Weekly target");
     expect(admin).not.toContain("Save reference preset");
   });
+
+  test("purchase price never falls back to a stale hardcoded amount, and checkout is blocked until a real price loads", () => {
+    // Bug fix (purchase-flow audit, 2026-08-04): a failed /purchase/price
+    // fetch used to be silently swallowed (empty .catch) and the widget
+    // fell back to a hardcoded "₦300,000" with checkout still enabled --
+    // if the admin had actually changed the price, this could show a
+    // stale/wrong amount that looked like a bait-and-switch once the real
+    // amount appeared later in the Bank Transfer step.
+    const purchase = read("components/PurchaseSection.jsx");
+    expect(purchase).not.toMatch(/\|\|\s*"₦300,000"/);
+    expect(purchase).toMatch(/catch\(\(\)\s*=>\s*\{\s*setPriceLoadFailed\(true\)/);
+    expect(purchase).toContain("checkoutBlocked");
+    expect(purchase).toMatch(/disabled=\{loading \|\| checkoutBlocked\}/);
+    expect(purchase).toContain("purchase-price-error");
+  });
 });

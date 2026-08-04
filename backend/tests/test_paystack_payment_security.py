@@ -213,6 +213,30 @@ def test_wrong_currency_rejected():
     _run(go())
 
 
+def test_verify_purchase_route_surfaces_failed_status_not_pending():
+    # Bug fix (purchase-flow audit, 2026-08-04): _fulfill_payment can
+    # genuinely return status="failed" (amount_mismatch) -- GET
+    # /purchase/verify/{reference} used to fall through to the generic
+    # {"status": "pending"} response in that case, so the customer's
+    # payment-success page never showed a failure and just kept polling
+    # until it timed out. It must now surface status="failed" directly.
+    async def go():
+        await _clear()
+        await _set_secret()
+        ref = "ASE-VERIFYFAIL"
+        await _seed_tx(ref, amount_kobo=30000000)
+        fake_resp = _fake_verify_response(amount=10000000)  # underpaid
+        with patch("httpx.AsyncClient") as MockClient:
+            instance = MockClient.return_value.__aenter__.return_value
+            instance.get = _async_return(fake_resp)
+            result = await srv.verify_purchase(ref, _FakeRequest(b"", ip="9.9.9.9"))
+        assert result["status"] == "failed"
+        assert result["payment_status"] == "failed"
+        assert result["pin"] is None
+        await _clear()
+    _run(go())
+
+
 def test_unknown_reference_rejected():
     async def go():
         await _clear()
