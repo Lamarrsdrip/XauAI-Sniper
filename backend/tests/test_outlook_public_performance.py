@@ -244,6 +244,44 @@ class TestConversionAndStats:
             assert stats["total_pips"] == 0.0
         _run(go())
 
+    def test_avg_win_avg_loss_best_worst_computed_from_real_data(self):
+        async def go():
+            await _clear()
+            await srv.db.cloud_market_outlooks.insert_one(_completed_outlook(
+                id="w1", classification_at=(_REF + timedelta(hours=0)).isoformat(),
+                analytics_outcome=mo.ANALYTICS_WIN, analytics_r=0.5, risk_distance=10.0))
+            await srv.db.cloud_market_outlooks.insert_one(_completed_outlook(
+                id="w2", classification_at=(_REF + timedelta(hours=1)).isoformat(),
+                analytics_outcome=mo.ANALYTICS_WIN, analytics_r=1.5, risk_distance=10.0))
+            await srv.db.cloud_market_outlooks.insert_one(_completed_outlook(
+                id="l1", classification_at=(_REF + timedelta(hours=2)).isoformat(),
+                analytics_outcome=mo.ANALYTICS_LOSS, analytics_r=-1.0, risk_distance=10.0))
+            result = await routes.build_public_outlook_performance(srv.db)
+            stats = result["stats"]
+            assert stats["average_win_r"] == 1.0  # (0.5 + 1.5) / 2
+            assert stats["average_loss_r"] == -1.0
+            assert stats["best_trade_r"] == 1.5
+            assert stats["worst_trade_r"] == -1.0
+        _run(go())
+
+    def test_cumulative_r_curve_is_chronological_and_matches_total_r(self):
+        async def go():
+            await _clear()
+            await srv.db.cloud_market_outlooks.insert_one(_completed_outlook(
+                id="first", classification_at=(_REF + timedelta(hours=0)).isoformat(),
+                analytics_outcome=mo.ANALYTICS_WIN, analytics_r=1.0, risk_distance=10.0))
+            await srv.db.cloud_market_outlooks.insert_one(_completed_outlook(
+                id="second", classification_at=(_REF + timedelta(hours=1)).isoformat(),
+                analytics_outcome=mo.ANALYTICS_LOSS, analytics_r=-0.4, risk_distance=10.0))
+            await srv.db.cloud_market_outlooks.insert_one(_completed_outlook(
+                id="third", classification_at=(_REF + timedelta(hours=2)).isoformat(),
+                analytics_outcome=mo.ANALYTICS_WIN, analytics_r=0.5, risk_distance=10.0))
+            result = await routes.build_public_outlook_performance(srv.db)
+            curve = result["cumulative_r_curve"]
+            assert [c["cumulative_r"] for c in curve] == [1.0, 0.6, 1.1]
+            assert curve[-1]["cumulative_r"] == result["stats"]["total_r"]
+        _run(go())
+
     def test_never_reads_automated_trade_result(self):
         """The advisory public feed must never surface the real account's
         trade outcome -- that's a separate, owner-directive-distinct

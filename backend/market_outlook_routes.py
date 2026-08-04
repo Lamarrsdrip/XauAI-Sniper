@@ -147,24 +147,41 @@ async def build_public_outlook_performance(db, limit: int = 10) -> dict:
 
     total_pips, total_gold_moves = 0.0, 0.0
     wins = losses = 0
-    rs = []
+    rs, win_rs, loss_rs = [], [], []
     for row in all_rows:
         conversion = mo.build_result_conversion(r=row.get("analytics_r"), risk_distance=row.get("risk_distance"))
-        if row.get("analytics_outcome") == mo.ANALYTICS_WIN:
+        is_win = row.get("analytics_outcome") == mo.ANALYTICS_WIN
+        if is_win:
             wins += 1
         else:
             losses += 1
         if conversion["result_r"] is not None:
             rs.append(conversion["result_r"])
+            (win_rs if is_win else loss_rs).append(conversion["result_r"])
         if conversion["result_pips"] is not None:
             total_pips += conversion["result_pips"]
         if conversion["result_gold_moves"] is not None:
             total_gold_moves += conversion["result_gold_moves"]
 
     signals = [_outlook_to_signal_card(row) for row in all_rows[:limit]]
+
+    # Cumulative R curve for the performance chart -- chronological
+    # (oldest-first) cumulative sum over every genuinely completed signal,
+    # same underlying rows as the stats above (not the truncated display
+    # window), so the chart can never disagree with the stat cards.
+    cumulative_r_curve = []
+    running = 0.0
+    for row in reversed(all_rows):  # all_rows is newest-first; walk oldest-first
+        conversion = mo.build_result_conversion(r=row.get("analytics_r"), risk_distance=row.get("risk_distance"))
+        if conversion["result_r"] is None:
+            continue
+        running = round(running + conversion["result_r"], 4)
+        cumulative_r_curve.append({"closed_at": row.get("classification_at"), "cumulative_r": running})
+
     win_rate = round(wins / (wins + losses), 3) if (wins + losses) else None
     return {
         "signals": signals,
+        "cumulative_r_curve": cumulative_r_curve,
         "stats": {
             "count": wins + losses,
             "wins": wins,
@@ -174,6 +191,10 @@ async def build_public_outlook_performance(db, limit: int = 10) -> dict:
             "average_r": round(sum(rs) / len(rs), 2) if rs else None,
             "total_pips": round(total_pips, 1) if (wins + losses) else None,
             "total_gold_moves": round(total_gold_moves, 2) if (wins + losses) else None,
+            "average_win_r": round(sum(win_rs) / len(win_rs), 2) if win_rs else None,
+            "average_loss_r": round(sum(loss_rs) / len(loss_rs), 2) if loss_rs else None,
+            "best_trade_r": max(rs) if rs else None,
+            "worst_trade_r": min(rs) if rs else None,
         },
     }
 
