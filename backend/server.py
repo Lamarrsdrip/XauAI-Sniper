@@ -126,6 +126,7 @@ def _client_ip(request: Request) -> str:
 
 
 PAYSTACK_BASE_URL = "https://api.paystack.co"
+
 # v6.25.3 owner directive 2026-07-17 (final pre-launch hardening, Phase 2) --
 # the Paystack callback_url used to be built directly from a client-supplied
 # origin_url with no allowlist, so any caller of /purchase/initialize could
@@ -495,6 +496,33 @@ class PurchaseInitRequest(BaseModel):
     buyer_name: str
     buyer_email: str
     origin_url: str
+    display_currency: Optional[str] = None  # what /purchase/price last showed this buyer; audit only, never affects the actual charge
+
+class BankTransferInitiateRequest(BaseModel):
+    buyer_name: str
+    buyer_email: str
+
+class BankTransferProofRequest(BaseModel):
+    proof_image: str  # data:image/... URL
+
+class BankTransferAdminActionRequest(BaseModel):
+    reason: Optional[str] = ""
+
+class AdminBankTransferSettingsUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    bank_name: Optional[str] = None
+    account_name: Optional[str] = None
+    account_number: Optional[str] = None
+    timeout_minutes: Optional[int] = None
+    proof_required: Optional[bool] = None
+    support_contact: Optional[str] = None
+    instructions: Optional[str] = None
+
+class AdminPaymentMethodsSettingsUpdate(BaseModel):
+    paystack_enabled: Optional[bool] = None
+    nomba_enabled: Optional[bool] = None
+    default_payment_method: Optional[str] = None  # "bank_transfer" | "paystack" | "nomba"
+    payment_method_order: Optional[List[str]] = None
 
 class AdminSettingsUpdate(BaseModel):
     paystack_secret_key: Optional[str] = None
@@ -705,19 +733,138 @@ async def _send_email(to_email: str, subject: str, html: str) -> bool:
         logger.error(f"Email send failed: {e}")
         return False
 
+TELEGRAM_SUPPORT_URL = "https://t.me/emrizeth"
+
 async def send_pin_email(to_email: str, buyer_name: str, pin: str):
+    """Fulfillment email -- resolves the current approved release from the
+    one authoritative manifest (_current_ea_release()) at SEND time, never a
+    hardcoded version. The download button deep-links to the Command Center
+    rather than embedding a direct file URL: the actual signed download
+    token (GET /download/request-token -> /download/ea-release) is only
+    ever minted for whatever release is current at the moment the customer
+    is authenticated and clicks it, so an old purchase email always resolves
+    to the newest approved build, never the version that existed when the
+    email was first sent."""
+    release = _current_ea_release()
+    version_line = f"Current version: <strong>{release['version']}</strong>" if release else "Current version: check Command Center"
+    changelog = (release or {}).get("release_notes", "")
+    changelog_html = f'<p style="margin-top:12px;color:#555;font-size:13px;line-height:1.5;">{changelog}</p>' if changelog else ""
+    command_center_url = f"{PUBLIC_SITE_URL}/command"
     html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
-<h2 style="color:#B8860B;">XauCloud EA - License PIN</h2>
+<h2 style="color:#B8860B;">XauCloud - Payment Confirmed</h2>
 <p>Hello {buyer_name or 'Trader'},</p>
 <p>Thank you for your purchase! Here is your unique license PIN:</p>
 <div style="background:#f5f5f5;border:2px solid #B8860B;padding:20px;text-align:center;margin:20px 0;">
 <span style="font-family:monospace;font-size:28px;font-weight:bold;letter-spacing:3px;">{pin}</span>
 </div>
-<p><strong>How to use:</strong></p>
-<ol><li>Download the EA from our website</li><li>Install on MetaTrader 5 (follow our Setup Guide)</li><li>Enter this PIN in the EA settings</li><li>Enable Auto Trading and start!</li></ol>
-<p style="color:#888;font-size:12px;">Keep this PIN private. Each PIN works on one MT5 account.</p>
+<p style="font-size:13px;color:#333;">{version_line}</p>
+{changelog_html}
+<div style="text-align:center;margin:24px 0;">
+<a href="{command_center_url}" style="display:inline-block;background:#B8860B;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold;font-size:14px;margin:6px;">Download Latest XauCloud</a>
+<a href="{command_center_url}" style="display:inline-block;background:#222;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold;font-size:14px;margin:6px;">Open Command Center</a>
+</div>
+<p><strong>Quick start:</strong></p>
+<ol><li>Sign in to Command Center and link this PIN</li><li>Download the compiled EX5 from your Command Center dashboard</li><li>Install on MetaTrader 5 (see the full install guide in Command Center)</li><li>Enter this PIN in the EA settings and enable Algo Trading</li></ol>
+<div style="text-align:center;margin:20px 0;">
+<a href="{TELEGRAM_SUPPORT_URL}" style="display:inline-block;background:#229ED9;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:bold;font-size:13px;">Message XauCloud Support on Telegram</a>
+</div>
+<p style="color:#888;font-size:12px;">Keep this PIN private. Each PIN works on one MT5 account. Trading involves risk; past results do not guarantee future performance.</p>
 </div>"""
-    return await _send_email(to_email, "Your XauCloud EA License PIN", html)
+    return await _send_email(to_email, "Your XauCloud License PIN", html)
+
+_ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@aisniper.com").lower()
+
+async def _notify_admin(subject: str, html: str) -> bool:
+    return await _send_email(_ADMIN_NOTIFICATION_EMAIL, subject, html)
+
+async def send_bank_transfer_instructions_email(to_email: str, buyer_name: str, order: dict):
+    """Sent immediately after a bank-transfer order is created -- the
+    customer's own copy of the transfer details/reference/deadline, in
+    case they navigate away from the in-page instructions. Never implies
+    the order is paid; that only happens after admin approval sends
+    send_pin_email separately."""
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+<h2 style="color:#B8860B;">XauCloud - Bank Transfer Instructions</h2>
+<p>Hello {buyer_name or 'Trader'},</p>
+<p>Please transfer the exact amount below to complete your XauCloud purchase:</p>
+<div style="background:#f5f5f5;border:2px solid #B8860B;padding:16px;margin:16px 0;font-size:14px;">
+<p style="margin:4px 0;"><strong>Amount:</strong> {order['amount_formatted']}</p>
+<p style="margin:4px 0;"><strong>Bank:</strong> {order['bank_name']}</p>
+<p style="margin:4px 0;"><strong>Account name:</strong> {order['account_name']}</p>
+<p style="margin:4px 0;"><strong>Account number:</strong> {order['account_number']}</p>
+<p style="margin:4px 0;"><strong>Reference:</strong> {order['reference']}</p>
+</div>
+<p style="font-size:13px;color:#333;">This order expires at {order['expires_at']}. Once you've transferred, return to the site and click "I have made the transfer," then wait for admin approval -- you'll receive your license PIN by email once approved.</p>
+<div style="text-align:center;margin:20px 0;">
+<a href="{TELEGRAM_SUPPORT_URL}" style="display:inline-block;background:#229ED9;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:bold;font-size:13px;">Message XauCloud Support on Telegram</a>
+</div>
+</div>"""
+    return await _send_email(to_email, f"XauCloud Bank Transfer Instructions — {order['reference']}", html)
+
+async def send_bank_transfer_rejected_email(to_email: str, buyer_name: str, reference: str, reason: str):
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+<h2 style="color:#B8860B;">XauCloud - Bank Transfer Not Approved</h2>
+<p>Hello {buyer_name or 'Trader'},</p>
+<p>Your bank transfer order <strong>{reference}</strong> could not be approved.</p>
+{f'<p style="color:#555;">Reason: {reason}</p>' if reason else ''}
+<p style="font-size:13px;">If you believe this is a mistake, please contact support with your reference number.</p>
+<div style="text-align:center;margin:20px 0;">
+<a href="{TELEGRAM_SUPPORT_URL}" style="display:inline-block;background:#229ED9;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:bold;font-size:13px;">Message XauCloud Support on Telegram</a>
+</div>
+</div>"""
+    return await _send_email(to_email, f"XauCloud Bank Transfer Not Approved — {reference}", html)
+
+async def notify_admin_new_order(channel: str, reference: str, buyer_name: str, buyer_email: str, amount_formatted: str):
+    html = f"""<div style="font-family:Arial,sans-serif;">
+<h3>New XauCloud order — {channel}</h3>
+<p>Reference: {reference}<br>Buyer: {buyer_name} &lt;{buyer_email}&gt;<br>Amount: {amount_formatted}</p>
+</div>"""
+    return await _notify_admin(f"New {channel} order — {reference}", html)
+
+async def notify_admin_bank_transfer_submitted(tx: dict):
+    naira = tx.get("amount_kobo", 0) / 100
+    admin_url = f"{PUBLIC_SITE_URL}/admin"
+    html = f"""<div style="font-family:Arial,sans-serif;">
+<h3>Bank transfer marked as paid — needs review</h3>
+<p>Reference: {tx.get('reference')}<br>Buyer: {tx.get('buyer_name')} &lt;{tx.get('buyer_email')}&gt;<br>Amount: ₦{naira:,.0f}</p>
+<p><a href="{admin_url}">Review in Admin Dashboard</a></p>
+</div>"""
+    return await _notify_admin(f"Bank transfer submitted — {tx.get('reference')}", html)
+
+async def _record_fulfillment_email_result(reference: str, buyer_name: str, buyer_email: str, pin: str, email_sent: bool):
+    """The order is already marked FULFILLED and the license already
+    exists by the time this runs -- a failed send must never be silently
+    lost (the spec's "do not lose the paid order... alert the admin"
+    requirement). No background retry queue exists in this deployment, so
+    this flags the order for admin visibility/manual resend rather than
+    auto-retrying blind."""
+    if email_sent:
+        return
+    await db.payment_transactions.update_one(
+        {"reference": reference},
+        {"$set": {"fulfillment_email_failed": True, "fulfillment_email_failed_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    logger.error(f"FULFILLMENT_EMAIL_FAILED ref={reference} buyer={buyer_email} -- order is FULFILLED but the customer may not have received their PIN")
+    admin_url = f"{PUBLIC_SITE_URL}/admin"
+    html = f"""<div style="font-family:Arial,sans-serif;">
+<h3>Fulfillment email failed to send</h3>
+<p>Reference: {reference}<br>Buyer: {buyer_name} &lt;{buyer_email}&gt;<br>PIN: {pin}</p>
+<p>The order is fulfilled and the license exists, but the customer may not have received it. Please resend manually or check SMTP configuration.</p>
+<p><a href="{admin_url}">Review in Admin Dashboard</a></p>
+</div>"""
+    await _notify_admin(f"Fulfillment email FAILED — {reference}", html)
+
+@api_router.post("/admin/orders/{reference}/resend-fulfillment-email", dependencies=[Depends(get_current_admin)])
+async def admin_resend_fulfillment_email(reference: str):
+    tx = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not tx.get("pin_generated"):
+        raise HTTPException(status_code=409, detail="This order has no license to resend yet.")
+    sent = await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), tx["pin_generated"])
+    if sent:
+        await db.payment_transactions.update_one({"reference": reference}, {"$unset": {"fulfillment_email_failed": ""}})
+    return {"sent": sent}
 
 # -------------------------------------------------------------------
 # PUBLIC ROUTES
@@ -941,29 +1088,142 @@ async def validate_pin(req: PinValidateRequest):
         return {"valid": False, "reason": detail.get("message") or detail.get("reason") or "License check failed"}
     return {"valid": True, "pin": lic.get("pin", req.pin), "message": "License verified"}
 
-# --- Purchase (public) ---
-@api_router.get("/purchase/price")
-async def get_pin_price():
+# --- Currency display (indicative only -- NGN 300,000 stays the sole
+# commercial source of truth and the sole currency Nomba actually charges;
+# every other currency shown here is a convenience conversion for the
+# visitor, never something the payment provider bills them in) ---
+EXCHANGE_RATE_API_KEY = os.environ.get("EXCHANGE_RATE_API_KEY", "")
+FX_RATE_CACHE_TTL_SECONDS = 3600  # exchangerate-api free tier is 1500 req/month; an hourly refresh is generous
+_fx_rate_cache: Dict = {}
+_fx_rate_cache_time: float = 0
+
+# Minimal, best-effort country->currency map for detection only -- display
+# currency is always overridable by the visitor and never gates or changes
+# what they're actually charged (always NGN today).
+_COUNTRY_TO_DISPLAY_CURRENCY = {
+    "NG": "NGN", "US": "USD", "GB": "GBP", "CA": "USD", "AU": "USD",
+    "DE": "EUR", "FR": "EUR", "ES": "EUR", "IT": "EUR", "NL": "EUR", "IE": "EUR",
+    "ZA": "USD", "KE": "USD", "GH": "USD", "IN": "USD", "AE": "USD",
+}
+
+async def _get_fx_rates() -> dict:
+    """Returns a dict of {currency_code: rate_from_ngn} or {} if the API
+    isn't configured or the fetch fails -- callers must treat an empty dict
+    as "no conversion available" and fall back to NGN-only display, never
+    fabricate a rate."""
+    global _fx_rate_cache, _fx_rate_cache_time
+    now = time.time()
+    if _fx_rate_cache and now - _fx_rate_cache_time < FX_RATE_CACHE_TTL_SECONDS:
+        return _fx_rate_cache
+    if not EXCHANGE_RATE_API_KEY:
+        return _fx_rate_cache  # last-known-good (possibly empty) rather than erroring
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as http:
+            resp = await http.get(f"https://v6.exchangerate-api.com/v6/{EXCHANGE_RATE_API_KEY}/latest/NGN")
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("result") == "success":
+                _fx_rate_cache = data.get("conversion_rates", {})
+                _fx_rate_cache_time = now
+    except Exception as e:
+        logger.warning(f"FX rate fetch failed: {e}")
+    return _fx_rate_cache
+
+def _detect_country_code(request: Request) -> str:
+    """CDN-provided country header (Cloudflare/Vercel-style edge headers)
+    first, Accept-Language country subtag as a secondary signal, empty
+    string if neither is present -- never guesses further than that.
+    Shared by currency display (informational) and bank-transfer
+    eligibility (a real access-control gate, re-validated server-side on
+    every bank-transfer endpoint regardless of what the UI showed)."""
+    country = (
+        request.headers.get("cf-ipcountry")
+        or request.headers.get("x-vercel-ip-country")
+        or request.headers.get("x-country-code")
+        or ""
+    ).upper()
+    if not country:
+        accept_lang = request.headers.get("accept-language", "")
+        # e.g. "en-NG,en;q=0.9" -> "NG"
+        m = re.search(r"-([A-Z]{2})\b", accept_lang.upper())
+        if m:
+            country = m.group(1)
+    return country
+
+def _detect_display_currency(request: Request, requested: Optional[str] = None) -> str:
+    """Precedence: explicit visitor selection > detected country > NGN-for-
+    Nigeria/USD-international default. Never used to change what's
+    actually charged."""
+    if requested:
+        return requested.upper()
+    country = _detect_country_code(request)
+    if country == "NG":
+        return "NGN"
+    return _COUNTRY_TO_DISPLAY_CURRENCY.get(country, "USD")
+
+async def _build_price_display(display_currency: str) -> dict:
     s = await get_settings()
     kobo = s.get("pin_price_kobo", 30000000)
     naira = kobo / 100
-    nomba_cfg, nomba_creds = await get_active_nomba_credentials()
-    return {
+    result = {
         "price_kobo": kobo, "price_naira": naira, "currency": "NGN",
-        "payment_method": "nomba" if nomba_creds else "unavailable",
-        "formatted": f"\u20a6{naira:,.0f}",
+        "charge_currency": "NGN",  # what the customer is actually billed -- always NGN today
+        "formatted": f"₦{naira:,.0f}",
+        "display_currency": display_currency,
+        "display_amount": None,
+        "display_amount_formatted": None,
+        "fx_rate": None,
+        "fx_rate_indicative": True,
+        "fx_rate_as_of": None,
     }
+    if display_currency == "NGN":
+        result["display_amount"] = naira
+        result["display_amount_formatted"] = result["formatted"]
+        result["fx_rate_indicative"] = False  # NGN display IS the exact charge amount, not a conversion
+        return result
+    rates = await _get_fx_rates()
+    rate = rates.get(display_currency)
+    if rate:
+        converted = naira * rate
+        result["display_amount"] = round(converted, 2)
+        result["display_amount_formatted"] = f"{display_currency} {converted:,.2f}"
+        result["fx_rate"] = rate
+        result["fx_rate_as_of"] = datetime.fromtimestamp(_fx_rate_cache_time, tz=timezone.utc).isoformat() if _fx_rate_cache_time else None
+    return result
+
+# --- Purchase (public) ---
+@api_router.get("/purchase/price")
+async def get_pin_price(request: Request, display_currency: Optional[str] = None):
+    detected = _detect_display_currency(request, display_currency)
+    price_display = await _build_price_display(detected)
+    # Bug fix: this used to hard-gate the entire purchase flow on Nomba
+    # credentials alone (a leftover from before the payment-method-priority
+    # reorder), so once Nomba was demoted to disabled-by-default this field
+    # read "unavailable" even when Manual Bank Transfer and/or Paystack were
+    # fully configured and working -- the frontend's "Payments Unavailable"
+    # button state is driven directly off this field. Now checks every
+    # provider via the same _payment_method_availability used by
+    # /purchase/payment-methods, and is only "unavailable" when NONE of them
+    # can actually take a payment.
+    settings = await _get_payment_methods_settings()
+    availability = await _payment_method_availability(request)
+    available_methods = [m for m in settings["payment_method_order"] if availability.get(m)]
+    price_display["payment_method"] = available_methods[0] if available_methods else "unavailable"
+    return price_display
 
 @api_router.post("/purchase/initialize")
 async def initialize_purchase(req: PurchaseInitRequest, request: Request):
-    # v-nomba-migration owner directive -- Paystack is no longer the
-    # active payment provider for new purchases (historical Paystack
-    # transactions/licenses are untouched -- see
-    # audits/nomba_migration/01_paystack_audit.md). This endpoint now
-    # creates a Nomba checkout order exclusively; if Nomba isn't enabled
-    # and fully configured, it fails closed with 503 rather than ever
-    # falling back to Paystack for a new sale.
+    # Owner directive (payment-priority reorder): Nomba is disabled by
+    # default until bank/provider approval completes, and is now the LAST
+    # option after Manual Bank Transfer and Paystack, not the sole active
+    # provider. This gate is checked BEFORE touching Nomba credentials at
+    # all, so a disabled-Nomba visitor gets a clean 503 rather than this
+    # endpoint attempting (and possibly failing loudly on) a live Nomba
+    # call for a provider the admin explicitly turned off.
     _rate_limit(f"purchase_init_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
+    payment_settings = await _get_payment_methods_settings()
+    if not payment_settings["nomba_enabled"]:
+        raise HTTPException(status_code=503, detail="Nomba is not currently available. Please choose Manual Bank Transfer or Paystack instead.")
     nomba_cfg, creds = await get_active_nomba_credentials()
     if not creds:
         raise HTTPException(status_code=503, detail="Payment system not configured yet.")
@@ -976,10 +1236,19 @@ async def initialize_purchase(req: PurchaseInitRequest, request: Request):
     # origin_url would let any caller redirect the post-payment browser
     # flow to an arbitrary attacker-controlled domain.
     callback_url = f"{PUBLIC_SITE_URL}/purchase/success?reference={ref}"
+    # Audit trail of what was shown to the buyer at checkout -- purely
+    # informational (never affects amount_kobo/currency, which are always
+    # server-computed from admin settings above), recorded so a support
+    # dispute can see exactly what indicative conversion the buyer saw.
+    display_price = await _build_price_display(_detect_display_currency(request, req.display_currency))
     tx = {"id": str(uuid.uuid4()), "reference": ref, "amount_kobo": kobo, "currency": "NGN",
           "provider": "NOMBA", "nomba_order_reference": ref, "nomba_transaction_id": None,
           "buyer_name": req.buyer_name, "buyer_email": req.buyer_email,
           "payment_status": "PENDING", "pin_generated": None,
+          "display_currency": display_price["display_currency"],
+          "display_amount": display_price["display_amount"],
+          "fx_rate": display_price["fx_rate"],
+          "fx_rate_as_of": display_price["fx_rate_as_of"],
           "created_at": datetime.now(timezone.utc).isoformat(), "state_transitions": {}}
     await db.payment_transactions.insert_one(tx)
 
@@ -995,6 +1264,61 @@ async def initialize_purchase(req: PurchaseInitRequest, request: Request):
         logger.error(f"NOMBA_INITIALIZE_FAILED ref={ref}: {exc}")
         raise HTTPException(status_code=502, detail="Payment init failed") from exc
     return {"authorization_url": result["checkout_link"], "reference": result["order_reference"]}
+
+
+@api_router.post("/purchase/paystack/initialize")
+async def initialize_paystack_purchase(req: PurchaseInitRequest, request: Request):
+    """Rebuilds the standalone Paystack checkout-initiation flow that the
+    Nomba migration removed entirely (only /transaction/verify remained,
+    for historical transactions). Paystack is now the second payment
+    option, independent of Nomba's enabled/disabled state or any Nomba
+    outage -- this handler never touches Nomba config at all. Fulfillment
+    for the resulting order goes through the existing, already-hardened
+    _fulfill_payment() (signature-verified webhook, real transaction/verify
+    cross-check, amount/currency validation, atomic idempotent fulfillment)
+    unchanged -- only the order-creation half was missing."""
+    _rate_limit(f"purchase_paystack_init_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
+    payment_settings = await _get_payment_methods_settings()
+    if not payment_settings["paystack_enabled"]:
+        raise HTTPException(status_code=503, detail="Card payment is not currently available.")
+    s = await get_settings()
+    pk = s.get("paystack_secret_key", "")
+    if not pk:
+        raise HTTPException(status_code=503, detail="Payment system not configured yet.")
+    kobo = s.get("pin_price_kobo", 30000000)
+    naira = kobo / 100
+    ref = f"ASE-{uuid.uuid4().hex[:12].upper()}"
+    # Same discipline as the Nomba path above: callback_url is built ONLY
+    # from the operator-controlled PUBLIC_SITE_URL, never from
+    # req.origin_url, to prevent an open-redirect via a client-supplied
+    # post-payment destination.
+    callback_url = f"{PUBLIC_SITE_URL}/purchase/success?reference={ref}"
+    display_price = await _build_price_display(_detect_display_currency(request, req.display_currency))
+    tx = {
+        "id": str(uuid.uuid4()), "reference": ref, "amount_kobo": kobo, "currency": "NGN",
+        "provider": "PAYSTACK", "buyer_name": req.buyer_name, "buyer_email": req.buyer_email,
+        "payment_status": "PENDING", "pin_generated": None, "state_transitions": {},
+        "display_currency": display_price["display_currency"], "display_amount": display_price["display_amount"],
+        "fx_rate": display_price["fx_rate"], "fx_rate_as_of": display_price["fx_rate_as_of"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.payment_transactions.insert_one(tx)
+    async with httpx.AsyncClient(timeout=15.0) as http:
+        resp = await http.post(
+            f"{PAYSTACK_BASE_URL}/transaction/initialize",
+            headers={"Authorization": f"Bearer {pk}", "Content-Type": "application/json"},
+            json={"email": req.buyer_email, "amount": kobo, "reference": ref, "callback_url": callback_url,
+                  "metadata": {"buyer_name": req.buyer_name}, "currency": "NGN"},
+        )
+    if resp.status_code != 200:
+        await db.payment_transactions.update_one({"reference": ref}, {"$set": {"payment_status": "FAILED"}})
+        logger.error(f"PAYSTACK_INITIALIZE_HTTP_ERROR ref={ref} status={resp.status_code}")
+        raise HTTPException(status_code=502, detail="Payment init failed")
+    data = resp.json()
+    if not data.get("status"):
+        await db.payment_transactions.update_one({"reference": ref}, {"$set": {"payment_status": "FAILED"}})
+        raise HTTPException(status_code=502, detail=data.get("message", "Failed"))
+    return {"authorization_url": data["data"]["authorization_url"], "reference": ref}
 
 
 def _verify_paystack_signature(raw_body: bytes, signature: str, secret: str) -> bool:
@@ -1117,7 +1441,9 @@ async def _fulfill_payment(reference: str, source: str) -> dict:
         pin = existing["pin"] if existing else pin
     await db.payment_transactions.update_one(
         {"reference": reference}, {"$set": {"pin_generated": pin, "payment_status": "FULFILLED"}})
-    await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    email_sent = await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    await _record_fulfillment_email_result(reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), pin, email_sent)
+    await notify_admin_new_order("card payment confirmed", reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), f"₦{tx.get('amount_kobo', 0) / 100:,.0f}")
     logger.info(f"PAYSTACK_FULFILLED ref={reference} source={source}")
     return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
 
@@ -1204,9 +1530,280 @@ async def _fulfill_nomba_payment(reference: str, source: str) -> dict:
         {"reference": reference},
         {"$set": {"pin_generated": pin, "payment_status": "FULFILLED", "nomba_transaction_id": result.nomba_transaction_id}},
     )
-    await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    email_sent = await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    await _record_fulfillment_email_result(reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), pin, email_sent)
+    await notify_admin_new_order("card payment confirmed", reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), f"₦{tx.get('amount_kobo', 0) / 100:,.0f}")
     logger.info(f"NOMBA_FULFILLED ref={reference} source={source}")
     return {"status": "success", "pin": pin, "buyer_name": tx.get("buyer_name", "")}
+
+
+# ---------------------------------------------------------------------------
+# Manual Nigeria-only bank transfer -- a second, deliberately manual purchase
+# path alongside Nomba's automatic card/transfer/ussd checkout above (kept
+# separate at the owner's request; see the payment-method decision this
+# session). A customer transfers directly to an admin-configured bank
+# account and clicks "I have made the transfer"; that action ONLY ever
+# advances payment_status to BANK_TRANSFER_SUBMITTED -- it can never mint a
+# license, bind an entitlement, or send the fulfillment email. Only an
+# authenticated admin's explicit approval can do that, via the same
+# _transition_payment_state() atomic-conditional-update mechanism the
+# Nomba/Paystack paths already use, so a double-click or two admins racing
+# each other still can't fulfill twice (plus the same DB-level unique index
+# on pin_licenses.payment_ref as defense-in-depth).
+# ---------------------------------------------------------------------------
+
+async def _get_bank_transfer_settings() -> dict:
+    s = await get_settings()
+    return {
+        "enabled": s.get("bank_transfer_enabled", False),
+        "bank_name": s.get("bank_transfer_bank_name", ""),
+        "account_name": s.get("bank_transfer_account_name", ""),
+        "account_number": s.get("bank_transfer_account_number", ""),
+        "timeout_minutes": s.get("bank_transfer_timeout_minutes", 60),
+        "proof_required": s.get("bank_transfer_proof_required", False),
+        "support_contact": s.get("bank_transfer_support_contact", TELEGRAM_SUPPORT_URL),
+        "instructions": s.get("bank_transfer_instructions", ""),
+    }
+
+def _bank_transfer_is_configured(settings: dict) -> bool:
+    return bool(settings.get("bank_name") and settings.get("account_name") and settings.get("account_number"))
+
+# ---------------------------------------------------------------------------
+# Payment method priority/availability -- production default per owner
+# directive: Manual Bank Transfer first and default (Nigerian customers),
+# Paystack second and fully active, Nomba last and disabled until the
+# provider approval completes. Each method's availability is computed
+# independently and defensively (try/except around anything that touches a
+# specific provider's config) so one provider being broken, misconfigured,
+# or mid-approval can never take the other two down with it.
+# ---------------------------------------------------------------------------
+_DEFAULT_PAYMENT_METHOD_ORDER = ["bank_transfer", "paystack", "nomba"]
+_PAYMENT_METHOD_COPY = {
+    "bank_transfer": {
+        "label": "Nigeria Bank Transfer",
+        "description": "Transfer to our Nigerian bank account. Admin verification required. Order fulfilled after confirmation.",
+        "instant": False,
+    },
+    "paystack": {
+        "label": "Pay with Paystack",
+        "description": "Card and supported Paystack payment methods. Instant fulfillment after verified payment.",
+        "instant": True,
+    },
+    "nomba": {
+        "label": "Nomba",
+        "description": "Awaiting approval. Not currently available.",
+        "instant": True,
+    },
+}
+
+async def _get_payment_methods_settings() -> dict:
+    s = await get_settings()
+    order = s.get("payment_method_order") or _DEFAULT_PAYMENT_METHOD_ORDER
+    # Defensive against a stored order that's missing/duplicating entries
+    # (e.g. hand-edited) -- always resolves to exactly the 3 known methods.
+    order = [m for m in order if m in _PAYMENT_METHOD_COPY] + [m for m in _DEFAULT_PAYMENT_METHOD_ORDER if m not in order]
+    return {
+        "paystack_enabled": s.get("payment_paystack_enabled", True),
+        "nomba_enabled": s.get("payment_nomba_enabled", False),
+        "default_payment_method": s.get("payment_default_method", "bank_transfer"),
+        "payment_method_order": order,
+    }
+
+async def _payment_method_availability(request: Request) -> dict:
+    """Returns {"bank_transfer": bool, "paystack": bool, "nomba": bool} --
+    each computed independently; a broken/misconfigured provider only ever
+    turns ITS OWN flag False, never raises, never affects the others."""
+    settings = await _get_payment_methods_settings()
+
+    # Owner directive: bank transfer (destination account is Nigerian, hence
+    # "Nigeria Bank Transfer") is available to every visitor, not gated on
+    # IP-geolocated country. The old country=="NG" check was unreliable --
+    # it blocked genuine Nigerian customers whenever geo-IP detection
+    # guessed wrong (VPNs, mobile carriers, no CDN country header on this
+    # deployment, etc). Availability now depends only on whether the admin
+    # has actually enabled and configured real bank details.
+    bank_transfer_available = False
+    try:
+        bt_settings = await _get_bank_transfer_settings()
+        bank_transfer_available = bt_settings.get("enabled", False) and _bank_transfer_is_configured(bt_settings)
+    except Exception as e:
+        logger.error(f"PAYMENT_METHOD_AVAILABILITY_CHECK_FAILED method=bank_transfer: {e}")
+
+    paystack_available = False
+    try:
+        if settings["paystack_enabled"]:
+            s = await get_settings()
+            paystack_available = bool(s.get("paystack_secret_key"))
+    except Exception as e:
+        logger.error(f"PAYMENT_METHOD_AVAILABILITY_CHECK_FAILED method=paystack: {e}")
+
+    nomba_available = False
+    try:
+        if settings["nomba_enabled"]:
+            _cfg, creds = await get_active_nomba_credentials()
+            nomba_available = bool(creds)
+    except Exception as e:
+        logger.error(f"PAYMENT_METHOD_AVAILABILITY_CHECK_FAILED method=nomba: {e}")
+
+    return {"bank_transfer": bank_transfer_available, "paystack": paystack_available, "nomba": nomba_available}
+
+@api_router.get("/purchase/payment-methods")
+async def list_payment_methods(request: Request):
+    _rate_limit(f"payment_methods_ip:{_client_ip(request)}", max_requests=60, window_seconds=60)
+    settings = await _get_payment_methods_settings()
+    availability = await _payment_method_availability(request)
+    country = _detect_country_code(request)
+
+    methods = []
+    for method in settings["payment_method_order"]:
+        copy = _PAYMENT_METHOD_COPY[method]
+        methods.append({
+            "method": method,
+            "label": copy["label"],
+            "description": copy["description"],
+            "instant": copy["instant"],
+            "available": availability[method],
+        })
+
+    default_method = settings["default_payment_method"]
+    if not availability.get(default_method):
+        # Fall back to the first available method in configured order --
+        # e.g. a non-Nigerian visitor defaults away from bank_transfer
+        # automatically without the frontend needing its own fallback logic.
+        default_method = next((m["method"] for m in methods if m["available"]), None)
+
+    return {"methods": methods, "default_method": default_method, "detected_country": country or None}
+
+async def _bank_transfer_effective_status(tx: dict) -> str:
+    """Lazily expires an order that's past its deadline and still sitting
+    in PENDING/SUBMITTED -- there's no background scheduler in this
+    deployment, so expiry is enforced the moment anyone (customer poll or
+    admin queue) next looks at the order, and persisted at that point."""
+    status = tx.get("payment_status", "")
+    expires_at = tx.get("expires_at")
+    if status in ("BANK_TRANSFER_PENDING", "BANK_TRANSFER_SUBMITTED") and expires_at:
+        if datetime.now(timezone.utc).isoformat() > expires_at:
+            won = await _transition_payment_state(tx["reference"], [status], "BANK_TRANSFER_EXPIRED")
+            if won:
+                return "BANK_TRANSFER_EXPIRED"
+            fresh = await db.payment_transactions.find_one({"reference": tx["reference"]}, {"_id": 0})
+            return (fresh or {}).get("payment_status", status)
+    return status
+
+@api_router.get("/purchase/bank-transfer/eligibility")
+async def bank_transfer_eligibility(request: Request):
+    _rate_limit(f"bank_transfer_eligibility_ip:{_client_ip(request)}", max_requests=60, window_seconds=60)
+    # Owner directive: available to every visitor regardless of geo-IP
+    # detected country -- see _payment_method_availability for why.
+    country = _detect_country_code(request)
+    settings = await _get_bank_transfer_settings()
+    eligible = settings.get("enabled", False) and _bank_transfer_is_configured(settings)
+    return {"eligible": eligible, "detected_country": country or None}
+
+@api_router.post("/purchase/bank-transfer/initiate")
+async def initiate_bank_transfer(req: BankTransferInitiateRequest, request: Request):
+    _rate_limit(f"bank_transfer_init_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
+    # Owner directive: available to every visitor regardless of geo-IP
+    # detected country -- the old NG-only gate blocked genuine Nigerian
+    # customers whenever geo-IP guessed wrong. Still recorded on the order
+    # for admin visibility, just no longer used to reject the request.
+    country = _detect_country_code(request)
+    settings = await _get_bank_transfer_settings()
+    if not settings.get("enabled"):
+        raise HTTPException(status_code=503, detail="Bank transfer is not currently available.")
+    if not _bank_transfer_is_configured(settings):
+        raise HTTPException(status_code=503, detail="Bank transfer is not fully configured yet.")
+    kobo = (await get_settings()).get("pin_price_kobo", 30000000)
+    naira = kobo / 100
+    ref = f"ASE-BT-{uuid.uuid4().hex[:10].upper()}"
+    timeout_minutes = settings.get("timeout_minutes", 60)
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)).isoformat()
+    tx = {
+        "id": str(uuid.uuid4()), "reference": ref, "amount_kobo": kobo, "currency": "NGN",
+        "provider": "BANK_TRANSFER",
+        "buyer_name": req.buyer_name, "buyer_email": req.buyer_email,
+        "payment_status": "BANK_TRANSFER_PENDING", "pin_generated": None,
+        "created_at": datetime.now(timezone.utc).isoformat(), "state_transitions": {},
+        "expires_at": expires_at, "detected_country": country,
+        "bank_transfer_proof": None, "admin_notes": [],
+    }
+    await db.payment_transactions.insert_one(tx)
+    logger.info(f"BANK_TRANSFER_INITIATED ref={ref} country={country}")
+    order = {
+        "reference": ref, "amount_naira": naira, "amount_formatted": f"₦{naira:,.0f}",
+        "bank_name": settings["bank_name"], "account_name": settings["account_name"],
+        "account_number": settings["account_number"],
+        "expires_at": expires_at, "timeout_minutes": timeout_minutes,
+        "proof_required": settings.get("proof_required", False),
+        "instructions": settings.get("instructions", ""),
+        "support_contact": settings.get("support_contact", ""),
+    }
+    # Never let an email hiccup fail order creation -- _send_email already
+    # catches its own exceptions and returns False rather than raising.
+    await send_bank_transfer_instructions_email(req.buyer_email, req.buyer_name, order)
+    await notify_admin_new_order("bank transfer", ref, req.buyer_name, req.buyer_email, order["amount_formatted"])
+    return order
+
+@api_router.post("/purchase/bank-transfer/{reference}/submitted")
+async def bank_transfer_mark_submitted(reference: str, request: Request):
+    """The customer's "I have made the transfer" action. This is the one
+    endpoint in the whole bank-transfer flow that must be the most
+    carefully constrained: it is ONLY ever allowed to move
+    BANK_TRANSFER_PENDING -> BANK_TRANSFER_SUBMITTED. It has no code path
+    that mints a license, touches pin_licenses, or calls send_pin_email --
+    a customer claiming they paid, truthfully or not, can never fulfill
+    their own order."""
+    _rate_limit(f"bank_transfer_submit_ip:{_client_ip(request)}", max_requests=20, window_seconds=600)
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    effective = await _bank_transfer_effective_status(tx)
+    if effective == "BANK_TRANSFER_EXPIRED":
+        raise HTTPException(status_code=410, detail="This order has expired.")
+    won = await _transition_payment_state(reference, ["BANK_TRANSFER_PENDING"], "BANK_TRANSFER_SUBMITTED")
+    if not won:
+        fresh = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+        return {"status": (fresh or {}).get("payment_status", effective)}
+    await notify_admin_bank_transfer_submitted(tx)
+    return {"status": "BANK_TRANSFER_SUBMITTED"}
+
+@api_router.post("/purchase/bank-transfer/{reference}/proof")
+async def bank_transfer_upload_proof(reference: str, req: BankTransferProofRequest, request: Request):
+    _rate_limit(f"bank_transfer_proof_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
+    if not req.proof_image.startswith("data:image/"):
+        raise HTTPException(status_code=400, detail="Proof must be an image.")
+    if len(req.proof_image) > 7_000_000:  # ~5MB of source image once base64-encoded
+        raise HTTPException(status_code=400, detail="Image too large (max ~5MB).")
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    if tx.get("payment_status") not in ("BANK_TRANSFER_PENDING", "BANK_TRANSFER_SUBMITTED"):
+        raise HTTPException(status_code=409, detail="Cannot attach proof at this stage.")
+    await db.payment_transactions.update_one(
+        {"reference": reference},
+        {"$set": {"bank_transfer_proof": req.proof_image, "proof_uploaded_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"status": "ok"}
+
+@api_router.get("/purchase/bank-transfer/{reference}/status")
+async def bank_transfer_status(reference: str, request: Request):
+    # Same generous per-IP window as /purchase/verify/{reference} -- the
+    # frontend legitimately polls this every few seconds while a customer
+    # waits for admin approval.
+    _rate_limit(f"bank_transfer_status_ip:{_client_ip(request)}", max_requests=60, window_seconds=60)
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    status = await _bank_transfer_effective_status(tx)
+    return {
+        "reference": reference, "status": status,
+        # License PIN is never exposed before FULFILLED -- matches "no
+        # license before verified payment" even in the status-polling path.
+        "pin": tx.get("pin_generated") if status == "FULFILLED" else None,
+        "expires_at": tx.get("expires_at"),
+        "rejection_reason": tx.get("rejection_reason"),
+        "has_proof": bool(tx.get("bank_transfer_proof")),
+    }
 
 
 @api_router.get("/purchase/verify/{reference}")
@@ -1405,11 +2002,26 @@ def _load_ea_release_manifest() -> dict:
 
 
 def _current_ea_release() -> Optional[dict]:
+    """The one function every version-facing surface (download, Command
+    Center display, fulfillment email) must call -- never read
+    manifest['current_version'] directly. Fails closed: a release is only
+    ever treated as current if it's both pointed to by current_version AND
+    explicitly marked stable_status=true. This matters because
+    current_version and the releases dict are edited independently (e.g. by
+    the CI auto-promotion workflow); a release that fails validation there
+    must never become servable just because current_version still points at
+    it from a prior, now-stale state."""
     manifest = _load_ea_release_manifest()
     current = manifest.get("current_version")
     if not current:
         return None
-    return manifest.get("releases", {}).get(current)
+    release = manifest.get("releases", {}).get(current)
+    if not release:
+        return None
+    if not release.get("stable_status"):
+        logger.error(f"EA_RELEASE_CURRENT_VERSION_NOT_STABLE version={current} -- refusing to serve/display it")
+        return None
+    return release
 
 
 # ---------------------------------------------------------------------------
@@ -1445,17 +2057,51 @@ def _known_release_versions() -> set:
 def build_public_release_display(ea_version: str) -> dict:
     """Authoritative publicProductName/publicVersion/publicDisplayName. Adding
     a new release to manifest.json is the only thing that changes what this
-    renders -- no frontend component hardcodes a version string."""
+    renders -- no frontend component hardcodes a version string.
+
+    Also the single place that decides "is this customer's attached EA on
+    the latest approved build" -- compares the EA's self-reported version
+    (heartbeat telemetry) against the manifest's current stable release, not
+    against just "some version we've ever shipped" (that's what
+    reported_build_recognized already covers)."""
     release = _current_ea_release()
     public_version = _normalize_release_version((release or {}).get("version") or "")
     reported = _normalize_release_version(ea_version)
     recognized = bool(reported) and reported in _known_release_versions()
+    update_available = bool(public_version) and bool(reported) and reported != public_version
     return {
         "public_product_name": "XauCloud",
         "public_version": public_version or None,
         "public_display_name": f"XauCloud-{public_version}" if public_version else "XauCloud",
         "reported_build_recognized": recognized,
+        "installed_version": reported or None,
+        "latest_version": public_version or None,
+        "update_available": update_available,
+        "latest_release_notes": (release or {}).get("release_notes", ""),
+        "latest_build_timestamp": (release or {}).get("build_timestamp"),
     }
+
+
+def _resolve_update_status(manifest_has_current_pointer: bool, current_release_servable: bool,
+                            license_active: bool, installed_version: Optional[str],
+                            update_available: bool) -> str:
+    """Single customer-facing "what should the Command Center tell them
+    about updating" status, in a defined precedence order -- release
+    availability and license state both gate whether "update available"
+    even makes sense to show. Kept as a pure function (no DB/request access)
+    so it's directly unit-testable without standing up the full
+    /cloud/monitor/status endpoint."""
+    if not manifest_has_current_pointer:
+        return "download_unavailable"
+    if not current_release_servable:
+        return "release_verification_failed"
+    if not license_active:
+        return "license_inactive"
+    if not installed_version:
+        return "installed_version_unknown"
+    if update_available:
+        return "update_available"
+    return "up_to_date"
 
 
 def reconcile_production_timeframe(reported_timeframe: str, build_recognized: bool) -> dict:
@@ -1524,18 +2170,214 @@ async def download_ea_release(token: str):
     lic = await db.pin_licenses.find_one({"id": license_id, "is_active": True}, {"_id": 0})
     if not lic:
         raise HTTPException(status_code=403, detail="License is no longer active.")
-    release = _load_ea_release_manifest().get("releases", {}).get(payload.get("version", ""))
-    if not release:
+    version = payload.get("version", "")
+    release = _load_ea_release_manifest().get("releases", {}).get(version)
+    # Re-check stable_status here, not just at token-mint time: a release
+    # can be disabled by an admin (e.g. a critical bug found) within the
+    # token's short lifetime, and an already-minted token must not still be
+    # able to pull down a build that's since been pulled from circulation.
+    if not release or not release.get("stable_status"):
+        await db.ea_download_log.insert_one({
+            "id": str(uuid.uuid4()), "user_id": payload.get("user_id", ""), "license_id": license_id,
+            "version": version, "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "result": "REJECTED_RELEASE_NOT_AVAILABLE",
+        })
         raise HTTPException(status_code=404, detail="Release no longer available.")
-    p = EA_RELEASES_DIR / payload["version"] / release["ex5_filename"]
+    p = EA_RELEASES_DIR / version / release["ex5_filename"]
     if not p.exists():
-        logger.error(f"EA_RELEASE_ARTIFACT_MISSING version={payload.get('version')} path={p}")
+        logger.error(f"EA_RELEASE_ARTIFACT_MISSING version={version} path={p}")
+        await db.ea_download_log.insert_one({
+            "id": str(uuid.uuid4()), "user_id": payload.get("user_id", ""), "license_id": license_id,
+            "version": version, "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "result": "REJECTED_ARTIFACT_MISSING",
+        })
         raise HTTPException(status_code=404, detail="Release artifact missing.")
+    # Runtime integrity check -- the CI workflow verifies the EX5 hash
+    # against the manifest at push time, but a customer download must never
+    # rely solely on a check that ran once at commit time; recompute the
+    # hash of the exact bytes about to be served and refuse to serve on any
+    # mismatch (corrupted artifact, tampered file, stale manifest entry).
+    actual_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+    expected_hash = release.get("ex5_sha256", "")
+    if actual_hash != expected_hash:
+        logger.error(f"EA_RELEASE_HASH_MISMATCH version={version} expected={expected_hash} actual={actual_hash}")
+        await db.ea_download_log.insert_one({
+            "id": str(uuid.uuid4()), "user_id": payload.get("user_id", ""), "license_id": license_id,
+            "version": version, "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "result": "REJECTED_HASH_MISMATCH",
+        })
+        raise HTTPException(status_code=503, detail="Release integrity check failed. The admin has been alerted.")
     await db.ea_download_log.insert_one({
         "id": str(uuid.uuid4()), "user_id": payload.get("user_id", ""), "license_id": license_id,
-        "version": payload.get("version", ""), "downloaded_at": datetime.now(timezone.utc).isoformat(),
+        "version": version, "downloaded_at": datetime.now(timezone.utc).isoformat(),
+        "result": "SUCCESS",
     })
     return FileResponse(path=str(p), filename=release["customer_filename"], media_type="application/octet-stream")
+
+
+# ---------------------------------------------------------------------------
+# Admin release management -- promote/rollback/disable act directly on
+# backend/ea_releases/manifest.json (the same file _current_ea_release()
+# reads fresh on every call, so a promotion takes effect immediately, no
+# redeploy required). Writes are atomic (temp file + os.replace) to avoid a
+# reader ever observing a half-written file.
+#
+# Durability note: this file write is NOT automatically committed to git.
+# The CI auto-promotion workflow (.github/workflows/ea.yml) is the durable
+# path -- it updates manifest.json as part of a real commit on main, so the
+# change survives the next redeploy. An admin promote/rollback/disable here
+# takes effect immediately on the running instance but will be reverted by
+# the next redeploy unless the admin (or CI) also commits the resulting
+# manifest.json. This makes the admin panel the right tool for an
+# in-the-moment incident response (e.g. emergency rollback), while a normal
+# version bump should go through the push-to-main flow.
+# ---------------------------------------------------------------------------
+
+class ReleasePromoteRequest(BaseModel):
+    version: str
+
+class ReleaseDisableRequest(BaseModel):
+    version: str
+    reason: str = ""
+
+async def _log_release_action(admin_email: str, action: str, version: str, previous_version: Optional[str], detail: str = ""):
+    await db.release_audit_log.insert_one({
+        "id": str(uuid.uuid4()), "admin_email": admin_email, "action": action,
+        "version": version, "previous_version": previous_version, "detail": detail,
+        "at": datetime.now(timezone.utc).isoformat(),
+    })
+
+def _write_manifest(manifest: dict):
+    p = EA_RELEASES_DIR / "manifest.json"
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(_json.dumps(manifest, indent=2), encoding="utf-8")
+    os.replace(tmp, p)
+
+def _verify_release_artifact(version: str, release: dict) -> Optional[str]:
+    """Returns None if the release's EX5 exists on disk and its hash
+    matches the manifest, otherwise a human-readable reason it doesn't."""
+    filename = release.get("ex5_filename", "")
+    if not filename:
+        return "Manifest entry has no ex5_filename."
+    p = EA_RELEASES_DIR / version / filename
+    if not p.exists():
+        return f"EX5 artifact not found at {p}."
+    actual_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+    expected_hash = release.get("ex5_sha256", "")
+    if actual_hash != expected_hash:
+        return f"SHA-256 mismatch: manifest says {expected_hash}, artifact is {actual_hash}."
+    return None
+
+@api_router.get("/admin/releases", dependencies=[Depends(get_current_admin)])
+async def admin_list_releases():
+    manifest = _load_ea_release_manifest()
+    releases = manifest.get("releases", {})
+    current = manifest.get("current_version")
+    download_counts = {}
+    async for doc in db.ea_download_log.aggregate([
+        {"$match": {"result": "SUCCESS"}},
+        {"$group": {"_id": "$version", "count": {"$sum": 1}}},
+    ]):
+        download_counts[doc["_id"]] = doc["count"]
+    out = []
+    for version, release in releases.items():
+        out.append({
+            **release,
+            "is_current": version == current,
+            "artifact_ok": _verify_release_artifact(version, release) is None,
+            "download_count": download_counts.get(version, 0),
+        })
+    out.sort(key=lambda r: r.get("build_timestamp") or "", reverse=True)
+    return {"current_version": current, "releases": out}
+
+@api_router.get("/admin/releases/audit-log", dependencies=[Depends(get_current_admin)])
+async def admin_release_audit_log(limit: int = 100):
+    entries = await db.release_audit_log.find({}, {"_id": 0}).sort("at", -1).limit(min(limit, 500)).to_list(500)
+    return {"total": len(entries), "entries": entries}
+
+@api_router.get("/admin/downloads", dependencies=[Depends(get_current_admin)])
+async def admin_download_log(limit: int = 100):
+    """Read-side of ea_download_log -- previously write-only (every real and
+    rejected download was logged, but nothing ever surfaced it to an admin).
+    Never returns the license's PIN, only its id."""
+    entries = await db.ea_download_log.find({}, {"_id": 0}).sort("downloaded_at", -1).limit(min(limit, 500)).to_list(500)
+    return {"total": len(entries), "entries": entries}
+
+@api_router.post("/admin/releases/promote")
+async def admin_promote_release(req: ReleasePromoteRequest, admin: dict = Depends(get_current_admin)):
+    manifest = _load_ea_release_manifest()
+    releases = manifest.get("releases", {})
+    release = releases.get(req.version)
+    if not release:
+        raise HTTPException(status_code=404, detail=f"No release '{req.version}' in the manifest.")
+    if not release.get("stable_status"):
+        raise HTTPException(status_code=400, detail=f"Release '{req.version}' is not marked stable_status=true. Approve it before promoting.")
+    artifact_problem = _verify_release_artifact(req.version, release)
+    if artifact_problem:
+        raise HTTPException(status_code=422, detail=f"Cannot promote '{req.version}': {artifact_problem}")
+    previous = manifest.get("current_version")
+    if previous == req.version:
+        return {"promoted": True, "version": req.version, "previous_version": previous, "no_op": True}
+    manifest["current_version"] = req.version
+    _write_manifest(manifest)
+    await _log_release_action(admin["email"], "promote", req.version, previous)
+    logger.info(f"EA_RELEASE_PROMOTED version={req.version} previous={previous} admin={admin['email']}")
+    return {"promoted": True, "version": req.version, "previous_version": previous, "no_op": False}
+
+@api_router.post("/admin/releases/rollback")
+async def admin_rollback_release(admin: dict = Depends(get_current_admin)):
+    """Restores the most recent DIFFERENT version that was ever the active
+    current_version (per release_audit_log's promote history), provided it
+    is still stable_status=true and its artifact still checks out. This is
+    the one-click incident-response path -- for promoting an arbitrary
+    specific version, use POST /admin/releases/promote instead."""
+    manifest = _load_ea_release_manifest()
+    current = manifest.get("current_version")
+    history = await db.release_audit_log.find(
+        {"action": {"$in": ["promote", "rollback"]}}, {"_id": 0}
+    ).sort("at", -1).to_list(200)
+    target = None
+    for entry in history:
+        candidate = entry.get("previous_version")
+        if candidate and candidate != current and candidate in manifest.get("releases", {}):
+            target = candidate
+            break
+    if not target:
+        raise HTTPException(status_code=404, detail="No prior version found to roll back to.")
+    release = manifest["releases"][target]
+    if not release.get("stable_status"):
+        raise HTTPException(status_code=409, detail=f"Most recent prior version '{target}' is no longer stable_status=true -- use /admin/releases/promote to choose a specific version instead.")
+    artifact_problem = _verify_release_artifact(target, release)
+    if artifact_problem:
+        raise HTTPException(status_code=422, detail=f"Cannot roll back to '{target}': {artifact_problem}")
+    manifest["current_version"] = target
+    _write_manifest(manifest)
+    await _log_release_action(admin["email"], "rollback", target, current)
+    logger.warning(f"EA_RELEASE_ROLLED_BACK version={target} previous={current} admin={admin['email']}")
+    return {"rolled_back": True, "version": target, "previous_version": current}
+
+@api_router.post("/admin/releases/disable")
+async def admin_disable_release(req: ReleaseDisableRequest, admin: dict = Depends(get_current_admin)):
+    """Marks a release unstable so it can never again be promoted, minted a
+    download token for, or served -- for a compromised/buggy build found
+    after the fact. If the disabled version is the current one, this leaves
+    current_version pointing at a now-unstable entry; _current_ea_release()
+    already fails closed in that case (serves nothing) rather than silently
+    falling back to some other version the admin didn't explicitly choose --
+    use /admin/releases/rollback or /promote right after to pick the
+    replacement explicitly."""
+    manifest = _load_ea_release_manifest()
+    release = manifest.get("releases", {}).get(req.version)
+    if not release:
+        raise HTTPException(status_code=404, detail=f"No release '{req.version}' in the manifest.")
+    if release.get("stable_status") is False:
+        return {"disabled": True, "version": req.version, "no_op": True}
+    release["stable_status"] = False
+    manifest["releases"][req.version] = release
+    _write_manifest(manifest)
+    await _log_release_action(admin["email"], "disable", req.version, manifest.get("current_version"), detail=req.reason)
+    logger.warning(f"EA_RELEASE_DISABLED version={req.version} admin={admin['email']} reason={req.reason!r}")
+    return {"disabled": True, "version": req.version, "no_op": False, "is_current": req.version == manifest.get("current_version")}
 
 
 @api_router.get("/download/ea", deprecated=True)
@@ -2105,6 +2947,184 @@ async def get_nomba_audit_log(admin: dict = Depends(get_current_admin), limit: i
         {"provider": "NOMBA"}, {"_id": 0}
     ).sort("at", -1).to_list(length=min(limit, 200))
     return {"entries": entries}
+
+
+# ---------------------------------------------------------------------------
+# Admin bank-transfer management -- config + review queue for the manual
+# Nigeria-only bank-transfer path (see the customer-facing endpoints above).
+# ---------------------------------------------------------------------------
+
+@api_router.get("/admin/settings/bank-transfer", dependencies=[Depends(get_current_admin)])
+async def admin_get_bank_transfer_settings():
+    return await _get_bank_transfer_settings()
+
+@api_router.put("/admin/settings/bank-transfer")
+async def admin_update_bank_transfer_settings(req: AdminBankTransferSettingsUpdate, admin: dict = Depends(get_current_admin)):
+    field_map = {
+        "enabled": "bank_transfer_enabled", "bank_name": "bank_transfer_bank_name",
+        "account_name": "bank_transfer_account_name", "account_number": "bank_transfer_account_number",
+        "timeout_minutes": "bank_transfer_timeout_minutes", "proof_required": "bank_transfer_proof_required",
+        "support_contact": "bank_transfer_support_contact", "instructions": "bank_transfer_instructions",
+    }
+    updates = {}
+    changed_fields = []
+    for field, db_key in field_map.items():
+        val = getattr(req, field)
+        if val is not None:
+            updates[db_key] = val
+            changed_fields.append(field)
+    if updates:
+        await db.admin_settings.update_one({"key": "main"}, {"$set": updates}, upsert=True)
+        await db.payment_config_audit_log.insert_one({
+            "id": str(uuid.uuid4()), "provider": "BANK_TRANSFER", "admin_email": admin["email"],
+            "changed_fields": changed_fields, "at": datetime.now(timezone.utc).isoformat(),
+        })
+    return await _get_bank_transfer_settings()
+
+@api_router.get("/admin/settings/payment-methods", dependencies=[Depends(get_current_admin)])
+async def admin_get_payment_methods_settings():
+    return await _get_payment_methods_settings()
+
+@api_router.put("/admin/settings/payment-methods")
+async def admin_update_payment_methods_settings(req: AdminPaymentMethodsSettingsUpdate, admin: dict = Depends(get_current_admin)):
+    updates = {}
+    changed_fields = []
+    if req.paystack_enabled is not None:
+        updates["payment_paystack_enabled"] = req.paystack_enabled
+        changed_fields.append("paystack_enabled")
+    if req.nomba_enabled is not None:
+        updates["payment_nomba_enabled"] = req.nomba_enabled
+        changed_fields.append("nomba_enabled")
+    if req.default_payment_method is not None:
+        if req.default_payment_method not in _PAYMENT_METHOD_COPY:
+            raise HTTPException(status_code=400, detail=f"default_payment_method must be one of {list(_PAYMENT_METHOD_COPY.keys())}")
+        updates["payment_default_method"] = req.default_payment_method
+        changed_fields.append("default_payment_method")
+    if req.payment_method_order is not None:
+        invalid = [m for m in req.payment_method_order if m not in _PAYMENT_METHOD_COPY]
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"Unknown payment method(s) in order: {invalid}")
+        updates["payment_method_order"] = req.payment_method_order
+        changed_fields.append("payment_method_order")
+    if updates:
+        await db.admin_settings.update_one({"key": "main"}, {"$set": updates}, upsert=True)
+        await db.payment_config_audit_log.insert_one({
+            "id": str(uuid.uuid4()), "provider": "PAYMENT_METHODS", "admin_email": admin["email"],
+            "changed_fields": changed_fields, "at": datetime.now(timezone.utc).isoformat(),
+        })
+    return await _get_payment_methods_settings()
+
+def _redact_bank_transfer_entry(tx: dict) -> dict:
+    """List view never returns the (potentially large) base64 proof image
+    -- just whether one exists. Fetch the full record via the detail
+    endpoint to see it."""
+    out = {k: v for k, v in tx.items() if k != "bank_transfer_proof"}
+    out["has_proof"] = bool(tx.get("bank_transfer_proof"))
+    return out
+
+@api_router.get("/admin/bank-transfers", dependencies=[Depends(get_current_admin)])
+async def admin_list_bank_transfers(status: Optional[str] = None, limit: int = 100):
+    query: Dict[str, Any] = {"provider": "BANK_TRANSFER"}
+    if status:
+        query["payment_status"] = status
+    entries = await db.payment_transactions.find(query, {"_id": 0}).sort("created_at", -1).limit(min(limit, 500)).to_list(500)
+    # Lazily expire anything past its deadline before returning the queue,
+    # so the admin never sees a stale PENDING/SUBMITTED that's actually run out.
+    resolved = []
+    for tx in entries:
+        tx["payment_status"] = await _bank_transfer_effective_status(tx)
+        resolved.append(_redact_bank_transfer_entry(tx))
+    return {"total": len(resolved), "entries": resolved}
+
+@api_router.get("/admin/bank-transfers/{reference}", dependencies=[Depends(get_current_admin)])
+async def admin_get_bank_transfer(reference: str):
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    tx["payment_status"] = await _bank_transfer_effective_status(tx)
+    return tx
+
+@api_router.post("/admin/bank-transfers/{reference}/approve")
+async def admin_approve_bank_transfer(reference: str, admin: dict = Depends(get_current_admin)):
+    """Idempotent: a double-click or two admins racing each other both
+    resolve to exactly one license, via the same atomic
+    _transition_payment_state() conditional update the Nomba/Paystack paths
+    use, backed by pin_licenses' unique index on payment_ref as
+    defense-in-depth."""
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    if tx.get("pin_generated") and tx.get("payment_status") == "FULFILLED":
+        return {"status": "already_fulfilled", "pin": tx["pin_generated"]}
+    effective = await _bank_transfer_effective_status(tx)
+    if effective not in ("BANK_TRANSFER_SUBMITTED", "UNDER_ADMIN_REVIEW"):
+        raise HTTPException(status_code=409, detail=f"Order is {effective}, not ready for approval.")
+    won = await _transition_payment_state(reference, [effective], "FULFILLING")
+    if not won:
+        fresh = await db.payment_transactions.find_one({"reference": reference}, {"_id": 0})
+        if fresh and fresh.get("pin_generated"):
+            return {"status": "already_fulfilled", "pin": fresh["pin_generated"]}
+        raise HTTPException(status_code=409, detail="Another request already claimed approval for this order.")
+    pin = generate_unique_pin()
+    while await db.pin_licenses.find_one({"pin": pin}):
+        pin = generate_unique_pin()
+    doc = PinLicense(pin=pin, buyer_name=tx.get("buyer_name", ""), buyer_email=tx.get("buyer_email", ""),
+                      notes=f"BankTransfer - {reference}", payment_ref=reference).model_dump()
+    doc["provider"] = "BANK_TRANSFER"
+    try:
+        await db.pin_licenses.insert_one(doc)
+    except DuplicateKeyError:
+        existing = await db.pin_licenses.find_one({"payment_ref": reference})
+        pin = existing["pin"] if existing else pin
+    await db.payment_transactions.update_one(
+        {"reference": reference},
+        {"$set": {"pin_generated": pin, "payment_status": "FULFILLED",
+                   "approved_by": admin["email"], "approved_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    email_sent = await send_pin_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), pin)
+    await _record_fulfillment_email_result(reference, tx.get("buyer_name", ""), tx.get("buyer_email", ""), pin, email_sent)
+    logger.info(f"BANK_TRANSFER_APPROVED ref={reference} admin={admin['email']}")
+    return {"status": "approved", "pin": pin}
+
+@api_router.post("/admin/bank-transfers/{reference}/reject")
+async def admin_reject_bank_transfer(reference: str, req: BankTransferAdminActionRequest, admin: dict = Depends(get_current_admin)):
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    effective = await _bank_transfer_effective_status(tx)
+    won = await _transition_payment_state(reference, [effective], "BANK_TRANSFER_REJECTED")
+    if not won:
+        raise HTTPException(status_code=409, detail=f"Cannot reject an order in state {effective}.")
+    await db.payment_transactions.update_one(
+        {"reference": reference},
+        {"$set": {"rejected_by": admin["email"], "rejected_at": datetime.now(timezone.utc).isoformat(),
+                   "rejection_reason": req.reason or ""}},
+    )
+    await send_bank_transfer_rejected_email(tx.get("buyer_email", ""), tx.get("buyer_name", ""), reference, req.reason or "")
+    logger.info(f"BANK_TRANSFER_REJECTED ref={reference} admin={admin['email']} reason={req.reason!r}")
+    return {"status": "rejected"}
+
+@api_router.post("/admin/bank-transfers/{reference}/mark-expired")
+async def admin_mark_bank_transfer_expired(reference: str, admin: dict = Depends(get_current_admin)):
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    effective = await _bank_transfer_effective_status(tx)
+    if effective == "BANK_TRANSFER_EXPIRED":
+        return {"status": "BANK_TRANSFER_EXPIRED", "no_op": True}
+    won = await _transition_payment_state(reference, [effective], "BANK_TRANSFER_EXPIRED")
+    if not won:
+        raise HTTPException(status_code=409, detail=f"Cannot expire an order in state {effective}.")
+    return {"status": "BANK_TRANSFER_EXPIRED", "no_op": False}
+
+@api_router.post("/admin/bank-transfers/{reference}/request-info")
+async def admin_bank_transfer_request_info(reference: str, req: BankTransferAdminActionRequest, admin: dict = Depends(get_current_admin)):
+    tx = await db.payment_transactions.find_one({"reference": reference, "provider": "BANK_TRANSFER"}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    note = {"admin_email": admin["email"], "note": req.reason or "", "at": datetime.now(timezone.utc).isoformat(), "action": "request_info"}
+    await db.payment_transactions.update_one({"reference": reference}, {"$push": {"admin_notes": note}})
+    return {"status": "ok"}
 
 
 # v6.6.0 — global Gold/Index Mode platform switches (architecture phase).
@@ -4213,6 +5233,17 @@ async def log_trade_journal(entry: TradeJournalEntry, request: Request):
                 })
             except Exception as e:
                 logger.error(f"Hive index error: {e}")
+        if doc.get("has_rich_ledger_data") and entry.closed_at > 0:
+            # Real-time trigger -- reconciles any awaiting Outlook signal for
+            # this account/symbol/direction the moment MT5 confirms a close,
+            # never waiting for the hourly Outlook job. Never allowed to
+            # affect this endpoint's own success response (matches the
+            # existing hive-index try/except discipline just above).
+            try:
+                import market_outlook as _mo
+                await _mo.reconcile_trade_journal_entry(doc)
+            except Exception as e:
+                logger.error(f"Outlook reconciliation error: {e}")
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Journal log error: {e}")
@@ -4867,8 +5898,16 @@ async def request_ea_download_token(user: dict = Depends(get_cloud_user)):
         "version": release["version"],
         "exp": datetime.now(timezone.utc) + timedelta(seconds=DOWNLOAD_TOKEN_TTL_SECONDS),
     }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    # Root cause of the {"detail":"Not Found"} download bug: this field
+    # used to include the "/api" prefix, but every frontend caller (here,
+    # window.location.href = `${API}${download_url}`) builds the final URL
+    # from `API`, which is already `${BACKEND_URL}/api` -- the prefix was
+    # being applied twice (`/api/api/download/ea-release`), which matches
+    # no mounted route and 404s. Every other relative path returned to the
+    # frontend in this file (e.g. /download/info, /cloud/auth/me) is
+    # deliberately un-prefixed for the same reason; this one just missed it.
     return {"download_token": token, "expires_in": DOWNLOAD_TOKEN_TTL_SECONDS,
-            "download_url": f"/api/download/ea-release?token={token}"}
+            "download_url": f"/download/ea-release?token={token}"}
 
 
 async def _verify_command_license(user: dict, key: str) -> dict:
@@ -6778,6 +7817,13 @@ async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):
     release_display = build_public_release_display((hb or {}).get("ea_version", ""))
     production_status = reconcile_production_timeframe(
         (hb or {}).get("timeframe", ""), release_display["reported_build_recognized"],
+    )
+    release_display["update_status"] = _resolve_update_status(
+        manifest_has_current_pointer=bool(_load_ea_release_manifest().get("current_version")),
+        current_release_servable=bool(_current_ea_release()),
+        license_active=bool((lic or {}).get("is_active")),
+        installed_version=release_display["installed_version"],
+        update_available=release_display["update_available"],
     )
     return {
         "status": status_label,

@@ -90,6 +90,14 @@ async def _seed_nomba_config(environment="sandbox", enabled=True):
                    "payment_description": "Test"}},
         upsert=True,
     )
+    # Payment-priority reorder (later commit): Nomba is off by default at
+    # the /purchase/payment-methods feature-flag level (admin_settings.
+    # payment_nomba_enabled), separate from this collection's own
+    # enabled/credentials state -- tests seeding a working Nomba config
+    # need both flags on to reach the actual checkout-creation code.
+    await srv.db.admin_settings.update_one(
+        {"key": "main"}, {"$set": {"payment_nomba_enabled": enabled}}, upsert=True,
+    )
 
 
 async def _seed_tx(reference, amount_kobo=30000000, currency="NGN", status="PENDING", provider="NOMBA"):

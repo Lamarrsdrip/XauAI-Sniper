@@ -4,7 +4,7 @@ import {
   Key, GearSix, SignOut, ShieldCheck, Copy, Check, Trash, Plus,
   UserCircle, CurrencyNgn, Envelope, Lock, Eye, EyeSlash, ArrowLeft,
   FloppyDisk, ChartBar, Lightning, Flame,
-  House, Pulse, TrendUp, Bell, ArrowClockwise, WarningCircle,
+  House, Pulse, TrendUp, Bell, ArrowClockwise, WarningCircle, Bank,
 } from "@phosphor-icons/react";
 
 const ax = axios.create({ withCredentials: true });
@@ -111,6 +111,7 @@ export default function AdminPortal({ api }) {
     { id: "settings",      label: "Settings",      icon: GearSix        },
     { id: "configurator",  label: "EA Config",     icon: ChartBar       },
     { id: "transactions",  label: "Payments",      icon: CurrencyNgn    },
+    { id: "bankTransfers", label: "Bank Transfers", icon: Bank          },
     { id: "account",       label: "Account",       icon: UserCircle     },
   ];
 
@@ -165,6 +166,7 @@ export default function AdminPortal({ api }) {
         {tab === "settings"      && <SettingsTab      api={api} />}
         {tab === "configurator"  && <ConfigTab        api={api} />}
         {tab === "transactions"  && <TransactionsTab  api={api} />}
+        {tab === "bankTransfers" && <BankTransfersTab api={api} />}
         {tab === "account"       && <AccountTab api={api} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
       </div>
     </div>
@@ -724,6 +726,85 @@ function NombaCredentialFields({ env, values, onChange, existing }) {
   );
 }
 
+const PAYMENT_METHOD_LABELS = { bank_transfer: "Nigeria Bank Transfer", paystack: "Paystack", nomba: "Nomba" };
+
+function PaymentMethodPrioritySettings({ api }) {
+  const [settings, setSettings] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const h = useMemo(() => auth(), []);
+
+  const fetchSettings = useCallback(() => {
+    ax.get(`${api}/admin/settings/payment-methods`, h).then(r => setSettings(r.data)).catch(() => {});
+  }, [api, h]);
+
+  useEffect(() => { fetchSettings(); }, [fetchSettings]);
+
+  const save = async (updates) => {
+    setSaving(true);
+    try {
+      const r = await ax.put(`${api}/admin/settings/payment-methods`, updates, h);
+      setSettings(r.data);
+      setSaved(true); setTimeout(() => setSaved(false), 3000);
+    } catch {} finally { setSaving(false); }
+  };
+
+  const moveMethod = (method, direction) => {
+    if (!settings) return;
+    const order = [...settings.payment_method_order];
+    const i = order.indexOf(method);
+    const j = i + direction;
+    if (j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    save({ payment_method_order: order });
+  };
+
+  if (!settings) return <CardSection title="Payment method priority"><p className="text-[13px] text-white/35">Loading…</p></CardSection>;
+
+  return (
+    <CardSection title="Payment method priority" action={saved && <span className="text-[11px] text-emerald-400">Saved</span>}>
+      <p className="text-[12px] text-white/40 mb-4 leading-5">
+        Controls the order and availability customers see on the checkout payment-method screen.
+        Bank details live in the separate "Bank Transfers" tab; this only enables/disables/orders the
+        three methods.
+      </p>
+      <div className="space-y-3">
+        {settings.payment_method_order.map((method, i) => (
+          <div key={method} className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="flex flex-col gap-0.5">
+                <button disabled={i === 0} onClick={() => moveMethod(method, -1)} className="text-white/30 hover:text-white disabled:opacity-20" aria-label="Move up">▲</button>
+                <button disabled={i === settings.payment_method_order.length - 1} onClick={() => moveMethod(method, 1)} className="text-white/30 hover:text-white disabled:opacity-20" aria-label="Move down">▼</button>
+              </div>
+              <div>
+                <div className="text-[13px] font-semibold text-white">{i + 1}. {PAYMENT_METHOD_LABELS[method]}</div>
+                {settings.default_payment_method === method && <div className="text-[10px] text-emerald-400">Default</div>}
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              {method !== "bank_transfer" && (
+                <label className="flex items-center gap-1.5 text-[12px] text-white/60">
+                  <input type="checkbox" checked={Boolean(settings[`${method}_enabled`])}
+                    onChange={e => save({ [`${method}_enabled`]: e.target.checked })} />
+                  Enabled
+                </label>
+              )}
+              <button
+                disabled={settings.default_payment_method === method}
+                onClick={() => save({ default_payment_method: method })}
+                className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] text-white/60 hover:text-white disabled:opacity-30"
+              >
+                Set default
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      {saving && <p className="mt-3 text-[11px] text-white/35">Saving…</p>}
+    </CardSection>
+  );
+}
+
 const NOMBA_EMPTY_ENV_FORM = { client_id: "", client_secret: "", account_id: "", webhook_signature_key: "" };
 const NOMBA_PAYMENT_METHODS = ["card", "transfer", "ussd", "qr"];
 
@@ -998,14 +1079,14 @@ function SettingsTab({ api }) {
         </div>
       </CardSection>
 
+      <PaymentMethodPrioritySettings api={api} />
+
       <NombaSettingsSection api={api} />
 
-      <CardSection title="Paystack (legacy — historical transactions only)">
+      <CardSection title="Paystack (active — second payment option)">
         <p className="text-[12px] text-white/40 mb-4 leading-5">
-          Paystack is no longer used for new purchases — every new checkout goes through Nomba above.
-          This key is kept only so any Paystack transaction still resolving (webhook/verify race) and
-          historical records remain lookupable. Existing customers, licenses, and purchase history are
-          untouched.
+          Paystack is active as the second checkout option, after Nigeria Bank Transfer. See "Payment
+          method priority" above to enable/disable it or change the default.
         </p>
         <div className="space-y-4">
           <Field label="Paystack secret key">
@@ -1191,6 +1272,215 @@ function TransactionsTab({ api }) {
           </div>
         )}
       </CardSection>
+    </div>
+  );
+}
+
+// ─── Bank Transfers ──────────────────────────────────────────────────────────
+const BANK_TRANSFER_STATUS_TONE = {
+  BANK_TRANSFER_PENDING: "neutral",
+  BANK_TRANSFER_SUBMITTED: "amber",
+  UNDER_ADMIN_REVIEW: "amber",
+  FULFILLED: "green",
+  BANK_TRANSFER_REJECTED: "red",
+  BANK_TRANSFER_EXPIRED: "red",
+};
+
+function BankTransfersTab({ api }) {
+  const [settings, setSettings] = useState(null);
+  const [entries, setEntries] = useState([]);
+  const [statusFilter, setStatusFilter] = useState("");
+  const [detail, setDetail] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const h = useMemo(() => auth(), []);
+
+  const fetchSettings = useCallback(() => {
+    ax.get(`${api}/admin/settings/bank-transfer`, h).then(r => setSettings(r.data)).catch(() => {});
+  }, [api, h]);
+
+  const fetchQueue = useCallback(() => {
+    const params = statusFilter ? { status: statusFilter } : {};
+    ax.get(`${api}/admin/bank-transfers`, { ...h, params }).then(r => setEntries(r.data.entries || [])).catch(() => {});
+  }, [api, h, statusFilter]);
+
+  useEffect(() => { fetchSettings(); }, [fetchSettings]);
+  useEffect(() => { fetchQueue(); }, [fetchQueue]);
+
+  const saveSettings = async () => {
+    setBusy(true); setMsg("");
+    try {
+      const r = await ax.put(`${api}/admin/settings/bank-transfer`, settings, h);
+      setSettings(r.data);
+      setMsg("Saved.");
+    } catch (e) {
+      setMsg(e.response?.data?.detail || "Could not save settings.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const act = async (reference, action, reason) => {
+    setBusy(true); setMsg("");
+    try {
+      const body = reason !== undefined ? { reason } : {};
+      await ax.post(`${api}/admin/bank-transfers/${reference}/${action}`, body, h);
+      fetchQueue();
+      if (detail?.reference === reference) {
+        const r = await ax.get(`${api}/admin/bank-transfers/${reference}`, h);
+        setDetail(r.data);
+      }
+    } catch (e) {
+      setMsg(e.response?.data?.detail || `Could not ${action}.`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openDetail = async (reference) => {
+    try {
+      const r = await ax.get(`${api}/admin/bank-transfers/${reference}`, h);
+      setDetail(r.data);
+    } catch {}
+  };
+
+  return (
+    <div className="space-y-4" data-testid="admin-bank-transfers-tab">
+      <CardSection title="Bank transfer settings" action={
+        <Btn variant="primary" onClick={saveSettings} disabled={busy || !settings}><FloppyDisk size={14} /> Save</Btn>
+      }>
+        {!settings ? <p className="text-[13px] text-white/35">Loading…</p> : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Enabled">
+              <label className="flex items-center gap-2 text-[13px] text-white/70">
+                <input type="checkbox" checked={Boolean(settings.enabled)}
+                  onChange={e => setSettings({ ...settings, enabled: e.target.checked })} />
+                Enable Nigeria Bank Transfer at checkout (available to every visitor, not just those detected as being in Nigeria)
+              </label>
+            </Field>
+            <Field label="Timeout (minutes)">
+              <Input type="number" value={settings.timeout_minutes || 60}
+                onChange={e => setSettings({ ...settings, timeout_minutes: Number(e.target.value) })} />
+            </Field>
+            <Field label="Bank name">
+              <Input value={settings.bank_name || ""} onChange={e => setSettings({ ...settings, bank_name: e.target.value })} />
+            </Field>
+            <Field label="Account name">
+              <Input value={settings.account_name || ""} onChange={e => setSettings({ ...settings, account_name: e.target.value })} />
+            </Field>
+            <Field label="Account number">
+              <Input value={settings.account_number || ""} onChange={e => setSettings({ ...settings, account_number: e.target.value })} />
+            </Field>
+            <Field label="Support contact">
+              <Input value={settings.support_contact || ""} onChange={e => setSettings({ ...settings, support_contact: e.target.value })} />
+            </Field>
+            <Field label="Require proof of payment">
+              <label className="flex items-center gap-2 text-[13px] text-white/70">
+                <input type="checkbox" checked={Boolean(settings.proof_required)}
+                  onChange={e => setSettings({ ...settings, proof_required: e.target.checked })} />
+                Customer must upload a screenshot
+              </label>
+            </Field>
+            <Field label="Instructions shown to customer">
+              <Input value={settings.instructions || ""} onChange={e => setSettings({ ...settings, instructions: e.target.value })} />
+            </Field>
+          </div>
+        )}
+        {msg && <p className="mt-3 text-[12px] text-amber-300">{msg}</p>}
+      </CardSection>
+
+      <CardSection title={`Review queue · ${entries.length}`} action={
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+          className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[11px] text-white/60">
+          <option value="">All statuses</option>
+          <option value="BANK_TRANSFER_PENDING">Pending</option>
+          <option value="BANK_TRANSFER_SUBMITTED">Submitted</option>
+          <option value="FULFILLED">Fulfilled</option>
+          <option value="BANK_TRANSFER_REJECTED">Rejected</option>
+          <option value="BANK_TRANSFER_EXPIRED">Expired</option>
+        </select>
+      }>
+        {entries.length === 0 ? (
+          <p className="py-6 text-center text-[13px] text-white/35">No bank-transfer orders</p>
+        ) : (
+          <div className="overflow-x-auto -m-5">
+            <table className="w-full text-[12px] min-w-[760px]">
+              <thead>
+                <tr className="border-b border-white/[0.06]">
+                  {["Reference","Buyer","Amount","Status","Proof","Date",""].map(col => (
+                    <th key={col} className="px-5 py-2.5 text-left text-[10px] font-bold uppercase tracking-[0.12em] text-white/35">{col}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/[0.04]">
+                {entries.map(t => (
+                  <tr key={t.reference}>
+                    <td className="px-5 py-3 font-mono text-[11px] text-white/55">{t.reference}</td>
+                    <td className="px-5 py-3"><div>{t.buyer_name}</div><div className="text-white/35">{t.buyer_email}</div></td>
+                    <td className="px-5 py-3 font-mono">₦{(t.amount_kobo / 100).toLocaleString()}</td>
+                    <td className="px-5 py-3"><Badge tone={BANK_TRANSFER_STATUS_TONE[t.payment_status] || "neutral"}>{t.payment_status}</Badge></td>
+                    <td className="px-5 py-3">{t.has_proof ? <Badge tone="green">Yes</Badge> : <Badge tone="neutral">No</Badge>}</td>
+                    <td className="px-5 py-3 text-white/40">{t.created_at?.split("T")[0]}</td>
+                    <td className="px-5 py-3">
+                      <div className="flex flex-wrap gap-1.5">
+                        <Btn variant="ghost" className="!px-2.5 !py-1.5 !text-[11px]" onClick={() => openDetail(t.reference)}>View</Btn>
+                        {(t.payment_status === "BANK_TRANSFER_SUBMITTED" || t.payment_status === "UNDER_ADMIN_REVIEW") && (
+                          <Btn variant="green" className="!px-2.5 !py-1.5 !text-[11px]" disabled={busy} onClick={() => act(t.reference, "approve")}>Approve</Btn>
+                        )}
+                        {["BANK_TRANSFER_PENDING", "BANK_TRANSFER_SUBMITTED", "UNDER_ADMIN_REVIEW"].includes(t.payment_status) && (
+                          <Btn variant="danger" className="!px-2.5 !py-1.5 !text-[11px]" disabled={busy}
+                            onClick={() => act(t.reference, "reject", window.prompt("Rejection reason (optional):") || "")}>
+                            Reject
+                          </Btn>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardSection>
+
+      {detail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setDetail(null)}>
+          <div className="w-full max-w-lg rounded-2xl border border-white/[0.1] bg-[#0a0a0e] p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h4 className="text-[14px] font-bold">{detail.reference}</h4>
+              <Badge tone={BANK_TRANSFER_STATUS_TONE[detail.payment_status] || "neutral"}>{detail.payment_status}</Badge>
+            </div>
+            <div className="mt-3 space-y-1.5 text-[12px] text-white/60">
+              <div>Buyer: {detail.buyer_name} · {detail.buyer_email}</div>
+              <div>Amount: ₦{(detail.amount_kobo / 100).toLocaleString()}</div>
+              <div>Expires: {detail.expires_at}</div>
+              {detail.rejection_reason && <div>Rejection reason: {detail.rejection_reason}</div>}
+              {detail.approved_by && <div>Approved by: {detail.approved_by} at {detail.approved_at}</div>}
+              {(detail.admin_notes || []).map((n, i) => (
+                <div key={i} className="rounded-lg bg-white/[0.03] px-2 py-1.5">{n.admin_email}: {n.note}</div>
+              ))}
+            </div>
+            {detail.bank_transfer_proof && (
+              <img src={detail.bank_transfer_proof} alt="Proof of payment" className="mt-3 max-h-64 w-full rounded-xl object-contain" />
+            )}
+            <div className="mt-4 flex flex-wrap gap-2">
+              {(detail.payment_status === "BANK_TRANSFER_SUBMITTED" || detail.payment_status === "UNDER_ADMIN_REVIEW") && (
+                <Btn variant="green" disabled={busy} onClick={() => act(detail.reference, "approve")}>Approve</Btn>
+              )}
+              {["BANK_TRANSFER_PENDING", "BANK_TRANSFER_SUBMITTED", "UNDER_ADMIN_REVIEW"].includes(detail.payment_status) && (
+                <Btn variant="danger" disabled={busy}
+                  onClick={() => act(detail.reference, "reject", window.prompt("Rejection reason (optional):") || "")}>
+                  Reject
+                </Btn>
+              )}
+              {["BANK_TRANSFER_PENDING", "BANK_TRANSFER_SUBMITTED"].includes(detail.payment_status) && (
+                <Btn variant="ghost" disabled={busy} onClick={() => act(detail.reference, "mark-expired")}>Mark expired</Btn>
+              )}
+              <Btn variant="ghost" onClick={() => setDetail(null)}>Close</Btn>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

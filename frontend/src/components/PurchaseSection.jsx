@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { ShoppingCart, ShieldCheck, Lightning, Check } from "@phosphor-icons/react";
+import { PaymentMethodModal } from "./BankTransferFlow";
 
 const PERKS = [
   "Lifetime license — free updates forever",
@@ -8,32 +9,48 @@ const PERKS = [
   "Free VPS activation included",
 ];
 
+const DISPLAY_CURRENCIES = ["NGN", "USD", "EUR", "GBP"];
+
 export default function PurchaseSection({ api }) {
   const [buyerName,  setBuyerName]  = useState("");
   const [buyerEmail, setBuyerEmail] = useState("");
   const [loading,    setLoading]    = useState(false);
   const [priceData,  setPriceData]  = useState(null);
+  const [currency,   setCurrency]   = useState(null); // null = let the server detect it
   const [error,      setError]      = useState("");
+  const [showMethodModal, setShowMethodModal] = useState(false);
 
   useEffect(() => {
-    axios.get(`${api}/purchase/price`)
+    const params = currency ? { display_currency: currency } : {};
+    axios.get(`${api}/purchase/price`, { params })
       .then(r => setPriceData(r.data))
       .catch(() => {});
-  }, [api]);
+  }, [api, currency]);
 
   const paymentUnavailable = priceData?.payment_method === "unavailable";
 
-  const handlePurchase = async () => {
-    if (loading) return; // belt-and-braces against double-submit beyond the disabled button alone
+  const validateBuyer = () => {
+    if (!buyerName.trim() || !buyerEmail.trim()) { setError("Please enter your name and email."); return false; }
+    if (!buyerEmail.includes("@")) { setError("Please enter a valid email address."); return false; }
+    return true;
+  };
+
+  const openMethodChoice = () => {
     if (paymentUnavailable) { setError("Payments are temporarily unavailable. Please try again shortly."); return; }
-    if (!buyerName.trim() || !buyerEmail.trim()) { setError("Please enter your name and email."); return; }
-    if (!buyerEmail.includes("@")) { setError("Please enter a valid email address."); return; }
+    if (!validateBuyer()) return;
+    setError("");
+    setShowMethodModal(true);
+  };
+
+  const payViaProvider = async (endpoint) => {
+    if (loading) return; // belt-and-braces against double-submit beyond the disabled button alone
     setError(""); setLoading(true);
     try {
-      const res = await axios.post(`${api}/purchase/initialize`, {
+      const res = await axios.post(`${api}${endpoint}`, {
         buyer_name: buyerName,
         buyer_email: buyerEmail,
         origin_url: window.location.origin,
+        display_currency: priceData?.display_currency || null,
       });
       if (res.data.authorization_url) window.location.href = res.data.authorization_url;
     } catch (e) {
@@ -42,8 +59,11 @@ export default function PurchaseSection({ api }) {
       setLoading(false);
     }
   };
+  const payByPaystack = () => payViaProvider("/purchase/paystack/initialize");
+  const payByNomba = () => payViaProvider("/purchase/initialize");
 
   const displayPrice = priceData?.formatted || "₦300,000";
+  const showingConverted = priceData?.display_currency && priceData.display_currency !== "NGN" && priceData.display_amount_formatted;
 
   return (
     <div className="bg-[#060609] border-t border-white/[0.06] text-white" data-testid="purchase-section">
@@ -61,9 +81,40 @@ export default function PurchaseSection({ api }) {
         <div className="mx-auto max-w-md">
           <div className="rounded-[28px] border border-white/[0.1] bg-white/[0.04] p-7 shadow-2xl shadow-black/40" data-testid="purchase-form">
 
-            <div className="mb-6 flex items-end gap-2">
+            <div className="mb-2 flex items-end gap-2">
               <span className="font-mono text-4xl font-black" data-testid="display-price">{displayPrice}</span>
               <span className="mb-1 font-mono text-sm text-white/30">NGN · one-time</span>
+            </div>
+
+            {showingConverted && (
+              <div className="mb-2 font-mono text-[12px] text-white/40" data-testid="display-price-converted">
+                ≈ {priceData.display_amount_formatted} <span className="text-white/25">(indicative)</span>
+              </div>
+            )}
+
+            <div className="mb-6 flex items-center gap-2">
+              <span className="font-mono text-[10px] uppercase tracking-widest text-white/25">Show in</span>
+              <div className="flex gap-1">
+                {DISPLAY_CURRENCIES.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    data-testid={`currency-${c}`}
+                    onClick={() => setCurrency(c)}
+                    className={`rounded-full px-2.5 py-1 font-mono text-[10px] font-bold transition ${
+                      (priceData?.display_currency || "NGN") === c
+                        ? "bg-amber-300 text-black"
+                        : "bg-white/[0.06] text-white/40 hover:bg-white/[0.1]"
+                    }`}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mb-6 font-mono text-[11px] text-white/30" data-testid="charge-currency-notice">
+              You will be charged {displayPrice} NGN — the amount above is exact, any other currency shown is an indicative estimate only.
             </div>
 
             <div className="mb-6 space-y-2">
@@ -97,26 +148,38 @@ export default function PurchaseSection({ api }) {
               )}
               <button
                 data-testid="purchase-btn"
-                onClick={handlePurchase}
+                onClick={openMethodChoice}
                 disabled={loading || paymentUnavailable}
                 className="mt-1 w-full inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-4 text-[14px] font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-50">
                 <ShoppingCart size={17} weight="bold" />
-                {loading ? "Redirecting…" : paymentUnavailable ? "Payments Unavailable" : `Pay ${displayPrice} Now`}
+                {loading ? "Redirecting…" : paymentUnavailable ? "Payments Unavailable" : `Continue to Payment · ${displayPrice}`}
               </button>
             </div>
 
             <div className="mt-5 flex items-center justify-center gap-5 border-t border-white/[0.06] pt-5">
               <div className="flex items-center gap-1.5 text-white/25 text-[11px]">
-                <ShieldCheck size={13} /> Secured by Nomba
+                <ShieldCheck size={13} /> Secure checkout
               </div>
               <div className="flex items-center gap-1.5 text-white/25 text-[11px]">
-                <Lightning size={13} /> Instant delivery
+                <Lightning size={13} /> Fast fulfillment
               </div>
             </div>
           </div>
         </div>
 
       </div>
+
+      {showMethodModal && (
+        <PaymentMethodModal
+          api={api}
+          priceDisplay={displayPrice}
+          buyerName={buyerName}
+          buyerEmail={buyerEmail}
+          onPaystack={() => { setShowMethodModal(false); payByPaystack(); }}
+          onNomba={() => { setShowMethodModal(false); payByNomba(); }}
+          onClose={() => setShowMethodModal(false)}
+        />
+      )}
     </div>
   );
 }

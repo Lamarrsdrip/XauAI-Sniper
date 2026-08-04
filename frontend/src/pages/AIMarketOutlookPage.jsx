@@ -4,11 +4,12 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft, Bell, BellOff, ArrowUpRight, ArrowDownRight, Minus, Compass,
   ChevronDown, ChevronUp, Filter, TrendingUp, TrendingDown, Activity,
-  AlertTriangle, CheckCircle2, Clock3, Database, Radio, ShieldCheck,
+  AlertTriangle, CheckCircle2, Clock3, Database, Radio, ShieldCheck, Wallet,
 } from "lucide-react";
 import { API } from "@/lib/api";
 import { ensureOneSignalDeviceRegistered } from "@/lib/onesignal";
 import M10VsOutlookCard from "@/components/cloud/M10VsOutlookCard";
+import Seo from "@/components/Seo";
 
 const outlookAxios = axios.create({ baseURL: API, withCredentials: true });
 
@@ -25,6 +26,25 @@ const COLOR_STYLE = {
 const DIRECTION_ICON = { BUY: ArrowUpRight, SELL: ArrowDownRight, NEUTRAL: Minus, RANGE: Minus, TRANSITION: Compass, NO_VALID_OUTLOOK: Minus };
 
 const HISTORY_FILTERS = ["All", "BUY", "SELL", "Green", "Red", "Gray", "Amber", "TP1", "TP2", "TP3", "Stopped", "Unavailable"];
+// Maps each filter chip to the /outlook/history query params the backend
+// already supports (direction/color/tp/result) -- this constant used to be
+// defined and never wired to anything, so the filter row simply didn't
+// exist despite the backend already being able to filter.
+const HISTORY_FILTER_PARAMS = {
+  All: {},
+  BUY: { direction: "BUY" },
+  SELL: { direction: "SELL" },
+  Green: { color: "GREEN" },
+  Red: { color: "RED" },
+  Gray: { color: "GRAY" },
+  Amber: { color: "AMBER" },
+  TP1: { tp: "TP1" },
+  TP2: { tp: "TP2" },
+  TP3: { tp: "TP3" },
+  Stopped: { result: "LOSS_RED_SL" },
+  Unavailable: { result: "HISTORICAL_DATA_UNAVAILABLE" },
+};
+const HISTORY_PAGE_SIZE = 12;
 
 const DEVELOPMENT_PREVIEW_CONTRACT = {
   state: "ACTIONABLE_SIGNAL", stateReason: "M10_EXECUTION_READY", canonicalSource: "M10",
@@ -64,6 +84,19 @@ function rText(value) {
 
 function timeText(value) {
   return value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+}
+
+// Shows a timestamp in both broker/server time (UTC -- what MT5 actually
+// stamped the event with) and the viewer's own local time, both labeled --
+// a plain "8:50 AM" alone doesn't say which clock it's in, and the two can
+// differ by hours depending on the customer's timezone vs the broker server.
+function DualTime({ value }) {
+  if (!value) return <span>—</span>;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return <span>—</span>;
+  const broker = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
+  const local = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return <span>Broker {broker} UTC · Yours {local}</span>;
 }
 
 function elapsedText(start, end) {
@@ -441,30 +474,67 @@ function safeJoin(values, separator) {
   return values.map((v) => (v == null ? "—" : v)).join(separator);
 }
 
+// Real broker-confirmed trade truth outranks the advisory color for at-a-
+// glance scanning (owner rule: never show green from floating/advisory
+// profit alone) -- when a real result exists, the card border reflects
+// THAT, while the advisory badge stays visible and separately labeled.
+const REAL_RESULT_TONE_COLOR = { emerald: COLOR_STYLE.GREEN, rose: COLOR_STYLE.RED, slate: COLOR_STYLE.GRAY };
+
 function HistoryCard({ outlook }) {
-  const color = COLOR_STYLE[outlook.color_state] || COLOR_STYLE.AMBER;
+  const [expanded, setExpanded] = useState(false);
   const signalTime = outlook.published_at || outlook.generated_at;
   const time = signalTime ? new Date(signalTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  const tradeResult = outlook.automated_trade_result;
+  const tradeOutcome = tradeResult?.status === "matched" ? (AUTOMATED_RESULT_COPY[tradeResult.result] || { label: humanEnum(tradeResult.result), tone: "slate" }) : null;
+  const tradeToneText = tradeOutcome ? { emerald: "text-emerald-300", rose: "text-rose-300", slate: "text-white/60" }[tradeOutcome.tone] : "";
+  const color = (tradeOutcome && REAL_RESULT_TONE_COLOR[tradeOutcome.tone]) || COLOR_STYLE[outlook.color_state] || COLOR_STYLE.AMBER;
   return (
     <div className={`rounded-xl border border-white/[0.06] border-l-4 ${color.border} ${color.bg} p-3`}>
       <div className="flex items-center justify-between">
         <span className="font-mono text-[12px] font-bold">{time} {outlook.primary_direction} · {outlook.confidence_pct}%</span>
         <span className={`font-mono text-[11px] font-bold ${color.text}`}>{resultLabel(outlook)}</span>
       </div>
+
+      {tradeOutcome && (
+        <div className={`mt-2 rounded-lg border border-current/15 px-2.5 py-1.5 text-[11px] font-semibold ${tradeToneText}`}>
+          Your account: {tradeOutcome.label} ({moneyText(tradeResult.realized_profit)})
+        </div>
+      )}
+      {tradeResult?.status === "uncertain" && (
+        <div className="mt-2 rounded-lg border border-amber-300/15 px-2.5 py-1.5 text-[11px] text-amber-200">
+          Your account: real trade result can&apos;t be confirmed (multiple candidates)
+        </div>
+      )}
+
       {["BUY", "SELL"].includes(outlook.primary_direction) ? (
-        <div className="mt-2 space-y-1 text-[11px] text-white/45">
-          <div>Signal entry <span className="font-mono text-white/75">{outlook.tracking_entry_price ?? "—"}</span> · Suggested zone {outlook.preferred_entry_zone_low}–{outlook.preferred_entry_zone_high}</div>
-          <div>SL {outlook.original_sl ?? outlook.suggested_sl} · TP1 {outlook.tp1_price} · TP2 {outlook.tp2_price} · TP3 {outlook.tp3_price}</div>
-          <div>Current {rText(outlook.current_r)} · MFE {rText(outlook.mfe_r)} · MAE {rText(outlook.mae_r)}</div>
-          <div>Elapsed {elapsedText(signalTime, outlook.classification_at)} · Deadline {timeText(outlook.evaluation_deadline)} · Last monitored {timeText(outlook.last_monitored_at)}</div>
-          {(outlook.first_half_r_at || outlook.tp1_hit_at || outlook.tp2_hit_at || outlook.tp3_hit_at || outlook.sl_hit_at) && (
-            <div className="text-[10px] text-white/35">
-              +0.50R {timeText(outlook.first_half_r_at)} · TP1 {timeText(outlook.tp1_hit_at)} · TP2 {timeText(outlook.tp2_hit_at)} · TP3 {timeText(outlook.tp3_hit_at)} · SL {timeText(outlook.sl_hit_at)}
+        <>
+          <div className="mt-2 text-[11px] text-white/45">
+            Signal entry <span className="font-mono text-white/75">{outlook.tracking_entry_price ?? "—"}</span> · SL {outlook.original_sl ?? outlook.suggested_sl} · TP1 {outlook.tp1_price}
+          </div>
+          <button onClick={() => setExpanded((e) => !e)} className="mt-2 flex items-center gap-1 text-[10px] text-white/35 hover:text-white/65">
+            {expanded ? "Hide" : "Show"} technical details {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
+          {expanded && (
+            <div className="mt-2 space-y-1 border-t border-white/[0.05] pt-2 text-[11px] text-white/45">
+              <div>Suggested zone {outlook.preferred_entry_zone_low}–{outlook.preferred_entry_zone_high}</div>
+              <div>TP2 {outlook.tp2_price} · TP3 {outlook.tp3_price}</div>
+              <div>Current {rText(outlook.current_r)} · MFE {rText(outlook.mfe_r)} · MAE {rText(outlook.mae_r)}</div>
+              <div>Elapsed {elapsedText(signalTime, outlook.classification_at)} · Deadline {timeText(outlook.evaluation_deadline)} · Last monitored {timeText(outlook.last_monitored_at)}</div>
+              {(outlook.first_half_r_at || outlook.tp1_hit_at || outlook.tp2_hit_at || outlook.tp3_hit_at || outlook.sl_hit_at) && (
+                <div className="text-[10px] text-white/35">
+                  +0.50R {timeText(outlook.first_half_r_at)} · TP1 {timeText(outlook.tp1_hit_at)} · TP2 {timeText(outlook.tp2_hit_at)} · TP3 {timeText(outlook.tp3_hit_at)} · SL {timeText(outlook.sl_hit_at)}
+                </div>
+              )}
+              {outlook.latest_path_event && <div className={`text-[10px] ${color.text}`}>Path: {outlook.latest_path_event.replace(/_/g, " ")}</div>}
+              {outlook.historical_data_unavailable_reason && <div className="text-[10px] text-white/35">{outlook.historical_data_unavailable_reason}</div>}
+              {tradeResult?.status === "matched" && (
+                <div className="text-[10px] text-white/35">
+                  Real trade: entry {tradeResult.entry_price} · exit {tradeResult.exit_price} · {rText(tradeResult.realized_r)} · ticket {tradeResult.ticket} · {tradeResult.close_reason}
+                </div>
+              )}
             </div>
           )}
-          {outlook.latest_path_event && <div className={`text-[10px] ${color.text}`}>Path: {outlook.latest_path_event.replace(/_/g, " ")}</div>}
-          {outlook.historical_data_unavailable_reason && <div className="text-[10px] text-white/35">{outlook.historical_data_unavailable_reason}</div>}
-        </div>
+        </>
       ) : outlook.primary_direction !== "NO_VALID_OUTLOOK" ? (
         // v6.25.2 owner directive 2026-07-17 -- a non-directional hourly
         // update (TRANSITION/NEUTRAL/RANGE) is informational only and must
@@ -572,6 +642,31 @@ function PrimaryStateCard({ contract }) {
   );
 }
 
+// The original spec's top summary explicitly wants suggested entry
+// zone/SL/TP and next-update time visible up front, in plain English --
+// this data already existed on the outlook doc (currentOutlook) but was
+// never surfaced anywhere on the page after the M10-contract rework.
+function SuggestedLevelsCard({ outlook }) {
+  if (!outlook || !["BUY", "SELL"].includes(outlook.primary_direction)) return null;
+  return (
+    <section className={`${CARD} p-5`} data-testid="suggested-levels-card">
+      <div className="flex items-center justify-between">
+        <span className={MONO_LABEL}>Suggested {outlook.primary_direction === "BUY" ? "buy" : "sell"} levels (advisory)</span>
+        <span className="font-mono text-[9px] text-white/30">Next update {timeText(outlook.evaluation_deadline)}</span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Metric label="Entry zone" value={safeJoin([outlook.preferred_entry_zone_low, outlook.preferred_entry_zone_high], "–")} />
+        <Metric label="Stop-loss" value={outlook.suggested_sl} />
+        <Metric label="Take-profit" value={outlook.tp1_price} />
+        <Metric label="Confidence" value={outlook.confidence_pct != null ? `${outlook.confidence_pct}%` : "—"} />
+      </div>
+      <p className="mt-3 text-[10px] leading-4 text-white/30">
+        These are advisory levels for this hourly outlook, not a live automated order — check the Execution status above for whether XauCloud itself is trading.
+      </p>
+    </section>
+  );
+}
+
 function M10ExecutionCard({ contract }) {
   const m10 = contract?.m10 || {};
   const ready = Boolean(contract?.executionReady);
@@ -592,6 +687,11 @@ function M10ExecutionCard({ contract }) {
         <Metric label="Closed bar" value={timeText(contract?.signalBarTime)} />
         <Metric label="Signal age" value={ageFromTimestamp(contract?.eventTime)} />
       </div>
+      {contract?.brokerTime && (
+        <div className="mt-3 font-mono text-[10px] text-white/30" data-testid="m10-dual-time">
+          <DualTime value={contract.brokerTime} />
+        </div>
+      )}
       <div className="mt-5 rounded-xl border border-white/[0.06] bg-black/20 px-4 py-3 text-[12px] leading-5 text-white/55">
         <span className="text-white/80">Next:</span> {contract?.nextRequiredCondition || "Waiting for current EA evidence."}
       </div>
@@ -657,6 +757,89 @@ function DataHealthStrip({ contract, diagnostics, notificationStatus }) {
   );
 }
 
+// "automated_trade_result" is real, broker-confirmed truth about a trade
+// XauCloud actually executed -- separate from and never merged into the
+// advisory M10/hourly tracking above (a prior owner directive keeps those
+// two clearly apart: one is "what if you had taken this setup," the other
+// is "what your account actually did"). Rendered in plain English first,
+// with the underlying broker fields available on demand.
+const AUTOMATED_RESULT_COPY = {
+  TP_HIT: { label: "Hit take-profit", tone: "emerald", icon: CheckCircle2 },
+  WIN: { label: "Closed in profit", tone: "emerald", icon: CheckCircle2 },
+  SL_HIT: { label: "Hit stop-loss", tone: "rose", icon: AlertTriangle },
+  LOSS: { label: "Closed at a loss", tone: "rose", icon: AlertTriangle },
+  BREAK_EVEN: { label: "Closed break-even", tone: "slate", icon: Minus },
+};
+
+function moneyText(value) {
+  if (value == null || Number.isNaN(Number(value))) return "—";
+  const n = Number(value);
+  return `${n >= 0 ? "+" : "-"}$${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function AutomatedTradeResultCard({ result }) {
+  const [showDetails, setShowDetails] = useState(false);
+  if (!result || !["matched", "uncertain"].includes(result.status)) return null;
+
+  if (result.status === "uncertain") {
+    return (
+      <section className={`${CARD} border-l-4 border-l-amber-300 bg-amber-300/[0.04] p-5`}>
+        <div className={MONO_LABEL}>Your account · real trade result</div>
+        <div className="mt-2 flex items-center gap-2">
+          <AlertTriangle className="h-5 w-5 text-amber-300" />
+          <span className="text-lg font-bold text-amber-100">Can&apos;t confirm which trade this was yet</span>
+        </div>
+        <p className="mt-2 text-[12px] leading-5 text-white/55">
+          More than one trade in your account matched this signal&apos;s timing, so XauCloud is not guessing which one it was.
+          This will stay unresolved rather than show a possibly-wrong result.
+        </p>
+      </section>
+    );
+  }
+
+  const outcome = AUTOMATED_RESULT_COPY[result.result] || { label: humanEnum(result.result), tone: "slate", icon: Wallet };
+  const Icon = outcome.icon;
+  const toneClass = { emerald: "border-l-emerald-400 bg-emerald-300/[0.04] text-emerald-200",
+    rose: "border-l-rose-400 bg-rose-300/[0.04] text-rose-200",
+    slate: "border-l-white/25 bg-white/[0.02] text-white/70" }[outcome.tone];
+
+  return (
+    <section className={`${CARD} border-l-4 p-5 ${toneClass}`}>
+      <div className="flex items-center justify-between">
+        <div className={MONO_LABEL}>Your account · real trade result</div>
+        <span className="rounded-full border border-current/20 px-2.5 py-1 font-mono text-[9px] uppercase tracking-widest opacity-70">
+          Broker-confirmed
+        </span>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Icon className="h-5 w-5" />
+        <span className="text-lg font-bold">{result.direction} {result.symbol} {outcome.label}</span>
+      </div>
+      <p className="mt-1 text-[13px] font-semibold">
+        {moneyText(result.realized_profit)}
+        {result.realized_r != null && <span className="ml-2 font-mono text-[12px] opacity-75">{rText(result.realized_r)}</span>}
+      </p>
+      <p className="mt-2 text-[11px] leading-4 text-white/45">
+        This is what your account actually did, confirmed by your broker — it is shown separately from the advisory outlook above,
+        which only tracks a hypothetical "if you had taken this setup" outcome.
+      </p>
+      <button onClick={() => setShowDetails((s) => !s)} className="mt-3 flex items-center gap-1 text-[10px] text-white/40 hover:text-white/70">
+        {showDetails ? "Hide" : "Show"} trade details {showDetails ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+      </button>
+      {showDetails && (
+        <div className="mt-3 grid grid-cols-2 gap-3 border-t border-current/10 pt-3 sm:grid-cols-4">
+          <Metric label="Entry" value={result.entry_price} />
+          <Metric label="Exit" value={result.exit_price} />
+          <Metric label="Ticket" value={result.ticket} />
+          <Metric label="Close reason" value={result.close_reason} />
+          <Metric label="Opened" value={result.opened_at ? new Date(result.opened_at).toLocaleString() : "—"} />
+          <Metric label="Closed" value={result.closed_at ? new Date(result.closed_at).toLocaleString() : "—"} />
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SignalEventCard({ event }) {
   const state = event.event_type || event.state;
   return (
@@ -677,11 +860,17 @@ export default function AIMarketOutlookPage() {
   const previewMode = process.env.NODE_ENV !== "production" && searchParams.get("preview") === "actionable";
 
   const [contract, setContract] = useState(null);
+  const [currentOutlook, setCurrentOutlook] = useState(null);
   const [diagnostics, setDiagnostics] = useState(null);
   const [prefs, setPrefs] = useState(null);
   const [history, setHistory] = useState([]);
   const [signalEvents, setSignalEvents] = useState([]);
   const [stats, setStats] = useState({});
+  const [historyFilter, setHistoryFilter] = useState("All");
+  const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState(false);
+  const [currentError, setCurrentError] = useState(false);
 
   const loadCurrent = useCallback(async () => {
     if (previewMode) {
@@ -692,8 +881,12 @@ export default function AIMarketOutlookPage() {
     try {
       const { data } = await outlookAxios.get("/outlook/current");
       setContract(data?.contract || null);
+      setCurrentOutlook(data?.outlook || null);
       setDiagnostics(data?.diagnostics || null);
-    } catch (_) { /* advisory only */ }
+      setCurrentError(false);
+    } catch (_) {
+      setCurrentError(true);
+    }
   }, [previewMode]);
 
   const loadPrefs = useCallback(async () => {
@@ -714,13 +907,21 @@ export default function AIMarketOutlookPage() {
       });
       return;
     }
+    setHistoryLoading(true);
     try {
-      const { data } = await outlookAxios.get("/outlook/history");
+      const { data } = await outlookAxios.get("/outlook/history", {
+        params: { ...HISTORY_FILTER_PARAMS[historyFilter], limit: historyLimit },
+      });
       setHistory(data?.timeline || data?.outlooks || []);
       setSignalEvents(data?.signal_events || []);
       setStats(data?.stats || {});
-    } catch (_) { /* advisory only */ }
-  }, [previewMode]);
+      setHistoryError(false);
+    } catch (_) {
+      setHistoryError(true);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [previewMode, historyFilter, historyLimit]);
 
   useEffect(() => {
     if (highlightId) {
@@ -729,13 +930,19 @@ export default function AIMarketOutlookPage() {
       loadCurrent();
     }
     loadPrefs();
-    loadHistory();
     // The backend owns classification; this lightweight refresh only makes
     // its persisted event-driven state visible promptly when the page is
     // open. It does not calculate or monitor prices in the browser.
     const t = setInterval(() => { loadCurrent(); loadHistory(); }, 15000);
     return () => clearInterval(t);
   }, [highlightId, loadCurrent, loadPrefs, loadHistory]);
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  const changeHistoryFilter = useCallback((filter) => {
+    setHistoryFilter(filter);
+    setHistoryLimit(HISTORY_PAGE_SIZE);
+  }, []);
 
   const notificationSummary = prefs?.tier === "OFF" ? "Preference off" : contract?.notificationSent ? "Delivered" : "Standing by";
   const comparisonM10 = contract?.m10 ? {
@@ -753,6 +960,11 @@ export default function AIMarketOutlookPage() {
 
   return (
     <div className="min-h-screen bg-[#07090d] text-white">
+      <Seo
+        title="AI Gold Market Outlook — XauCloud M10 Execution Truth"
+        description="M10 execution truth with hourly advisory context for XAUUSD Gold trading, from the XauCloud AI Director."
+        path="/ai-market-outlook"
+      />
       <div className="mx-auto max-w-6xl px-4 pb-16 pt-[max(1.5rem,env(safe-area-inset-top))] sm:px-6">
         <div className="mb-6 flex items-center gap-3">
           <button onClick={() => navigate(-1)} className="rounded-full border border-white/10 p-2 hover:border-white/25">
@@ -761,8 +973,16 @@ export default function AIMarketOutlookPage() {
           <div><h1 className="text-lg font-black tracking-tight">AI Market Outlook</h1><p className="mt-0.5 text-[10px] text-white/35">M10 execution truth with hourly advisory context</p></div>
         </div>
 
+        {currentError && (
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.05] px-4 py-3">
+            <p className="text-[12px] text-rose-200">The live outlook couldn't be refreshed. Showing the last known data.</p>
+            <button onClick={loadCurrent} className="flex-none text-[11px] text-rose-100 underline decoration-dotted">Retry</button>
+          </div>
+        )}
+
         <div className="space-y-4">
           <PrimaryStateCard contract={contract} />
+          <SuggestedLevelsCard outlook={currentOutlook} />
           <DataHealthStrip contract={contract} diagnostics={diagnostics} notificationStatus={notificationSummary} />
           <div className="grid gap-4 lg:grid-cols-[1.35fr_0.65fr]">
             <M10ExecutionCard contract={contract} />
@@ -774,6 +994,7 @@ export default function AIMarketOutlookPage() {
             online={contract?.dataHealth === "HEALTHY"}
             loading={!contract}
           />
+          <AutomatedTradeResultCard result={currentOutlook?.automated_trade_result} />
           <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
             <section className={`${CARD} p-5 sm:p-6`}>
               <div className="flex items-center justify-between"><span className={MONO_LABEL}>Meaningful signal history</span><span className="text-[10px] text-white/30">Informational repeats grouped</span></div>
@@ -786,10 +1007,42 @@ export default function AIMarketOutlookPage() {
               <Metric label="Active" value={stats.active_unresolved_count ?? 0} />
               <Metric label="Unavailable history" value={stats.unavailable_historical_count ?? 0} />
               </div>
+
+              <div className="mt-4 flex gap-1.5 overflow-x-auto pb-1" data-testid="history-filters">
+                {HISTORY_FILTERS.map((f) => (
+                  <button key={f} onClick={() => changeHistoryFilter(f)}
+                          className={`flex-none rounded-full border px-3 py-1.5 font-mono text-[10px] font-bold transition ${historyFilter === f ? "border-amber-300/40 bg-amber-300/[0.08] text-amber-100" : "border-white/[0.06] text-white/40 hover:border-white/15"}`}>
+                    {f}
+                  </button>
+                ))}
+              </div>
+
               <div className="mt-5 space-y-2">
-                {signalEvents.slice(0, 12).map((event) => <SignalEventCard key={event.id || `${event.candidate_id}-${event.event_type}`} event={event} />)}
-                {signalEvents.length === 0 && history.slice(0, 12).map((o) => <HistoryCard key={o.id} outlook={o} />)}
-                {signalEvents.length === 0 && history.length === 0 && <p className="py-6 text-center text-[12px] text-white/35">No completed or active signals yet. Informational heartbeats are not counted as trades.</p>}
+                {historyError && (
+                  <div className="rounded-xl border border-rose-400/20 bg-rose-400/[0.05] p-4 text-center">
+                    <p className="text-[12px] text-rose-200">Signal history couldn't be loaded right now.</p>
+                    <button onClick={loadHistory} className="mt-2 text-[11px] text-rose-100 underline decoration-dotted">Retry</button>
+                  </div>
+                )}
+                {!historyError && historyFilter === "All" && signalEvents.slice(0, 12).map((event) => <SignalEventCard key={event.id || `${event.candidate_id}-${event.event_type}`} event={event} />)}
+                {!historyError && (historyFilter !== "All" || signalEvents.length === 0) && history.map((o) => <HistoryCard key={o.id} outlook={o} />)}
+                {!historyError && historyFilter === "All" && signalEvents.length === 0 && history.length === 0 && !historyLoading && (
+                  <p className="py-6 text-center text-[12px] text-white/35">No completed or active signals yet. Informational heartbeats are not counted as trades.</p>
+                )}
+                {!historyError && historyFilter !== "All" && history.length === 0 && !historyLoading && (
+                  <p className="py-6 text-center text-[12px] text-white/35">No signals match this filter yet.</p>
+                )}
+                {historyLoading && history.length === 0 && (
+                  <div className="space-y-2" aria-label="Loading signal history">
+                    {[0, 1, 2].map((i) => <div key={i} className="h-16 animate-pulse rounded-xl border border-white/[0.05] bg-white/[0.02]" />)}
+                  </div>
+                )}
+                {!historyError && history.length >= historyLimit && history.length > 0 && (
+                  <button onClick={() => setHistoryLimit((l) => l + HISTORY_PAGE_SIZE)} disabled={historyLoading}
+                          className="w-full rounded-xl border border-white/[0.07] py-2.5 text-[11px] text-white/50 hover:text-white disabled:opacity-50">
+                    {historyLoading ? "Loading…" : "Load more"}
+                  </button>
+                )}
               </div>
             </section>
             <NotificationSettings prefs={prefs} setPrefs={setPrefs} />

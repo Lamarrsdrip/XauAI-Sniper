@@ -11,7 +11,8 @@ import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
 import AIThoughtFeed from "./AIThoughtFeed";
 import AIMarketOutlookCard from "./AIMarketOutlookCard";
-import M10VsOutlookCard from "./M10VsOutlookCard";
+import M10VsOutlookCard, { M10_DECISION_LABELS, FRESHNESS_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
+import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
 import { API } from "@/lib/api";
 import { logoutOneSignalUser } from "@/lib/onesignal";
 
@@ -499,6 +500,7 @@ function useAuthGuard() {
 
 function AppShell({ active, setActive, children, logout, statusText, online, eaVersion }) {
   const [moreOpen, setMoreOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
   const moreActive = MORE_NAV.some(([id])=>id===active);
   const go = (id)=>{ setActive(id); setMoreOpen(false); };
 
@@ -524,12 +526,15 @@ function AppShell({ active, setActive, children, logout, statusText, online, eaV
               {online && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />}
               {statusText}
             </div>
+            <NotificationBell onClick={() => setNotifOpen(true)} />
             <button onClick={logout} className="rounded-full border border-white/[0.07] bg-white/[0.03] p-2 text-white/45 hover:text-white transition">
               <LogOut className="h-4 w-4" />
             </button>
           </div>
         </div>
       </header>
+
+      <NotificationCenterPanel open={notifOpen} onClose={() => setNotifOpen(false)} />
 
       {/* Page content */}
       <main className="relative z-10 mx-auto max-w-5xl overflow-x-hidden px-4 py-5 pb-8">
@@ -811,6 +816,7 @@ function M10SignalCard({ events, heartbeat }) {
   // account+symbol before trusting it -- a stale event from a previous
   // session/build must never be silently displayed as current.
   const latest = latestM10Signal(events, heartbeat);
+  const [showTechnical, setShowTechnical] = useState(false);
   if (!latest) return null;
 
   const decision = latest.decision || "DATA_UNAVAILABLE";
@@ -846,8 +852,8 @@ function M10SignalCard({ events, heartbeat }) {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className={MONO_LABEL}>M10 Signal Engine · Evidence #{latest.evidence_id ?? "—"}</div>
         <div className="flex items-center gap-2">
-          <span className={pill(freshnessTone)}>{freshnessState}{latest.age_seconds != null ? ` · ${latest.age_seconds}s old` : ""}</span>
-          <span className={pill(decisionTone)}>{isStaleOrUnknown ? "DATA STALE" : decision.replace(/_/g, " ")}</span>
+          <span className={pill(freshnessTone)}>{humanEnumLabel(freshnessState, FRESHNESS_LABELS)}{latest.age_seconds != null ? ` · ${latest.age_seconds}s old` : ""}</span>
+          <span className={pill(decisionTone)}>{isStaleOrUnknown ? "Data delayed" : humanEnumLabel(decision, M10_DECISION_LABELS)}</span>
         </div>
       </div>
 
@@ -876,27 +882,32 @@ function M10SignalCard({ events, heartbeat }) {
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 text-[11px]">
-            <div><div className="text-white/35">Trend</div><div className="mt-0.5 font-mono text-white/80">{latest.trend_state || "—"}</div></div>
-            <div><div className="text-white/35">Structure</div><div className="mt-0.5 font-mono text-white/80">{latest.structure_state || "—"}</div></div>
-            <div><div className="text-white/35">Location</div><div className="mt-0.5 font-mono text-white/80">{latest.location_state || "—"}</div></div>
-            <div><div className="text-white/35">{confidenceLabel}</div><div className="mt-0.5 font-mono text-white/80">{Number(latest.confidence || 0).toFixed(0)}%</div></div>
-          </div>
-
-          <p className="mt-3 text-[11px] leading-4 text-white/45">
-            Preferred direction: <span className="text-white/70 font-semibold">{preferredDir}</span>
-            {latest.retracement_required ? " · location evidence noted inside the single entry timer" : ""}
-            {" — "}{displayReason}
+          <p className="mt-4 text-[12px] leading-5 text-white/70">
+            <span className="font-semibold text-white/85">{preferredDir}</span> evidence is {leadingScore.toFixed(0)}% strong{isActionable ? "." : ", but the setup is not ready for execution yet."}
           </p>
+          {displayReason && <p className="mt-1.5 text-[11px] leading-4 text-white/45">{displayReason}</p>}
 
-          <p className="mt-3 rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 text-[10px] leading-4 text-white/40">
-            Evidence scores describe the current setup; they are not next-candle probabilities. High evidence at a late or exhausted location can describe a move that is already mature.
-          </p>
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
-            <span className={pill("neutral")}>Exhaustion evidence-only: {(latest.exhaustion_decision || "—").replace(/_/g, " ")}</span>
-            {latest.post_profit_buy_pending && <span className={pill("amber")}>Buy location evidence: extended</span>}
-            {latest.post_profit_sell_pending && <span className={pill("amber")}>Sell location evidence: extended</span>}
-          </div>
+          <button onClick={() => setShowTechnical((s) => !s)} className="mt-3 flex items-center gap-1 text-[10px] text-white/35 hover:text-white/65">
+            {showTechnical ? "Hide" : "Show"} technical details
+          </button>
+          {showTechnical && (
+            <>
+              <div className="mt-2 grid grid-cols-2 gap-3 border-t border-white/[0.05] pt-3 sm:grid-cols-4 text-[11px]">
+                <div><div className="text-white/35">Trend</div><div className="mt-0.5 font-mono text-white/80">{humanEnumLabel(latest.trend_state)}</div></div>
+                <div><div className="text-white/35">Structure</div><div className="mt-0.5 font-mono text-white/80">{humanEnumLabel(latest.structure_state)}</div></div>
+                <div><div className="text-white/35">Location</div><div className="mt-0.5 font-mono text-white/80">{humanEnumLabel(latest.location_state)}</div></div>
+                <div><div className="text-white/35">{confidenceLabel}</div><div className="mt-0.5 font-mono text-white/80">{Number(latest.confidence || 0).toFixed(0)}%</div></div>
+              </div>
+              <p className="mt-3 rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 text-[10px] leading-4 text-white/40">
+                Evidence scores describe the current setup; they are not next-candle probabilities. High evidence at a late or exhausted location can describe a move that is already mature.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
+                <span className={pill("neutral")}>Exhaustion evidence-only: {humanEnumLabel(latest.exhaustion_decision)}</span>
+                {latest.post_profit_buy_pending && <span className={pill("amber")}>Buy location evidence: extended</span>}
+                {latest.post_profit_sell_pending && <span className={pill("amber")}>Sell location evidence: extended</span>}
+              </div>
+            </>
+          )}
         </>
       )}
 
@@ -1680,7 +1691,7 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
 // the anonymous public page where it always 401'd for a first-time visitor
 // anyway. Same backend contract as before: POST /download/request-token
 // (cookie-authenticated) -> short-lived signed URL -> GET /download/ea-release.
-function EaDownloadCard({ hasLicense }) {
+function EaDownloadCard({ hasLicense, release }) {
   const [info, setInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
@@ -1705,6 +1716,7 @@ function EaDownloadCard({ hasLicense }) {
 
   const available = info?.available !== false;
   const version = info?.version || "Published release";
+  const updateAvailable = release?.update_available;
 
   return (
     <Card title="Download EA">
@@ -1719,10 +1731,24 @@ function EaDownloadCard({ hasLicense }) {
           </span>
         )}
       </div>
+
+      {updateAvailable && (
+        <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/[0.08] p-3">
+          <div className="text-[12px] font-bold text-amber-200">XauCloud update available</div>
+          <div className="mt-1 text-[11px] leading-4 text-white/50">
+            Installed {release.installed_version} · Latest {release.latest_version}
+          </div>
+          {release.latest_release_notes && (
+            <p className="mt-1.5 text-[11px] leading-4 text-white/40">{release.latest_release_notes}</p>
+          )}
+        </div>
+      )}
+
       {error && <div className="mt-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-[12px] text-rose-300">{error}</div>}
       <button onClick={requestDownload} disabled={downloading || loading || !available || !hasLicense}
         className="mt-4 w-full rounded-xl bg-amber-300 px-5 py-3 text-[13px] font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-40">
-        {downloading ? "Preparing download…" : !hasLicense ? "Link a license to download" : available ? `Download ${version} .EX5` : "No release available"}
+        {downloading ? "Preparing download…" : !hasLicense ? "Link a license to download" : !available ? "No release available"
+          : updateAvailable ? "Download and Install Latest Version" : `Download ${version} .EX5`}
       </button>
     </Card>
   );
@@ -1767,10 +1793,12 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
         </div>
         <Metric label="MT5 binding"    value={info?.account_binding||heartbeat.account_number||"Not bound"} detail={heartbeat.broker_server||"Waiting for EA"} icon={TerminalSquare} tone={heartbeat.account_number?"green":"amber"} />
         <Metric label="VPS binding"    value={info?.vps_binding||"Not bound"} detail="Optional" icon={Wifi} tone="blue" />
-        <Metric label="XauCloud version" value={status?.release?.public_display_name||"Waiting"} detail={`Heartbeat ${relativeTime(heartbeat.last_heartbeat||heartbeat.ts)}`} icon={Bot} tone={heartbeat.ea_version?"green":"neutral"} />
+        <Metric label="XauCloud version" value={status?.release?.public_display_name||"Waiting"}
+          detail={status?.release?.update_available ? `Update available · latest ${status.release.latest_version}` : `Heartbeat ${relativeTime(heartbeat.last_heartbeat||heartbeat.ts)}`}
+          icon={Bot} tone={status?.release?.update_available ? "amber" : (heartbeat.ea_version?"green":"neutral")} />
       </div>
 
-      <EaDownloadCard hasLicense={Boolean(info?.activation_key)} />
+      <EaDownloadCard hasLicense={Boolean(info?.activation_key)} release={status?.release} />
     </div>
   );
 }
@@ -1837,6 +1865,10 @@ function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
               ["EPF state",        heartbeat.epf_state||"—"],
               ["EA build (internal)", heartbeat.ea_version||"—"],
               ["Build recognized",    String(status?.release?.reported_build_recognized ?? "—")],
+              ["Installed version",   status?.release?.installed_version||"—"],
+              ["Latest version",      status?.release?.latest_version||"—"],
+              ["Update status",       status?.release?.update_status||"—"],
+              ["Latest release date", status?.release?.latest_build_timestamp||"—"],
               ["Reported timeframe",  status?.production_status?.reported_timeframe||"—"],
               ["Timeframe mismatch",  String(status?.production_status?.timeframe_mismatch ?? "—")],
               ["Account",          heartbeat.account_number||"—"],

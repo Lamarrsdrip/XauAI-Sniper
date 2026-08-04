@@ -134,6 +134,7 @@ class NotificationPrefsUpdate(BaseModel):
     quiet_hours_start: Optional[int] = None  # local hour 0-23, or None
     quiet_hours_end: Optional[int] = None
     notify_all_devices: bool = True
+    muted_categories: Optional[list] = None  # Notification Center categories excluded from push
 
 
 # OneSignal v16 genuine per-device registration. The raw push token is
@@ -1888,6 +1889,10 @@ async def track_outlook_lifecycle_tick(account: str = "", bid: Optional[float] =
             await dispatch_pending_trade_notifications()
         except Exception as exc:
             logger.warning("PENDING_TRADE_NOTIFICATION_RETRY_FAILED: %s", exc)
+        try:
+            await dispatch_pending_automated_trade_notifications()
+        except Exception as exc:
+            logger.warning("PENDING_AUTOMATED_TRADE_NOTIFICATION_RETRY_FAILED: %s", exc)
     return updated_count
 
 
@@ -2183,3 +2188,232 @@ async def _dispatch_hourly_notification(doc: Dict) -> None:
         # intentionally visible in the API but can never masquerade as a
         # confirmed signal notification.
         logger.info("OUTLOOK_NOTIFICATION_SUPPRESSED id=%s reason=ADVISORY_ONLY", doc.get("id"))
+
+
+# ---------------------------------------------------------------------------
+# Automated trade result reconciliation -- links a published outlook signal
+# to the REAL automated trade (if any) that followed it, sourced from
+# trade_journal (broker-confirmed entry/exit/R/close-reason data). Kept
+# deliberately SEPARATE from the advisory price-tracking above
+# (tracking_entry_price/tp1_hit_at/final_result/etc, which represents "what
+# if you had taken this advisory setup" using real live prices against the
+# outlook's OWN suggested levels): a prior owner directive established
+# outlook_type=HOURLY_MANUAL_BIAS / execution_authority=False specifically
+# so the advisory opinion is never confused with "XauCloud opened/approved
+# a trade." Both are surfaced to the customer, clearly labeled, never
+# merged into one field.
+#
+# Real-time note: this is invoked from /journal/log's request handler the
+# moment a CLOSED trade is reported (see reconcile_trade_journal_entry),
+# not on the hourly Outlook job -- the hourly job never needs to run for a
+# customer to see a confirmed automated result within seconds of MT5
+# reporting the close.
+# ---------------------------------------------------------------------------
+
+TRADE_MATCH_ENTRY_TOLERANCE_R = 0.5   # entry must be within 0.5R of the outlook's suggested entry
+TRADE_MATCH_GRACE_MINUTES = 30        # allow a trade opened up to this long after the outlook's expiry
+
+
+async def _find_matching_automated_trade(doc: Dict) -> Dict:
+    """Deterministic match only -- account + symbol + direction + a
+    published-to-expiry(+grace) time window + entry-price proximity (when
+    available). Zero or multiple candidates both return an explicit
+    non-matched status; never guesses which trade "probably" corresponds
+    to this outlook."""
+    direction = str(doc.get("primary_direction") or "").upper()
+    account = str(doc.get("account") or "")
+    if direction not in ("BUY", "SELL") or not account:
+        return {"status": "not_applicable"}
+
+    published_at = _as_utc(doc.get("published_at"))
+    if not published_at:
+        return {"status": "not_applicable"}
+    expiry_at = _as_utc(doc.get("expiry_at")) or (published_at + timedelta(hours=OUTLOOK_HORIZON_HOURS))
+    window_start = published_at.timestamp()
+    window_end = expiry_at.timestamp() + TRADE_MATCH_GRACE_MINUTES * 60
+
+    db = _db()
+    cursor = db.trade_journal.find({
+        "account_login": account,
+        "symbol": doc.get("symbol", OUTLOOK_SYMBOL),
+        "direction": direction,
+        "closed_at": {"$gt": 0},
+        "opened_at": {"$gte": window_start, "$lte": window_end},
+    }, {"_id": 0})
+    candidates = await cursor.to_list(20)
+
+    entry_ref = doc.get("tracking_entry_price")
+    risk = doc.get("risk_distance")
+    if entry_ref and risk:
+        tol = float(risk) * TRADE_MATCH_ENTRY_TOLERANCE_R
+        candidates = [c for c in candidates if abs(float(c.get("entry_price") or 0) - float(entry_ref)) <= tol]
+
+    if len(candidates) == 0:
+        return {"status": "no_trade_found"}
+    if len(candidates) > 1:
+        tickets = sorted({c.get("ticket") for c in candidates if c.get("ticket")})
+        return {"status": "uncertain", "candidate_tickets": tickets}
+    return {"status": "matched", "trade": candidates[0]}
+
+
+def _classify_automated_close(trade: Dict) -> str:
+    """WIN/LOSS/BREAK_EVEN always comes from the broker-confirmed realized
+    profit (never inferred from exit_reason text or floating P/L) -- one
+    of these three is always the base result. TP_HIT/SL_HIT are used
+    INSTEAD only when exit_reason unambiguously says so AND agrees with
+    the profit sign: this EA's real exit authorities are much richer than
+    plain TP/SL (e.g. OWNER_R_EXIT_GIVEBACK_45, RUNNER_CONTINUATION_FAILED
+    -- see audits/xaucloud/), so guessing SL/TP from a loose substring
+    match on those would be dishonest. The raw exit_reason string is
+    always exposed alongside regardless of which label is used, so nothing
+    is ever hidden."""
+    profit = float(trade.get("profit") or 0)
+    reason = str(trade.get("exit_reason") or "").upper()
+    base = "BREAK_EVEN" if abs(profit) < 0.01 else ("WIN" if profit > 0 else "LOSS")
+    if base == "LOSS" and any(tag in reason for tag in ("STOP_LOSS", "SL_HIT", "HARD_SL")):
+        return "SL_HIT"
+    if base == "WIN" and any(tag in reason for tag in ("TAKE_PROFIT", "TP_HIT", "TP1", "TP2", "TP3")):
+        return "TP_HIT"
+    return base
+
+
+def _build_automated_trade_result(trade: Dict) -> Dict:
+    entry_price = float(trade.get("entry_price") or 0) or None
+    # "price" is this schema's close/exit price field (see TradeJournalEntry
+    # in server.py -- entry_price was added later as an explicit rich-ledger
+    # field; the original "price" field is populated at close time).
+    exit_price = float(trade.get("price") or 0) or None
+    return {
+        "ticket": trade.get("ticket"),
+        "direction": trade.get("direction"),
+        "symbol": trade.get("symbol"),
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+        "realized_profit": trade.get("profit"),
+        "realized_r": trade.get("final_r"),
+        "close_reason": trade.get("exit_reason") or "",
+        "result": _classify_automated_close(trade),
+        "opened_at": datetime.fromtimestamp(trade["opened_at"], tz=timezone.utc).isoformat() if trade.get("opened_at") else None,
+        "closed_at": datetime.fromtimestamp(trade["closed_at"], tz=timezone.utc).isoformat() if trade.get("closed_at") else None,
+        "account_login": trade.get("account_login"),
+        "reconciled_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+async def reconcile_automated_trade_result(doc: Dict) -> Optional[Dict]:
+    """Attempts to link `doc` (an outlook) to a real automated trade and
+    persists the result under automated_trade_result -- a field completely
+    separate from the outlook's own advisory tracking fields. Returns the
+    persisted reconciliation dict, or None if nothing changed. Idempotent
+    and fail-closed against overwrite: once a status="matched" result
+    exists, this is a no-op -- broker-confirmed truth outranks any later
+    recompute and can never flip back to "uncertain"/"no_trade_found"."""
+    if (doc.get("automated_trade_result") or {}).get("status") == "matched":
+        return None
+
+    match = await _find_matching_automated_trade(doc)
+    db = _db()
+    if match["status"] == "matched":
+        result = {"status": "matched", **_build_automated_trade_result(match["trade"])}
+    elif match["status"] == "uncertain":
+        result = {"status": "uncertain", "candidate_tickets": match.get("candidate_tickets", []),
+                   "reconciled_at": datetime.now(timezone.utc).isoformat()}
+    else:
+        result = {"status": match["status"], "reconciled_at": datetime.now(timezone.utc).isoformat()}
+
+    await db.cloud_market_outlooks.update_one({"id": doc["id"]}, {"$set": {"automated_trade_result": result}})
+    if result.get("status") == "matched":
+        await _dispatch_automated_trade_notification({**doc, "automated_trade_result": result})
+    return result
+
+
+async def _dispatch_automated_trade_notification(doc: Dict) -> None:
+    """Fires the real-trade-result push exactly once per outlook, mirroring
+    _dispatch_signal_event's notification_flags gate/retry discipline. Never
+    raises -- reconciliation must never fail because a push send failed."""
+    if (doc.get("notification_flags") or {}).get("AUTOMATED_TRADE_RESULT"):
+        return
+    try:
+        from notifications import send_automated_trade_result_notification
+        dispatch_result = await send_automated_trade_result_notification(doc)
+    except Exception as exc:
+        logger.error(f"AUTOMATED_TRADE_NOTIFICATION_FAILED outlook_id={doc.get('id')}: {exc}")
+        return
+    if dispatch_result is None:
+        return
+    from notifications import RETRYABLE_FAILURES
+    retryable = await _db().cloud_notification_log.find_one({
+        "outlook_id": doc["id"],
+        "notification_type": "AUTOMATED_TRADE_RESULT",
+        "failure_reason": {"$in": list(RETRYABLE_FAILURES)},
+    })
+    if not retryable:
+        await _db().cloud_market_outlooks.update_one(
+            {"id": doc["id"]},
+            {"$set": {"notification_flags.AUTOMATED_TRADE_RESULT": datetime.now(timezone.utc).isoformat()}},
+        )
+
+
+async def dispatch_pending_automated_trade_notifications() -> int:
+    """Crash-recovery pass: retries any matched automated_trade_result whose
+    notification_flags.AUTOMATED_TRADE_RESULT was never set (e.g. the
+    process died between the DB write and the push send)."""
+    db = _db()
+    rows = db.cloud_market_outlooks.find({
+        "automated_trade_result.status": "matched",
+        "notification_flags.AUTOMATED_TRADE_RESULT": {"$exists": False},
+    }, {"_id": 0}).sort("published_at", -1)
+    dispatched = 0
+    async for doc in rows:
+        await _dispatch_automated_trade_notification(doc)
+        dispatched += 1
+    return dispatched
+
+
+async def reconcile_trade_journal_entry(entry: Dict) -> Optional[Dict]:
+    """Real-time trigger -- called immediately when POST /journal/log
+    receives a CLOSED trade (never waits for the hourly Outlook job). Finds
+    any outlook signal still awaiting reconciliation for this
+    account/symbol/direction whose window covers this trade's open time,
+    and reconciles it right away so the customer sees the confirmed result
+    within seconds of MT5 reporting the close. Returns
+    {"outlook_id", "result"} if something was matched, else None -- never
+    raises (a reconciliation failure must never break trade-journal
+    logging, the same discipline notifications.py already uses for push)."""
+    try:
+        if not entry.get("closed_at"):
+            return None
+        direction = str(entry.get("direction") or "").upper()
+        account = str(entry.get("account_login") or "")
+        if direction not in ("BUY", "SELL") or not account:
+            return None
+        opened_at = entry.get("opened_at")
+        if not opened_at:
+            return None
+        opened_dt = datetime.fromtimestamp(opened_at, tz=timezone.utc)
+
+        db = _db()
+        cursor = db.cloud_market_outlooks.find({
+            "account": account,
+            "symbol": entry.get("symbol", OUTLOOK_SYMBOL),
+            "primary_direction": direction,
+            "automated_trade_result": {"$exists": False},
+        }, {"_id": 0}).sort("published_at", -1).limit(50)
+        candidates = await cursor.to_list(50)
+
+        for outlook_doc in candidates:
+            published_at = _as_utc(outlook_doc.get("published_at"))
+            if not published_at:
+                continue
+            expiry_at = _as_utc(outlook_doc.get("expiry_at")) or (published_at + timedelta(hours=OUTLOOK_HORIZON_HOURS))
+            window_end = expiry_at + timedelta(minutes=TRADE_MATCH_GRACE_MINUTES)
+            if not (published_at <= opened_dt <= window_end):
+                continue
+            result = await reconcile_automated_trade_result(outlook_doc)
+            if result and result.get("status") == "matched":
+                logger.info(f"AUTOMATED_TRADE_RECONCILED outlook_id={outlook_doc['id']} ticket={entry.get('ticket')} result={result.get('result')}")
+                return {"outlook_id": outlook_doc["id"], "result": result}
+        return None
+    except Exception as exc:
+        logger.error(f"AUTOMATED_TRADE_RECONCILIATION_FAILED ticket={entry.get('ticket')}: {exc}")
+        return None

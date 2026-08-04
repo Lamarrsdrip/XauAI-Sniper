@@ -90,7 +90,40 @@ _EVENT_MIN_TIER = {
     "TP2_HIT": "HOURLY_PLUS_RESULTS",
     "TP3_HIT": "HOURLY_PLUS_RESULTS",
     "SL_HIT": "HOURLY_PLUS_RESULTS",
+    "AUTOMATED_TRADE_RESULT": "HOURLY_PLUS_RESULTS",
 }
+
+# Notification Center category taxonomy. TRADES/MARKET_OUTLOOK/SIGNALS are
+# the only categories any dispatch function currently emits (License, Bot
+# Updates, Payments, System, and Support notifications go out over email
+# today -- see server.py's email templates -- not push); the remaining
+# categories exist so the feed/preferences UI has a stable, complete list
+# to render even before those channels are wired into this log.
+NOTIFICATION_CATEGORIES = [
+    "TRADES", "MARKET_OUTLOOK", "SIGNALS", "LICENSE", "BOT_UPDATES",
+    "PAYMENTS", "SYSTEM", "SUPPORT",
+]
+_EVENT_CATEGORY = {
+    "OUTLOOK_PUBLISHED": "MARKET_OUTLOOK",
+    "TRACKING_STARTED": "MARKET_OUTLOOK",
+    "HALF_R_REACHED": "SIGNALS",
+    "TIMEOUT_60M": "SIGNALS",
+    "TP1_HIT": "SIGNALS",
+    "TP2_HIT": "SIGNALS",
+    "TP3_HIT": "SIGNALS",
+    "SL_HIT": "SIGNALS",
+    "TRADE_OPENED": "TRADES",
+    "TRADE_CLOSED": "TRADES",
+    "AUTOMATED_TRADE_RESULT": "TRADES",
+}
+
+
+def notification_category(event: str) -> str:
+    return _EVENT_CATEGORY.get(event, "SYSTEM")
+
+
+def _category_muted(prefs: Dict, category: str) -> bool:
+    return category in (prefs.get("muted_categories") or [])
 
 
 def _idempotency_key(outlook_id: str, event: str, user_id: str) -> str:
@@ -497,6 +530,8 @@ async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> Opt
             required_tier = _EVENT_MIN_TIER.get(event, min_tier)
             if _TIER_RANK.get(tier, 0) < _TIER_RANK.get(required_tier, 99):
                 continue
+            if _category_muted(prefs, notification_category(event)):
+                continue
             idem_key = _idempotency_key(outlook_id, event, user_id)
             already = await db.cloud_notification_log.find_one({"idempotency_key": idem_key})
             if already and (already.get("delivery_status") == "SENT"
@@ -511,10 +546,14 @@ async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> Opt
                 "user_id": user_id,
                 "outlook_id": outlook_id,
                 "notification_type": event,
+                "category": notification_category(event),
+                "title": payload.get("title"),
+                "body": payload.get("body"),
                 "scheduled_time": (already or {}).get("scheduled_time") or datetime.now(timezone.utc).isoformat(),
                 "sent_time": None,
                 "delivery_status": "PENDING",
                 "opened_time": None,
+                "read_at": (already or {}).get("read_at"),
                 "device_count": len(devices),
                 "retry_count": int((already or {}).get("retry_count", 0) or 0),
                 "failure_reason": None,
@@ -542,6 +581,128 @@ async def send_outlook_notification(doc: Dict, event: str, min_tier: str) -> Opt
         return sent
     except Exception as exc:
         logger.error("NOTIFICATION_DISPATCH_FAILED event=%s outlook=%s: %s", event, doc.get("id"), exc)
+        return None
+
+
+def _build_automated_trade_payload(doc: Dict) -> Dict:
+    """Builds the push payload for a real, broker-confirmed automated trade
+    result (doc["automated_trade_result"], written by
+    market_outlook.reconcile_automated_trade_result). Deliberately separate
+    from _build_payload's advisory TP/SL events -- this describes a trade
+    that XauCloud actually executed, not the advisory "if you had taken
+    this setup" tracking."""
+    result = doc.get("automated_trade_result") or {}
+    outcome = result.get("result", "")
+    direction = result.get("direction") or doc.get("primary_direction", "")
+    symbol = result.get("symbol") or doc.get("symbol", "XAUUSD")
+    profit_raw = result.get("realized_profit")
+    r_multiple = _fmt_number(result.get("realized_r"))
+    entry = result.get("entry_price")
+    exit_price = result.get("exit_price")
+    close_reason = result.get("close_reason") or ""
+    deep_link = f"/ai-market-outlook?outlook_id={doc.get('id')}"
+
+    icon = {"TP_HIT": "✅", "WIN": "✅", "SL_HIT": "❌", "LOSS": "❌", "BREAK_EVEN": "➖"}.get(outcome, "📊")
+    label = {
+        "TP_HIT": "hit take-profit", "SL_HIT": "hit stop-loss", "WIN": "closed in profit",
+        "LOSS": "closed at a loss", "BREAK_EVEN": "closed break-even",
+    }.get(outcome, "closed")
+    title = f"{icon} {direction} {symbol} automated trade {label}"
+
+    parts = []
+    try:
+        numeric_profit = float(profit_raw)
+        signed_amount = f"+${numeric_profit:,.2f}" if numeric_profit >= 0 else f"-${abs(numeric_profit):,.2f}"
+        parts.append(f"P/L {signed_amount}")
+    except (TypeError, ValueError):
+        pass
+    if r_multiple: parts.append(f"{r_multiple}R")
+    if entry is not None: parts.append(f"Entry {entry}")
+    if exit_price is not None: parts.append(f"Exit {exit_price}")
+    if close_reason: parts.append(close_reason)
+    if result.get("ticket"): parts.append(f"Ticket {result.get('ticket')}")
+    body = " · ".join(parts) or "Your automated trade result has been confirmed by your broker."
+
+    return {
+        "title": title, "body": body, "deep_link": deep_link,
+        "outlook_id": doc.get("id"), "event": "AUTOMATED_TRADE_RESULT",
+    }
+
+
+async def send_automated_trade_result_notification(doc: Dict) -> Optional[int]:
+    """Sends the real, broker-confirmed automated-trade-result push.
+
+    Unlike send_outlook_notification, this never applies the
+    market-open/bot-heartbeat suppression gate -- that gate exists only to
+    hide notifications about the *advisory* tracking process while the bot
+    is offline/market is closed (owner directive 2026-07-24). This event
+    reports something that has already genuinely happened (the trade is
+    closed), so it is always eligible to send, subject only to the
+    recipient's own notification tier preference."""
+    try:
+        db = _db()
+        account = doc.get("account", "")
+        outlook_id = doc.get("id", "")
+        event = "AUTOMATED_TRADE_RESULT"
+        prefs_cursor = db.cloud_notification_prefs.find({"account": account})
+        sent = 0
+        async for prefs in prefs_cursor:
+            user_id = prefs.get("user_id", "")
+            tier = prefs.get("tier", "OFF")
+            required_tier = _EVENT_MIN_TIER.get(event, "HOURLY_PLUS_RESULTS")
+            if _TIER_RANK.get(tier, 0) < _TIER_RANK.get(required_tier, 99):
+                continue
+            if _category_muted(prefs, notification_category(event)):
+                continue
+            idem_key = _idempotency_key(outlook_id, event, user_id)
+            already = await db.cloud_notification_log.find_one({"idempotency_key": idem_key})
+            if already and (already.get("delivery_status") == "SENT"
+                            or already.get("failure_reason") not in RETRYABLE_FAILURES):
+                continue
+
+            payload = _build_automated_trade_payload(doc)
+            devices = await complete_active_devices(user_id)
+            log_entry = {
+                "id": (already or {}).get("id") or str(uuid.uuid4()),
+                "idempotency_key": idem_key,
+                "user_id": user_id,
+                "outlook_id": outlook_id,
+                "notification_type": event,
+                "category": notification_category(event),
+                "title": payload.get("title"),
+                "body": payload.get("body"),
+                "scheduled_time": (already or {}).get("scheduled_time") or datetime.now(timezone.utc).isoformat(),
+                "sent_time": None,
+                "delivery_status": "PENDING",
+                "opened_time": None,
+                "read_at": (already or {}).get("read_at"),
+                "device_count": len(devices),
+                "retry_count": int((already or {}).get("retry_count", 0) or 0),
+                "failure_reason": None,
+            }
+            if not devices:
+                log_entry.update({"delivery_status": "NO_DEVICE", "failure_reason": "SUBSCRIPTION_MISSING"})
+            else:
+                ok, failure_class, provider = _coerce_send_result(await _send_onesignal(user_id, payload))
+                log_entry.update({
+                    "sent_time": datetime.now(timezone.utc).isoformat(),
+                    "delivery_status": "SENT" if ok else "FAILED",
+                    "failure_reason": None if ok else (failure_class or UNKNOWN_FAILURE),
+                    "provider_http_status": provider.get("http_status"),
+                    "provider_message_id": provider.get("message_id"),
+                    "provider_errors": provider.get("errors"),
+                    "provider_warnings": provider.get("warnings"),
+                })
+                if ok:
+                    sent += 1
+            if already:
+                log_entry["retry_count"] = int(already.get("retry_count", 0) or 0) + 1
+                await db.cloud_notification_log.update_one({"idempotency_key": idem_key}, {"$set": log_entry})
+            else:
+                await db.cloud_notification_log.insert_one(log_entry)
+        return sent
+    except Exception as exc:
+        logger.error("AUTOMATED_TRADE_NOTIFICATION_DISPATCH_FAILED outlook=%s: %s", doc.get("id"), exc)
         return None
 
 
@@ -678,6 +839,8 @@ async def send_trade_activity_notification(activity: Dict) -> Optional[int]:
             user_id = str(prefs.get("user_id") or "")
             if not user_id or _TIER_RANK.get(prefs.get("tier", "OFF"), 0) < _TIER_RANK["ALL_UPDATES"]:
                 continue
+            if _category_muted(prefs, notification_category(event)):
+                continue
 
             idem_key = f"{event}:{account}:{symbol}:{ticket}:{user_id}"
             already = await db.cloud_notification_log.find_one({"idempotency_key": idem_key})
@@ -698,6 +861,7 @@ async def send_trade_activity_notification(activity: Dict) -> Optional[int]:
 
             devices = await complete_active_devices(user_id)
             now_iso = datetime.now(timezone.utc).isoformat()
+            payload = build_trade_notification_payload(activity, event)
             log_entry = {
                 "id": (already or {}).get("id") or str(uuid.uuid4()),
                 "idempotency_key": idem_key,
@@ -708,10 +872,14 @@ async def send_trade_activity_notification(activity: Dict) -> Optional[int]:
                 "symbol": symbol,
                 "ticket": ticket,
                 "notification_type": event,
+                "category": notification_category(event),
+                "title": payload.get("title"),
+                "body": payload.get("body"),
                 "scheduled_time": (already or {}).get("scheduled_time") or now_iso,
                 "sent_time": None,
                 "delivery_status": "PENDING",
                 "opened_time": None,
+                "read_at": (already or {}).get("read_at"),
                 "device_count": len(devices),
                 "retry_count": int((already or {}).get("retry_count", 0) or 0),
                 "failure_reason": None,
@@ -726,7 +894,6 @@ async def send_trade_activity_notification(activity: Dict) -> Optional[int]:
             if not devices:
                 log_entry.update({"delivery_status": "NO_DEVICE", "failure_reason": "SUBSCRIPTION_MISSING"})
             else:
-                payload = build_trade_notification_payload(activity, event)
                 payload["notification_key"] = f"{idem_key}:provider"
                 ok, failure_class, provider = _coerce_send_result(await _send_onesignal(user_id, payload))
                 log_entry.update({
@@ -773,6 +940,63 @@ async def dispatch_pending_trade_notifications(limit: int = 100) -> int:
             if result:
                 dispatched += int(result)
     return dispatched
+
+
+# ---------------------------------------------------------------------------
+# Notification Center -- grouped/paginated in-app feed over the same
+# cloud_notification_log every dispatch function above already writes to.
+# Read/unread and per-category mute preferences are real, backend-persisted
+# state (cloud_notification_log.read_at, cloud_notification_prefs.
+# muted_categories), not client-local UI state.
+# ---------------------------------------------------------------------------
+
+async def get_notification_center_page(
+    user_id: str, category: Optional[str] = None, unread_only: bool = False,
+    page: int = 1, limit: int = 20,
+) -> Dict:
+    db = _db()
+    query: Dict = {"user_id": user_id, "delivery_status": {"$in": ["SENT", "NO_DEVICE", "PENDING", "FAILED"]}}
+    if category and category != "ALL":
+        query["category"] = category
+    if unread_only:
+        query["read_at"] = None
+    page = max(1, int(page))
+    limit = max(1, min(int(limit), 100))
+    total = await db.cloud_notification_log.count_documents(query)
+    unread_total = await db.cloud_notification_log.count_documents({**query, "read_at": None})
+    rows = await db.cloud_notification_log.find(query, {"_id": 0}).sort("scheduled_time", -1).skip((page - 1) * limit).limit(limit).to_list(limit)
+    category_counts = {}
+    for cat in NOTIFICATION_CATEGORIES:
+        cat_query = {"user_id": user_id, "category": cat}
+        category_counts[cat] = {
+            "total": await db.cloud_notification_log.count_documents(cat_query),
+            "unread": await db.cloud_notification_log.count_documents({**cat_query, "read_at": None}),
+        }
+    return {
+        "items": rows, "page": page, "limit": limit, "total": total,
+        "unread_total": unread_total, "has_more": page * limit < total,
+        "category_counts": category_counts,
+    }
+
+
+async def mark_notification_read(user_id: str, notification_id: str) -> bool:
+    db = _db()
+    result = await db.cloud_notification_log.update_one(
+        {"id": notification_id, "user_id": user_id, "read_at": None},
+        {"$set": {"read_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return result.modified_count > 0
+
+
+async def mark_all_notifications_read(user_id: str, category: Optional[str] = None) -> int:
+    db = _db()
+    query: Dict = {"user_id": user_id, "read_at": None}
+    if category and category != "ALL":
+        query["category"] = category
+    result = await db.cloud_notification_log.update_many(
+        query, {"$set": {"read_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return result.modified_count
 
 
 async def send_test_notification(user_id: str) -> Dict:

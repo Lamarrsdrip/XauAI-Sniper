@@ -254,7 +254,7 @@ def build_router() -> APIRouter:
     async def get_notification_prefs(user: dict = Depends(srv.get_cloud_user)):
         db = srv.db
         prefs = await db.cloud_notification_prefs.find_one({"user_id": user["id"]}, {"_id": 0})
-        return {"prefs": prefs or {"user_id": user["id"], "tier": "OFF", "notify_all_devices": True}}
+        return {"prefs": prefs or {"user_id": user["id"], "tier": "OFF", "notify_all_devices": True, "muted_categories": []}}
 
     @r.post("/outlook/notifications/prefs")
     async def set_notification_prefs(body: mo.NotificationPrefsUpdate, user: dict = Depends(srv.get_cloud_user)):
@@ -266,12 +266,21 @@ def build_router() -> APIRouter:
                 "code": "SUBSCRIPTION_MISSING",
                 "message": "Register and verify this device before enabling notification delivery.",
             })
+        existing = await db.cloud_notification_prefs.find_one({"user_id": user["id"]}, {"_id": 0})
+        if body.muted_categories is not None:
+            invalid = [c for c in body.muted_categories if c not in notif.NOTIFICATION_CATEGORIES]
+            if invalid:
+                raise HTTPException(status_code=400, detail=f"unknown categories: {invalid}")
+            muted_categories = body.muted_categories
+        else:
+            muted_categories = (existing or {}).get("muted_categories", [])
         lic = await srv._get_user_license(user)
         account = str((lic or {}).get("mt5_account") or "").strip()
         doc = {
             "user_id": user["id"], "account": account, "tier": body.tier,
             "quiet_hours_start": body.quiet_hours_start, "quiet_hours_end": body.quiet_hours_end,
             "notify_all_devices": body.notify_all_devices,
+            "muted_categories": muted_categories,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.cloud_notification_prefs.update_one({"user_id": user["id"]}, {"$set": doc}, upsert=True)
@@ -328,6 +337,34 @@ def build_router() -> APIRouter:
         db = srv.db
         rows = await db.cloud_notification_log.find({"user_id": user["id"]}, {"_id": 0}).sort("scheduled_time", -1).to_list(min(limit, 100))
         return {"log": rows}
+
+    # Notification Center -- grouped-by-category, paginated, read/unread feed
+    # over the same cloud_notification_log every dispatch path already
+    # writes to. "category" here means one of notif.NOTIFICATION_CATEGORIES
+    # (TRADES/MARKET_OUTLOOK/SIGNALS/etc), not the push-tier gate above.
+    @r.get("/notifications/center")
+    async def get_notification_center(
+        category: Optional[str] = Query(None), unread_only: bool = Query(False),
+        page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=100),
+        user: dict = Depends(srv.get_cloud_user),
+    ):
+        if category and category not in notif.NOTIFICATION_CATEGORIES and category != "ALL":
+            raise HTTPException(status_code=400, detail=f"unknown category: {category}")
+        return await notif.get_notification_center_page(
+            user["id"], category=category, unread_only=unread_only, page=page, limit=limit,
+        )
+
+    @r.post("/notifications/{notification_id}/read")
+    async def mark_notification_read_route(notification_id: str, user: dict = Depends(srv.get_cloud_user)):
+        marked = await notif.mark_notification_read(user["id"], notification_id)
+        return {"ok": True, "marked": marked}
+
+    @r.post("/notifications/read-all")
+    async def mark_all_notifications_read_route(category: Optional[str] = Query(None), user: dict = Depends(srv.get_cloud_user)):
+        if category and category not in notif.NOTIFICATION_CATEGORIES and category != "ALL":
+            raise HTTPException(status_code=400, detail=f"unknown category: {category}")
+        count = await notif.mark_all_notifications_read(user["id"], category=category)
+        return {"ok": True, "marked": count}
 
     # v6.24.18 owner directive 2026-07-16 -- the frontend must never show ON
     # from the saved preference tier alone. This is the real, authenticated

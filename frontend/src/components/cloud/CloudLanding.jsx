@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowRight, Check, KeyRound, Lock, RadioTower, Shield, Smartphone, Terminal, Activity } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
+import Seo from "../Seo";
 
 const FEATURES = [
   { icon: Smartphone, title: "Phone-first", body: "Add to your home screen. Check bot status, open trades, and alerts without opening MT5." },
@@ -25,6 +26,11 @@ const INCLUDED = [
 export default function CloudLanding() {
   return (
     <div className="min-h-screen bg-[#060609] text-white">
+      <Seo
+        title="XauCloud Command Center — Monitor Your Gold Trading Bot Remotely"
+        description="Buy the licensed XauCloud EA, run it on your own MT5 or VPS, then use the Command Center for live heartbeat, AI Director decisions, ML state, trade activity, and PIN-protected remote commands."
+        path="/command"
+      />
       <InstallAppPrompt />
 
       {/* Nav */}

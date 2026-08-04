@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowLeft, ChartLineUp, CheckCircle } from "@phosphor-icons/react";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import Seo from "@/components/Seo";
 import { API } from "@/lib/api";
 
 // Relocated from the public homepage (2026-07-25 redesign) -- unreleased/
@@ -22,6 +23,11 @@ export default function LabsPage() {
 
   return (
     <div className="min-h-screen bg-[#060609] text-white">
+      <Seo
+        title="XauCloud Labs — Experimental Gold Trading Products"
+        description="Products here are not yet approved for customer release. Nothing on this page is available to buy or download today."
+        path="/labs"
+      />
       <Header activeSection="" onNavigate={() => {}} goldPrice={null} />
       <div className="mx-auto max-w-3xl px-4 py-16 md:px-8 md:py-24">
         <Link to="/" className="inline-flex items-center gap-2 text-[13px] text-white/45 hover:text-white transition">

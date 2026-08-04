@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { ArrowLeft, ChartLineUp, Clock } from "@phosphor-icons/react";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import Seo from "@/components/Seo";
 import { API } from "@/lib/api";
 
 const fmt = (v, digits = 2) => (v == null || Number.isNaN(v) ? "--" : Number(v).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits }));
@@ -47,6 +48,11 @@ export default function PerformancePage() {
 
   return (
     <div className="min-h-screen bg-[#060609] text-white">
+      <Seo
+        title="XauCloud Performance — Live Gold Trading Bot Results"
+        description="Full performance history for the XauCloud automated Gold (XAUUSD) trading Expert Advisor on MetaTrader 5."
+        path="/performance"
+      />
       <Header activeSection="" onNavigate={() => {}} goldPrice={null} />
       <div className="mx-auto max-w-4xl px-4 py-14 md:px-8 md:py-20">
         <Link to="/" className="inline-flex items-center gap-2 text-[13px] text-white/45 hover:text-white transition">
