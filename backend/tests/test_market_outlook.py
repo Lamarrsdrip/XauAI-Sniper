@@ -259,11 +259,23 @@ def test_generation_only_ever_inserts_never_updates_the_original_outlook_doc():
 # 13-16: SL/TP event ordering
 # ---------------------------------------------------------------------------
 
-def test_sl_classification_precedes_timeout_and_win():
+def test_any_tp_touch_precedes_timeout_and_sl_never_independently_classifies():
+    """Owner-approved rule (2026-08-04): a genuine TP1/TP2/TP3 touch at any
+    point in the evaluation window always wins, regardless of order versus
+    SL. SL touching alone must never appear as a classification trigger in
+    the primary if/elif chain -- it only finalizes LOSS in the defensive
+    no-deadline fallback, which is a separate branch checked after the
+    timeout path."""
     fn = MO_SRC[MO_SRC.index("def advance_persisted_signal"):]
-    classify = fn[fn.index("if outcome is None:"):]
-    assert classify.index("if sl_on_time:") < classify.index("elif tp1_on_time")
-    assert classify.index("elif tp1_on_time") < classify.index("elif half_on_time") < classify.index("elif deadline")
+    classify = fn[fn.index("    if outcome is None:"):]
+    primary_chain = classify[:classify.index("elif outcome == ANALYTICS_WIN:")]
+    assert primary_chain.index("if tp3_on_time:") < primary_chain.index("elif tp2_on_time:")
+    assert primary_chain.index("elif tp2_on_time:") < primary_chain.index("elif tp1_on_time:")
+    assert primary_chain.index("elif tp1_on_time:") < primary_chain.index("elif deadline and observed_at >= deadline:")
+    assert primary_chain.index("elif deadline and observed_at >= deadline:") < primary_chain.index("elif not deadline and sl_hit:")
+    # The generic +0.50R threshold must never independently classify a win --
+    # only a genuine TP price-level touch may.
+    assert "elif half_on_time:" not in primary_chain
 
 
 def test_actionable_state_machine_has_persisted_win_states():

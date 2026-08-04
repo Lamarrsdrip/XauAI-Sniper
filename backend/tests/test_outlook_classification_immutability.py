@@ -126,17 +126,19 @@ class TestClassificationNeverOverwritten:
 
     def test_first_time_classification_still_works_normally(self):
         """The immutability guard must not block a genuine first
-        classification -- an unclassified signal that reaches SL still
-        resolves to LOSS."""
+        classification -- an unclassified signal that reaches TP1 still
+        resolves to WIN. (SL touching alone no longer finalizes a result at
+        all -- owner-approved rule, 2026-08-04 -- so TP1 is what exercises
+        a genuine first-time classification here.)"""
         async def go():
             await _clear()
             doc = _tracking_doc()
             await srv.db.cloud_market_outlooks.insert_one(dict(doc))
 
-            await mo.track_outlook_lifecycle_tick(account=ACCOUNT, bid=2644.0, ask=2644.2, quote_at=_REF)
+            await mo.track_outlook_lifecycle_tick(account=ACCOUNT, bid=2660.0, ask=2660.2, quote_at=_REF)
 
             persisted = await srv.db.cloud_market_outlooks.find_one({"id": doc["id"]}, {"_id": 0})
-            assert persisted["analytics_outcome"] == mo.ANALYTICS_LOSS
+            assert persisted["analytics_outcome"] == mo.ANALYTICS_WIN
         _run(go())
 
 

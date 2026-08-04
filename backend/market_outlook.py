@@ -1699,36 +1699,60 @@ def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[floa
             if "SL_HIT" not in milestones:
                 milestones.append("SL_HIT")
 
-    # Classification is immutable. A target observed exactly at the deadline
-    # is still within the 60-minute window. A price event strictly after the
-    # deadline cannot replace the timeout classification.
+    # Classification is immutable once a genuine TP touch wins it, or once
+    # the full evaluation window closes with no TP ever touched.
+    #
+    # Owner-approved rule (investigated and documented 2026-08-04): a signal
+    # is a WIN if ANY of TP1/TP2/TP3 is touched at any moment during the
+    # evaluation window -- the highest TP touched sets the result, and
+    # nothing that happens afterward (including SL being touched later, or
+    # price reversing) can ever change a confirmed win back to a loss. LOSS
+    # is only assigned once the full window has closed with NO take-profit
+    # level ever touched. SL touching is still recorded (sl_hit_at, and an
+    # informational SL_HIT event/notification still fires) but never by
+    # itself finalizes the result or stops monitoring.
+    #
+    # This replaces a confirmed bug: SL touching used to lock in an
+    # immediate LOSS classification (see git history) AND close monitoring,
+    # which permanently prevented a later same-window TP touch from ever
+    # being reflected in the stored result -- exactly the "price reached
+    # TP1 but the site marked it a loss" defect this fixes. Do not award a
+    # win from the generic +0.50R threshold alone anymore either -- only a
+    # genuine TP1/TP2/TP3 price-level touch counts (HALF_R_REACHED is still
+    # recorded as an informational progress milestone above, just no longer
+    # used to independently classify a win).
     new_state = doc.get("signal_state") or SIGNAL_TRACKING
     latest_path = doc.get("latest_path_event") or "TRACKING_STARTED"
     classification_at = doc.get("classification_at")
     analytics_r = doc.get("analytics_r")
     half_at = _as_utc(updates.get("first_half_r_at") or doc.get("first_half_r_at"))
     tp1_at = _as_utc(updates.get("tp1_hit_at") or doc.get("tp1_hit_at"))
+    tp2_at = _as_utc(updates.get("tp2_hit_at") or doc.get("tp2_hit_at"))
+    tp3_at = _as_utc(updates.get("tp3_hit_at") or doc.get("tp3_hit_at"))
     sl_at = _as_utc(updates.get("sl_hit_at") or doc.get("sl_hit_at"))
     half_on_time = bool(half_at and (not deadline or half_at <= deadline))
     tp1_on_time = bool(tp1_at and (not deadline or tp1_at <= deadline))
+    tp2_on_time = bool(tp2_at and (not deadline or tp2_at <= deadline))
+    tp3_on_time = bool(tp3_at and (not deadline or tp3_at <= deadline))
     sl_on_time = bool(sl_at and (not deadline or sl_at <= deadline))
     timeout_classified_now = False
     if outcome is None:
-        if sl_on_time:
-            outcome, new_state, latest_path = ANALYTICS_LOSS, SIGNAL_LOSS_SL, "SL_HIT_BEFORE_WIN"
-            classification_at, analytics_r = updates.get("sl_hit_at") or doc.get("sl_hit_at") or observed_iso, -1.0
+        if tp3_on_time:
+            outcome, new_state, latest_path = ANALYTICS_WIN, SIGNAL_WIN_TP1, "TP3_HIT"
+            classification_at = updates.get("tp3_hit_at") or doc.get("tp3_hit_at") or observed_iso
+            analytics_r = round(current_r, 6)
+        elif tp2_on_time:
+            outcome, new_state, latest_path = ANALYTICS_WIN, SIGNAL_WIN_TP1, "TP2_HIT"
+            classification_at = updates.get("tp2_hit_at") or doc.get("tp2_hit_at") or observed_iso
+            analytics_r = round(current_r, 6)
         elif tp1_on_time:
             outcome, new_state, latest_path = ANALYTICS_WIN, SIGNAL_WIN_TP1, "TP1_HIT"
             classification_at = updates.get("tp1_hit_at") or doc.get("tp1_hit_at") or observed_iso
             # TP1 may sit closer than +0.50R. Its analytics value must still
             # use the executable tracking anchor, never the suggested-zone R.
             analytics_r = round(current_r, 6)
-        elif half_on_time:
-            outcome, new_state, latest_path = ANALYTICS_WIN, SIGNAL_WIN_HALF_R, "HALF_R_REACHED"
-            classification_at = updates.get("first_half_r_at") or doc.get("first_half_r_at") or observed_iso
-            analytics_r = HALF_R_WIN_THRESHOLD
         elif deadline and observed_at >= deadline:
-            outcome, new_state, latest_path = ANALYTICS_LOSS, SIGNAL_LOSS_TIMEOUT, "FAILED_HALF_R_60M"
+            outcome, new_state, latest_path = ANALYTICS_LOSS, SIGNAL_LOSS_TIMEOUT, "NO_TP_WITHIN_60M"
             classification_at = deadline.isoformat()
             analytics_r = round(current_r if observed_at <= deadline else prior_current_r, 6)
             timeout_classified_now = True
@@ -1741,22 +1765,29 @@ def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[floa
             record_event(
                 "TIMEOUT_60M", deadline.isoformat(), timeout_price, analytics_r,
             )
-        elif sl_hit:
-            # Only reachable for records without a deadline.
+        elif not deadline and sl_hit:
+            # Defensive fallback only -- every real generated outlook always
+            # has evaluation_deadline set, so this is unreachable in
+            # production. Without a deadline there is no other event that
+            # could ever finalize the signal, so SL remains a last-resort
+            # finalizer here rather than tracking forever.
             outcome, new_state, latest_path = ANALYTICS_LOSS, SIGNAL_LOSS_SL, "SL_HIT_BEFORE_WIN"
             classification_at, analytics_r = updates.get("sl_hit_at") or doc.get("sl_hit_at") or observed_iso, -1.0
     elif outcome == ANALYTICS_WIN:
-        # A later SL is the terminal path event for a signal that already
-        # qualified as a win. Keep that truthful metadata stable on repeated
-        # quotes instead of allowing an earlier TP milestone to overwrite it.
-        if sl_hit:
-            latest_path = "LATER_SL_AFTER_WIN"
-        elif tp3_hit:
+        # Already a confirmed win. A later, higher TP still upgrades the
+        # stored result/R (highest TP achieved) -- but nothing can ever
+        # flip this back to LOSS, including a later SL touch.
+        highest_so_far = int(doc.get("highest_tp_reached") or 0)
+        if tp3_hit and highest_so_far < 3:
             latest_path = "TP3_HIT"
-        elif tp2_hit:
+            classification_at = updates.get("tp3_hit_at") or doc.get("tp3_hit_at") or classification_at
+            analytics_r = round(current_r, 6)
+        elif tp2_hit and highest_so_far < 2:
             latest_path = "TP2_HIT"
-        elif tp1_hit:
-            latest_path = "TP1_HIT"
+            classification_at = updates.get("tp2_hit_at") or doc.get("tp2_hit_at") or classification_at
+            analytics_r = round(current_r, 6)
+        elif sl_hit:
+            latest_path = "LATER_SL_AFTER_WIN"
     elif outcome == ANALYTICS_LOSS and doc.get("signal_state") == SIGNAL_LOSS_TIMEOUT:
         if tp3_hit and not doc.get("tp3_hit_at"):
             latest_path = "LATE_TP3_AFTER_60M"
@@ -1794,8 +1825,16 @@ def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[floa
     })
     if snapshots_changed:
         updates["event_snapshots"] = event_snapshots
+    # SL touching alone must never close monitoring anymore -- a signal
+    # that dips to SL before touching any TP must keep being watched for
+    # the remainder of the window in case a TP is reached later (see the
+    # classification rule above). Monitoring only closes once there is
+    # nothing more it could ever change: TP3 (max possible upside) reached,
+    # or the outer expiry window has fully elapsed. The no-deadline SL
+    # fallback above is the one legitimate case that still closes on SL,
+    # since nothing else could ever finalize that record.
     monitoring_closed = bool(doc.get("monitoring_closed"))
-    if new_state == SIGNAL_LOSS_SL or sl_hit or (expiry and observed_at >= expiry):
+    if tp3_hit or (expiry and observed_at >= expiry) or (not deadline and new_state == SIGNAL_LOSS_SL):
         monitoring_closed = True
     updates["monitoring_closed"] = monitoring_closed
     return updates, list(dict.fromkeys(events))

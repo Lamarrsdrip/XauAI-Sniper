@@ -75,8 +75,10 @@ def test_restart_monitor_reads_and_updates_persisted_mfe_mae_and_outcome():
         await h.db.cloud_market_outlooks.insert_one(doc)
         with patch.object(mo, "_db", return_value=h.db), \
              patch.object(mo, "_dispatch_signal_event", new=AsyncMock()):
+            # Genuine tp1_price=101.1 touch -- a generic +0.50R level alone
+            # (e.g. 100.6) no longer wins (owner-approved rule, 2026-08-04).
             updated = await mo.track_outlook_lifecycle_tick(
-                account="PERSIST-1", bid=100.6, ask=100.7,
+                account="PERSIST-1", bid=101.1, ask=101.2,
                 quote_at=(published + timedelta(minutes=17)).isoformat(),
                 now=published + timedelta(minutes=17),
             )
@@ -84,8 +86,8 @@ def test_restart_monitor_reads_and_updates_persisted_mfe_mae_and_outcome():
         outcome = await h.db.cloud_market_outlook_outcomes.find_one({"outlook_id": "persisted-restart"}, {"_id": 0})
         assert updated == 1
         assert saved["analytics_outcome"] == mo.ANALYTICS_WIN
-        assert saved["signal_state"] == mo.SIGNAL_WIN_HALF_R
-        assert saved["mfe_r"] == 0.5
+        assert saved["signal_state"] == mo.SIGNAL_WIN_TP1
+        assert saved["mfe_r"] == 1.0
         assert saved["mae_r"] == -0.22
         assert outcome["analytics_outcome"] == mo.ANALYTICS_WIN
         await h.drop()
@@ -152,7 +154,9 @@ def test_concurrent_price_events_cannot_regress_last_persisted_checkpoint():
         assert saved["last_monitored_at"] == (published + timedelta(minutes=6)).isoformat()
         assert saved["current_r"] == 0.5
         assert saved["mfe_r"] == 0.5
-        assert saved["analytics_outcome"] == mo.ANALYTICS_WIN
+        # +0.50R alone (tp1_price=101.1 not reached by either quote) no
+        # longer wins on its own -- owner-approved rule, 2026-08-04.
+        assert saved["analytics_outcome"] is None
         await h.drop()
 
     _run(go())
@@ -186,23 +190,30 @@ def test_eight_legacy_records_reconstruct_four_and_exclude_four_without_data():
         legacy = [_legacy_doc(i, f"BACKFILL-{i}", published, "SELL" if i == 1 else "BUY") for i in range(8)]
         await h.db.cloud_market_outlooks.insert_many(legacy)
 
+        # Owner-approved rule (2026-08-04): SL no longer finalizes a signal
+        # by itself and a genuine TP touch anywhere in the window always
+        # wins, so BACKFILL-1/BACKFILL-2 (no TP ever touched) now only
+        # resolve via the full 60-minute timeout path -- and this codebase
+        # already (correctly, pre-existing to this change) refuses to trust
+        # a timeout-LOSS verdict built from coverage sparser than
+        # MAX_HISTORICAL_QUOTE_GAP_SECONDS. Near-tick (5-second) density is
+        # required for every account here now, not just BACKFILL-3.
         activity = []
         for i in range(3):
-            for minute in range(61):
+            for seconds in range(0, 60 * 60 + 1, 5):
+                minute = seconds / 60.0
                 bid, ask = 100.0, 100.1
                 if i == 0 and minute >= 40:       # later SL after a recorded win
                     bid, ask = 99.1, 99.2
-                elif i == 0 and minute >= 30:     # TP1 + TP2 after the +0.50R win
+                elif i == 0 and minute >= 30:     # genuine TP1 + TP2 touch
                     bid, ask = 102.1, 102.2
-                elif i == 0 and minute >= 17:     # BUY +0.50R
+                elif i == 0 and minute >= 17:     # +0.50R only -- no longer wins alone
                     bid, ask = 100.6, 100.7
-                elif i == 1 and minute >= 17:     # SELL +0.50R, checked on Ask
+                elif i == 1 and minute >= 17:     # SELL +0.50R only, checked on Ask -- never reaches tp1_price=99.0
                     bid, ask = 99.4, 99.5
-                elif i == 2 and minute >= 12:     # BUY SL before qualifying
+                elif i == 2 and minute >= 12:     # BUY SL touched, but never any TP -- resolves LOSS only at the 60m timeout
                     bid, ask = 99.1, 99.2
-                activity.append(_activity(f"BACKFILL-{i}", published + timedelta(minutes=minute), bid, ask))
-        # Timeout reconstruction requires near-tick coverage; minute samples
-        # cannot prove that price did not cross between observations.
+                activity.append(_activity(f"BACKFILL-{i}", published + timedelta(seconds=seconds), bid, ask))
         for seconds in range(0, 60 * 60 + 1, 5):
             activity.append(_activity("BACKFILL-3", published + timedelta(seconds=seconds), 100.2, 100.3))
         await h.db.cloud_bot_activity.insert_many(activity)
@@ -213,7 +224,7 @@ def test_eight_legacy_records_reconstruct_four_and_exclude_four_without_data():
         rows = await h.db.cloud_market_outlooks.find({}, {"_id": 0}).sort("id", 1).to_list(20)
         reconstructed = [row for row in rows if row.get("historical_repair_status") == "RECONSTRUCTED"]
         unavailable = [row for row in rows if row.get("historical_repair_status") == mo.ANALYTICS_UNAVAILABLE]
-        assert report == {"examined": 8, "reconstructed": 4, "wins": 2, "losses": 2, "active": 0, "unavailable": 4}
+        assert report == {"examined": 8, "reconstructed": 4, "wins": 1, "losses": 3, "active": 0, "unavailable": 4}
         assert len(reconstructed) == 4
         assert len(unavailable) == 4
         assert {row["analytics_outcome"] for row in reconstructed} == {mo.ANALYTICS_WIN, mo.ANALYTICS_LOSS}

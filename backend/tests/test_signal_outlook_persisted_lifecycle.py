@@ -41,20 +41,25 @@ def advance(doc, bid, ask, minutes):
     return {**doc, **update}, events
 
 
-def test_buy_half_r_at_17_minutes_is_immediate_green_win():
+def test_buy_half_r_alone_is_recorded_but_does_not_win():
+    """Owner-approved rule (2026-08-04): the generic +0.50R threshold no
+    longer independently wins a signal -- only a genuine TP1 price touch
+    does. Entry 100, tp1_price=101.0: reaching 100.50 is +0.50R but tp1
+    genuinely was not touched, so this must stay TRACKING, not WIN."""
     doc, events = advance(signal(), 100.50, 100.55, 17)
-    assert doc["signal_state"] == mo.SIGNAL_WIN_HALF_R
-    assert doc["analytics_outcome"] == mo.ANALYTICS_WIN
+    assert doc["analytics_outcome"] is None
+    assert doc["signal_state"] == mo.SIGNAL_TRACKING
     assert doc["mfe_r"] == 0.5
-    assert "HALF_R_REACHED" in events
+    assert "HALF_R_REACHED" in events  # still recorded as an informational milestone
+    assert doc["first_half_r_at"] is not None
 
 
-def test_sell_uses_executable_ask_for_half_r():
+def test_sell_uses_executable_ask_for_tp1_touch():
     pending, _ = advance(signal("SELL"), 99.40, 99.60, 10)
-    assert pending["analytics_outcome"] is None  # Bid is +0.60R, Ask is only +0.40R.
-    won, _ = advance(pending, 99.25, 99.50, 11)
+    assert pending["analytics_outcome"] is None  # Bid is +0.60R, Ask is only +0.40R (tp1_price=99.0 not yet touched).
+    won, _ = advance(pending, 98.90, 99.00, 11)  # Ask reaches tp1_price=99.0 -- genuine touch.
     assert won["analytics_outcome"] == mo.ANALYTICS_WIN
-    assert won["current_r"] == 0.5
+    assert won["signal_state"] == mo.SIGNAL_WIN_TP1
 
 
 def test_tp1_can_classify_win_before_half_r_threshold():
@@ -66,12 +71,28 @@ def test_tp1_can_classify_win_before_half_r_threshold():
     assert "TP1_HIT" in events
 
 
-def test_sl_at_12_minutes_is_immediate_red_loss_event():
-    lost, events = advance(signal(), 99.0, 99.05, 12)
-    assert lost["signal_state"] == mo.SIGNAL_LOSS_SL
-    assert lost["analytics_outcome"] == mo.ANALYTICS_LOSS
-    assert lost["analytics_r"] == -1.0
+def test_sl_at_12_minutes_is_recorded_but_never_finalizes_alone():
+    """Owner-approved rule (2026-08-04): SL touching must never by itself
+    finalize the result or stop monitoring anymore -- the signal stays
+    open in case a TP is reached later in the same evaluation window."""
+    touched, events = advance(signal(), 99.0, 99.05, 12)
+    assert touched["analytics_outcome"] is None
+    assert touched["signal_state"] == mo.SIGNAL_TRACKING
+    assert touched["sl_hit_at"] is not None
+    assert touched["monitoring_closed"] is False
     assert events == ["SL_HIT"]
+
+
+def test_sl_then_tp1_within_the_window_is_still_a_win():
+    """The exact bug this fix addresses: price dips to SL, then later
+    reaches TP1, all inside the same 60-minute window -- must be WIN, not
+    LOSS."""
+    dipped, _ = advance(signal(), 99.0, 99.05, 12)
+    assert dipped["analytics_outcome"] is None
+    won, events = advance(dipped, 101.0, 101.05, 30)
+    assert won["analytics_outcome"] == mo.ANALYTICS_WIN
+    assert won["signal_state"] == mo.SIGNAL_WIN_TP1
+    assert "TP1_HIT" in events
 
 
 def test_exact_60_minute_deadline_is_red_timeout():
@@ -81,11 +102,14 @@ def test_exact_60_minute_deadline_is_red_timeout():
     assert "TIMEOUT_60M" in events
 
 
-def test_half_r_reached_exactly_at_deadline_is_still_a_win():
-    won, events = advance(signal(), 100.50, 100.55, 60)
-    assert won["analytics_outcome"] == mo.ANALYTICS_WIN
-    assert won["signal_state"] == mo.SIGNAL_WIN_HALF_R
-    assert "TIMEOUT_60M" not in events
+def test_half_r_without_genuine_tp1_touch_at_deadline_is_a_loss():
+    """+0.50R alone (entry 100, tp1_price=101.0, price only reached 100.50)
+    is not a genuine TP1 touch -- with no TP ever touched by the deadline,
+    this must resolve LOSS, not WIN."""
+    lost, events = advance(signal(), 100.50, 100.55, 60)
+    assert lost["analytics_outcome"] == mo.ANALYTICS_LOSS
+    assert lost["signal_state"] == mo.SIGNAL_LOSS_TIMEOUT
+    assert "TIMEOUT_60M" in events
 
 
 def test_sl_first_observed_after_deadline_is_timeout_not_sl_loss():
@@ -107,24 +131,43 @@ def test_half_r_after_deadline_remains_timeout_loss():
     assert late["latest_path_event"] == "LATE_HALF_R_AFTER_60M"
 
 
-def test_half_r_then_later_sl_remains_win_with_path_metadata():
-    won, _ = advance(signal(), 100.50, 100.55, 17)
+def test_tp1_then_later_sl_remains_win_with_path_metadata():
+    won, _ = advance(signal(), 101.0, 101.05, 17)
+    assert won["analytics_outcome"] == mo.ANALYTICS_WIN
     later, events = advance(won, 99.0, 99.05, 40)
     assert later["analytics_outcome"] == mo.ANALYTICS_WIN
-    assert later["signal_state"] == mo.SIGNAL_WIN_HALF_R
+    assert later["signal_state"] == mo.SIGNAL_WIN_TP1
     assert later["latest_path_event"] == "LATER_SL_AFTER_WIN"
     assert "SL_HIT" in events
 
 
-def test_tp3_win_keeps_monitoring_until_later_sl_is_recorded():
+def test_tp3_win_closes_monitoring_since_it_is_the_maximum_target():
     won, _ = advance(signal(), 103.0, 103.05, 20)
     assert won["analytics_outcome"] == mo.ANALYTICS_WIN
     assert won["highest_tp_reached"] == 3
+    assert won["monitoring_closed"] is True
+
+
+def test_tp1_win_keeps_monitoring_open_and_upgrades_to_tp2():
+    """A TP1-only win must keep monitoring open (TP2/TP3 could still be
+    reached) and the stored result must upgrade to reflect the higher TP
+    once it's touched -- "highest TP achieved" per the owner-approved rule."""
+    won, _ = advance(signal(), 101.0, 101.05, 17)
+    assert won["analytics_outcome"] == mo.ANALYTICS_WIN
+    assert won["highest_tp_reached"] == 1
     assert won["monitoring_closed"] is False
-    later, _ = advance(won, 99.0, 99.05, 40)
-    assert later["analytics_outcome"] == mo.ANALYTICS_WIN
-    assert later["latest_path_event"] == "LATER_SL_AFTER_WIN"
-    assert later["monitoring_closed"] is True
+
+    upgraded, events = advance(won, 102.0, 102.05, 25)
+    assert upgraded["analytics_outcome"] == mo.ANALYTICS_WIN
+    assert upgraded["highest_tp_reached"] == 2
+    assert upgraded["latest_path_event"] == "TP2_HIT"
+    assert "TP2_HIT" in events
+    assert upgraded["monitoring_closed"] is False  # TP3 is still reachable
+
+    maxed, _ = advance(upgraded, 103.0, 103.05, 30)
+    assert maxed["highest_tp_reached"] == 3
+    assert maxed["latest_path_event"] == "TP3_HIT"
+    assert maxed["monitoring_closed"] is True
 
 
 def test_transition_is_informational_and_not_advanced():
