@@ -518,6 +518,12 @@ class AdminBankTransferSettingsUpdate(BaseModel):
     support_contact: Optional[str] = None
     instructions: Optional[str] = None
 
+class AdminPaymentMethodsSettingsUpdate(BaseModel):
+    paystack_enabled: Optional[bool] = None
+    nomba_enabled: Optional[bool] = None
+    default_payment_method: Optional[str] = None  # "bank_transfer" | "paystack" | "nomba"
+    payment_method_order: Optional[List[str]] = None
+
 class AdminSettingsUpdate(BaseModel):
     paystack_secret_key: Optional[str] = None
     pin_price_kobo: Optional[int] = None
@@ -1196,14 +1202,17 @@ async def get_pin_price(request: Request, display_currency: Optional[str] = None
 
 @api_router.post("/purchase/initialize")
 async def initialize_purchase(req: PurchaseInitRequest, request: Request):
-    # v-nomba-migration owner directive -- Paystack is no longer the
-    # active payment provider for new purchases (historical Paystack
-    # transactions/licenses are untouched -- see
-    # audits/nomba_migration/01_paystack_audit.md). This endpoint now
-    # creates a Nomba checkout order exclusively; if Nomba isn't enabled
-    # and fully configured, it fails closed with 503 rather than ever
-    # falling back to Paystack for a new sale.
+    # Owner directive (payment-priority reorder): Nomba is disabled by
+    # default until bank/provider approval completes, and is now the LAST
+    # option after Manual Bank Transfer and Paystack, not the sole active
+    # provider. This gate is checked BEFORE touching Nomba credentials at
+    # all, so a disabled-Nomba visitor gets a clean 503 rather than this
+    # endpoint attempting (and possibly failing loudly on) a live Nomba
+    # call for a provider the admin explicitly turned off.
     _rate_limit(f"purchase_init_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
+    payment_settings = await _get_payment_methods_settings()
+    if not payment_settings["nomba_enabled"]:
+        raise HTTPException(status_code=503, detail="Nomba is not currently available. Please choose Manual Bank Transfer or Paystack instead.")
     nomba_cfg, creds = await get_active_nomba_credentials()
     if not creds:
         raise HTTPException(status_code=503, detail="Payment system not configured yet.")
@@ -1244,6 +1253,61 @@ async def initialize_purchase(req: PurchaseInitRequest, request: Request):
         logger.error(f"NOMBA_INITIALIZE_FAILED ref={ref}: {exc}")
         raise HTTPException(status_code=502, detail="Payment init failed") from exc
     return {"authorization_url": result["checkout_link"], "reference": result["order_reference"]}
+
+
+@api_router.post("/purchase/paystack/initialize")
+async def initialize_paystack_purchase(req: PurchaseInitRequest, request: Request):
+    """Rebuilds the standalone Paystack checkout-initiation flow that the
+    Nomba migration removed entirely (only /transaction/verify remained,
+    for historical transactions). Paystack is now the second payment
+    option, independent of Nomba's enabled/disabled state or any Nomba
+    outage -- this handler never touches Nomba config at all. Fulfillment
+    for the resulting order goes through the existing, already-hardened
+    _fulfill_payment() (signature-verified webhook, real transaction/verify
+    cross-check, amount/currency validation, atomic idempotent fulfillment)
+    unchanged -- only the order-creation half was missing."""
+    _rate_limit(f"purchase_paystack_init_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
+    payment_settings = await _get_payment_methods_settings()
+    if not payment_settings["paystack_enabled"]:
+        raise HTTPException(status_code=503, detail="Card payment is not currently available.")
+    s = await get_settings()
+    pk = s.get("paystack_secret_key", "")
+    if not pk:
+        raise HTTPException(status_code=503, detail="Payment system not configured yet.")
+    kobo = s.get("pin_price_kobo", 30000000)
+    naira = kobo / 100
+    ref = f"ASE-{uuid.uuid4().hex[:12].upper()}"
+    # Same discipline as the Nomba path above: callback_url is built ONLY
+    # from the operator-controlled PUBLIC_SITE_URL, never from
+    # req.origin_url, to prevent an open-redirect via a client-supplied
+    # post-payment destination.
+    callback_url = f"{PUBLIC_SITE_URL}/purchase/success?reference={ref}"
+    display_price = await _build_price_display(_detect_display_currency(request, req.display_currency))
+    tx = {
+        "id": str(uuid.uuid4()), "reference": ref, "amount_kobo": kobo, "currency": "NGN",
+        "provider": "PAYSTACK", "buyer_name": req.buyer_name, "buyer_email": req.buyer_email,
+        "payment_status": "PENDING", "pin_generated": None, "state_transitions": {},
+        "display_currency": display_price["display_currency"], "display_amount": display_price["display_amount"],
+        "fx_rate": display_price["fx_rate"], "fx_rate_as_of": display_price["fx_rate_as_of"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.payment_transactions.insert_one(tx)
+    async with httpx.AsyncClient(timeout=15.0) as http:
+        resp = await http.post(
+            f"{PAYSTACK_BASE_URL}/transaction/initialize",
+            headers={"Authorization": f"Bearer {pk}", "Content-Type": "application/json"},
+            json={"email": req.buyer_email, "amount": kobo, "reference": ref, "callback_url": callback_url,
+                  "metadata": {"buyer_name": req.buyer_name}, "currency": "NGN"},
+        )
+    if resp.status_code != 200:
+        await db.payment_transactions.update_one({"reference": ref}, {"$set": {"payment_status": "FAILED"}})
+        logger.error(f"PAYSTACK_INITIALIZE_HTTP_ERROR ref={ref} status={resp.status_code}")
+        raise HTTPException(status_code=502, detail="Payment init failed")
+    data = resp.json()
+    if not data.get("status"):
+        await db.payment_transactions.update_one({"reference": ref}, {"$set": {"payment_status": "FAILED"}})
+        raise HTTPException(status_code=502, detail=data.get("message", "Failed"))
+    return {"authorization_url": data["data"]["authorization_url"], "reference": ref}
 
 
 def _verify_paystack_signature(raw_body: bytes, signature: str, secret: str) -> bool:
@@ -1492,6 +1556,106 @@ async def _get_bank_transfer_settings() -> dict:
 
 def _bank_transfer_is_configured(settings: dict) -> bool:
     return bool(settings.get("bank_name") and settings.get("account_name") and settings.get("account_number"))
+
+# ---------------------------------------------------------------------------
+# Payment method priority/availability -- production default per owner
+# directive: Manual Bank Transfer first and default (Nigerian customers),
+# Paystack second and fully active, Nomba last and disabled until the
+# provider approval completes. Each method's availability is computed
+# independently and defensively (try/except around anything that touches a
+# specific provider's config) so one provider being broken, misconfigured,
+# or mid-approval can never take the other two down with it.
+# ---------------------------------------------------------------------------
+_DEFAULT_PAYMENT_METHOD_ORDER = ["bank_transfer", "paystack", "nomba"]
+_PAYMENT_METHOD_COPY = {
+    "bank_transfer": {
+        "label": "Manual Bank Transfer",
+        "description": "Recommended for Nigerian customers. Admin verification required. Order fulfilled after confirmation.",
+        "instant": False,
+    },
+    "paystack": {
+        "label": "Pay with Paystack",
+        "description": "Card and supported Paystack payment methods. Instant fulfillment after verified payment.",
+        "instant": True,
+    },
+    "nomba": {
+        "label": "Nomba",
+        "description": "Awaiting approval. Not currently available.",
+        "instant": True,
+    },
+}
+
+async def _get_payment_methods_settings() -> dict:
+    s = await get_settings()
+    order = s.get("payment_method_order") or _DEFAULT_PAYMENT_METHOD_ORDER
+    # Defensive against a stored order that's missing/duplicating entries
+    # (e.g. hand-edited) -- always resolves to exactly the 3 known methods.
+    order = [m for m in order if m in _PAYMENT_METHOD_COPY] + [m for m in _DEFAULT_PAYMENT_METHOD_ORDER if m not in order]
+    return {
+        "paystack_enabled": s.get("payment_paystack_enabled", True),
+        "nomba_enabled": s.get("payment_nomba_enabled", False),
+        "default_payment_method": s.get("payment_default_method", "bank_transfer"),
+        "payment_method_order": order,
+    }
+
+async def _payment_method_availability(request: Request) -> dict:
+    """Returns {"bank_transfer": bool, "paystack": bool, "nomba": bool} --
+    each computed independently; a broken/misconfigured provider only ever
+    turns ITS OWN flag False, never raises, never affects the others."""
+    settings = await _get_payment_methods_settings()
+    country = _detect_country_code(request)
+
+    bank_transfer_available = False
+    try:
+        bt_settings = await _get_bank_transfer_settings()
+        bank_transfer_available = country == "NG" and bt_settings.get("enabled", False) and _bank_transfer_is_configured(bt_settings)
+    except Exception as e:
+        logger.error(f"PAYMENT_METHOD_AVAILABILITY_CHECK_FAILED method=bank_transfer: {e}")
+
+    paystack_available = False
+    try:
+        if settings["paystack_enabled"]:
+            s = await get_settings()
+            paystack_available = bool(s.get("paystack_secret_key"))
+    except Exception as e:
+        logger.error(f"PAYMENT_METHOD_AVAILABILITY_CHECK_FAILED method=paystack: {e}")
+
+    nomba_available = False
+    try:
+        if settings["nomba_enabled"]:
+            _cfg, creds = await get_active_nomba_credentials()
+            nomba_available = bool(creds)
+    except Exception as e:
+        logger.error(f"PAYMENT_METHOD_AVAILABILITY_CHECK_FAILED method=nomba: {e}")
+
+    return {"bank_transfer": bank_transfer_available, "paystack": paystack_available, "nomba": nomba_available}
+
+@api_router.get("/purchase/payment-methods")
+async def list_payment_methods(request: Request):
+    _rate_limit(f"payment_methods_ip:{_client_ip(request)}", max_requests=60, window_seconds=60)
+    settings = await _get_payment_methods_settings()
+    availability = await _payment_method_availability(request)
+    country = _detect_country_code(request)
+
+    methods = []
+    for method in settings["payment_method_order"]:
+        copy = _PAYMENT_METHOD_COPY[method]
+        methods.append({
+            "method": method,
+            "label": copy["label"],
+            "description": copy["description"],
+            "instant": copy["instant"],
+            "available": availability[method],
+        })
+
+    default_method = settings["default_payment_method"]
+    if not availability.get(default_method):
+        # Fall back to the first available method in configured order --
+        # e.g. a non-Nigerian visitor defaults away from bank_transfer
+        # automatically without the frontend needing its own fallback logic.
+        default_method = next((m["method"] for m in methods if m["available"]), None)
+
+    return {"methods": methods, "default_method": default_method, "detected_country": country or None}
 
 async def _bank_transfer_effective_status(tx: dict) -> str:
     """Lazily expires an order that's past its deadline and still sitting
@@ -2798,6 +2962,39 @@ async def admin_update_bank_transfer_settings(req: AdminBankTransferSettingsUpda
             "changed_fields": changed_fields, "at": datetime.now(timezone.utc).isoformat(),
         })
     return await _get_bank_transfer_settings()
+
+@api_router.get("/admin/settings/payment-methods", dependencies=[Depends(get_current_admin)])
+async def admin_get_payment_methods_settings():
+    return await _get_payment_methods_settings()
+
+@api_router.put("/admin/settings/payment-methods")
+async def admin_update_payment_methods_settings(req: AdminPaymentMethodsSettingsUpdate, admin: dict = Depends(get_current_admin)):
+    updates = {}
+    changed_fields = []
+    if req.paystack_enabled is not None:
+        updates["payment_paystack_enabled"] = req.paystack_enabled
+        changed_fields.append("paystack_enabled")
+    if req.nomba_enabled is not None:
+        updates["payment_nomba_enabled"] = req.nomba_enabled
+        changed_fields.append("nomba_enabled")
+    if req.default_payment_method is not None:
+        if req.default_payment_method not in _PAYMENT_METHOD_COPY:
+            raise HTTPException(status_code=400, detail=f"default_payment_method must be one of {list(_PAYMENT_METHOD_COPY.keys())}")
+        updates["payment_default_method"] = req.default_payment_method
+        changed_fields.append("default_payment_method")
+    if req.payment_method_order is not None:
+        invalid = [m for m in req.payment_method_order if m not in _PAYMENT_METHOD_COPY]
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"Unknown payment method(s) in order: {invalid}")
+        updates["payment_method_order"] = req.payment_method_order
+        changed_fields.append("payment_method_order")
+    if updates:
+        await db.admin_settings.update_one({"key": "main"}, {"$set": updates}, upsert=True)
+        await db.payment_config_audit_log.insert_one({
+            "id": str(uuid.uuid4()), "provider": "PAYMENT_METHODS", "admin_email": admin["email"],
+            "changed_fields": changed_fields, "at": datetime.now(timezone.utc).isoformat(),
+        })
+    return await _get_payment_methods_settings()
 
 def _redact_bank_transfer_entry(tx: dict) -> dict:
     """List view never returns the (potentially large) base64 proof image
