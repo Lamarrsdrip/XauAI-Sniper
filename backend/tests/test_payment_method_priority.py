@@ -302,3 +302,61 @@ class TestAdminSettingsValidation:
             assert entry["admin_email"] == "admin@test.com"
             assert "nomba_enabled" in entry["changed_fields"]
         _run(go())
+
+
+class TestPurchasePriceReflectsRealAvailability:
+    """Regression coverage for a live bug: /purchase/price used to set
+    payment_method="unavailable" whenever Nomba specifically had no
+    credentials configured, completely ignoring Bank Transfer/Paystack --
+    a leftover from before the payment-method-priority reorder. Once Nomba
+    was demoted to disabled-by-default, this made the entire purchase
+    button read "Payments Unavailable" even with other providers fully
+    configured and working."""
+
+    def test_unavailable_when_no_provider_is_configured(self):
+        async def go():
+            await _clear()
+            result = await srv.get_pin_price(_fake_request("NG"))
+            assert result["payment_method"] == "unavailable"
+        _run(go())
+
+    def test_reflects_paystack_when_only_paystack_is_configured(self):
+        async def go():
+            await _clear()
+            await srv.db.admin_settings.update_one(
+                {"key": "main"}, {"$set": {"paystack_secret_key": "sk_test_abc123"}}, upsert=True)
+            result = await srv.get_pin_price(_fake_request("NG"))
+            assert result["payment_method"] == "paystack"
+        _run(go())
+
+    def test_reflects_bank_transfer_when_only_bank_transfer_is_configured(self):
+        async def go():
+            await _clear()
+            await _enable_bank_transfer()
+            result = await srv.get_pin_price(_fake_request("NG"))
+            assert result["payment_method"] == "bank_transfer"
+        _run(go())
+
+    def test_prefers_higher_priority_method_when_multiple_available(self):
+        async def go():
+            await _clear()
+            await _enable_bank_transfer()
+            await srv.db.admin_settings.update_one(
+                {"key": "main"}, {"$set": {"paystack_secret_key": "sk_test_abc123"}}, upsert=True)
+            result = await srv.get_pin_price(_fake_request("NG"))
+            assert result["payment_method"] == "bank_transfer"  # first in default priority order
+        _run(go())
+
+    def test_never_reports_unavailable_from_missing_nomba_alone(self):
+        """Nomba is disabled by default and never configured in this test --
+        that alone must not make the whole purchase flow unavailable when
+        Paystack works fine."""
+        async def go():
+            await _clear()
+            await srv.db.admin_settings.update_one(
+                {"key": "main"}, {"$set": {"paystack_secret_key": "sk_test_abc123"}}, upsert=True)
+            settings = await srv._get_payment_methods_settings()
+            assert settings["nomba_enabled"] is False
+            result = await srv.get_pin_price(_fake_request("NG"))
+            assert result["payment_method"] != "unavailable"
+        _run(go())

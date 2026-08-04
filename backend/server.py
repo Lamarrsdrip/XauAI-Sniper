@@ -1196,8 +1196,19 @@ async def _build_price_display(display_currency: str) -> dict:
 async def get_pin_price(request: Request, display_currency: Optional[str] = None):
     detected = _detect_display_currency(request, display_currency)
     price_display = await _build_price_display(detected)
-    _nomba_cfg, nomba_creds = await get_active_nomba_credentials()
-    price_display["payment_method"] = "nomba" if nomba_creds else "unavailable"
+    # Bug fix: this used to hard-gate the entire purchase flow on Nomba
+    # credentials alone (a leftover from before the payment-method-priority
+    # reorder), so once Nomba was demoted to disabled-by-default this field
+    # read "unavailable" even when Manual Bank Transfer and/or Paystack were
+    # fully configured and working -- the frontend's "Payments Unavailable"
+    # button state is driven directly off this field. Now checks every
+    # provider via the same _payment_method_availability used by
+    # /purchase/payment-methods, and is only "unavailable" when NONE of them
+    # can actually take a payment.
+    settings = await _get_payment_methods_settings()
+    availability = await _payment_method_availability(request)
+    available_methods = [m for m in settings["payment_method_order"] if availability.get(m)]
+    price_display["payment_method"] = available_methods[0] if available_methods else "unavailable"
     return price_display
 
 @api_router.post("/purchase/initialize")
