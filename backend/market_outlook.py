@@ -107,11 +107,71 @@ def build_result_conversion(
         "result_pips": pips,
     }
 
-PRIMARY_DIRECTIONS = ("BUY", "SELL", "NEUTRAL", "RANGE", "TRANSITION", "NO_VALID_OUTLOOK")
+PRIMARY_DIRECTIONS = ("BUY", "SELL", "NEUTRAL", "RANGE", "TRANSITION", "NO_VALID_OUTLOOK", "BLOCKED")
 EXPECTED_PATHS = ("PULLBACK_FIRST_THEN_BUY", "RALLY_FIRST_THEN_SELL", "DIRECT_CONTINUATION",
                   "RANGE_ROTATION", "REVERSAL_FORMING", "NO_CLEAR_PATH")
 LIFECYCLE_STATES = ("INFORMATIONAL", "TRACKING_AMBER", "WIN_GREEN_0_5R",
                     "WIN_GREEN_TP1", "LOSS_RED_SL", "LOSS_RED_TIMEOUT")
+
+# ---------------------------------------------------------------------------
+# Owner-approved permanent M10 category policy -- the single shared engine
+# every consumer (Outlook generation, public performance, notifications,
+# history) must use. These reason codes match the EA's own, hard, code-level,
+# non-toggleable trading restrictions exactly (see
+# ea_code/XAUUSD_AI_Sniper_EA.mq5: XAU_IsPermanentM10CategoryBlocked's
+# PERM_BLOCK_* codes and XAU_OwnerEntryPermission's OWNER_LOCATION_*_BLOCK
+# codes -- both reported to the backend via the M10 candidate's own
+# blocker_code/final_blocker field, the same channel _canonical_m10_signal
+# already reads for "why didn't XauCloud enter automatically").
+#
+# The Outlook must never publish an actionable BUY/SELL signal in a category
+# the EA itself would refuse to trade -- doing so would let the advisory
+# disagree with the bot it is supposed to be describing.
+OWNER_POLICY_VERSION = "2026-08-04-v1"
+OWNER_POLICY_HARD_BLOCK_CODES = frozenset({
+    "PERM_BLOCK_ASIA_NON_A_PLUS",       # Asia Grade A and Asia Grade B (any non-A+ grade during Asia)
+    "PERM_BLOCK_ASIA_GRADE_B",          # legacy/alternate naming for the same Asia Grade B case
+    "PERM_BLOCK_A_PLUS_RESET_PENDING",  # A+ candidates at RESET_PENDING
+    "PERM_BLOCK_GRADE_B_REVERSAL",      # Grade B reversal / opposite-discovery
+    "PERM_BLOCK_RESET_PENDING_GRADE_B", # Grade B at RESET_PENDING
+    "OWNER_LOCATION_EXCELLENT_BLOCK",   # OWNER_LOCATION_EXCELLENT
+    "OWNER_LOCATION_LATE_BLOCK",        # OWNER_LOCATION_LATE
+})
+_OWNER_POLICY_BLOCK_EXPLANATIONS = {
+    "PERM_BLOCK_ASIA_NON_A_PLUS": "Asia session — only Grade A+ candidates are allowed by owner policy.",
+    "PERM_BLOCK_ASIA_GRADE_B": "Asia session, Grade B — blocked by owner policy.",
+    "PERM_BLOCK_A_PLUS_RESET_PENDING": "Grade A+ candidate at a reset-pending location — blocked by owner policy.",
+    "PERM_BLOCK_GRADE_B_REVERSAL": "Grade B reversal/opposite-discovery setup — blocked by owner policy.",
+    "PERM_BLOCK_RESET_PENDING_GRADE_B": "Grade B candidate at a reset-pending location — blocked by owner policy.",
+    "OWNER_LOCATION_EXCELLENT_BLOCK": "Location classified Excellent — an absolute owner-policy execution block.",
+    "OWNER_LOCATION_LATE_BLOCK": "Location classified Late — an absolute owner-policy execution block.",
+}
+
+
+def evaluate_owner_policy(canonical_m10: Dict) -> Dict:
+    """The one shared owner-policy check. Returns a structured result so
+    every caller reads the SAME determination rather than each re-deriving
+    its own (never copy this logic into a second place).
+
+    Fail-open on missing data deliberately: "no blocker_code reported" and
+    "genuinely blocked" are different states. A missing/absent field must
+    not silently suppress every signal -- the caller's own evidence-
+    freshness/completeness checks (already fail-closed elsewhere in this
+    module, e.g. generate_outlook_for_account's NO_VALID_OUTLOOK path) are
+    what gate on missing or stale data; this function only ever answers
+    "does the reported blocker_code match a known owner-policy hard block."
+    """
+    code = str((canonical_m10 or {}).get("blocker_code") or "").strip().upper()
+    blocked = code in OWNER_POLICY_HARD_BLOCK_CODES
+    return {
+        "allowed": not blocked,
+        "blocker_code": code if blocked else None,
+        "blocker_explanation": _OWNER_POLICY_BLOCK_EXPLANATIONS.get(code) if blocked else None,
+        "policy_version": OWNER_POLICY_VERSION,
+        "evaluated_at": datetime.now(timezone.utc).isoformat(),
+        "session": (canonical_m10 or {}).get("session"),
+        "grade": (canonical_m10 or {}).get("grade"),
+    }
 FINAL_RESULTS = ("WIN_GREEN_0_5R", "WIN_GREEN_TP1", "LOSS_RED_SL",
                  "LOSS_RED_TIMEOUT", "HISTORICAL_DATA_UNAVAILABLE")
 NOTIFICATION_TIERS = ("OFF", "HOURLY_ONLY", "HOURLY_PLUS_RESULTS", "ALL_UPDATES")
@@ -1068,6 +1128,22 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         buy_p = float(thesis.get("buy_pressure", 50.0) or 50.0)
         sell_p = float(thesis.get("sell_pressure", 50.0) or 50.0)
         logger.warning(f"OUTLOOK_DIRECTIONAL_CONFLICT | account={account} buy_pressure={buy_p} sell_pressure={sell_p} -> flipped to pressure-dominant side {direction_label}")
+
+    # Owner-approved permanent M10 category policy (2026-08-04): the Outlook
+    # must never publish an actionable BUY/SELL signal in a category the EA
+    # itself would refuse to trade -- see evaluate_owner_policy() above.
+    # Applies only to genuinely directional candidates; a BLOCKED signal is
+    # never activated, never monitored for TP/SL, never counted in public
+    # performance, and never sends a trade notification -- it is visible
+    # only as a labeled, non-actionable technical/audit record.
+    owner_policy = evaluate_owner_policy(canonical_m10)
+    owner_policy_blocked_direction = None
+    if direction_label in ("BUY", "SELL") and not owner_policy["allowed"]:
+        logger.info(f"OUTLOOK_BLOCKED_BY_OWNER_POLICY | account={account} direction={direction_label} blocker={owner_policy['blocker_code']}")
+        owner_policy_blocked_direction = direction_label
+        direction_label = "BLOCKED"
+        direction = 0
+
     data_status = "LIVE"
     path = _expected_path(direction, thesis)
     setup_type = ("WITH_TREND_PULLBACK" if path.startswith(("PULLBACK", "RALLY"))
@@ -1251,6 +1327,18 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         "execution_authority": False,
         "automated_entry_approved": automated_entry_approved,
         "automated_block_reason": automated_block_reason,
+        # Owner-policy determination (evaluate_owner_policy) -- kept
+        # separate from automated_entry_approved/automated_block_reason
+        # (which describe "not automated-execution-ready yet", a routine,
+        # temporary state). owner_policy_blocked means the EA's own
+        # permanent, non-toggleable trading policy forbids this category
+        # entirely; when true, primary_direction is "BLOCKED" (never a
+        # published BUY/SELL) and owner_policy_blocked_direction records
+        # what the evidence would otherwise have shown, for the technical/
+        # audit view only.
+        "owner_policy": owner_policy,
+        "owner_policy_blocked": not owner_policy["allowed"],
+        "owner_policy_blocked_direction": owner_policy_blocked_direction,
         "expected_path": path,
         "preferred_entry_zone_low": zone.get("preferred_entry_zone_low"),
         "preferred_entry_zone_high": zone.get("preferred_entry_zone_high"),

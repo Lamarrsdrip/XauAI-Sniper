@@ -97,7 +97,7 @@ def test_generate_outlook_never_calls_readiness_engine_mutating_functions():
 # ---------------------------------------------------------------------------
 
 def test_all_required_primary_directions_supported():
-    assert set(mo.PRIMARY_DIRECTIONS) == {"BUY", "SELL", "NEUTRAL", "RANGE", "TRANSITION", "NO_VALID_OUTLOOK"}
+    assert set(mo.PRIMARY_DIRECTIONS) == {"BUY", "SELL", "NEUTRAL", "RANGE", "TRANSITION", "NO_VALID_OUTLOOK", "BLOCKED"}
 
 
 def test_all_required_lifecycle_states_defined():
@@ -761,3 +761,118 @@ def test_resolved_bias_for_healthy_no_candidate_evidence_satisfies_notification_
     # notification gate actually accepts, closing the suppression gap.
     bias = mo._resolve_hourly_bias(_no_candidate_m10(actionable=False), {"buy_pressure": 62, "sell_pressure": 38})
     assert bias["direction_label"] in ("BUY", "SELL")
+
+
+# ---------------------------------------------------------------------------
+# Owner-approved permanent M10 category policy -- the single shared engine
+# every Outlook consumer must use. Reason codes match the EA's own
+# XAU_IsPermanentM10CategoryBlocked / XAU_OwnerEntryPermission hard blocks
+# exactly (see ea_code/XAUUSD_AI_Sniper_EA.mq5).
+# ---------------------------------------------------------------------------
+
+def _m10(blocker_code=None, session="LONDON", grade="A"):
+    return {"blocker_code": blocker_code, "session": session, "grade": grade}
+
+
+def test_asia_grade_a_never_publishes():
+    result = mo.evaluate_owner_policy(_m10("PERM_BLOCK_ASIA_NON_A_PLUS", session="ASIA", grade="A"))
+    assert result["allowed"] is False
+    assert result["blocker_code"] == "PERM_BLOCK_ASIA_NON_A_PLUS"
+
+
+def test_asia_grade_b_never_publishes():
+    result = mo.evaluate_owner_policy(_m10("PERM_BLOCK_ASIA_GRADE_B", session="ASIA", grade="B"))
+    assert result["allowed"] is False
+
+
+def test_clean_asia_a_plus_may_publish():
+    result = mo.evaluate_owner_policy(_m10(None, session="ASIA", grade="A+"))
+    assert result["allowed"] is True
+    assert result["blocker_code"] is None
+
+
+def test_a_plus_reset_pending_never_publishes():
+    result = mo.evaluate_owner_policy(_m10("PERM_BLOCK_A_PLUS_RESET_PENDING", session="ASIA", grade="A+"))
+    assert result["allowed"] is False
+
+
+def test_non_asia_normal_grade_b_may_publish():
+    result = mo.evaluate_owner_policy(_m10(None, session="LONDON", grade="B"))
+    assert result["allowed"] is True
+
+
+def test_grade_b_reversal_never_publishes():
+    result = mo.evaluate_owner_policy(_m10("PERM_BLOCK_GRADE_B_REVERSAL", session="LONDON", grade="B"))
+    assert result["allowed"] is False
+
+
+def test_grade_b_reset_pending_never_publishes():
+    result = mo.evaluate_owner_policy(_m10("PERM_BLOCK_RESET_PENDING_GRADE_B", session="LONDON", grade="B"))
+    assert result["allowed"] is False
+
+
+def test_owner_location_excellent_never_publishes():
+    result = mo.evaluate_owner_policy(_m10("OWNER_LOCATION_EXCELLENT_BLOCK"))
+    assert result["allowed"] is False
+    assert "Excellent" in result["blocker_explanation"]
+
+
+def test_owner_location_late_never_publishes():
+    result = mo.evaluate_owner_policy(_m10("OWNER_LOCATION_LATE_BLOCK"))
+    assert result["allowed"] is False
+    assert "Late" in result["blocker_explanation"]
+
+
+def test_missing_blocker_code_is_treated_as_not_blocked():
+    """No blocker_code reported and "genuinely blocked" are different
+    states -- consistent with how automated_block_reason/blocker_code are
+    read everywhere else in this module (absence means "nothing reported",
+    never "assume blocked"). True fail-closed behavior for missing/stale/
+    incomplete EA evidence is the job of generate_outlook_for_account's own
+    NO_VALID_OUTLOOK path, not this function."""
+    result = mo.evaluate_owner_policy(_m10(None))
+    assert result["allowed"] is True
+
+
+def test_unrecognized_blocker_code_does_not_block():
+    """A routine, non-owner-policy block (e.g. still waiting for
+    confirmation timer) must not suppress the advisory direction -- only
+    the specific owner-policy hard-block codes do."""
+    result = mo.evaluate_owner_policy(_m10("CANDIDATE_NOT_EXECUTION_READY"))
+    assert result["allowed"] is True
+
+
+def test_result_includes_policy_version_and_evaluated_timestamp():
+    result = mo.evaluate_owner_policy(_m10("PERM_BLOCK_ASIA_NON_A_PLUS", session="ASIA", grade="A"))
+    assert result["policy_version"] == mo.OWNER_POLICY_VERSION
+    assert result["evaluated_at"] is not None
+    assert result["session"] == "ASIA"
+    assert result["grade"] == "A"
+
+
+def test_generation_downgrades_blocked_directional_bias_to_blocked_state():
+    """Integration point: generate_outlook_for_account must downgrade
+    primary_direction to BLOCKED (never publish BUY/SELL) when the owner
+    policy blocks the candidate, while preserving what the evidence would
+    otherwise have shown for the technical/audit view."""
+    fn_src = MO_SRC[MO_SRC.index("async def generate_outlook_for_account"):MO_SRC.index("async def generate_outlook_for_account") + 8000]
+    assert "evaluate_owner_policy(canonical_m10)" in fn_src
+    assert 'direction_label = "BLOCKED"' in fn_src
+    assert "owner_policy_blocked_direction" in fn_src
+
+
+def test_blocked_signals_excluded_from_public_performance_query():
+    routes_src = read(BACKEND_DIR / "market_outlook_routes.py")
+    fn = routes_src[routes_src.index("async def build_public_outlook_performance"):]
+    fn = fn[:fn.index("\n\n\n")]
+    assert '"primary_direction": {"$in": ["BUY", "SELL"]}' in fn
+
+
+def test_blocked_signals_never_dispatch_a_trade_notification():
+    fn = MO_SRC[MO_SRC.index("async def _dispatch_hourly_notification"):]
+    fn = fn[:fn.index("\n\n\n")]
+    assert 'doc.get("primary_direction") in ("BUY", "SELL")' in fn
+
+
+def test_blocked_primary_direction_is_a_known_state():
+    assert "BLOCKED" in mo.PRIMARY_DIRECTIONS
