@@ -5672,8 +5672,16 @@ async def request_ea_download_token(user: dict = Depends(get_cloud_user)):
         "version": release["version"],
         "exp": datetime.now(timezone.utc) + timedelta(seconds=DOWNLOAD_TOKEN_TTL_SECONDS),
     }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    # Root cause of the {"detail":"Not Found"} download bug: this field
+    # used to include the "/api" prefix, but every frontend caller (here,
+    # window.location.href = `${API}${download_url}`) builds the final URL
+    # from `API`, which is already `${BACKEND_URL}/api` -- the prefix was
+    # being applied twice (`/api/api/download/ea-release`), which matches
+    # no mounted route and 404s. Every other relative path returned to the
+    # frontend in this file (e.g. /download/info, /cloud/auth/me) is
+    # deliberately un-prefixed for the same reason; this one just missed it.
     return {"download_token": token, "expires_in": DOWNLOAD_TOKEN_TTL_SECONDS,
-            "download_url": f"/api/download/ea-release?token={token}"}
+            "download_url": f"/download/ea-release?token={token}"}
 
 
 async def _verify_command_license(user: dict, key: str) -> dict:

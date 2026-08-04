@@ -142,6 +142,26 @@ def test_request_token_succeeds_for_user_with_active_license():
     _run(go())
 
 
+def test_download_url_has_no_api_prefix():
+    """Regression test for the {"detail":"Not Found"} download bug: the
+    frontend builds the final URL as `${API}${download_url}` where API is
+    already `${BACKEND_URL}/api` -- if download_url ALSO starts with
+    "/api", the browser is sent to /api/api/download/ea-release, which
+    matches no mounted route (api_router's prefix is "/api", applied once)
+    and 404s with FastAPI's default JSON error body. Every other relative
+    path this backend hands the frontend (e.g. /download/info,
+    /cloud/auth/me) is deliberately un-prefixed for the same reason."""
+    async def go():
+        await _clear()
+        await _seed_license(pin="ASE-URLCHECK1", active=True)
+        user = await _seed_cloud_user(license_key="ASE-URLCHECK1")
+        result = await srv.request_ea_download_token(user=user)
+        assert result["download_url"].startswith("/download/ea-release?token=")
+        assert not result["download_url"].startswith("/api/")
+        await _clear()
+    _run(go())
+
+
 def test_request_token_rejects_revoked_license():
     async def go():
         await _clear()
