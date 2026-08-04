@@ -107,6 +107,7 @@ def _outlook_to_signal_card(row: dict) -> dict:
         "result": outcome,
         "confidence_pct": row.get("confidence_pct"),
         "setup_type": row.get("setup_type"),
+        "highest_tp_reached": row.get("highest_tp_reached"),
         **conversion,
     }
 
