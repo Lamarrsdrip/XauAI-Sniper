@@ -9,6 +9,41 @@ function timestampLabel(value) {
   return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
 }
 
+// Bug fix: this card used to show the EA's raw M10_DECISION_* / freshness
+// enum text with underscores swapped for spaces (e.g. "TRANSITION_WATCH" ->
+// "TRANSITION WATCH") -- still a raw system code, not plain English. These
+// are the complete, real decision values the EA sends (see M10_DECISION_*
+// in XAUUSD_AI_Sniper_EA.mq5), written as a customer would actually read them.
+const M10_DECISION_LABELS = {
+  BUY_CANDIDATE: "Buy setup forming",
+  SELL_CANDIDATE: "Sell setup forming",
+  WAIT_FOR_BUY_RETRACE: "Waiting for a pullback to buy",
+  WAIT_FOR_SELL_RETRACE: "Waiting for a pullback to sell",
+  TREND_CONTINUATION_NO_ENTRY_YET: "Trend continuing, no entry yet",
+  TRANSITION_WATCH: "Watching for a trend change",
+  RANGE_NO_TRADE: "Market ranging, no trade",
+  NO_VALID_SIGNAL: "No valid signal right now",
+  DATA_UNAVAILABLE: "Waiting for data",
+  WAITING: "Waiting for signal",
+};
+
+const FRESHNESS_LABELS = {
+  FRESH: "Up to date",
+  STALE: "Delayed",
+  NO_DATA: "No data yet",
+  "NO DATA": "No data yet",
+};
+
+function humanEnumLabel(value, map) {
+  if (!value) return "—";
+  const key = String(value).toUpperCase().trim();
+  if (map && map[key]) return map[key];
+  return key
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 /**
  * One display-only comparison of the EA's canonical M10 signal and the
  * backend's canonical hourly outlook. It never derives a trading decision or
@@ -43,7 +78,7 @@ export default function M10VsOutlookCard({
               <div className="text-[10px] uppercase tracking-wide text-white/35">M10 (near-term)</div>
               <div className="mt-1 truncate font-mono text-lg font-black">{m10Dir}</div>
               <div className="mt-1 break-words text-white/45">
-                {m10 ? `${String(m10.decision || "WAITING").replace(/_/g, " ")} · ${m10Freshness}` : "No signal data yet"}
+                {m10 ? `${humanEnumLabel(m10.decision || "WAITING", M10_DECISION_LABELS)} · ${humanEnumLabel(m10Freshness, FRESHNESS_LABELS)}` : "No signal data yet"}
               </div>
               <div className="mt-1 text-[10px] text-white/30">
                 {m10?.confidence != null ? `${Number(m10.confidence).toFixed(0)}% ${["BUY","SELL"].includes(m10Dir) ? "signal confidence" : "evidence strength"}` : "Evidence —"}
@@ -55,7 +90,7 @@ export default function M10VsOutlookCard({
               <div className="mt-1 break-words text-white/45">
                 {outlook?.confidence_pct != null ? `${outlook.confidence_pct}% confidence` : "No outlook data yet"}
               </div>
-              <div className="mt-1 text-[10px] text-white/30">{String(outlookFreshness).replace(/_/g, " ")}</div>
+              <div className="mt-1 text-[10px] text-white/30">{humanEnumLabel(outlookFreshness, FRESHNESS_LABELS)}</div>
             </div>
           </div>
 
