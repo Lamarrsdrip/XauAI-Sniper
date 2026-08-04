@@ -23,6 +23,7 @@ import AIMarketOutlookPage from "@/pages/AIMarketOutlookPage";
 import LabsPage from "@/pages/LabsPage";
 import PerformancePage from "@/pages/PerformancePage";
 import PerformanceHistoryPage from "@/pages/PerformanceHistoryPage";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import { API } from "@/lib/api";
 
 function MainDashboard() {
@@ -87,27 +88,29 @@ function PurchaseCancelWrap() {
 
 function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<MainDashboard />} />
-        <Route path="/command" element={<CloudLanding />} />
-        <Route path="/command/signup" element={<CloudSignup />} />
-        <Route path="/command/login" element={<CloudLogin />} />
-        <Route path="/command/dashboard" element={<CloudDashboard />} />
-        <Route path="/ai-market-outlook" element={<AIMarketOutlookPage />} />
-        <Route path="/labs" element={<LabsPage />} />
-        <Route path="/performance" element={<PerformancePage />} />
-        <Route path="/performance/history" element={<PerformanceHistoryPage />} />
-        <Route path="/cloud" element={<Navigate to="/command" replace />} />
-        <Route path="/cloud/signup" element={<Navigate to="/command/signup" replace />} />
-        <Route path="/cloud/login" element={<Navigate to="/command/login" replace />} />
-        <Route path="/cloud/dashboard" element={<Navigate to="/command/dashboard" replace />} />
-        <Route path="/purchase/success" element={<PurchaseSuccessPage />} />
-        <Route path="/purchase/cancel" element={<PurchaseCancelWrap />} />
-        <Route path="/admin" element={<AdminPortal api={API} />} />
-        <Route path="/admin/*" element={<AdminPortal api={API} />} />
-      </Routes>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<MainDashboard />} />
+          <Route path="/command" element={<CloudLanding />} />
+          <Route path="/command/signup" element={<CloudSignup />} />
+          <Route path="/command/login" element={<CloudLogin />} />
+          <Route path="/command/dashboard" element={<CloudDashboard />} />
+          <Route path="/ai-market-outlook" element={<AIMarketOutlookPage />} />
+          <Route path="/labs" element={<LabsPage />} />
+          <Route path="/performance" element={<PerformancePage />} />
+          <Route path="/performance/history" element={<PerformanceHistoryPage />} />
+          <Route path="/cloud" element={<Navigate to="/command" replace />} />
+          <Route path="/cloud/signup" element={<Navigate to="/command/signup" replace />} />
+          <Route path="/cloud/login" element={<Navigate to="/command/login" replace />} />
+          <Route path="/cloud/dashboard" element={<Navigate to="/command/dashboard" replace />} />
+          <Route path="/purchase/success" element={<PurchaseSuccessPage />} />
+          <Route path="/purchase/cancel" element={<PurchaseCancelWrap />} />
+          <Route path="/admin" element={<AdminPortal api={API} />} />
+          <Route path="/admin/*" element={<AdminPortal api={API} />} />
+        </Routes>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }
 
