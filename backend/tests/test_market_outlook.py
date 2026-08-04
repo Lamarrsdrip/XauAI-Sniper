@@ -53,7 +53,7 @@ def test_outlook_module_only_writes_its_own_collections():
     import re
     writes = re.findall(r'db\.(\w+)\.(?:insert_one|update_one|delete_one|update_many)', MO_SRC)
     own_collections = {"cloud_market_outlooks", "cloud_market_outlook_revisions", "cloud_market_outlook_outcomes",
-                       "cloud_market_outlook_repair_runs"}
+                       "cloud_market_outlook_repair_runs", "cloud_market_outlook_reclassification_runs"}
     for coll in writes:
         assert coll in own_collections, f"market_outlook.py writes to unexpected collection: {coll}"
 

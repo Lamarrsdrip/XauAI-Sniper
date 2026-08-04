@@ -6,7 +6,7 @@ import Header from "@/components/Header";
 import HeroSection from "@/components/HeroSection";
 import TrustStrip from "@/components/TrustStrip";
 import FeaturesSection from "@/components/FeaturesSection";
-import OutlookPerformanceSection from "@/components/OutlookPerformanceSection";
+import DailyTradingResultsSection from "@/components/DailyTradingResultsSection";
 import HowItWorksSection from "@/components/HowItWorksSection";
 import ReassuranceSection from "@/components/ReassuranceSection";
 import PurchaseSection from "@/components/PurchaseSection";
@@ -44,6 +44,10 @@ function MainDashboard() {
     return () => clearInterval(iv);
   }, [fetchGoldPrice]);
 
+  // Owner decision (2026-08-04): the advisory Outlook signal-tracking
+  // section was pulled off the homepage and replaced with real closed-
+  // trade results (DailyTradingResultsSection) at the same "performance"
+  // nav id/anchor -- back to normal in-page scrolling.
   const scrollTo = (id) => {
     setActiveSection(id);
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -55,7 +59,7 @@ function MainDashboard() {
       <main>
         <section id="overview"><HeroSection goldPrice={goldPrice} /></section>
         <TrustStrip />
-        <section id="performance"><OutlookPerformanceSection api={API} /></section>
+        <section id="performance"><DailyTradingResultsSection api={API} /></section>
         <section id="how-it-works"><HowItWorksSection /></section>
         <section id="features"><FeaturesSection /></section>
         <ReassuranceSection />

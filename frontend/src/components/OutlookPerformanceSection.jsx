@@ -5,17 +5,14 @@ import {
   TrendUp, TrendDown, Target, Clock, ChartLineUp, Gauge, CaretDown,
   ArrowUp, ArrowDown, Coin, Percent, Trophy, Flag, ArrowsClockwise,
 } from "@phosphor-icons/react";
-import {
-  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
-} from "recharts";
 
 // ─── Premium redesign (owner spec, 2026-08-04) ─────────────────────────────
-// This is the highest-traffic conversion surface on the public site -- the
-// proof a visitor sees before buying. Same data source as before
-// (GET /outlook/public-performance, now with limit/cumulative_r_curve/
-// avg-win-loss/best-worst added server-side -- see market_outlook_routes.py).
-// No client-side fabrication anywhere: every number rendered here comes
-// straight from the API response.
+// Compact, information-dense signal cards; no client-side fabrication --
+// every number rendered here comes straight from the API response
+// (GET /outlook/public-performance, now with limit/avg-win-loss/best-worst
+// added server-side -- see market_outlook_routes.py). No longer imported
+// on the public homepage (owner decision, see App.js) -- kept as a
+// standalone component in case it's wanted again later.
 
 const RESULT_STYLE = {
   WIN:  { card: "border-emerald-400/25 bg-gradient-to-br from-emerald-950/40 to-[#0a1410]", text: "text-emerald-300", badge: "bg-emerald-400/15 text-emerald-300 border-emerald-400/30", accent: "#34d399" },
@@ -91,14 +88,13 @@ function ConfidenceBadge({ pct }) {
   if (pct == null) return null;
   // Thresholds are a display convention only (not a statistic) -- the
   // underlying confidence_pct is always the real value from the backend.
-  const tier = pct >= 75 ? { label: "High Confidence", cls: "text-emerald-300 border-emerald-400/25 bg-emerald-400/10" }
-    : pct >= 50 ? { label: "Medium Confidence", cls: "text-amber-200 border-amber-300/25 bg-amber-300/10" }
-    : { label: "Low Confidence", cls: "text-white/50 border-white/[0.12] bg-white/[0.04]" };
+  const tier = pct >= 75 ? { label: "High Confidence", cls: "text-emerald-300" }
+    : pct >= 50 ? { label: "Medium Confidence", cls: "text-amber-200" }
+    : { label: "Low Confidence", cls: "text-white/45" };
   return (
-    <div className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${tier.cls}`}>
-      <span className="font-mono text-[11px] font-black">{Math.round(pct)}%</span>
-      <span className="font-mono text-[9px] uppercase tracking-wide">{tier.label}</span>
-    </div>
+    <span className={`font-mono text-[9px] font-bold uppercase tracking-wide ${tier.cls}`}>
+      {Math.round(pct)}% {tier.label}
+    </span>
   );
 }
 
@@ -112,6 +108,12 @@ function shortDateTime(iso) {
 const fmt = (v, digits = 1) => (v == null || Number.isNaN(Number(v)) ? "--" : Number(v).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits }));
 const signed = (v, digits = 1) => (v == null ? "--" : `${Number(v) >= 0 ? "+" : ""}${fmt(v, digits)}`);
 
+// Compact redesign (owner spec, 2026-08-04): ~30-40% shorter than the first
+// pass -- Entry/SL/TP1 collapsed onto one inline row instead of a 3-column
+// grid with stacked labels, the result line is plain text instead of a
+// bordered/padded box, and the confidence badge lost its pill chrome. Same
+// fields, same real data, just denser -- this is a performance page users
+// scan quickly, not a single hero card.
 function SignalCard({ signal, index }) {
   const style = RESULT_STYLE[signal.result] || RESULT_STYLE.LOSS;
   const DirIcon = signal.direction === "BUY" ? ArrowUp : ArrowDown;
@@ -119,94 +121,39 @@ function SignalCard({ signal, index }) {
     ? ` · TP${signal.highest_tp_reached}` : "";
   return (
     <div
-      className={`anim-fade-up min-w-0 rounded-2xl border ${style.card} p-3.5`}
+      className={`anim-fade-up min-w-0 rounded-xl border ${style.card} px-3 py-2.5`}
       style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
     >
-      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-        <div className="flex items-center gap-2">
-          <span className={`flex items-center gap-1 font-mono text-[12px] font-black ${style.text}`}>
-            <DirIcon size={12} weight="bold" />
-            {signal.direction}
-          </span>
-          <span className={`rounded-full border px-2 py-0.5 font-mono text-[9px] font-black uppercase tracking-wide ${style.badge}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <DirIcon size={11} weight="bold" className={style.text} />
+          <span className={`font-mono text-[11px] font-black ${style.text}`}>{signal.direction}</span>
+          <span className={`rounded-full border px-1.5 py-[1px] font-mono text-[8px] font-black uppercase tracking-wide ${style.badge}`}>
             {signal.result}{tpDetail}
           </span>
         </div>
-        <span className="flex items-center gap-1 font-mono text-[10px] text-white/35">
-          <Clock size={10} />
-          {shortDateTime(signal.closed_at)}
-        </span>
+        <span className="flex-none font-mono text-[9px] text-white/30">{shortDateTime(signal.closed_at)}</span>
       </div>
 
-      <div className="mt-2.5 grid grid-cols-3 gap-2 text-[10px]">
-        <div>
-          <div className="flex items-center gap-1 text-white/30"><Target size={9} /> Entry</div>
-          <div className="mt-0.5 font-mono text-[11px] font-semibold text-white/80">{fmt(signal.entry_price, 2)}</div>
-        </div>
-        <div>
-          <div className="text-white/30">SL</div>
-          <div className="mt-0.5 font-mono text-[11px] font-semibold text-white/80">{fmt(signal.stop_loss, 2)}</div>
-        </div>
-        <div>
-          <div className="text-white/30">TP1</div>
-          <div className="mt-0.5 font-mono text-[11px] font-semibold text-white/80">{fmt(signal.take_profit_1, 2)}</div>
-        </div>
+      <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[9px] text-white/30">
+        <span>Entry <span className="text-[11px] font-semibold text-white/80">{fmt(signal.entry_price, 2)}</span></span>
+        <span>SL <span className="text-[11px] font-semibold text-white/80">{fmt(signal.stop_loss, 2)}</span></span>
+        <span>TP1 <span className="text-[11px] font-semibold text-white/80">{fmt(signal.take_profit_1, 2)}</span></span>
       </div>
 
-      <div className={`mt-2.5 rounded-xl border border-white/[0.06] bg-black/20 px-2.5 py-2 font-mono text-[11px] font-bold ${style.text}`}>
+      <div className={`mt-1.5 font-mono text-[11px] font-bold leading-tight ${style.text}`}>
         {signal.result_pips != null
           ? `${signed(signal.result_pips)} pips · ${signed(signal.result_gold_moves, 2)} Gold moves · ${signed(signal.result_r, 2)}R`
           : signal.result_r != null ? `${signed(signal.result_r, 2)}R` : "--"}
       </div>
 
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+      <div className="mt-1.5 flex items-center justify-between gap-2">
         {signal.confidence_pct != null ? <ConfidenceBadge pct={signal.confidence_pct} /> : <span />}
         {signal.setup_type && (
-          <span className="flex items-center gap-1 text-[10px] text-white/35">
-            <ChartLineUp size={11} />
+          <span className="truncate font-mono text-[9px] text-white/30">
             {signal.setup_type.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())}
           </span>
         )}
-      </div>
-    </div>
-  );
-}
-
-function PerformanceChart({ curve }) {
-  if (!curve || curve.length < 2) return null;
-  const data = curve.map((p, i) => ({ i, r: p.cumulative_r, closed_at: p.closed_at }));
-  const positive = data[data.length - 1].r >= 0;
-  const stroke = positive ? "#34d399" : "#fb7185";
-  return (
-    <div className="anim-fade-up rounded-2xl border border-white/[0.08] bg-white/[0.02] p-4">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.16em] text-white/40">
-          <ChartLineUp size={12} /> Cumulative Net R
-        </span>
-        <span className={`font-mono text-[13px] font-black ${positive ? "text-emerald-300" : "text-rose-300"}`}>
-          {signed(data[data.length - 1].r, 2)}R
-        </span>
-      </div>
-      <div className="h-[140px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
-            <defs>
-              <linearGradient id="netRFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={stroke} stopOpacity={0.35} />
-                <stop offset="100%" stopColor={stroke} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-            <XAxis dataKey="i" hide />
-            <YAxis width={34} tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace" }} axisLine={false} tickLine={false} />
-            <Tooltip
-              contentStyle={{ background: "#0c0d11", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, fontSize: 11, fontFamily: "monospace" }}
-              labelFormatter={() => ""}
-              formatter={(v) => [`${signed(v, 2)}R`, "Cumulative"]}
-            />
-            <Area type="monotone" dataKey="r" stroke={stroke} strokeWidth={2} fill="url(#netRFill)" isAnimationActive />
-          </AreaChart>
-        </ResponsiveContainer>
       </div>
     </div>
   );
@@ -313,12 +260,6 @@ export default function OutlookPerformanceSection({ api }) {
               {stats.count} completed signal{stats.count === 1 ? "" : "s"} tracked
             </div>
           </>
-        )}
-
-        {data?.cumulative_r_curve?.length > 1 && (
-          <div className="mt-5">
-            <PerformanceChart curve={data.cumulative_r_curve} />
-          </div>
         )}
 
         {allSignals.length > 0 && (

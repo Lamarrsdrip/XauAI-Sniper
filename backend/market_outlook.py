@@ -2413,6 +2413,158 @@ async def backfill_signal_outlook_history(limit: int = 500) -> Dict[str, int]:
     return report
 
 
+async def audit_v2_signal_classifications(limit: int = 500, apply: bool = False) -> Dict[str, Any]:
+    """Re-derives the WIN/LOSS classification of already-resolved
+    signal_tracking_version=2 signals from their OWN stored broker quote
+    history, using today's advance_persisted_signal rules, and reports any
+    disagreement with what is currently stored.
+
+    Why this exists (owner audit, 2026-08-04): before the TP/SL priority
+    fix documented in advance_persisted_signal's own docstring, touching SL
+    immediately locked a signal in as LOSS and stopped monitoring, even if
+    price went on to hit TP1/TP2/TP3 later in the same evaluation window.
+    That fix only changed live/future classification --
+    backfill_signal_outlook_history() only reconstructs pre-v2-schema
+    records, never records that were already signal_tracking_version=2 when
+    the fix landed. This is the missing piece: replay each resolved v2
+    signal's own stored quotes through today's rules and check whether the
+    stored result still holds.
+
+    Dry-run by default (apply=False): never writes anything, only reports.
+    A record whose stored quote history isn't dense/complete enough to
+    trust a re-derivation (same coverage bar backfill already enforces) is
+    reported as insufficient_evidence and left untouched either way --
+    never guessed in either direction.
+    """
+    db = _db()
+    now = datetime.now(timezone.utc)
+    audit_run_id = str(uuid.uuid4())
+    resolved = await db.cloud_market_outlooks.find({
+        "signal_tracking_version": 2,
+        "primary_direction": {"$in": ["BUY", "SELL"]},
+        "analytics_outcome": {"$in": [ANALYTICS_WIN, ANALYTICS_LOSS]},
+    }, {"_id": 0}).sort("published_at", 1).to_list(limit)
+
+    report: Dict[str, Any] = {
+        "examined": len(resolved), "confirmed_correct": 0, "insufficient_evidence": 0,
+        "corrections_found": 0, "corrections_applied": 0, "corrections": [],
+    }
+
+    for old in resolved:
+        published = _as_utc(old.get("published_at") or old.get("generated_at"))
+        account = str(old.get("account") or "")
+        direction = old.get("primary_direction")
+        entry = float(old.get("tracking_entry_price", 0.0) or 0.0)
+        risk = float(old.get("risk_distance", 0.0) or 0.0)
+        sl = float(old.get("original_sl", old.get("suggested_sl", 0.0)) or 0.0)
+        deadline = _as_utc(old.get("evaluation_deadline")) or (
+            published + timedelta(minutes=OUTLOOK_EVALUATION_MINUTES) if published else None)
+        if not published or not account or entry <= 0.0 or risk <= 0.0 or sl <= 0.0 or not deadline:
+            report["insufficient_evidence"] += 1
+            continue
+
+        end = min(now, published + timedelta(hours=OUTLOOK_HORIZON_HOURS))
+        rows = await db.cloud_bot_activity.find({
+            "account": account,
+            "ts": {"$gte": published.isoformat(), "$lte": end.isoformat()},
+            "details.market_thesis.live_bid": {"$gt": 0},
+            "details.market_thesis.live_ask": {"$gt": 0},
+        }, {"_id": 0, "ts": 1, "details.market_thesis.live_bid": 1,
+            "details.market_thesis.live_ask": 1}).sort("ts", 1).to_list(5000)
+        usable = [(row, _as_utc(row.get("ts"))) for row in rows]
+        usable = [(row, ts) for row, ts in usable if ts and all(v is not None for v in _quote_from_activity(row))]
+        in_window = [(row, ts) for row, ts in usable if published <= ts <= deadline]
+        if not in_window:
+            report["insufficient_evidence"] += 1
+            continue
+        times = [ts for _, ts in in_window]
+        max_gap = max(((b - a).total_seconds() for a, b in zip(times, times[1:])), default=0.0)
+        coverage_reliable = (
+            times[0] <= published + timedelta(seconds=MAX_HISTORICAL_QUOTE_GAP_SECONDS)
+            and times[-1] >= deadline - timedelta(seconds=MAX_HISTORICAL_QUOTE_GAP_SECONDS)
+            and max_gap <= MAX_HISTORICAL_QUOTE_GAP_SECONDS
+        )
+        if not coverage_reliable:
+            report["insufficient_evidence"] += 1
+            continue
+
+        working: Dict[str, Any] = {
+            "primary_direction": direction, "tracking_entry_price": entry, "original_sl": sl,
+            "risk_distance": risk, "evaluation_deadline": deadline.isoformat(),
+            "tp1_price": old.get("tp1_price"), "tp2_price": old.get("tp2_price"), "tp3_price": old.get("tp3_price"),
+            "signal_state": SIGNAL_TRACKING, "analytics_outcome": None, "analytics_r": None,
+            "current_r": 0.0, "mfe_r": 0.0, "mae_r": 0.0,
+            "highest_tracked_price": entry, "lowest_tracked_price": entry,
+            "first_half_r_at": None, "tp1_hit_at": None, "tp2_hit_at": None, "tp3_hit_at": None,
+            "sl_hit_at": None, "classification_at": None, "latest_path_event": "TRACKING_STARTED",
+            "monitoring_closed": False, "milestones_hit": [], "event_snapshots": {}, "highest_tp_reached": 0,
+        }
+        for row, ts in in_window:
+            q_bid, q_ask = _quote_from_activity(row)
+            update, _ = advance_persisted_signal(working, q_bid, q_ask, ts)
+            working.update(update)
+            if working.get("monitoring_closed"):
+                break
+        if working.get("analytics_outcome") is None:
+            update, _ = advance_persisted_signal(working, None, None, deadline)
+            working.update(update)
+
+        replayed_outcome = working.get("analytics_outcome")
+        if replayed_outcome is None:
+            report["insufficient_evidence"] += 1
+            continue
+
+        stored_outcome = old.get("analytics_outcome")
+        if replayed_outcome == stored_outcome:
+            report["confirmed_correct"] += 1
+            continue
+
+        replayed_r = working.get("analytics_r")
+        correction = {
+            "id": old["id"], "account": account, "published_at": old.get("published_at"),
+            "direction": direction,
+            "stored_outcome": stored_outcome, "stored_r": old.get("analytics_r"),
+            "stored_highest_tp_reached": old.get("highest_tp_reached"),
+            "replayed_outcome": replayed_outcome, "replayed_r": replayed_r,
+            "replayed_highest_tp_reached": working.get("highest_tp_reached"),
+            "reason": "stored classification disagrees with a re-derivation from the same stored quotes under the current (post-fix) TP/SL priority rule",
+        }
+        report["corrections_found"] += 1
+        report["corrections"].append(correction)
+
+        if apply:
+            persist = {
+                "analytics_outcome": replayed_outcome, "analytics_r": replayed_r,
+                "highest_tp_reached": working.get("highest_tp_reached"),
+                "current_r": working.get("current_r"), "mfe_r": working.get("mfe_r"), "mae_r": working.get("mae_r"),
+                "first_half_r_at": working.get("first_half_r_at"), "tp1_hit_at": working.get("tp1_hit_at"),
+                "tp2_hit_at": working.get("tp2_hit_at"), "tp3_hit_at": working.get("tp3_hit_at"),
+                "sl_hit_at": working.get("sl_hit_at"), "classification_at": working.get("classification_at"),
+                "latest_path_event": working.get("latest_path_event"),
+                "monitoring_closed": working.get("monitoring_closed"),
+                "event_snapshots": working.get("event_snapshots"), "milestones_hit": working.get("milestones_hit"),
+                "signal_state": working.get("signal_state"),
+                "reclassification_audit_run_id": audit_run_id,
+                "legacy_classification_before_reclassification_audit": stored_outcome,
+                "legacy_r_before_reclassification_audit": old.get("analytics_r"),
+                "reclassified_at": now.isoformat(),
+            }
+            await db.cloud_market_outlooks.update_one({"id": old["id"]}, {"$set": persist})
+            await _record_revision(
+                old["id"], "analytics_outcome", stored_outcome, replayed_outcome,
+                "reclassification audit: re-derived from stored quotes under the corrected TP/SL priority rule",
+            )
+            await _persist_signal_outcome({**old, **persist, "id": old["id"]})
+            report["corrections_applied"] += 1
+
+    await db.cloud_market_outlook_reclassification_runs.insert_one({
+        "id": audit_run_id, "started_at": now.isoformat(),
+        "completed_at": datetime.now(timezone.utc).isoformat(), "applied": apply,
+        "summary": {k: v for k, v in report.items() if k != "corrections"},
+    })
+    return report
+
+
 async def _mark_history_unavailable(doc: Dict, reason: str) -> None:
     update = {
         "signal_tracking_version": 2,

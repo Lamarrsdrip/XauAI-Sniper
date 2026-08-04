@@ -2637,6 +2637,18 @@ async def download_xauindex_package_retired():
 # performance_periods document. No number is ever hand-typed, cached
 # indefinitely, or mixed across two different queries.
 
+class OutlookReclassificationAuditRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    apply: bool = False
+    limit: int = 500
+    # Fresh-auth requirement only when apply=True -- same pattern as
+    # StartPerformancePeriodRequest/update_admin_account: a destructive/
+    # high-stakes action (rewriting already-final WIN/LOSS classifications)
+    # requires re-entering the current password, not just an already-valid
+    # session cookie. A pure dry-run (apply=False, the default) needs none.
+    current_password: Optional[str] = None
+
+
 class StartPerformancePeriodRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     name: str
@@ -2753,6 +2765,75 @@ async def get_performance_full(period_id: Optional[str] = None):
     d = await _period_summary_dict(period)
     d["status"] = "active" if d["sufficient_data"] else "collecting"
     return d
+
+
+@api_router.get("/performance/daily-results")
+async def get_performance_daily_results(days: int = 30):
+    """Real closed-trade results (the actual EA/bot, not the advisory
+    Outlook feature) grouped by day, in pips/Gold-moves/R -- owner spec
+    2026-08-04, replacing the Outlook section pulled off the homepage.
+
+    Same eligibility/dedup rules as every other real-performance number on
+    the site (has_rich_ledger_data + a genuine ticket, first-seen-per-ticket
+    only -- see performance_engine.is_eligible_trade/dedupe_by_ticket), and
+    the same pip/Gold-move conversion market_outlook.py uses everywhere
+    else, computed from each trade's own real entry/exit price -- never
+    fabricated, never estimated.
+    """
+    days = max(1, min(days, 90))
+    period = await get_active_performance_period()
+    if not period:
+        return {"status": "unavailable", "days": []}
+    trades = await _fetch_period_trades(period)
+    cutoff_unix = time.time() - days * 86400
+    recent = [t for t in trades if float(t.get("closed_at") or t.get("opened_at") or 0) >= cutoff_unix]
+
+    import market_outlook as _mo
+    by_day: Dict[str, Dict[str, Any]] = {}
+    for t in recent:
+        closed_at = float(t.get("closed_at") or t.get("opened_at") or 0)
+        if closed_at <= 0:
+            continue
+        date_str = datetime.fromtimestamp(closed_at, timezone.utc).strftime("%Y-%m-%d")
+        direction = str(t.get("direction") or "").upper()
+        entry = float(t.get("entry_price") or 0)
+        exit_price = float(t.get("price") or 0)
+        price_move = None
+        if entry > 0 and exit_price > 0 and direction in ("BUY", "SELL"):
+            price_move = (exit_price - entry) if direction == "BUY" else (entry - exit_price)
+        conversion = _mo.build_result_conversion(r=float(t.get("final_r") or 0) or None, price_move=price_move)
+        net_usd = round(performance_engine.net_result(t), 2)
+        outcome = performance_engine.classify_trade(t)
+        day = by_day.setdefault(date_str, {
+            "date": date_str, "trades": 0, "wins": 0, "losses": 0, "breakeven": 0,
+            "net_pips": 0.0, "net_gold_moves": 0.0, "net_r": 0.0, "net_usd": 0.0,
+        })
+        day["trades"] += 1
+        if outcome == "WIN": day["wins"] += 1
+        elif outcome == "LOSS": day["losses"] += 1
+        else: day["breakeven"] += 1
+        if conversion["result_pips"] is not None:
+            day["net_pips"] = round(day["net_pips"] + conversion["result_pips"], 1)
+        if conversion["result_gold_moves"] is not None:
+            day["net_gold_moves"] = round(day["net_gold_moves"] + conversion["result_gold_moves"], 2)
+        if conversion["result_r"] is not None:
+            day["net_r"] = round(day["net_r"] + conversion["result_r"], 2)
+        day["net_usd"] = round(day["net_usd"] + net_usd, 2)
+
+    days_list = sorted(by_day.values(), key=lambda d: d["date"], reverse=True)
+    totals = {
+        "trades": sum(d["trades"] for d in days_list),
+        "wins": sum(d["wins"] for d in days_list),
+        "losses": sum(d["losses"] for d in days_list),
+        "net_pips": round(sum(d["net_pips"] for d in days_list), 1),
+        "net_gold_moves": round(sum(d["net_gold_moves"] for d in days_list), 2),
+        "net_r": round(sum(d["net_r"] for d in days_list), 2),
+        "net_usd": round(sum(d["net_usd"] for d in days_list), 2),
+    }
+    return {
+        "status": "ok", "days_requested": days, "period_id": period["id"], "period_name": period["name"],
+        "days": days_list, "totals": totals,
+    }
 
 
 @api_router.get("/performance/historical")
@@ -8411,6 +8492,39 @@ AGENT_TOKEN = os.environ.get("CLOUD_AGENT_TOKEN", "")  # kept for backward compa
 # ===================================================================
 import market_outlook_routes as _mo_routes
 api_router.include_router(_mo_routes.build_router())
+
+
+@api_router.post("/admin/outlook/reclassification-audit")
+async def admin_outlook_reclassification_audit(
+    req: OutlookReclassificationAuditRequest, admin: dict = Depends(get_current_admin)
+):
+    """Owner audit (2026-08-04): re-derives already-resolved v2 Outlook
+    signal classifications from their own stored quote history under the
+    current (post SL/TP-priority-fix) rules, and reports every disagreement
+    with what is currently stored -- see
+    market_outlook.audit_v2_signal_classifications for the full rationale
+    and coverage-reliability guarantees.
+
+    Dry-run by default (apply=False) -- always safe to call, never writes.
+    apply=True requires re-entering the current admin password (this can
+    flip real, customer-visible WIN/LOSS results) and only ever applies a
+    correction where the record's own stored quote history reliably
+    supports it; everything else is left untouched and reported as
+    insufficient_evidence."""
+    if req.apply:
+        if not req.current_password:
+            raise HTTPException(status_code=401, detail="Current password required to apply corrections.")
+        full = await db.users.find_one({"email": admin["email"]})
+        if not full or not verify_password(req.current_password, full.get("password_hash", "")):
+            raise HTTPException(status_code=401, detail="Incorrect password.")
+    import market_outlook as _mo
+    report = await _mo.audit_v2_signal_classifications(limit=req.limit, apply=req.apply)
+    logger.info(
+        f"OUTLOOK_RECLASSIFICATION_AUDIT admin={admin['email']} apply={req.apply} "
+        f"examined={report['examined']} corrections_found={report['corrections_found']} "
+        f"corrections_applied={report['corrections_applied']} insufficient_evidence={report['insufficient_evidence']}"
+    )
+    return report
 
 # Customer EAs use this authenticated HTTPS relay.  The owner VPS claims
 # jobs outbound-only and keeps llama.cpp plus its gateway on loopback.

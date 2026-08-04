@@ -3,6 +3,7 @@ import path from "path";
 
 const read = (relative) => fs.readFileSync(path.join(__dirname, relative), "utf8");
 const section = read("components/OutlookPerformanceSection.jsx");
+const app = read("App.js");
 
 // Premium redesign (owner spec, 2026-08-04): compact stat cards, redesigned
 // signal cards, filter chips, cumulative performance chart, confidence
@@ -67,10 +68,15 @@ describe("Market Outlook Performance redesign contract", () => {
     expect(section).toMatch(/sticky top-\[/);
   });
 
-  test("performance chart renders the real cumulative_r_curve from the API, not a client-computed guess", () => {
-    expect(section).toContain("data.cumulative_r_curve");
-    expect(section).toContain("cumulative_r");
-    expect(section).toContain("AreaChart");
+  test("Cumulative Net R chart is completely removed", () => {
+    // Owner spec (2026-08-04): removed entirely -- component, heading,
+    // graph, and the recharts import used only by it. Filters and signal
+    // cards moved up to fill the space; no blank gap left behind.
+    expect(section).not.toContain("Cumulative Net R");
+    expect(section).not.toContain("AreaChart");
+    expect(section).not.toContain("cumulative_r_curve");
+    expect(section).not.toContain("recharts");
+    expect(section).not.toContain("PerformanceChart");
   });
 
   test("load more requests additional real data via the limit param, never fabricates extra rows", () => {
@@ -91,5 +97,25 @@ describe("Market Outlook Performance redesign contract", () => {
   test("respects prefers-reduced-motion for both the count-up numbers and card entrance animation", () => {
     expect(section).toContain("prefers-reduced-motion: reduce");
     expect(section).toMatch(/matchMedia\("\(prefers-reduced-motion: reduce\)"\)/);
+  });
+
+  test("signal cards are compact -- no separate 3-column Entry/SL/TP grid or boxed result panel", () => {
+    // Owner spec (2026-08-04): ~30-40% shorter cards. Entry/SL/TP1 collapsed
+    // onto one inline row instead of a `grid grid-cols-3` with stacked
+    // per-field labels, and the result line is plain text instead of a
+    // bordered/padded box -- both of those were the main height cost.
+    expect(section).not.toContain("grid grid-cols-3");
+    expect(section).not.toContain("bg-black/20 px-2.5 py-2");
+    expect(section).toMatch(/Entry <span/);
+  });
+
+  test("Outlook Performance section is no longer embedded on the public homepage", () => {
+    // Owner decision (2026-08-04): pulled off the marketing homepage --
+    // the component itself still exists (still tested above) but is not
+    // rendered there. Replaced at the same "performance" anchor by real
+    // closed-trade results (DailyTradingResultsSection).
+    expect(app).not.toContain("OutlookPerformanceSection");
+    expect(app).toContain("DailyTradingResultsSection");
+    expect(app).toMatch(/<section id="performance"><DailyTradingResultsSection/);
   });
 });
