@@ -214,6 +214,22 @@ def build_router() -> APIRouter:
             evidence, evidence_reason, hourly_doc=hourly_doc, signal_doc=signal_doc,
             notification=latest_notification, now=now,
         )
+        # The single authoritative "what counts as current" determination --
+        # see compute_outlook_freshness's own docstring for the exact bug
+        # this replaces: `signal_doc or doc` used to prefer the latest
+        # directional signal even when it was hours older than the
+        # account's real latest publication, letting a stale BUY/SELL
+        # outrank "nothing to show right now." The frontend must read
+        # `freshness` instead of independently guessing staleness from
+        # generated_at age.
+        freshness = mo.compute_outlook_freshness(doc, signal_doc, evidence_reason, now=now)
+        current_outlook = None
+        if freshness["outlook_id"]:
+            current_outlook = (
+                signal_doc if signal_doc and signal_doc.get("id") == freshness["outlook_id"]
+                else doc if doc and doc.get("id") == freshness["outlook_id"]
+                else None
+            )
         diagnostics = {
             "last_ea_evidence_at": evidence.get("ts") if evidence else None,
             "evidence_age_seconds": evidence_age_seconds,
@@ -225,7 +241,8 @@ def build_router() -> APIRouter:
         }
         return {
             "contract": contract,
-            "outlook": signal_doc or doc,
+            "freshness": freshness,
+            "outlook": current_outlook,
             "hourly_context": hourly_doc,
             "diagnostics": diagnostics,
         }

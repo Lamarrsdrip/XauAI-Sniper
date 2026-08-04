@@ -29,15 +29,27 @@ describe("owner-required Command Center card order", () => {
     expect((home.match(/data-testid="bot-status-card"/g) || [])).toHaveLength(1);
   });
 
-  test("Home order is connection, outlook, summary, then M10/hourly comparison", () => {
+  test("Home order is connection, outlook, M10/hourly comparison, then the collapsed advanced-details summary grid", () => {
+    // Investigated 2026-08-04: this assertion previously expected
+    // `summary` (home-summary-grid) before `comparison` (M10VsOutlookCard),
+    // which stopped matching reality back at commit 6ac33d6 "mobile-first
+    // Command Center home hierarchy redesign" (2026-07-24, see
+    // audits/xaucloud/04_command_center_mobile_redesign.md) -- a real,
+    // browser-verified, owner-approved redesign that intentionally
+    // promoted M10VsOutlookCard up next to the outlook/M10 signal cards
+    // and wrapped the old 8-metric technical grid in a collapsed-by-
+    // default "Advanced details" <details> disclosure much further down
+    // the page, after M30 consensus. The layout was correct; only this
+    // test's assumption was stale. Updated to match the real, intended
+    // hierarchy instead of reverting the redesign.
     const connection = home.indexOf('data-testid="bot-status-card"');
     const outlook = home.indexOf("<AIMarketOutlookCard");
-    const summary = home.indexOf('data-testid="home-summary-grid"');
     const comparison = home.indexOf("<M10VsOutlookCard");
+    const summary = home.indexOf('data-testid="home-summary-grid"');
     expect(connection).toBeGreaterThan(-1);
     expect(connection).toBeLessThan(outlook);
-    expect(outlook).toBeLessThan(summary);
-    expect(summary).toBeLessThan(comparison);
+    expect(outlook).toBeLessThan(comparison);
+    expect(comparison).toBeLessThan(summary);
     expect((home.match(/<AIMarketOutlookCard/g) || [])).toHaveLength(1);
     expect((home.match(/<M10VsOutlookCard/g) || [])).toHaveLength(1);
   });

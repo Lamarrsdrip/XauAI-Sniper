@@ -17,7 +17,7 @@ environment doesn't have.)
 """
 
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -876,3 +876,111 @@ def test_blocked_signals_never_dispatch_a_trade_notification():
 
 def test_blocked_primary_direction_is_a_known_state():
     assert "BLOCKED" in mo.PRIMARY_DIRECTIONS
+
+
+# ---------------------------------------------------------------------------
+# compute_outlook_freshness -- the single authoritative "what counts as
+# current" determination, replacing the buggy `signal_doc or doc` selection
+# that let an old directional signal outrank the account's actual latest
+# publication.
+# ---------------------------------------------------------------------------
+
+_NOW = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+
+
+def _outlook(**overrides):
+    doc = {
+        "id": "outlook-1", "primary_direction": "BUY",
+        "generated_at": (_NOW - timedelta(minutes=10)).isoformat(),
+        "expiry_at": (_NOW + timedelta(hours=3)).isoformat(),
+        "analytics_outcome": None, "monitoring_closed": False,
+        "owner_policy_blocked": False,
+    }
+    doc.update(overrides)
+    return doc
+
+
+def test_ea_offline_takes_priority_over_everything_else():
+    result = mo.compute_outlook_freshness(_outlook(), _outlook(), "NO_CONNECTED_EA", now=_NOW)
+    assert result["state"] == "EA_OFFLINE"
+    result = mo.compute_outlook_freshness(_outlook(), _outlook(), "STALE_EVIDENCE", now=_NOW)
+    assert result["state"] == "EA_OFFLINE"
+
+
+def test_no_publication_at_all_is_no_fresh_signal():
+    result = mo.compute_outlook_freshness(None, None, "OK", now=_NOW)
+    assert result["state"] == "NO_FRESH_SIGNAL"
+    assert result["outlook_id"] is None
+
+
+def test_expired_publication_is_no_fresh_signal_not_shown_as_current():
+    stale_doc = _outlook(expiry_at=(_NOW - timedelta(hours=1)).isoformat())
+    result = mo.compute_outlook_freshness(stale_doc, stale_doc, "OK", now=_NOW)
+    assert result["state"] == "NO_FRESH_SIGNAL"
+
+
+def test_root_bug_fixed_old_directional_signal_never_outranks_newer_non_directional_doc():
+    """The exact bug: signal_doc is an old BUY from hours ago, already
+    resolved and monitoring closed; doc is this hour's genuinely fresh
+    NEUTRAL publication. The old signal must NOT be shown as current."""
+    old_signal = _outlook(
+        id="old-buy", primary_direction="BUY", analytics_outcome=mo.ANALYTICS_LOSS,
+        monitoring_closed=True, generated_at=(_NOW - timedelta(hours=3)).isoformat(),
+        expiry_at=(_NOW - timedelta(hours=1)).isoformat(),  # already expired
+    )
+    fresh_neutral = _outlook(id="fresh-neutral", primary_direction="NEUTRAL", generated_at=_NOW.isoformat())
+    result = mo.compute_outlook_freshness(fresh_neutral, old_signal, "OK", now=_NOW)
+    assert result["state"] == "SIGNAL_FORMING"
+    assert result["outlook_id"] == "fresh-neutral"
+
+
+def test_still_live_signal_shown_as_current_even_if_a_newer_neutral_doc_exists():
+    """The other half of the fix: an unresolved, still-live signal must
+    stay "current" for as long as it's genuinely live, even though a
+    newer (non-directional) hourly slot has since published."""
+    live_signal = _outlook(id="live-buy", primary_direction="BUY", analytics_outcome=None, monitoring_closed=False)
+    newer_neutral = _outlook(id="newer-neutral", primary_direction="NEUTRAL", generated_at=_NOW.isoformat())
+    result = mo.compute_outlook_freshness(newer_neutral, live_signal, "OK", now=_NOW)
+    assert result["state"] == "ACTIVE_SIGNAL"
+    assert result["outlook_id"] == "live-buy"
+    assert result["direction"] == "BUY"
+
+
+def test_blocked_signal_shows_as_no_fresh_signal_not_a_visible_direction():
+    blocked = _outlook(primary_direction="BLOCKED", owner_policy_blocked=True)
+    result = mo.compute_outlook_freshness(blocked, blocked, "OK", now=_NOW)
+    assert result["state"] == "NO_FRESH_SIGNAL"
+    assert result["direction"] is None
+
+
+def test_signal_forming_for_fresh_non_directional_evidence():
+    result = mo.compute_outlook_freshness(_outlook(primary_direction="RANGE"), None, "OK", now=_NOW)
+    assert result["state"] == "SIGNAL_FORMING"
+
+
+def test_active_signal_for_fresh_unresolved_directional_signal():
+    result = mo.compute_outlook_freshness(_outlook(), _outlook(), "OK", now=_NOW)
+    assert result["state"] == "ACTIVE_SIGNAL"
+    assert result["direction"] == "BUY"
+
+
+def test_signal_completed_for_resolved_signal_still_within_window():
+    resolved = _outlook(analytics_outcome=mo.ANALYTICS_WIN, monitoring_closed=True)
+    result = mo.compute_outlook_freshness(resolved, resolved, "OK", now=_NOW)
+    assert result["state"] == "SIGNAL_COMPLETED"
+    assert result["result"] == mo.ANALYTICS_WIN
+
+
+def test_response_includes_last_checked_and_next_expected_update():
+    result = mo.compute_outlook_freshness(_outlook(), None, "OK", now=_NOW)
+    assert result["last_checked_at"] == _NOW.isoformat()
+    assert result["next_expected_update_at"] == "2026-08-04T13:00:00+00:00"
+
+
+def test_current_outlook_route_returns_freshness_and_never_the_stale_selection():
+    routes_src = read(BACKEND_DIR / "market_outlook_routes.py")
+    fn = routes_src[routes_src.index('@r.get("/outlook/current")'):]
+    fn = fn[:fn.index('@r.get("/outlook/history")')]
+    assert "compute_outlook_freshness(" in fn
+    assert '"outlook": signal_doc or doc' not in fn
+    assert '"freshness": freshness' in fn

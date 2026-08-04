@@ -484,6 +484,91 @@ def _as_iso(value: Any) -> Optional[str]:
     return parsed.isoformat() if parsed else None
 
 
+OUTLOOK_FRESHNESS_STATES = (
+    "EA_OFFLINE", "NO_FRESH_SIGNAL", "SIGNAL_FORMING", "ACTIVE_SIGNAL", "SIGNAL_COMPLETED",
+)
+
+
+def _outlook_within_freshness_window(doc: Optional[Dict], now: datetime) -> bool:
+    if not doc:
+        return False
+    expiry = _as_utc(doc.get("expiry_at"))
+    return bool(expiry) and now < expiry
+
+
+def _outlook_still_live(doc: Optional[Dict], now: datetime) -> bool:
+    """A signal is still genuinely "happening right now" if it hasn't been
+    classified yet, monitoring hasn't closed, and it's within its own
+    expiry window -- independent of whether a newer (possibly
+    non-directional) hourly slot has published since."""
+    if not doc or doc.get("analytics_outcome") is not None or doc.get("monitoring_closed"):
+        return False
+    return _outlook_within_freshness_window(doc, now)
+
+
+def compute_outlook_freshness(doc: Optional[Dict], signal_doc: Optional[Dict],
+                               evidence_reason: str, now: Optional[datetime] = None) -> Dict:
+    """The one authoritative "what should a customer see as the CURRENT
+    outlook" determination. Every consumer (the Home page's compact card,
+    the full Outlook page) must read this instead of independently
+    guessing from generated_at age client-side -- that duplication is
+    exactly what let an old signal stay visible under a "stale" warning
+    (backend and frontend disagreeing about what counts as fresh).
+
+    Root-cause note: /outlook/current used to hand back `signal_doc or doc`
+    -- i.e. it PREFERRED the latest directional (BUY/SELL) signal even when
+    it was hours older than the account's actual latest publication (`doc`),
+    which is exactly how a stale signal could keep outranking this hour's
+    real "nothing to show" reality. The fix: an unresolved, still-live
+    signal_doc is shown as current for as long as it's genuinely still
+    live (see _outlook_still_live) -- never merely because it's the most
+    recent BUY/SELL ever seen. Once resolved or expired, "current" reverts
+    to `doc`, the account's actual latest publication, whatever state that
+    is.
+
+    Returns {state, message, direction, result, outlook_id, last_checked_at,
+    next_expected_update_at}. `state` is one of OUTLOOK_FRESHNESS_STATES.
+    """
+    now = now or datetime.now(timezone.utc)
+    next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    base = {
+        "last_checked_at": now.isoformat(),
+        "next_expected_update_at": next_hour.isoformat(),
+        "direction": None, "result": None, "outlook_id": None,
+    }
+
+    if evidence_reason in ("NO_CONNECTED_EA", "STALE_EVIDENCE"):
+        return {**base, "state": "EA_OFFLINE",
+                "message": "Your EA isn't connected right now. No live outlook until a fresh heartbeat arrives."}
+
+    effective = signal_doc if _outlook_still_live(signal_doc, now) else doc
+    if not effective or not _outlook_within_freshness_window(effective, now):
+        return {**base, "state": "NO_FRESH_SIGNAL",
+                "message": "XauCloud is waiting for new Gold market data. A new outlook will appear automatically when a valid signal is ready."}
+
+    # A blocked candidate is never shown as an actionable current signal --
+    # customer-facing state is the same calm "no signal" message; the real
+    # blocker code/reason lives only in the technical/audit detail
+    # (owner_policy on the returned outlook doc), never the primary state.
+    if effective.get("owner_policy_blocked") or effective.get("primary_direction") == "BLOCKED":
+        return {**base, "state": "NO_FRESH_SIGNAL", "outlook_id": effective.get("id"),
+                "message": "XauCloud is waiting for new Gold market data. A new outlook will appear automatically when a valid signal is ready."}
+
+    direction = effective.get("primary_direction")
+    if direction not in ("BUY", "SELL"):
+        return {**base, "state": "SIGNAL_FORMING", "outlook_id": effective.get("id"),
+                "message": "XauCloud is checking the Gold market."}
+
+    if effective.get("analytics_outcome") is None:
+        return {**base, "state": "ACTIVE_SIGNAL", "direction": direction, "outlook_id": effective.get("id"),
+                "message": f"XauCloud is monitoring this {direction} signal live."}
+
+    result = effective.get("analytics_outcome")
+    return {**base, "state": "SIGNAL_COMPLETED", "direction": direction, "result": result,
+            "outlook_id": effective.get("id"),
+            "message": "TP reached." if result == ANALYTICS_WIN else "No take-profit was reached during the one-hour signal window."}
+
+
 def build_authoritative_outlook_contract(evidence: Optional[Dict], evidence_reason: str,
                                          hourly_doc: Optional[Dict] = None,
                                          signal_doc: Optional[Dict] = None,

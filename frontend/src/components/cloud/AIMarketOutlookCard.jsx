@@ -30,6 +30,7 @@ function directionStyle(dir) {
  * relies on). */
 export default function AIMarketOutlookCard({ linked = true, online = true, onOutlookChange, onStatusChange }) {
   const [outlook, setOutlook] = useState(null);
+  const [freshness, setFreshness] = useState(null);
   const [prefs, setPrefs] = useState(null);
   const [verifiedStatus, setVerifiedStatus] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -52,6 +53,7 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
       ]);
       const nextOutlook = cur?.outlook || null;
       setOutlook(nextOutlook);
+      setFreshness(cur?.freshness || null);
       setPrefs(pr?.prefs || null);
       setVerifiedStatus(statusResult?.data || null);
       setRequestFailed(false);
@@ -89,26 +91,25 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
 
   const dir = outlook?.primary_direction || "NO_VALID_OUTLOOK";
   const style = directionStyle(dir);
-  const generatedAt = outlook?.generated_at || outlook?.published_at || outlook?.created_at || outlook?.ts;
-  const ageMinutes = generatedAt ? (Date.now() - new Date(generatedAt).getTime()) / 60000 : Infinity;
-  const isStale = !Number.isFinite(ageMinutes) || ageMinutes > 75;
-  const lastCheckedText = generatedAt ? new Date(generatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+  const lastCheckedText = freshness?.last_checked_at
+    ? new Date(freshness.last_checked_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : null;
 
-  // Bug fix: this card used to show a red stale-data warning while still
-  // rendering the OLD BUY/SELL direction, entry zone, SL, and confidence
-  // underneath it -- exactly the "old signal underneath a warning" defect.
-  // A customer could see a red alert and a seemingly-live trade card at the
-  // same time. Once a signal is stale/offline/missing, its actionable
-  // details are never shown -- only a calm "no fresh signal" message.
-  const hasFreshDirectionalSignal = !isStale && online && (dir === "BUY" || dir === "SELL");
-
-  let bodyState = "FRESH_SIGNAL";
+  // Bug fix: this card used to compute its own client-side staleness (age
+  // > 75 minutes) and still render the OLD BUY/SELL direction, entry zone,
+  // SL, and confidence underneath a red warning -- exactly the "old signal
+  // underneath a warning" defect. The backend's /outlook/current now
+  // returns one authoritative `freshness.state`
+  // (compute_outlook_freshness in market_outlook.py) that this card reads
+  // directly instead of re-deriving its own answer -- so the Home card and
+  // the full Outlook page can never disagree about what's "current."
+  let bodyState = "LOADING";
   if (!linked) bodyState = "NOT_LINKED";
   else if (loading) bodyState = "LOADING";
-  else if (requestFailed && !outlook) bodyState = "DATA_CONNECTION_ERROR";
+  else if (requestFailed && !outlook && !freshness) bodyState = "DATA_CONNECTION_ERROR";
   else if (!online) bodyState = "EA_OFFLINE";
-  else if (!outlook || isStale || dir === "BLOCKED") bodyState = "NO_FRESH_SIGNAL";
-  else if (!hasFreshDirectionalSignal) bodyState = "SIGNAL_FORMING";
+  else if (freshness?.state) bodyState = freshness.state;
+  else bodyState = "NO_FRESH_SIGNAL";
 
   return (
     <Link to="/ai-market-outlook" className={`${CARD} block p-4 hover:border-amber-300/20 transition`} data-testid="ai-market-outlook-card">
@@ -185,7 +186,7 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
         </div>
       )}
 
-      {bodyState === "FRESH_SIGNAL" && (
+      {bodyState === "ACTIVE_SIGNAL" && outlook && (
         <div className="mt-3">
           <div className="flex items-center gap-2">
             <div className={`flex items-center gap-1 rounded-full border ${style.border} ${style.bg} px-2.5 py-1`}>
@@ -207,6 +208,19 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
           </div>
           <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-white/35">{outlook.reasoning}</p>
           {lastCheckedText && <p className="mt-2 text-[10px] text-white/25">Last checked: {lastCheckedText}</p>}
+        </div>
+      )}
+
+      {bodyState === "SIGNAL_COMPLETED" && (
+        <div className={`mt-3 rounded-lg border px-3 py-2.5 ${freshness?.result === "WIN" ? "border-emerald-400/20 bg-emerald-300/[0.05]" : "border-rose-400/20 bg-rose-400/[0.05]"}`} data-testid="outlook-signal-completed">
+          <div className="flex items-center gap-2">
+            <style.Icon className={`h-3.5 w-3.5 flex-none ${freshness?.result === "WIN" ? "text-emerald-300" : "text-rose-300"}`} />
+            <span className={`text-[12px] font-semibold ${freshness?.result === "WIN" ? "text-emerald-200" : "text-rose-200"}`}>
+              {dir} signal completed
+            </span>
+          </div>
+          <p className="mt-1 text-[11px] text-white/50">{freshness?.message}</p>
+          {lastCheckedText && <p className="mt-1 text-[10px] text-white/25">Last checked: {lastCheckedText}</p>}
         </div>
       )}
     </Link>
