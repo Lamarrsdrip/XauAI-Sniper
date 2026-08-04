@@ -744,7 +744,20 @@ export default function CloudDashboard() {
 }
 
 // ─── Home helpers ─────────────────────────────────────────────────────────────
-function getSession() {
+// Investigation note (2026-08-04, ticket 152427437796): this was labelled
+// plain "Session" on the dashboard, which reads as if it reflects the bot's
+// own trading-session classification -- it does not. It is only ever the
+// viewer's browser clock at render time, unrelated to any specific trade or
+// to the EA's own SessionTag() (which uses broker server time and different
+// hour boundaries, e.g. broker-hour 8 = "LDN" for the EA but this function's
+// old boundary put UTC-hour 8 in "London" too -- the two can still diverge
+// whenever broker-server time isn't UTC, or simply because this reflects
+// "right now" rather than the time of whatever trade the viewer is actually
+// looking at). Neither the EA's heartbeat payload nor BotHeartbeatReq
+// carries a real broker-session field today, so this cannot be corrected to
+// show genuine broker-time session without an EA telemetry change; renamed
+// and relabelled instead so it can no longer be mistaken for that.
+function getViewerClockSession() {
   const h = new Date().getUTCHours();
   if (h >= 22 || h < 7)  return { label:"Asia",         tone:"blue"    };
   if (h >= 7  && h < 12) return { label:"London",       tone:"amber"   };
@@ -1099,7 +1112,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
   const pnlPos     = pnlNum >= 0;
   const aiEvent    = latestAiFieldsEvent(events);
   const conf       = Number(getEventField(aiEvent, "ai_confidence", 0)) || 0;
-  const session    = getSession();
+  const viewerClockSession = getViewerClockSession();
   const bias       = getMarketBias(aiEvent, heartbeat);
   const botState   = humanBotState(heartbeat.bot_state, openTrades, tradingOk, online);
   const stateTone  = openTrades>0?"amber":tradingOk?"green":"neutral";
@@ -1203,7 +1216,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
           <Metric label="Open risk" value={online?pct(ddNum):"—"} detail="Current floating drawdown" icon={Shield} tone={online?riskTone:"neutral"} />
           <Metric label="Market bias" value={online?bias.label:"—"} detail="Latest fresh EA evidence" icon={Activity} tone={online?bias.tone:"neutral"} />
           <Metric label="AI confidence" value={online&&conf>0?`${conf}%`:"—"} detail={conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"} icon={Brain} tone={conf>=70?"green":conf>0?"amber":"neutral"} />
-          <Metric label="Session" value={online?session.label:"—"} detail="Device UTC session" icon={Clock3} tone={online?session.tone:"neutral"} />
+          <Metric label="Your Local Time" value={online?viewerClockSession.label:"—"} detail="Your browser's clock right now -- not this trade's session, not broker time" icon={Clock3} tone={online?viewerClockSession.tone:"neutral"} />
           <Metric label="Trading status" value={online?botState:"Offline"} detail={tradingOk?"Broker trading enabled":"No new-trade authority"} icon={Bot} tone={online?stateTone:"neutral"} />
         </div>
       </details>
