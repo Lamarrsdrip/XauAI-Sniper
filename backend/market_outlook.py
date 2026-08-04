@@ -134,6 +134,7 @@ class NotificationPrefsUpdate(BaseModel):
     quiet_hours_start: Optional[int] = None  # local hour 0-23, or None
     quiet_hours_end: Optional[int] = None
     notify_all_devices: bool = True
+    muted_categories: Optional[list] = None  # Notification Center categories excluded from push
 
 
 # OneSignal v16 genuine per-device registration. The raw push token is
