@@ -24,21 +24,28 @@ function formatCountdown(seconds) {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-// "Pay by Card" / "Pay by Bank Transfer" — the payment-method selection
-// step. Bank transfer is only offered when the backend's own eligibility
-// check (Nigeria-detected + admin-enabled) says so; the backend
-// independently re-validates this on every bank-transfer endpoint too, so
-// hiding the button here is a UX nicety, not the actual access control.
-export function PaymentMethodModal({ api, priceDisplay, buyerName, buyerEmail, onCard, onClose }) {
-  const [eligible, setEligible] = useState(false);
-  const [checked, setChecked] = useState(false);
+const METHOD_ICON = { bank_transfer: Bank };
+
+// Payment-method selection step, driven entirely by GET /purchase/payment-
+// methods -- order, availability, and the default selection all come from
+// the backend (admin-configured), never hardcoded here. Manual Bank
+// Transfer is first/default per the current production priority; Nomba
+// renders as a disabled "Coming soon" card whenever the backend reports it
+// unavailable, never a clickable option. Every availability flag is a UX
+// nicety -- the backend independently re-validates on every endpoint too.
+export function PaymentMethodModal({ api, priceDisplay, buyerName, buyerEmail, onPaystack, onNomba, onClose }) {
+  const [methods, setMethods] = useState(null);
+  const [selected, setSelected] = useState(null);
   const [showBankTransfer, setShowBankTransfer] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    axios.get(`${api}/purchase/bank-transfer/eligibility`)
-      .then(r => setEligible(Boolean(r.data.eligible)))
-      .catch(() => setEligible(false))
-      .finally(() => setChecked(true));
+    axios.get(`${api}/purchase/payment-methods`)
+      .then(r => {
+        setMethods(r.data.methods || []);
+        setSelected(r.data.default_method || null);
+      })
+      .catch(() => setError("Could not load payment options. Please try again."));
   }, [api]);
 
   if (showBankTransfer) {
@@ -53,40 +60,79 @@ export function PaymentMethodModal({ api, priceDisplay, buyerName, buyerEmail, o
     );
   }
 
+  const proceed = () => {
+    if (!selected) return;
+    if (selected === "bank_transfer") setShowBankTransfer(true);
+    else if (selected === "paystack") onPaystack();
+    else if (selected === "nomba") onNomba();
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" data-testid="payment-method-modal">
       <div className="w-full max-w-sm rounded-[24px] border border-white/[0.1] bg-[#0a0a0e] p-6 shadow-2xl">
         <h3 className="font-heading text-xl font-bold text-white">How would you like to pay?</h3>
         <p className="mt-1 font-mono text-[12px] text-white/40">{priceDisplay} · {buyerEmail}</p>
 
-        <div className="mt-5 space-y-3">
-          <button
-            data-testid="pay-by-card"
-            onClick={onCard}
-            className="flex w-full items-center justify-between gap-3 rounded-2xl border border-amber-300/30 bg-amber-300/[0.08] px-4 py-4 text-left transition hover:bg-amber-300/[0.14]"
-          >
-            <span>
-              <span className="block font-bold text-white">Pay by Card</span>
-              <span className="block text-[11px] text-white/40">Instant, secured by Nomba</span>
-            </span>
-          </button>
+        {error && <div className="mt-4 text-[12px] text-rose-400" data-testid="payment-methods-error">{error}</div>}
 
-          {checked && eligible && (
-            <button
-              data-testid="pay-by-bank-transfer"
-              onClick={() => setShowBankTransfer(true)}
-              className="flex w-full items-center justify-between gap-3 rounded-2xl border border-white/[0.1] bg-white/[0.04] px-4 py-4 text-left transition hover:bg-white/[0.08]"
-            >
-              <span>
-                <span className="block font-bold text-white">Pay by Bank Transfer</span>
-                <span className="block text-[11px] text-white/40">Nigeria only · manually reviewed</span>
-              </span>
-              <Bank size={20} className="flex-none text-white/40" />
-            </button>
-          )}
-        </div>
+        {!methods && !error && (
+          <div className="mt-5 space-y-3">
+            {[0, 1, 2].map(i => <div key={i} className="h-16 animate-pulse rounded-2xl bg-white/[0.04]" />)}
+          </div>
+        )}
 
-        <button onClick={onClose} className="mt-5 w-full text-center font-mono text-[11px] text-white/30 hover:text-white/50">
+        {methods && (
+          <div className="mt-5 space-y-3">
+            {methods.map((m) => {
+              const isSelected = selected === m.method;
+              const Icon = METHOD_ICON[m.method];
+              return (
+                <button
+                  key={m.method}
+                  type="button"
+                  data-testid={`payment-method-${m.method}`}
+                  onClick={() => m.available && setSelected(m.method)}
+                  disabled={!m.available}
+                  className={`flex w-full items-center justify-between gap-3 rounded-2xl border px-4 py-4 text-left transition ${
+                    !m.available
+                      ? "border-white/[0.06] bg-white/[0.02] opacity-50 cursor-not-allowed"
+                      : isSelected
+                      ? "border-amber-300/40 bg-amber-300/[0.1]"
+                      : "border-white/[0.1] bg-white/[0.04] hover:bg-white/[0.08]"
+                  }`}
+                >
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-2">
+                      <span className="block font-bold text-white">{m.label}</span>
+                      {!m.available && (
+                        <span className="flex-none rounded-full bg-white/[0.08] px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wide text-white/40">
+                          {m.method === "nomba" ? "Coming soon" : "Unavailable"}
+                        </span>
+                      )}
+                      {m.available && m.method === "bank_transfer" && (
+                        <span className="flex-none rounded-full bg-emerald-300/15 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wide text-emerald-300">
+                          Recommended
+                        </span>
+                      )}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] leading-4 text-white/40">{m.description}</span>
+                  </span>
+                  {Icon && <Icon size={20} className="flex-none text-white/40" />}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <button
+          data-testid="payment-method-continue"
+          onClick={proceed}
+          disabled={!selected}
+          className="mt-5 w-full rounded-full bg-amber-300 px-5 py-3.5 text-[13px] font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-40"
+        >
+          Continue
+        </button>
+        <button onClick={onClose} className="mt-3 w-full text-center font-mono text-[11px] text-white/30 hover:text-white/50">
           Cancel
         </button>
       </div>

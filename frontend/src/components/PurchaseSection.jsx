@@ -42,11 +42,11 @@ export default function PurchaseSection({ api }) {
     setShowMethodModal(true);
   };
 
-  const payByCard = async () => {
+  const payViaProvider = async (endpoint) => {
     if (loading) return; // belt-and-braces against double-submit beyond the disabled button alone
     setError(""); setLoading(true);
     try {
-      const res = await axios.post(`${api}/purchase/initialize`, {
+      const res = await axios.post(`${api}${endpoint}`, {
         buyer_name: buyerName,
         buyer_email: buyerEmail,
         origin_url: window.location.origin,
@@ -59,6 +59,8 @@ export default function PurchaseSection({ api }) {
       setLoading(false);
     }
   };
+  const payByPaystack = () => payViaProvider("/purchase/paystack/initialize");
+  const payByNomba = () => payViaProvider("/purchase/initialize");
 
   const displayPrice = priceData?.formatted || "₦300,000";
   const showingConverted = priceData?.display_currency && priceData.display_currency !== "NGN" && priceData.display_amount_formatted;
@@ -156,10 +158,10 @@ export default function PurchaseSection({ api }) {
 
             <div className="mt-5 flex items-center justify-center gap-5 border-t border-white/[0.06] pt-5">
               <div className="flex items-center gap-1.5 text-white/25 text-[11px]">
-                <ShieldCheck size={13} /> Secured by Nomba
+                <ShieldCheck size={13} /> Secure checkout
               </div>
               <div className="flex items-center gap-1.5 text-white/25 text-[11px]">
-                <Lightning size={13} /> Instant delivery
+                <Lightning size={13} /> Fast fulfillment
               </div>
             </div>
           </div>
@@ -173,7 +175,8 @@ export default function PurchaseSection({ api }) {
           priceDisplay={displayPrice}
           buyerName={buyerName}
           buyerEmail={buyerEmail}
-          onCard={() => { setShowMethodModal(false); payByCard(); }}
+          onPaystack={() => { setShowMethodModal(false); payByPaystack(); }}
+          onNomba={() => { setShowMethodModal(false); payByNomba(); }}
           onClose={() => setShowMethodModal(false)}
         />
       )}

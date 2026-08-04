@@ -726,6 +726,85 @@ function NombaCredentialFields({ env, values, onChange, existing }) {
   );
 }
 
+const PAYMENT_METHOD_LABELS = { bank_transfer: "Manual Bank Transfer", paystack: "Paystack", nomba: "Nomba" };
+
+function PaymentMethodPrioritySettings({ api }) {
+  const [settings, setSettings] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const h = useMemo(() => auth(), []);
+
+  const fetchSettings = useCallback(() => {
+    ax.get(`${api}/admin/settings/payment-methods`, h).then(r => setSettings(r.data)).catch(() => {});
+  }, [api, h]);
+
+  useEffect(() => { fetchSettings(); }, [fetchSettings]);
+
+  const save = async (updates) => {
+    setSaving(true);
+    try {
+      const r = await ax.put(`${api}/admin/settings/payment-methods`, updates, h);
+      setSettings(r.data);
+      setSaved(true); setTimeout(() => setSaved(false), 3000);
+    } catch {} finally { setSaving(false); }
+  };
+
+  const moveMethod = (method, direction) => {
+    if (!settings) return;
+    const order = [...settings.payment_method_order];
+    const i = order.indexOf(method);
+    const j = i + direction;
+    if (j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    save({ payment_method_order: order });
+  };
+
+  if (!settings) return <CardSection title="Payment method priority"><p className="text-[13px] text-white/35">Loading…</p></CardSection>;
+
+  return (
+    <CardSection title="Payment method priority" action={saved && <span className="text-[11px] text-emerald-400">Saved</span>}>
+      <p className="text-[12px] text-white/40 mb-4 leading-5">
+        Controls the order and availability customers see on the checkout payment-method screen.
+        Bank details live in the separate "Bank Transfers" tab; this only enables/disables/orders the
+        three methods.
+      </p>
+      <div className="space-y-3">
+        {settings.payment_method_order.map((method, i) => (
+          <div key={method} className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="flex flex-col gap-0.5">
+                <button disabled={i === 0} onClick={() => moveMethod(method, -1)} className="text-white/30 hover:text-white disabled:opacity-20" aria-label="Move up">▲</button>
+                <button disabled={i === settings.payment_method_order.length - 1} onClick={() => moveMethod(method, 1)} className="text-white/30 hover:text-white disabled:opacity-20" aria-label="Move down">▼</button>
+              </div>
+              <div>
+                <div className="text-[13px] font-semibold text-white">{i + 1}. {PAYMENT_METHOD_LABELS[method]}</div>
+                {settings.default_payment_method === method && <div className="text-[10px] text-emerald-400">Default</div>}
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              {method !== "bank_transfer" && (
+                <label className="flex items-center gap-1.5 text-[12px] text-white/60">
+                  <input type="checkbox" checked={Boolean(settings[`${method}_enabled`])}
+                    onChange={e => save({ [`${method}_enabled`]: e.target.checked })} />
+                  Enabled
+                </label>
+              )}
+              <button
+                disabled={settings.default_payment_method === method}
+                onClick={() => save({ default_payment_method: method })}
+                className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] text-white/60 hover:text-white disabled:opacity-30"
+              >
+                Set default
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      {saving && <p className="mt-3 text-[11px] text-white/35">Saving…</p>}
+    </CardSection>
+  );
+}
+
 const NOMBA_EMPTY_ENV_FORM = { client_id: "", client_secret: "", account_id: "", webhook_signature_key: "" };
 const NOMBA_PAYMENT_METHODS = ["card", "transfer", "ussd", "qr"];
 
@@ -1000,14 +1079,14 @@ function SettingsTab({ api }) {
         </div>
       </CardSection>
 
+      <PaymentMethodPrioritySettings api={api} />
+
       <NombaSettingsSection api={api} />
 
-      <CardSection title="Paystack (legacy — historical transactions only)">
+      <CardSection title="Paystack (active — second payment option)">
         <p className="text-[12px] text-white/40 mb-4 leading-5">
-          Paystack is no longer used for new purchases — every new checkout goes through Nomba above.
-          This key is kept only so any Paystack transaction still resolving (webhook/verify race) and
-          historical records remain lookupable. Existing customers, licenses, and purchase history are
-          untouched.
+          Paystack is active as the second checkout option, after Manual Bank Transfer. See "Payment
+          method priority" above to enable/disable it or change the default.
         </p>
         <div className="space-y-4">
           <Field label="Paystack secret key">
