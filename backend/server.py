@@ -2836,6 +2836,29 @@ async def get_performance_daily_results(days: int = 30):
     }
 
 
+@api_router.get("/performance/gold-replay")
+async def get_performance_gold_replay():
+    """Real 30-day MetaTrader 5 Strategy Tester replay of the production EA
+    against real historical XAUUSD tick data -- owner spec 2026-08-05.
+    Not live trading data (that's /performance/daily-results); this is a
+    periodic backtest snapshot the owner refreshes manually (monthly, per
+    spec) and re-runs in the actual MT5 Strategy Tester each time, never
+    computed/estimated here. Served as-is from the checked-in snapshot file
+    that was generated directly from that replay's own real report -- see
+    the report_evidence_file path for the original MT5-generated HTML.
+    """
+    path = Path(__file__).parent / "data" / "gold_replay_current.json"
+    if not path.exists():
+        return {"status": "unavailable"}
+    try:
+        data = _json.loads(path.read_text())
+    except (OSError, _json.JSONDecodeError) as e:
+        logger.error(f"gold_replay_current.json read failed: {e}")
+        return {"status": "unavailable"}
+    data["status"] = "ok"
+    return data
+
+
 @api_router.get("/performance/historical")
 async def get_performance_historical():
     """Every ARCHIVED period, oldest first, each with its own

@@ -116,6 +116,6 @@ describe("Market Outlook Performance redesign contract", () => {
     // closed-trade results (DailyTradingResultsSection).
     expect(app).not.toContain("OutlookPerformanceSection");
     expect(app).toContain("DailyTradingResultsSection");
-    expect(app).toMatch(/<section id="performance"><DailyTradingResultsSection/);
+    expect(app).toMatch(/<section id="performance">[\s\S]*<DailyTradingResultsSection/);
   });
 });

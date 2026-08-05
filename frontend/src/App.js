@@ -7,6 +7,7 @@ import HeroSection from "@/components/HeroSection";
 import TrustStrip from "@/components/TrustStrip";
 import FeaturesSection from "@/components/FeaturesSection";
 import DailyTradingResultsSection from "@/components/DailyTradingResultsSection";
+import GoldReplaySection from "@/components/GoldReplaySection";
 import HowItWorksSection from "@/components/HowItWorksSection";
 import ReassuranceSection from "@/components/ReassuranceSection";
 import PurchaseSection from "@/components/PurchaseSection";
@@ -59,7 +60,10 @@ function MainDashboard() {
       <main>
         <section id="overview"><HeroSection goldPrice={goldPrice} /></section>
         <TrustStrip />
-        <section id="performance"><DailyTradingResultsSection api={API} /></section>
+        <section id="performance">
+          <GoldReplaySection api={API} />
+          <DailyTradingResultsSection api={API} />
+        </section>
         <section id="how-it-works"><HowItWorksSection /></section>
         <section id="features"><FeaturesSection /></section>
         <ReassuranceSection />
