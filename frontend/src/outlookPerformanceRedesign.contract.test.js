@@ -17,13 +17,17 @@ describe("Market Outlook Performance redesign contract", () => {
     // ones this exact page used to ship as invented drawdown/AI-rating
     // placeholders elsewhere on the site (see forensic.contract.test.js).
     expect(section).toMatch(/value=\{stats\.win_rate/);
-    expect(section).toMatch(/value=\{stats\.total_r\}/);
-    expect(section).toMatch(/value=\{stats\.total_gold_moves\}/);
     expect(section).toMatch(/value=\{stats\.total_pips\}/);
-    expect(section).toMatch(/value=\{stats\.average_win_r\}/);
-    expect(section).toMatch(/value=\{stats\.average_loss_r\}/);
-    expect(section).toMatch(/value=\{stats\.best_trade_r\}/);
-    expect(section).toMatch(/value=\{stats\.worst_trade_r\}/);
+    expect(section).toMatch(/value=\{stats\.total_gold_moves\}/);
+    expect(section).toMatch(/value=\{stats\.average_pips\}/);
+    expect(section).toMatch(/value=\{stats\.average_win_pips\}/);
+    expect(section).toMatch(/value=\{stats\.average_loss_pips\}/);
+    expect(section).toMatch(/value=\{stats\.best_trade_pips\}/);
+    expect(section).toMatch(/value=\{stats\.worst_trade_pips\}/);
+    // v6.26.0 R-to-pips migration: this redesign's stat cards must never
+    // show a bare "R" label again (was "Net R" + suffix="R" on 5 cards).
+    expect(section).not.toMatch(/label="Net R"/);
+    expect(section).not.toMatch(/suffix="R"/);
     expect(section).toMatch(/\{stats\.wins\} wins/);
     expect(section).toMatch(/\{stats\.losses\} losses/);
     // No suspicious standalone numeric-literal stat values (the kind of

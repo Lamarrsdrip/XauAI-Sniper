@@ -247,13 +247,13 @@ export default function OutlookPerformanceSection({ api }) {
           <>
             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4" data-testid="outlook-performance-stats">
               <StatCard index={0} icon={Percent} label="Win Rate" value={stats.win_rate != null ? stats.win_rate * 100 : null} decimals={0} suffix="%" tone="green" />
-              <StatCard index={1} icon={ChartLineUp} label="Net R" value={stats.total_r} decimals={2} suffix="R" tone={stats.total_r >= 0 ? "green" : "red"} />
+              <StatCard index={1} icon={ChartLineUp} label="Total Pips" value={stats.total_pips} decimals={1} suffix=" pips" tone={stats.total_pips >= 0 ? "green" : "red"} />
               <StatCard index={2} icon={Coin} label="Total Gold Moves" value={stats.total_gold_moves} decimals={2} tone={stats.total_gold_moves >= 0 ? "green" : "red"} />
-              <StatCard index={3} icon={Gauge} label="Total Pips" value={stats.total_pips} decimals={1} tone={stats.total_pips >= 0 ? "green" : "red"} />
-              <StatCard index={4} icon={TrendUp} label="Avg Win" value={stats.average_win_r} decimals={2} suffix="R" tone="green" />
-              <StatCard index={5} icon={TrendDown} label="Avg Loss" value={stats.average_loss_r} decimals={2} suffix="R" tone="red" />
-              <StatCard index={6} icon={Trophy} label="Best Trade" value={stats.best_trade_r} decimals={2} suffix="R" tone="green" />
-              <StatCard index={7} icon={Target} label="Worst Trade" value={stats.worst_trade_r} decimals={2} suffix="R" tone="red" />
+              <StatCard index={3} icon={Gauge} label="Avg Result" value={stats.average_pips} decimals={1} suffix=" pips" tone={stats.average_pips >= 0 ? "green" : "red"} />
+              <StatCard index={4} icon={TrendUp} label="Avg Win" value={stats.average_win_pips} decimals={1} suffix=" pips" tone="green" />
+              <StatCard index={5} icon={TrendDown} label="Avg Loss" value={stats.average_loss_pips} decimals={1} suffix=" pips" tone="red" />
+              <StatCard index={6} icon={Trophy} label="Best Trade" value={stats.best_trade_pips} decimals={1} suffix=" pips" tone="green" />
+              <StatCard index={7} icon={Target} label="Worst Trade" value={stats.worst_trade_pips} decimals={1} suffix=" pips" tone="red" />
             </div>
             {/* Wins/Losses shown as its own strip -- "15/3" isn't a single
                 number, so it doesn't fit the count-up stat card shape. */}

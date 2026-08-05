@@ -192,13 +192,13 @@ function OutlookHero({ outlook, advanced, setAdvanced }) {
                 missing piece before the pieces are ever combined. */}
             <Metric label="Preferred zone" value={safeJoin([outlook.preferred_entry_zone_low, outlook.preferred_entry_zone_high], "–")} />
             <Metric label="SL" value={outlook.suggested_sl} />
-            <Metric label="TP1" value={outlook.tp1_price != null ? `${outlook.tp1_price} (${outlook.tp1_r ?? "—"}R)` : "—"} />
+            <Metric label="TP1" value={outlook.tp1_price != null ? `${outlook.tp1_price}${outlook.tracking_entry_price != null ? ` (${Math.round(Math.abs(outlook.tp1_price - outlook.tracking_entry_price) * 100) / 10} pips)` : ""}` : "—"} />
             <Metric label="TP2 / TP3" value={safeJoin([outlook.tp2_price, outlook.tp3_price], " / ")} />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Metric label="Signal entry" value={outlook.tracking_entry_price} />
-            <Metric label="Current R" value={rText(outlook.current_r)} />
-            <Metric label="MFE / MAE" value={`${rText(outlook.mfe_r)} / ${rText(outlook.mae_r)}`} />
+            <Metric label="Current result" value={resultText(outlook.current_r, outlook.risk_distance)} />
+            <Metric label="MFE / MAE" value={`${resultText(outlook.mfe_r, outlook.risk_distance)} / ${resultText(outlook.mae_r, outlook.risk_distance)}`} />
             <Metric label="Elapsed / deadline" value={`${elapsedText(outlook.published_at, outlook.classification_at)} / ${timeText(outlook.evaluation_deadline)}`} />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -238,7 +238,7 @@ function OutlookHero({ outlook, advanced, setAdvanced }) {
             <div>SELL pressure: <span className="text-white/70">{outlook.sell_pressure}</span></div>
             <div>Exhaustion: <span className="text-white/70">{outlook.exhaustion_pct}%</span></div>
             <div>Movement consumed: <span className="text-white/70">{outlook.movement_consumed_pct}%</span></div>
-            <div>Remaining room: <span className="text-white/70">{outlook.remaining_room_r}R</span></div>
+            <div>Remaining room: <span className="text-white/70">{resultText(outlook.remaining_room_r, outlook.risk_distance)}</span></div>
             <div>Structure: <span className="text-white/70">{outlook.structure_state}</span></div>
             <div>Trend state: <span className="text-white/70">{outlook.trend_state}</span></div>
             <div>Regime: <span className="text-white/70">{outlook.market_regime}</span></div>
@@ -553,18 +553,18 @@ function HistoryCard({ outlook }) {
             <div className="mt-2 space-y-1 border-t border-white/[0.05] pt-2 text-[11px] text-white/45">
               <div>Suggested zone {outlook.preferred_entry_zone_low}–{outlook.preferred_entry_zone_high}</div>
               <div>TP2 {outlook.tp2_price} · TP3 {outlook.tp3_price}</div>
-              <div>Current {rText(outlook.current_r)} · MFE {rText(outlook.mfe_r)} · MAE {rText(outlook.mae_r)}</div>
+              <div>Current {resultText(outlook.current_r, outlook.risk_distance)} · MFE {resultText(outlook.mfe_r, outlook.risk_distance)} · MAE {resultText(outlook.mae_r, outlook.risk_distance)}</div>
               <div>Elapsed {elapsedText(signalTime, outlook.classification_at)} · Deadline {timeText(outlook.evaluation_deadline)} · Last monitored {timeText(outlook.last_monitored_at)}</div>
               {(outlook.first_half_r_at || outlook.tp1_hit_at || outlook.tp2_hit_at || outlook.tp3_hit_at || outlook.sl_hit_at) && (
                 <div className="text-[10px] text-white/35">
-                  +0.50R {timeText(outlook.first_half_r_at)} · TP1 {timeText(outlook.tp1_hit_at)} · TP2 {timeText(outlook.tp2_hit_at)} · TP3 {timeText(outlook.tp3_hit_at)} · SL {timeText(outlook.sl_hit_at)}
+                  +50 pips {timeText(outlook.first_half_r_at)} · TP1 {timeText(outlook.tp1_hit_at)} · TP2 {timeText(outlook.tp2_hit_at)} · TP3 {timeText(outlook.tp3_hit_at)} · SL {timeText(outlook.sl_hit_at)}
                 </div>
               )}
               {outlook.latest_path_event && <div className={`text-[10px] ${color.text}`}>Path: {outlook.latest_path_event.replace(/_/g, " ")}</div>}
               {outlook.historical_data_unavailable_reason && <div className="text-[10px] text-white/35">{outlook.historical_data_unavailable_reason}</div>}
               {tradeResult?.status === "matched" && (
                 <div className="text-[10px] text-white/35">
-                  Real trade: entry {tradeResult.entry_price} · exit {tradeResult.exit_price} · {rText(tradeResult.realized_r)} · ticket {tradeResult.ticket} · {tradeResult.close_reason}
+                  Real trade: entry {tradeResult.entry_price} · exit {tradeResult.exit_price} · {tradeResult.result_pips != null ? `${tradeResult.result_pips >= 0 ? "+" : ""}${tradeResult.result_pips} pips` : rText(tradeResult.realized_r)} · ticket {tradeResult.ticket} · {tradeResult.close_reason}
                 </div>
               )}
             </div>
@@ -1049,9 +1049,9 @@ export default function AIMarketOutlookPage() {
               <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Metric label="Win rate" value={stats.win_rate != null ? `${Math.round(stats.win_rate * 100)}%` : "—"} />
               <Metric label="Wins / Losses" value={`${stats.wins ?? 0} / ${stats.losses ?? 0}`} />
-              <Metric label="Total R" value={stats.total_r != null ? `${stats.total_r > 0 ? "+" : ""}${stats.total_r}R` : "—"} />
-              <Metric label="Avg R" value={stats.average_r != null ? `${stats.average_r > 0 ? "+" : ""}${stats.average_r}R` : "—"} />
-              <Metric label="Avg MFE / MAE" value={stats.average_mfe != null ? `${rText(stats.average_mfe)} / ${rText(stats.average_mae)}` : "—"} />
+              <Metric label="Total pips" value={stats.total_pips != null ? `${stats.total_pips > 0 ? "+" : ""}${stats.total_pips} pips` : "—"} />
+              <Metric label="Avg pips" value={stats.average_pips != null ? `${stats.average_pips > 0 ? "+" : ""}${stats.average_pips} pips` : "—"} />
+              <Metric label="Avg MFE / MAE" value={stats.average_mfe_pips != null ? `${stats.average_mfe_pips} / ${stats.average_mae_pips} pips` : "—"} />
               <Metric label="Active" value={stats.active_unresolved_count ?? 0} />
               <Metric label="Unavailable history" value={stats.unavailable_historical_count ?? 0} />
               </div>

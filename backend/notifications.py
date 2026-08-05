@@ -646,7 +646,10 @@ def _build_automated_trade_payload(doc: Dict) -> Dict:
     direction = result.get("direction") or doc.get("primary_direction", "")
     symbol = result.get("symbol") or doc.get("symbol", "XAUUSD")
     profit_raw = result.get("realized_profit")
-    r_multiple = _fmt_number(result.get("realized_r"))
+    # v6.26.0: result already carries result_pips (from
+    # market_outlook._build_automated_trade_result's build_result_conversion
+    # spread) -- customer notifications must show pips, never a bare "R".
+    result_pips = _fmt_number(result.get("result_pips"), digits=1)
     entry = result.get("entry_price")
     exit_price = result.get("exit_price")
     close_reason = result.get("close_reason") or ""
@@ -666,7 +669,7 @@ def _build_automated_trade_payload(doc: Dict) -> Dict:
         parts.append(f"P/L {signed_amount}")
     except (TypeError, ValueError):
         pass
-    if r_multiple: parts.append(f"{r_multiple}R")
+    if result_pips: parts.append(f"{result_pips} pips")
     if entry is not None: parts.append(f"Entry {entry}")
     if exit_price is not None: parts.append(f"Exit {exit_price}")
     if close_reason: parts.append(close_reason)
@@ -827,7 +830,34 @@ def build_trade_notification_payload(activity: Dict, event: str) -> Dict:
     setup = _clean_text(_activity_value(activity, "setup", "setup_type", "family"), 80)
     campaign = _clean_text(_activity_value(activity, "campaign_id", "campaign"), 80)
     reason = _clean_text(_activity_value(activity, "close_reason_exact", "close_reason", "reason"), 140)
-    final_r = _fmt_number(_activity_value(activity, "final_r", "r_multiple"))
+    # v6.26.0: customer notifications must show pips/Gold moves, never a bare
+    # "R" label -- build_result_conversion (the single authoritative XauCloud
+    # result-conversion function, already used by
+    # market_outlook._build_automated_trade_result) derives result_pips from
+    # real entry/exit prices when they're available, falling back to the raw
+    # final_r/r_multiple activity field only when prices aren't posted.
+    final_pips = None
+    try:
+        # Deliberately NOT "price" for the entry side: on a TRADE_CLOSED
+        # activity record, this event's own "price" field is the CLOSE
+        # price (see close_price's own fallback below) -- if "entry_price"/
+        # "open_price" isn't separately posted on the close event, there is
+        # no reliable entry price here at all, and entry_f would silently
+        # equal exit_f, producing a false price_move of exactly 0.
+        raw_entry = _activity_value(activity, "entry_price", "open_price")
+        raw_exit = _activity_value(activity, "close_price", "price")
+        raw_r = _activity_value(activity, "final_r", "r_multiple")
+        price_move = None
+        if raw_entry is not None and raw_exit is not None and direction in ("BUY", "SELL"):
+            entry_f, exit_f = float(raw_entry), float(raw_exit)
+            price_move = (exit_f - entry_f) if direction == "BUY" else (entry_f - exit_f)
+        if price_move is not None or raw_r is not None:
+            from market_outlook import build_result_conversion
+            conversion = build_result_conversion(
+                r=float(raw_r) if raw_r is not None else None, price_move=price_move)
+            final_pips = _fmt_number(conversion.get("result_pips"), digits=1)
+    except (TypeError, ValueError):
+        final_pips = None
     duration = _clean_text(_activity_value(activity, "duration", "duration_text", "trade_duration"), 60)
     balance = _fmt_number(_activity_value(activity, "balance", "account_balance"))
     profit_raw = _activity_value(activity, "profit", "net_profit", "realized_profit")
@@ -853,7 +883,7 @@ def build_trade_notification_payload(activity: Dict, event: str) -> Dict:
         parts = [f"P/L {signed_amount}"]
         if direction: parts.append(direction)
         if close_price: parts.append(f"Close {close_price}")
-        if final_r: parts.append(f"{final_r}R")
+        if final_pips: parts.append(f"{final_pips} pips")
         if duration: parts.append(duration)
         if reason: parts.append(reason)
         if balance: parts.append(f"Balance ${balance}")

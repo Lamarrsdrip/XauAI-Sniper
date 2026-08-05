@@ -82,6 +82,19 @@ def compute_outlook_stats(rows: list) -> dict:
     loss_rs = [float(o["analytics_r"]) for o in losses if o.get("analytics_r") is not None]
     gross_win = sum(win_rs) if win_rs else 0.0
     gross_loss = abs(sum(loss_rs)) if loss_rs else 0.0
+    # v6.26.0: pips equivalents of the *_r fields above -- the customer-
+    # facing history page must display these, never a bare "R" label.
+    def _pips(o: dict, key: str) -> Optional[float]:
+        val = o.get(key)
+        if val is None:
+            return None
+        conv = mo.build_result_conversion(r=float(val), risk_distance=o.get("risk_distance"))
+        return conv["result_pips"]
+    resolved_pips = [p for p in (_pips(o, "analytics_r") for o in completed) if p is not None]
+    win_pips = [p for p in (_pips(o, "analytics_r") for o in wins) if p is not None]
+    loss_pips = [p for p in (_pips(o, "analytics_r") for o in losses) if p is not None]
+    actionable_mfe_pips = [p for p in (_pips(o, "mfe_r") for o in actionable) if p is not None]
+    actionable_mae_pips = [p for p in (_pips(o, "mae_r") for o in actionable) if p is not None]
     return {
         "total_outlooks": len(stats_rows), "actionable_outlooks": len(actionable),
         "activated_outlooks": len(actionable), "informational_outlooks": len(informational),
@@ -96,15 +109,27 @@ def compute_outlook_stats(rows: list) -> dict:
         "partial_profits": len(partial_profits), "breakeven": len(breakevens),
         "no_entry_count": 0, "active_unresolved_count": len(active_unresolved),
         "unavailable_historical_count": len(unavailable), "win_rate": win_rate,
+        # v6.26.0: *_r fields kept for forensic/internal use only (archived,
+        # never deleted, per the migration's non-destructive rule) -- the
+        # *_pips fields alongside them are what the customer-facing history
+        # page must display.
         "total_r": round(sum(resolved_rs), 3) if resolved_rs else 0.0,
         "average_win_r": round(sum(win_rs) / len(win_rs), 3) if win_rs else None,
         "average_loss_r": round(sum(loss_rs) / len(loss_rs), 3) if loss_rs else None,
+        "total_pips": round(sum(resolved_pips), 1) if resolved_pips else 0.0,
+        "average_pips": round(sum(resolved_pips) / len(resolved_pips), 1) if resolved_pips else None,
+        "average_win_pips": round(sum(win_pips) / len(win_pips), 1) if win_pips else None,
+        "average_loss_pips": round(sum(loss_pips) / len(loss_pips), 1) if loss_pips else None,
+        "average_mfe_pips": round(sum(actionable_mfe_pips) / len(actionable_mfe_pips), 1) if actionable_mfe_pips else None,
+        "average_mae_pips": round(sum(actionable_mae_pips) / len(actionable_mae_pips), 1) if actionable_mae_pips else None,
         # JSON has no portable Infinity value. An all-win filtered subset
         # has an undefined/unbounded profit factor, so return null rather
         # than crashing the entire History endpoint during serialization.
         "profit_factor": round(gross_win / gross_loss, 3) if gross_loss > 0 else None,
         "best_result_r": max(resolved_rs) if resolved_rs else None,
         "worst_result_r": min(resolved_rs) if resolved_rs else None,
+        "best_result_pips": max(resolved_pips) if resolved_pips else None,
+        "worst_result_pips": min(resolved_pips) if resolved_pips else None,
     }
 
 
@@ -168,6 +193,7 @@ async def build_public_outlook_performance(db, limit: int = 10) -> dict:
     total_pips, total_gold_moves = 0.0, 0.0
     wins = losses = partial_profits = breakevens = 0
     rs, win_rs, loss_rs = [], [], []
+    pips_list, win_pips, loss_pips = [], [], []
     for row in all_rows:
         conversion = mo.build_result_conversion(r=row.get("analytics_r"), risk_distance=row.get("risk_distance"))
         outcome = row.get("analytics_outcome")
@@ -192,6 +218,11 @@ async def build_public_outlook_performance(db, limit: int = 10) -> dict:
                 loss_rs.append(conversion["result_r"])
         if conversion["result_pips"] is not None:
             total_pips += conversion["result_pips"]
+            pips_list.append(conversion["result_pips"])
+            if is_win:
+                win_pips.append(conversion["result_pips"])
+            elif outcome == mo.ANALYTICS_LOSS:
+                loss_pips.append(conversion["result_pips"])
         if conversion["result_gold_moves"] is not None:
             total_gold_moves += conversion["result_gold_moves"]
 
@@ -222,14 +253,24 @@ async def build_public_outlook_performance(db, limit: int = 10) -> dict:
             "partial_profits": partial_profits,
             "breakevens": breakevens,
             "win_rate": win_rate,
+            # v6.26.0: total_r/average_r/average_win_r/average_loss_r/
+            # best_trade_r/worst_trade_r are kept for forensic/internal use
+            # only (never removed non-destructively, per the migration's own
+            # archive-don't-delete rule) -- the *_pips siblings below are
+            # what the customer-facing UI must display.
             "total_r": round(sum(rs), 2) if rs else None,
             "average_r": round(sum(rs) / len(rs), 2) if rs else None,
             "total_pips": round(total_pips, 1) if total_count else None,
+            "average_pips": round(sum(pips_list) / len(pips_list), 1) if pips_list else None,
             "total_gold_moves": round(total_gold_moves, 2) if total_count else None,
             "average_win_r": round(sum(win_rs) / len(win_rs), 2) if win_rs else None,
             "average_loss_r": round(sum(loss_rs) / len(loss_rs), 2) if loss_rs else None,
             "best_trade_r": max(rs) if rs else None,
             "worst_trade_r": min(rs) if rs else None,
+            "average_win_pips": round(sum(win_pips) / len(win_pips), 1) if win_pips else None,
+            "average_loss_pips": round(sum(loss_pips) / len(loss_pips), 1) if loss_pips else None,
+            "best_trade_pips": max(pips_list) if pips_list else None,
+            "worst_trade_pips": min(pips_list) if pips_list else None,
         },
     }
 
@@ -368,7 +409,7 @@ def build_router() -> APIRouter:
             "_id": 0, "excluded_from_stats": 1, "historical_repair_status": 1,
             "analytics_outcome": 1, "primary_direction": 1,
             "excluded_from_signal_analytics": 1, "highest_tp_reached": 1,
-            "analytics_r": 1, "mfe_r": 1, "mae_r": 1,
+            "analytics_r": 1, "mfe_r": 1, "mae_r": 1, "risk_distance": 1,
         }
         stats_rows = await db.cloud_market_outlooks.find(query, stats_projection).to_list(None)
         stats = compute_outlook_stats(stats_rows)

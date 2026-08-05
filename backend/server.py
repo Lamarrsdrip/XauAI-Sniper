@@ -4333,9 +4333,13 @@ async def startup():
         while True:
             try:
                 import market_outlook as _mo
-                published = await _mo.hourly_generation_tick()
+                published, actionable_docs = await _mo.hourly_generation_tick()
                 if published:
                     logger.info(f"[outlook-hourly] published {published} outlook(s)")
+                if actionable_docs:
+                    import outlook_execution as _oe
+                    for _doc in actionable_docs:
+                        await _oe.enqueue_if_actionable(_doc)
             except Exception as e:
                 logger.warning(f"[outlook-hourly] {e}")
             now = datetime.now(timezone.utc)
@@ -7356,13 +7360,18 @@ async def cloud_monitor_activity(req: BotActivityReq, request: Request):
                     account=req.account or "", bid=quote_bid, ask=quote_ask, quote_at=doc["ts"])
                 m10_signal = details.get("m10_signal") or {}
                 m10_decision = str(m10_signal.get("decision") or m10_signal.get("final_decision") or "").upper()
+                import outlook_execution as _oe
                 if m10_decision in {"BUY_CANDIDATE", "SELL_CANDIDATE", "ALLOW_CORE"}:
-                    await _mo.publish_m10_signal_from_activity(
+                    m10_doc = await _mo.publish_m10_signal_from_activity(
                         license_key=license_key,
                         account=req.account or "",
                         source_event_id=doc["id"],
                     )
-                await _mo.hourly_generation_tick(account=req.account or "")
+                    if m10_doc:
+                        await _oe.enqueue_if_actionable(m10_doc)
+                _hourly_published, _hourly_actionable = await _mo.hourly_generation_tick(account=req.account or "")
+                for _hdoc in _hourly_actionable:
+                    await _oe.enqueue_if_actionable(_hdoc)
             except Exception as exc:
                 logger.warning(f"[outlook-event-monitor] account={req.account} error={exc}")
         asyncio.create_task(_monitor_outlook_quote_event())

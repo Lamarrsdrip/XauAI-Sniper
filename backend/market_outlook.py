@@ -1664,27 +1664,43 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
     stored = await _insert_outlook_atomically(db, doc, account, OUTLOOK_SYMBOL, hourly_slot, publication_key=publication_key)
     if stored.get("_newly_inserted"):
         logger.info(f"OUTLOOK_PUBLISHED id={outlook_id} dir={direction_label} conf={confidence}% account={account}")
+    # Phase 2 (2026-08-05 owner directive) execution-candidate enqueueing
+    # deliberately does NOT happen here or anywhere else in this file --
+    # see this module's own top-of-file STRICT SEPARATION docstring and
+    # tests/test_market_outlook.py's test_no_trade_execution_calls_anywhere_in_outlook_module
+    # / test_outlook_module_only_writes_its_own_collections /
+    # test_generate_outlook_never_calls_readiness_engine_mutating_functions,
+    # which assert this file never touches cloud_bot_commands, directly or
+    # indirectly. That boundary is deliberate and tested, not an oversight
+    # this migration should route around -- see outlook_execution.py, called
+    # from server.py's own orchestration (the caller of this function),
+    # never from inside market_outlook.py itself.
     return stored
 
 
 async def publish_m10_signal_from_activity(license_key: str, account: str,
-                                           source_event_id: str = "") -> int:
+                                           source_event_id: str = "") -> Optional[Dict]:
     """Persist M10 lifecycle truth and publish only an execution-ready signal.
 
     The normal hourly slot remains the informational cadence. A deterministic
     M10 publication key lets a candidate arriving after an earlier neutral
     hourly outlook become visible immediately while repeated telemetry for the
     same M10 bar remains idempotent.
+
+    Returns the newly-published BUY/SELL doc when this call is the one that
+    genuinely inserted it, otherwise None. server.py uses that returned doc
+    to (optionally) enqueue an execution command -- see this file's STRICT
+    SEPARATION docstring for why that enqueue never happens in here.
     """
     evidence, reason = await _latest_ea_evidence(
         license_key, account, source_event_id=source_event_id
     )
     if not evidence:
         logger.info("M10_OUTLOOK_NOT_PUBLISHED account=%s reason=%s", account, reason)
-        return 0
+        return None
     canonical = _canonical_m10_signal(evidence)
     if not canonical.get("candidate"):
-        return 0
+        return None
 
     identity = canonical.get("candidate_id") or f"{account}|{OUTLOOK_SYMBOL}|{canonical.get('bar_time')}|{canonical.get('direction')}"
     candidate_id = canonical.get("candidate_id") or uuid.uuid5(uuid.NAMESPACE_URL, identity).hex
@@ -1730,7 +1746,7 @@ async def publish_m10_signal_from_activity(license_key: str, account: str,
             "M10_SIGNAL_SUPPRESSED account=%s candidate=%s state=%s reason=%s",
             account, candidate_id, event_state, notification_reason,
         )
-        return 0
+        return None
 
     publication_key = f"m10-signal:{uuid.uuid5(uuid.NAMESPACE_URL, identity).hex}"
     doc = await generate_outlook_for_account(
@@ -1747,7 +1763,7 @@ async def publish_m10_signal_from_activity(license_key: str, account: str,
             {"$set": {"notification_eligibility": False,
                       "notification_reason": "AWAITING_FRESH_PUBLICATION_QUOTE"}},
         )
-        return 0
+        return None
     newly_inserted = doc.pop("_newly_inserted", True)
     if newly_inserted and doc.get("primary_direction") in ("BUY", "SELL"):
         await _dispatch_signal_event(doc, "TRACKING_STARTED")
@@ -1759,7 +1775,12 @@ async def publish_m10_signal_from_activity(license_key: str, account: str,
             "M10_OUTLOOK_PUBLISHED id=%s account=%s direction=%s bar=%s",
             doc.get("id"), account, doc.get("primary_direction"), canonical.get("bar_time"),
         )
-        return 1
+        # Phase 2 (2026-08-05 owner directive): the caller (server.py) uses
+        # this returned doc to enqueue an EA execution command via
+        # outlook_execution.enqueue_if_actionable -- see that module's own
+        # docstring and market_outlook.py's STRICT SEPARATION docstring for
+        # why that call never happens from inside this file.
+        return doc
     if doc.get("primary_direction") not in ("BUY", "SELL"):
         await _db().cloud_outlook_signal_events.update_one(
             {"account": account, "candidate_id": candidate_id, "event_type": OUTLOOK_ACTIONABLE, "event_version": 1},
@@ -1767,10 +1788,10 @@ async def publish_m10_signal_from_activity(license_key: str, account: str,
                       "notification_reason": "PUBLICATION_VALIDATION_FAILED",
                       "outlook_id": doc.get("id")}},
         )
-    return 0
+    return None
 
 
-async def hourly_generation_tick(account: str = "") -> int:
+async def hourly_generation_tick(account: str = "") -> "tuple[int, list]":
     """Generates at most one NEW outlook per (account, symbol, UTC hourly
     slot) that has posted EA evidence recently.
 
@@ -1796,6 +1817,7 @@ async def hourly_generation_tick(account: str = "") -> int:
     cutoff = (now - timedelta(hours=2)).isoformat()
     accounts = [account] if account else await db.cloud_bot_activity.distinct("account", {"ts": {"$gte": cutoff}})
     published = 0
+    actionable_docs = []
     for account in accounts:
         if not account:
             continue
@@ -1842,9 +1864,16 @@ async def hourly_generation_tick(account: str = "") -> int:
                     await _dispatch_hourly_notification(doc)
                 else:
                     logger.info(f"OUTLOOK_SLOT_ALREADY_PUBLISHED_BY_ANOTHER_WORKER account={account} slot={current_slot} -- no duplicate publish, no duplicate notification")
+                # Phase 2 (2026-08-05 owner directive): expose newly-published
+                # actionable docs to the caller (server.py) so IT can enqueue
+                # an EA execution command via outlook_execution.py -- this
+                # file itself never touches cloud_bot_commands, see the
+                # STRICT SEPARATION docstring at the top of this module.
+                if newly_inserted and doc.get("primary_direction") in ("BUY", "SELL"):
+                    actionable_docs.append(doc)
         except Exception as e:
             logger.error(f"OUTLOOK_GENERATION_FAILED account={account}: {e}")
-    return published
+    return published, actionable_docs
 
 
 async def repair_price_integrity_incidents(max_reasonable_price: float = 6000.0, min_reasonable_price: float = 500.0) -> int:

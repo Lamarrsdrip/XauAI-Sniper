@@ -729,8 +729,8 @@
 //   much bigger lot -- arming/triggering protection at a fraction of the R
 //   a smaller-lot trade would need. Backwards: a bigger lot should never
 //   mean "protect earlier in R-terms."
-//   FIX: new XAU_MinArmUSDForOwnR(dollarArm, rDollars) floors every such
-//   threshold at InpExitArmMinOwnR (0.20R default) of the position's own
+//   FIX: new XAU_MinArmUSDForOwnPips(dollarArm, rDollars) floors every such
+//   threshold at InpExitArmMinOwnPips (0.20R default) of the position's own
 //   risk. Applied to: XAU_ProtectPeakProfitFloor's final armUSD;
 //   A+ Shield's tier1ArmUSD/tier2ArmUSD; XAU_EvaluateExitEV's
 //   evExitEdgeUSD/evMinHoldEdgeUSD (including the direct
@@ -758,7 +758,7 @@
 //   LOW_VOL/CHOPPY safety-capped 1.5R override, which stays tight regardless
 //   of account size (that cap exists for volatility-regime safety, not
 //   sizing preference). The v6.17.18 profit-quality exit gate's R-multiple
-//   thresholds (InpProfitQualityMinR/BigWinRMultiple) needed no equivalent
+//   thresholds (InpProfitQualityMinPips/BigWinRMultiple) needed no equivalent
 //   change -- R is profit/rDollars, and rDollars already scales with lot
 //   size, so those thresholds are already account-size-normalized by
 //   construction.
@@ -799,8 +799,8 @@
 //       misaligned) or profit already large (>= 2.5R) -> unchanged, keeps
 //       the existing (tighter) context-based lock.
 //   Lot size is untouched everywhere -- this only changes when/how tightly
-//   the protective SL ratchets. New inputs: InpProfitQualityMinR (0.80),
-//   InpProfitQualityRunnerLockPct (22.0), InpProfitQualityBigWinRMultiple
+//   the protective SL ratchets. New inputs: InpProfitQualityMinPips (0.80),
+//   InpProfitQualityRunnerLockPct (22.0), InpProfitQualityBigWinPipsMultiple
 //   (2.50), InpProfitQualitySpreadImpactPct (30.0).
 //
 // v6.17.18 CHANGES (2026-07-08) — SCAN WARM-UP NOISE + SPEED FIX:
@@ -1611,7 +1611,7 @@
 //   ALSO: profit give-back limit fires independently — when peak >= $40 AND giveback
 //   >= 32% of peak, tighten SL to prevent further bleed even on non-explosive moves.
 //   Re-entry after an AMPL stop is handled by the existing re-entry engine.
-//   New inputs: InpAMPL_Enable, InpAMPL_MinUSD, InpAMPL_ExplosiveBodyR,
+//   New inputs: InpAMPL_Enable, InpAMPL_MinUSD, InpAMPL_ExplosiveBodyPips,
 //   InpAMPL_VelATRFactor, InpAMPL_TrailATR_{Strong,Mid,Weak}, InpAMPL_GivebackPct,
 //   InpAMPL_GivebackMinUSD. Master toggle allows instant disable without recompile.
 // v6.4.2 CHANGES (2026-06-28) — SELF-AUDIT FIXES:
@@ -1966,7 +1966,7 @@
 // finalized. 1R for every downstream R-based system (TP staging, breakeven,
 // trailing, profit floor, missed-entry 0.30R measurement, Outlook R values,
 // replay stats) is this widened distance, not the raw one. Declared this
-// early so every call site (OpenTrade, the transition engine's remainingRewardR,
+// early so every call site (OpenTrade, the transition engine's remainingRewardPips,
 // the missed-entry measurement, the Outlook thesis snapshot) references the
 // same single constant instead of each hardcoding 1.20 separately.
 #define XAU_SL_WIDENING_FACTOR 1.20
@@ -2031,10 +2031,30 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "XauCloud-m10_v6.25.30_PURE_M10_CYCLE_AUTHORITY_FIX"
-#define XAUAI_EA_VERSION_NUM "6.25.30"
-#define XAUAI_BUILD_HASH "xaucloud-pure-m10-cycle-authority-restart-ledger-20260802"
-#define XAU_PYRAMID_BASKET_HARD_CLOSE_R 0.50
+#define XAUAI_EA_VERSION "XauCloud-m10_v6.26.0_PIPS_GOLDMOVES_UNIT_MIGRATION"
+#define XAUAI_EA_VERSION_NUM "6.26.0"
+#define XAUAI_BUILD_HASH "xaucloud-pips-goldmoves-unit-migration-20260805"
+
+// v6.26.0 owner directive (2026-08-05): permanent migration off the R
+// (risk-multiple) measurement system. Every internal exit/protection
+// calculation that used to be expressed as a multiple of a position's own
+// risk distance ("R") is now expressed as XauCloud pips / Gold price moves
+// of that SAME per-position risk distance -- the underlying normalized
+// math (a threshold scaled by each position's own blended risk distance)
+// is unchanged, only its unit is. Fixed owner conversion for XAUUSD:
+//   1.00 Gold price move (1.00 raw price unit) = 10 XauCloud pips
+// so what used to be "1.00R" is now "this position's own risk distance,
+// expressed in pips" -- NOT a universal fixed 100-pip constant, because a
+// fixed constant would silently change protection behavior for any trade
+// whose actual structural stop distance isn't exactly 10.00 Gold moves
+// (see the owner-approved migration decision log in RELEASE_CHECKLIST.md
+// v6.26.0 entry). Real price distance is still computed from
+// SYMBOL_TRADE_TICK_SIZE/SYMBOL_POINT/SYMBOL_DIGITS exactly as before;
+// this constant only converts a price distance into the pips/Gold-move
+// display/threshold convention.
+#define XAUCLOUD_PIPS_PER_PRICE_UNIT 10.0
+#define XAUCLOUD_GOLDMOVES_PER_PRICE_UNIT 1.0
+#define XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS 0.50
 #define XAU_COUNTER_EXCURSION_BUILD false
 #define XAU_TRADEBRAIN_VALIDATED_GLOBAL_SEED_AVAILABLE true
 #define XAU_TRADEBRAIN_SEED_SCHEMA "XAUAI_TRADEBRAIN_SEED_V1"
@@ -2106,7 +2126,7 @@ input double InpTransitionMatureThreshold       = 60.0;
 input double InpTransitionExhaustThreshold      = 70.0;   // invariant: >=70 blocks every old-direction autonomous entry source
 input double InpTransitionProbabilityThreshold = 57.0;
 input double InpTransitionReversalThreshold     = 68.0;
-input double InpTransitionMinRewardR            = 1.20;
+input double InpTransitionMinRewardPips            = 1.20;
 input double InpTransitionPreferredOppositeAt   = 80.0;   // compact local reversal package may approve before HTF flips
 input int    InpTransitionFastConfirmSeconds    = 30;     // dedicated high-exhaustion reversal confirmation, closed-bar/microstructure proven and anti-chase guarded
 input double InpTransitionOldConfidenceCap      = 35.0;   // successful opposite counter evidence during high exhaustion caps old confidence
@@ -2575,14 +2595,14 @@ input double InpStructureBasketRatchetT2Pct   = 5.0;
 input double InpStructureBasketRatchetT3Pct   = 8.0;
 input double InpStructureBasketBEPct          = 1.2;   // Later BE basket lock
 input double InpStructureBasketHardGivebackPct= 2.2;   // Equity curve armor still caps serious giveback
-input double InpStructureBEActivateR          = 2.70;  // Later per-trade BE; avoids suffocating winners
-input double InpStructureBECushionR           = 0.08;  // Small cushion, not a tight scalp lock
-input double InpStructureChandelierStartR     = 4.75;  // Trail only after a real runner move
+input double InpStructureBEActivatePips          = 270.0;  // v6.26.0: pips-of-this-trade's-own-risk-distance (was 2.70R) — later per-trade BE; avoids suffocating winners
+input double InpStructureBECushionPips           = 8.0;  // v6.26.0: pips-of-this-trade's-own-risk-distance (was 0.08R) — small cushion, not a tight scalp lock
+input double InpStructureChandelierStartPips     = 475.0;  // v6.26.0: pips-of-this-trade's-own-risk-distance (was 4.75R) — trail only after a real runner move
 input double InpStructureChandelierATR1       = 6.2;   // Wider runner trail before +4R
 input double InpStructureChandelierATR2       = 4.9;   // Wider runner trail after +4R
 input int    InpStructureMinHoldMinutes       = 10;    // Structure-runner bias: do not judge normal gold noise too early
 input int    InpStructureTargetHoldMinutes    = 30;    // Log/behavior target window for entry quality guards
-input double InpStructureFailFastLossR        = 1.55;  // Can still cut only confirmed failed structure
+input double InpStructureFailFastLossPips        = 155.0;  // v6.26.0: pips-of-this-trade's-own-risk-distance (was 1.55R) — can still cut only confirmed failed structure
 input int    InpStructureFailFastMinMinutes   = 12;
 input double InpStructureFailFastMaxAdverseATR= 2.4;
 
@@ -2808,8 +2828,8 @@ input double InpConvictionHighMulti = 1.3;  // >=90% confidence -> 1.3x boost si
 input bool   InpRespectSkipIf    = true;   // Honor the AI's skip_if veto condition
 
 input group "=== TRAILING / BE LOCK (v4.5.1 — loosen the leash) ==="
-input double InpBELockActivateR   = 1.0;   // BE lock only fires at >= this R-multiple (was 0.5 = too tight)
-input double InpBELockProfitR     = 0.25;  // BE SL locks at openPx + this R (was +10pts = basically 0)
+input double InpBELockActivatePips   = 100.0;   // v6.26.0: pips-of-this-trade's-own-risk-distance (was 1.0R) -- BE lock only fires at >= this
+input double InpBELockProfitPips     = 25.0;    // v6.26.0: pips-of-this-trade's-own-risk-distance (was 0.25R) -- BE SL locks at openPx + this
 input double InpCapTrailATRMulti  = 1.5;   // CAP_RUNNER trail distance = this × ATR (was 0.8 = clipped easily)
 input double InpCapTrailSpikeMulti= 1.8;   // On high-vol spike bars, widen trail to this × ATR
 input double InpCapTrailCalmMulti = 1.2;   // On calm bars, use this × ATR
@@ -2825,12 +2845,12 @@ input double InpChoppyTrailMulti  = 1.3;   // CHOPPY regime → moderate
 input group "=== CONVICTION RUNNER (v4.5.3 — let 90%+ winners RUN) ==="
 input bool   InpConvictionRunner  = true;  // TRUE = high-conf trades past +2R get max trail
 input int    InpConvRunMinConf    = 90;    // Original AI confidence must have been >= this
-input double InpConvRunMinR       = 2.0;   // Trade must be at least this much in profit (R-multiples)
+input double InpConvRunMinPips       = 200.0;   // v6.26.0: pips-of-this-trade's-own-risk-distance (was 2.0R) — trade must be at least this much in profit
 input double InpConvRunnerMulti   = 3.0;   // Trail distance on these monsters = this × ATR
 
 input group "=== PARTIAL TAKE-PROFIT (v4.5.4 — lock half, ride the rest) ==="
 input bool   InpPartialTP         = true;  // Close part of the position at +X R, let rest run
-input double InpPartialTPAtR      = 1.5;   // Fire partial at this R-multiple of profit (1.5 = give winners more room)
+input double InpPartialTPAtPips   = 150.0;   // v6.26.0: pips-of-this-trade's-own-risk-distance (was 1.5R) — fire partial at this profit (150 = give winners more room)
 input double InpPartialPct        = 0.4;   // Fraction of position to close (0.4 = 40%, leaves 60% to ride)
 input bool   InpPartialSkipHighConf = true;// Skip partial on 90%+ trades (let them fully run)
 input int    InpPartialMinMinutes  = 3;    // Don't fire partial within first N minutes (let trade develop)
@@ -2913,14 +2933,14 @@ input double InpBasketDirLossBlockPct   = 2.0;   // Block new same-dir entries i
 
 input group "=== ADAPTIVE RUNNER (legacy, DISABLED when ProfitRatchet is ON) ==="
 input bool   InpAdaptiveRunner      = false;  // v4.9.5 — DISABLED (clean exits use tiered model)
-input double InpARStage1ActivateR   = 0.8;    // v4.8.4 — Was 0.3, now 0.8 (let winners develop before tight trail)
+input double InpARStage1ActivatePips   = 80.0;    // v6.26.0: pips-of-this-trade's-own-risk-distance (was 0.8R) — let winners develop before tight trail
 input double InpARStage1MinPct      = 2.5;    // v4.9.0 — $1k→$30, $10k→$250, $100k→$2500 (floor $30)
 input double InpARStage1TrailATR    = 2.5;    // v4.8.9 — Was 2.0, now 2.5 (more patient, ride profit growth)
-input double InpARStage2ActivateR   = 2.0;    // v4.8.9 — Was 1.0, now 2.0 (need strong profit before wide trail)
+input double InpARStage2ActivatePips   = 200.0;    // v6.26.0: pips-of-this-trade's-own-risk-distance (was 2.0R) — need strong profit before wide trail
 input double InpARStage2TrailATR    = 4.0;    // v4.8.9 — Was 3.0, now 4.0 (trail FAR behind, let profit grow)
-input double InpARBreakEvenR        = 1.2;    // v4.8.6 — Was 1.0, now 1.2 (more profit confirmed before BE lock)
+input double InpARBreakEvenPips        = 120.0;    // v6.26.0: pips-of-this-trade's-own-risk-distance (was 1.2R) — more profit confirmed before BE lock
 input double InpARBreakEvenMinPct   = 4.0;    // v4.9.0 — $1k→$50, $10k→$400, $100k→$4000 (floor $50)
-input double InpARBreakEvenProfitR  = 0.15;   // v4.8.4 — slightly more cushion past BE (was 0.1)
+input double InpARBreakEvenProfitPips  = 15.0;   // v6.26.0: pips-of-this-trade's-own-risk-distance (was 0.15R) — slightly more cushion past BE
 input double InpARMinTrailPoints    = 80;     // Anti-noise: SL never closer than X points (chop filter, 80pt = ~$0.80 on XAU)
 input double InpARMomentumBoostMulti = 0.7;   // In strong momentum, tighten trail by this multi (0.7 = 30% tighter = faster ratchet)
 
@@ -2934,29 +2954,29 @@ input bool   InpCleanExits          = true;   // MASTER toggle — disables all 
 // Old: BE at 1.85R with 0.05R cushion → trade could give back 95% between 1.85R and Chandelier start
 // Old: Chandelier starts at 3.5R with 4.8× ATR → 0.1 lot trade could give $190-380 from peak
 // New: BE at 1.50R with 0.30R cushion → meaningful floor earlier. Chandelier starts at 2.0R, tighter ATR.
-input double InpCleanBEActivateR    = 1.50;   // v6.3.4: earlier BE (was 1.85) — protect sooner without choking
-input double InpCleanBECushionR     = 0.30;   // v6.3.4: lock 30% of risk at BE (was 0.05 = $3 floor = worthless)
-input double InpCleanChandelierStartR = 2.00; // v6.3.4: trail from +2R not +3.5R — closes dead zone
+input double InpCleanBEActivatePips    = 150.0;   // v6.26.0: pips-of-this-trade's-own-risk-distance (was 1.50R) — protect sooner without choking
+input double InpCleanBECushionPips     = 30.0;   // v6.26.0: pips-of-this-trade's-own-risk-distance (was 0.30R) — lock 30% of risk at BE
+input double InpCleanChandelierStartPips = 200.0; // v6.26.0: pips-of-this-trade's-own-risk-distance (was 2.00R) — trail from +2R not +3.5R — closes dead zone
 input double InpCleanChandelierATR1 = 3.2;    // v6.3.4: tightened 4.8→3.2 — still breathes but banks more profit
 input double InpCleanChandelierATR2 = 2.5;    // v6.3.4: tightened 3.8→2.5 — after +4R lock in the bulk
-input double InpCleanPartialR       = 2.20;   // v6.3.5: take partial at 2.2R (was 3.2R) — bank profit as Chandelier starts, runner continues
+input double InpCleanPartialPips       = 220.0;   // v6.26.0: pips-of-this-trade's-own-risk-distance (was 2.20R) — bank profit as Chandelier starts, runner continues
 input double InpCleanPartialPct     = 22.0;   // v6.3.5: raised 12→22% partial — meaningful cash in pocket, 78% runner still runs
 input int    InpCleanChandelierLookback = 24; // Bars to scan for highest high / lowest low
 input bool   InpCleanMomentumInvalidation = true; // Cut trade if momentum flips hard against us
 input int    InpCleanStaleHours     = 3;      // Close if > X hours in AND profit < StaleMinR, unless trend still validates
-input double InpCleanStaleMinR      = 0.10;   // Threshold below which we consider trade stale
-input double InpCleanMaxLossR       = 2.60;   // v5.8.17: give XAU pullbacks room before invalidation close
-input double InpCleanEmergencyLossR = 4.20;   // Emergency close only after a true failed setup/disaster move
+input double InpCleanStaleMinPips      = 10.0;   // v6.26.0: pips-of-this-trade's-own-risk-distance (was 0.10R) — threshold below which we consider trade stale
+input double InpCleanMaxLossPips       = 260.0;   // v6.26.0: pips-of-this-trade's-own-risk-distance (was 2.60R) — give XAU pullbacks room before invalidation close
+input double InpCleanEmergencyLossPips = 420.0;   // v6.26.0: pips-of-this-trade's-own-risk-distance (was 4.20R) — emergency close only after a true failed setup/disaster move
 input int    InpCleanStructureLookback = 18;  // Wider swing window for gold structure invalidation
 input int    InpMaxTransitionWaitBars = 3;    // legacy telemetry threshold only in v6.23.1; time/bar count can NEVER release to BOTH_ALLOWED. Real continuation reset or opposite confirmation is required.
 input double InpCleanStructureATRBuffer = 0.35; // Close must break swing by this ATR fraction
 input int    InpCleanMinInvalidationMin = 40; // Do not judge normal early XAU pullback too fast
 input int    InpCleanStagnantMinutes = 120;   // Time-based exit for flat/choppy trades with no progress
-input double InpCleanStagnantMaxR = 0.20;     // Stagnant if abs(R) remains below this after StagnantMinutes
+input double InpCleanStagnantMaxPips = 20.0;     // v6.26.0: pips-of-this-trade's-own-risk-distance (was 0.20R) — stagnant if abs(pips) remains below this after StagnantMinutes
 // v6.4.6: EARLY CONVICTION CUT — exits losing trades fast when ALL signals confirm failure
 // Fires MUCH earlier than the 40-min main invalidation. Saves 50-70% of SL dollar loss.
 input bool   InpEarlyConvictionCut    = true;  // Enable early loser cut when full invalidation confirmed fast
-input double InpEarlyConvictionCutR   = 0.50;  // Exit when rMult <= -this AND invalidScore >= 4 (all signals against)
+input double InpEarlyConvictionCutPips   = 50.0;  // v6.26.0: pips-of-this-trade's-own-risk-distance (was 0.50R) — exit when rMult <= -this AND invalidScore >= 4 (all signals against)
 input int    InpEarlyConvictionMinMin = 10;    // Minimum minutes before early cut can fire (gives XAU normal wiggle room)
 
 input group "=== VOLATILITY LOT CAP (v6.4.6 — prevent ATR inflation causing oversized losses) ==="
@@ -2974,11 +2994,11 @@ input int    InpGoldPullbackMinMomentum  = 3;     // Momentum score needed to cl
 input group "=== EXPECTANCY LOSS ARMOR (v5.8.15 — breathe first, de-risk before disaster) ==="
 input bool   InpExpectancyLossArmor       = true;  // Runs even when Clean Exits owns trade management
 input bool   InpExpectancySoftDeRisk      = true;  // First response is partial size reduction, not full kill
-input double InpExpectancySoftLossR       = 2.70;  // Soft de-risk trigger by R
+input double InpExpectancySoftLossPips       = 270.0;  // v6.26.0: pips-of-this-trade's-own-risk-distance (was 2.70R) — soft de-risk trigger
 input double InpExpectancySoftLossPctEq   = 4.5;   // Soft de-risk trigger by equity %
 input double InpExpectancySoftClosePct    = 15.0;  // Close this % once; keep runner alive for recovery
 input int    InpExpectancySoftMinAgeSec   = 1800;  // Let fresh XAU pullbacks breathe before de-risk
-input double InpExpectancyMaxLossR        = 4.20;  // Full close only at deep R loss
+input double InpExpectancyMaxLossPips        = 420.0;  // v6.26.0: pips-of-this-trade's-own-risk-distance (was 4.20R) — full close only at deep loss
 input double InpExpectancyMaxLossPctEq    = 8.5;   // Or at dangerous equity loss, whichever comes first
 input int    InpExpectancyMinAgeSec       = 2400;  // Avoid full close before the setup has had time to prove itself
 input bool   InpExpectancyRequireStructureBreak = true; // Do not close red just for drawdown while structure is still intact
@@ -2987,7 +3007,7 @@ input double InpExpectancyDayArmPct       = 1.0;   // Arm daily giveback after d
 input double InpExpectancyDayMaxGivePct   = 35.0;  // Max allowed giveback of today's HWM profit
 input double InpExpectancyDayGiveFloorUSD = 600.0; // Floor so small normal fluctuation does not close a basket
 input bool   InpNoPartialSmartLossArmor   = true;  // When cloud-safe no-partials is ON, full-close only confirmed failed losers earlier
-input double InpNoPartialSmartLossR       = 2.75;  // No-partial confirmed-failure close threshold by R
+input double InpNoPartialSmartLossPips       = 275.0;  // v6.26.0: pips-of-this-trade's-own-risk-distance (was 2.75R) — no-partial confirmed-failure close threshold
 input double InpNoPartialSmartLossPctEq   = 4.0;   // Or by account equity %, whichever is smaller
 input int    InpNoPartialSmartLossMinSec  = 1500;  // Let normal XAU pullbacks breathe first
 input int    InpNoPartialSmartMaxMomentum = 1;     // Momentum must be this weak or worse for early no-partial close
@@ -2996,15 +3016,15 @@ input group "=== A+ PROFIT SHIELD (v5.8.55 — runner restore: no tiny BE choke)
 input bool   InpAPlusShield             = true;   // Master toggle
 // --- TIER 1: observation arm (records proven profit; does NOT move SL by default) ---
 input double InpAPlusShieldEquityPct    = 1.5;    // Mark shield armed when peak >= X% of reference balance
-input double InpAPlusShieldArmR         = 1.50;   // Also mark armed when peakR >= this
-input double InpAPlusShieldBECushR      = 0.04;   // SL = entry + slDist * this cushion
+input double InpAPlusShieldArmPips         = 150.0;   // v6.26.0: pips-of-this-trade's-own-risk-distance (was 1.50R) — also mark armed when peakPips >= this
+input double InpAPlusShieldBECushPips      = 4.0;   // v6.26.0: pips-of-this-trade's-own-risk-distance (was 0.04R) — SL = entry + slDist * this cushion / 100.0
 input double InpAPlusShieldMinArmUSD    = 30.0;   // Ignore noise-level peaks; $7-$20 should not move SL on a $3k account
 input bool   InpAPlusShieldMoveBEOnTier1= false;  // OFF restores v5.8.50-style runner breathing; tier2 still protects meaningful profit
 // --- TIER 2: Active protection (only fires when peak was MEANINGFUL + momentum confirms reversal) ---
 input double InpAPlusShieldProtectEquityPct = 2.5;  // Tier 2 can lock after account-meaningful profit, without choking runners
-input double InpAPlusShieldProtectR         = 3.0;  // And peakR >= this when RequireUSDAndR is true
+input double InpAPlusShieldProtectPips         = 300.0;  // v6.26.0: pips-of-this-trade's-own-risk-distance (was 3.0R) — and peakPips >= this when RequireUSDAndPips is true
 input double InpAPlusShieldMinProtectUSD    = 75.0; // Never treat tiny moves as meaningful protection events
-input bool   InpAPlusShieldRequireUSDAndR   = false;// False = 3% account profit can lock even if SL was wide
+input bool   InpAPlusShieldRequireUSDAndPips   = false;// False = 3% account profit can lock even if SL was wide
 input double InpAPlusGivebackPct            = 70.0; // Trail only after large giveback from a meaningful peak
 input double InpAPlusGivebackTrailATR       = 1.80; // Wider ATR trail — gives pullbacks room
 input double InpAPlusForceExitGivePct       = 88.0; // If market-close enabled, force-close after X% giveback
@@ -3027,7 +3047,7 @@ input group "=== ADAPTIVE MOMENTUM PROFIT LOCK — AMPL (v6.4.3) ==="
 // AND the fast move qualifies as explosive. SL moves to 4056-4057, locking $90+.
 input bool   InpAMPL_Enable          = true;   // MASTER TOGGLE
 input double InpAMPL_MinUSD          = 80.0;   // v6.4.6: raised 50→80 — do not arm on small early moves
-input double InpAMPL_ExplosiveBodyR  = 1.35;   // Candle body >= N×ATR in trade direction = explosive candle
+input double InpAMPL_ExplosiveBodyPips  = 1.35;   // Candle body >= N×ATR in trade direction = explosive candle
 input double InpAMPL_VelATRFactor    = 1.50;   // Price moved >= N×ATR over last 5 bars = fast velocity
 input double InpAMPL_TrailATR_Strong = 0.52;   // v6.4.6: widened 0.45→0.52 — give strong trend more breathing room
 input double InpAMPL_TrailATR_Mid    = 0.33;   // v6.4.6: slight widening 0.30→0.33
@@ -3060,25 +3080,34 @@ input bool   InpProtectedPeakCloseOnFloorBreak= true;  // If price already breac
 input bool   InpProtectedPeakBasketCloseRed   = true;  // Basket cannot breathe into red after meaningful protected peak
 
 input group "=== EXIT ARM R-FLOOR (v6.17.20) ==="
-input double InpExitArmMinOwnR = 0.20; // Minimum R-multiple of THIS trade's own risk before any flat-$/equity-% exit-arm threshold can fire -- prevents a bigger (e.g. account-floored) lot from arming/protecting earlier in R-terms than a smaller one
+input double InpExitArmMinOwnPips = 0.20; // Minimum R-multiple of THIS trade's own risk before any flat-$/equity-% exit-arm threshold can fire -- prevents a bigger (e.g. account-floored) lot from arming/protecting earlier in R-terms than a smaller one
 
 input group "=== PROFIT QUALITY GATE (v6.17.18) ==="
-input double InpProfitQualityMinR             = 0.80; // Below this R-multiple, a still-valid thesis is held instead of locked -- a tiny win isn't worth cutting a clean runner for
+input double InpProfitQualityMinPips             = 80.0; // v6.26.0: pips-of-this-trade's-own-risk-distance (was 0.80R) -- below this, a still-valid thesis is held instead of locked -- a tiny win isn't worth cutting a clean runner for
 input double InpProfitQualityRunnerLockPct    = 22.0; // Loosened lock %-of-peak used while thesis/structure/momentum are still fully intact (instead of the tighter context lock) so real runners aren't stopped out by ordinary noise
-input double InpProfitQualityBigWinRMultiple  = 2.50; // At/above this R-multiple, revert to the normal (tighter) context lock even if thesis still looks intact -- a big win is worth protecting more assertively
+input double InpProfitQualityBigWinPipsMultiple  = 250.0; // v6.26.0: pips-of-this-trade's-own-risk-distance (was 2.50R) -- at/above this, revert to the normal (tighter) context lock even if thesis still looks intact -- a big win is worth protecting more assertively
 input double InpProfitQualitySpreadImpactPct  = 30.0; // If current spread cost is this large a share of current floating profit, treat the profit as spread-noise, not a real win worth locking/cutting yet
 
 input group "=== R-BASED EXIT MANAGER (v6.21.0) -- single centralized exit authority ==="
 input bool   InpRExitEnable               = true;   // R_EXIT: master switch. When true this is the ONLY normal (non-emergency) exit authority for every ticket
-input double InpRProtectTrigger           = 0.30;   // R_EXIT: arm profit protection once peak or current R reaches this multiple
-input double InpRInitialLock              = 0.15;   // R_EXIT: RETIRED v6.21.3 -- superseded by InpRGuaranteedFloor/InpRAdaptiveTrailOffset below. Declared only so an old .set setting it does not error; no longer read by the core loop.
-input double InpRGuaranteedFloor          = 0.10;   // R_EXIT: owner rule 2026-07-13 -- once armed at InpRProtectTrigger, the trade can never finish below this many R. Permanent, ratchet-only.
-input double InpRAdaptiveTrailStart       = 0.35;   // R_EXIT: from this R onward, the floor adapts via InpRAdaptiveTrailOffset instead of staying flat at InpRGuaranteedFloor
-input double InpRAdaptiveTrailOffset      = 0.15;   // R_EXIT: adaptive floor = currentR - this, once currentR >= InpRAdaptiveTrailStart (e.g. 0.35R -> lock 0.20R, 0.60R -> lock 0.45R)
+// v6.26.0 owner directive: default values below are now genuinely
+// pips-of-this-trade's-own-risk-distance (old R default x 100, per the
+// owner's exact conversion table -- 0.30R -> 30 pips), not bare R
+// fractions. Every comparison against these now reads
+// (InpXPips/100.0)*riskDistancePips -- i.e. "InpXPips" describes the
+// trigger as pips-of-a-reference-100-pip-risk-unit, rescaled per position
+// by that position's own real risk distance -- so behavior is identical
+// to the pre-migration R-fraction logic, only the configured/displayed
+// unit changed (see XAU_ComputeOwnerRequiredFloorPips's own header comment).
+input double InpProtectTriggerPips           = 30.0;   // R_EXIT: arm profit protection once peak or current pips reaches this many pips of this trade's own risk distance (was 0.30R)
+input double InpRInitialLock              = 0.15;   // R_EXIT: RETIRED v6.21.3 -- superseded by InpGuaranteedFloorPips/InpAdaptiveTrailOffsetPips below. Declared only so an old .set setting it does not error; no longer read by the core loop.
+input double InpGuaranteedFloorPips          = 10.0;   // R_EXIT: owner rule 2026-07-13 -- once armed at InpProtectTriggerPips, the trade can never finish below this many pips of its own risk distance (was 0.10R). Permanent, ratchet-only.
+input double InpAdaptiveTrailStartPips       = 35.0;   // R_EXIT: from this many pips onward, the floor adapts via InpAdaptiveTrailOffsetPips instead of staying flat at InpGuaranteedFloorPips (was 0.35R)
+input double InpAdaptiveTrailOffsetPips      = 15.0;   // R_EXIT: adaptive floor = currentPips - this, once currentPips >= InpAdaptiveTrailStartPips (was 0.15R; e.g. 35 pips -> lock 20 pips, 60 pips -> lock 45 pips, all scaled by this trade's own risk distance)
 input double InpRCaptureTarget            = 0.50;   // R_EXIT: RETIRED v6.21.3 -- the old one-shot bank-or-run decision at this R is superseded by the continuous adaptive trail above. Declared only for back-compat/telemetry.
-input double InpRStrongContinuationLock   = 0.35;   // R_EXIT: RETIRED v6.21.3 -- superseded by the continuous InpRAdaptiveTrailOffset formula. Declared only for back-compat.
-input double InpRWeakContinuationLock     = 0.40;   // R_EXIT: RETIRED v6.21.3 -- superseded by the continuous InpRAdaptiveTrailOffset formula. Declared only for back-compat.
-input double InpRFinalTarget              = 1.00;   // R_EXIT: hard close target -- do not hold beyond this in v1
+input double InpRStrongContinuationLock   = 0.35;   // R_EXIT: RETIRED v6.21.3 -- superseded by the continuous InpAdaptiveTrailOffsetPips formula. Declared only for back-compat.
+input double InpRWeakContinuationLock     = 0.40;   // R_EXIT: RETIRED v6.21.3 -- superseded by the continuous InpAdaptiveTrailOffsetPips formula. Declared only for back-compat.
+input double InpFinalTargetPips              = 100.0;   // R_EXIT: hard close target in pips of this trade's own risk distance -- do not hold beyond this in v1 (was 1.00R)
 input double InpRMaxGivebackPct           = 45.0;   // R_EXIT: close and bank remaining profit if giveback from peak reaches this %, once armed (>=0.3R)
 input int    InpRContinuationMinFactors   = 4;      // R_EXIT: RETIRED v6.21.3 -- the one-shot 0.5R bank-or-run decision that used this is superseded by the continuous adaptive trail; the 6-factor scoring itself lives on in the RUN_TO_1R hostile-factor recheck (InpRRunnerFailureMinHostile). Declared only for back-compat.
 input double InpRMaxSpreadPoints          = 400;    // R_EXIT: spread ceiling (points) counted as a continuation factor at the 0.5R decision
@@ -3086,7 +3115,7 @@ input bool   InpRUseClosedBarMomentum     = true;   // R_EXIT: reserved for futu
 input int    InpRRunnerFailureMinHostile  = 3;      // R_EXIT: of 5 hostile factors (trend/EMA/RSI/momentum/spread), minimum to confirm RUN_TO_1R continuation failure on a closed bar
 
 input group "=== GENERAL 10M EXTENSION PROTECTION (v6.25.28 owner exit rule, independently toggleable) ==="
-input bool   InpExtensionFloor015REnabled     = false; // At extension start, immediately protect at least +0.15R (never weaker than whatever SL is already on the broker). Default OFF: the extension starts with only the wide original structural SL, exactly like the pre-v6.25.26 behavior. Owner-switchable.
+input bool   InpExtensionFloor15PipsEnabled     = false; // At extension start, immediately protect at least +0.15R (never weaker than whatever SL is already on the broker). Default OFF: the extension starts with only the wide original structural SL, exactly like the pre-v6.25.26 behavior. Owner-switchable.
 input bool   InpExtension70PctRatchetEnabled  = false; // While the extension is active, once peak R reaches +0.70R, ratchet the floor to 70% of peak (monotonic). Default OFF. Independent of the floor toggle above -- either, both, or neither can be on. Owner-switchable.
 
 input group "=== SMART EXIT 3-LAYER SYSTEM (v6.4.11) ==="
@@ -3214,21 +3243,24 @@ const ENUM_XAU_OWNER_BREAKOUT_EXECUTION_MODE InpOwnerBreakoutExecutionMode=OWNER
 input double InpCounterRiskFractionOfNormal            = 0.15;   // fraction of the NORMAL bot's calculated dollar risk for this trade, NOT a fraction of account equity
 input double InpCounterExcursionSLATRMult              = 1.2;    // counter trade's OWN, tighter SL distance (ATR multiple) -- independent of normal InpSLMultiplier
 input int    InpCounterExcursionMaxHoldMinutes         = 30;     // tactical only -- not a swing strategy
-input double InpCounterExcursionProtectAtR             = 0.20;   // minimum tactical success zone -- begin strong profit protection
-input double InpCounterExcursionDefaultExitR           = 0.30;   // normal preferred profit-taking area; full close allowed from here if momentum isn't sustained
-input double InpCounterExcursionPreferredCloseR        = 0.50;   // informational checkpoint only (target05R telemetry) -- InpCounterExcursionMaxTargetR is the sole hard-cap authority below
-input double InpCounterExcursionMaxTargetR             = 0.50;   // OWNER SPEC (2026-07-10): unconditional hard cap -- never held beyond this, no "exceptionally strong momentum" exception in this version
+// v6.26.0: defaults are now pips-of-this-trade's-own-risk-distance (old R
+// default x 100), same "InpXPips/100.0 * riskDistancePips" normalization
+// pattern used throughout this migration -- see XAU_ManageCounterExcursionPosition.
+input double InpCounterExcursionProtectAtPips             = 20.0;   // minimum tactical success zone -- begin strong profit protection (was 0.20R)
+input double InpCounterExcursionDefaultExitPips           = 30.0;   // normal preferred profit-taking area; full close allowed from here if momentum isn't sustained (was 0.30R)
+input double InpCounterExcursionPreferredClosePips        = 50.0;   // informational checkpoint only -- InpCounterExcursionMaxTargetPips is the sole hard-cap authority below (was 0.50R)
+input double InpCounterExcursionMaxTargetPips             = 50.0;   // OWNER SPEC (2026-07-10): unconditional hard cap -- never held beyond this, no "exceptionally strong momentum" exception in this version (was 0.50R)
 input int    InpCounterExcursionMagicNumber            = 90205001; // dedicated identity; does not collide with normal (2025xxxx) or any inverse-experiment (9019xxxx) range
 input int    InpCounterOpportunityMinScore             = 2;        // v6.21.3: minimum XAU_CounterExcursionOpportunityScore() to execute (of 6 positive/2 negative factors, range -2..+6). Owner directive 2026-07-13: initial value, provisional pending live COUNTER_SKIPPED_OUTCOME evidence at this and neighboring thresholds.
 input int    InpCounterShadowTrackMinutes              = 30;       // v6.21.3: how long to shadow-track a skipped candidate's hypothetical outcome before logging COUNTER_SKIPPED_OUTCOME and expiring
 
 input group "=== LOSS PROTECTION (v4.4.5 — trust the SL, stop scalping out) ==="
 input double InpHardStopUSD    = 0;        // Hard $ loss cap per trade (0 = OFF, SL handles it)
-input bool   InpHardStopRBased = true;     // TRUE = HardStop = adaptive R-based risk, not fixed dollars
-input double InpHardStopRMulti = 3.5;      // v5.8.15: catastrophic only; structure-aware de-risk handles earlier damage
+input bool   InpHardStopPipsBased = true;     // TRUE = HardStop = adaptive R-based risk, not fixed dollars
+input double InpHardStopDistanceMulti = 350.0;      // v6.26.0: pips-of-this-trade's-own-risk-distance (was 3.5R) — catastrophic only; structure-aware de-risk handles earlier damage
 input bool   InpEarlyAdverseCut = false;   // OFF by default — let SL do its job (was killing good trades)
 input int    InpEarlyAdverseMin = 5;       // Minutes window for early cut
-input double InpEarlyAdverseR  = 1.5;      // Only cut if down > 1.5R early (was 0.7 — too tight)
+input double InpEarlyAdversePips  = 1.5;      // Only cut if down > 1.5R early (was 0.7 — too tight)
 input bool   InpPeakRetraceExit = true;    // Exit winner if retraces from peak
 input double InpPeakRetracePct = 75.0;     // % retrace from peak to close (was 60, give room)
 input double InpPeakMinUSD     = 250.0;    // Peak must exceed this USD to arm retrace exit
@@ -3415,19 +3447,19 @@ double EffBasketHardGivebackPct()
    return StructureRunnerActive() ? InpStructureBasketHardGivebackPct : InpBasketHardGivebackPct;
 }
 
-double EffCleanBEActivateR()
+double EffCleanBEActivatePips()
 {
-   return StructureRunnerActive() ? MathMax(InpCleanBEActivateR, InpStructureBEActivateR) : InpCleanBEActivateR;
+   return StructureRunnerActive() ? MathMax(InpCleanBEActivatePips, InpStructureBEActivatePips) : InpCleanBEActivatePips;
 }
 
-double EffCleanBECushionR()
+double EffCleanBECushionPips()
 {
-   return StructureRunnerActive() ? InpStructureBECushionR : InpCleanBECushionR;
+   return StructureRunnerActive() ? InpStructureBECushionPips : InpCleanBECushionPips;
 }
 
-double EffCleanChandelierStartR()
+double EffCleanChandelierStartPips()
 {
-   return StructureRunnerActive() ? MathMax(InpCleanChandelierStartR, InpStructureChandelierStartR) : InpCleanChandelierStartR;
+   return StructureRunnerActive() ? MathMax(InpCleanChandelierStartPips, InpStructureChandelierStartPips) : InpCleanChandelierStartPips;
 }
 
 double EffCleanChandelierATR1()
@@ -3861,8 +3893,8 @@ struct XAU_AdaptiveTransitionDecision
    double reversalProbability;
    double trendMaturity;
    double trendHealth;
-   double remainingRewardR;
-   double oppositeRemainingRewardR;
+   double remainingRewardPips;
+   double oppositeRemainingRewardPips;
    double entryLocationQuality;
    double moveAlreadyConsumedPct;
    double distanceFromValueATR;
@@ -4184,7 +4216,7 @@ struct XAU_AlignedCandidateState
    int      barsElapsed;
    double   atrTravelled;
    double   bestAvailableEntry;
-   double   remainingRewardR;
+   double   remainingRewardPips;
    bool     objectiveReached;
    bool     marketReset;
    bool     confirmationAfterExtension;
@@ -4891,7 +4923,7 @@ struct XAU_ForensicPostExitWatch
    double   riskUSD;
    double   exitPrice;
    double   realizedProfitUSD;
-   double   realizedR;
+   double   realizedPips;
    double   peakRWhileOpen;
    string   exitAuthority;
    double   maxFavorableMove;
@@ -4916,7 +4948,7 @@ struct XAU_ForensicOpenSnapshot
    double originalSL;
    double riskDistance;
    double riskUSD;
-   double peakR;
+   double peakPips;
    int    ownerExitProfile;
 };
 XAU_ForensicOpenSnapshot g_forensicOpenSnapshot[];
@@ -5012,9 +5044,9 @@ struct TradeTTMRecord
    bool     recoveryExpansionActive;
    datetime recoveryExpansionActivatedAt;
    datetime recoveryExpansionCrossTime;
-   double   recoveryExpansionProtectedR;
-   double   recoveryExpansionPeakR;
-   double   recoveryExpansionMFER;
+   double   recoveryExpansionProtectedPips;
+   double   recoveryExpansionPeakPips;
+   double   recoveryExpansionMFEPips;
    string   recoveryExpansionLastOwner;
 };
 
@@ -5036,10 +5068,22 @@ input int    InpTRI_FailedAfterBars     = 12;      // Bars in Recovery Mode with
 input bool   InpTRI_AdaptThresholds     = true;    // Nudge strong/weak thresholds using rolling historical outcomes
 input double InpTRI_ReEntryTriggerBars  = 30;      // How many bars a bailed-out zone stays "needs fresh trigger" for smart re-entry
 input bool   InpRecoveryExpansionEnable = true;    // Deep recovered trades: protect and hold for meaningful own-R while thesis remains valid
-input double InpRecoveryExpansionMinMAER = 0.50;   // Minimum MAE in own R before recovered expansion can activate
-input double InpRecoveryExpansionActivateR = 0.10; // Must recover to at least this positive R before expansion mode owns the exit
-input double InpRecoveryExpansionMeaningfulR = 0.30; // Tiny-profit exits below this R can be vetoed if continuation remains valid
-input double InpRecoveryExpansionTargetR = 1.00;  // At/above this R, hand back to normal strong-runner logic with protected floor
+// v6.26.0: defaults now pips-of-this-trade's-own-risk-distance (x100 of old
+// R default). XAU_RecoveryExpansionManage computes its own independent
+// riskDistancePips (from its own slDist parameter -- this subsystem is
+// single-position, never netted) and scales every comparison below by it.
+// NOTE: InpRecoveryExpansionMinMAEPips is deliberately NOT converted (kept
+// as a bare 0.50 fraction) -- it gates exclusively against
+// g_ttm[].triWorstAdversePct ("worst % of original SL distance reached, as
+// a fraction of 1R" -- a SEPARATE, not-yet-migrated R-fraction field used
+// across several other TRI/TTM consumers, see line ~14338/24532/26586).
+// Converting this one input alone without converting triWorstAdversePct's
+// own producer/every consumer would silently break that comparison; out of
+// scope for this pass -- flagged for a dedicated TRI/TTM conversion pass.
+input double InpRecoveryExpansionMinMAEPips = 50.0;   // v6.26.0: pips-of-this-trade's-own-risk-distance (was 0.50R) -- minimum MAE before recovered expansion can activate. g_ttm[].triWorstAdversePct itself is a genuine 0-1 fraction-of-SL-distance (already correctly displayed as a %, not R -- see recoveryWorstPct), so no change needed there; the comparison site divides this input by 100.0 to convert back to that same 0-1 scale.
+input double InpRecoveryExpansionActivatePips = 10.0; // Must recover to at least this many pips of own risk distance before expansion mode owns the exit (was 0.10R)
+input double InpRecoveryExpansionMeaningfulPips = 30.0; // Tiny-profit exits below this many pips can be vetoed if continuation remains valid (was 0.30R)
+input double InpRecoveryExpansionTargetPips = 100.0;  // At/above this many pips, hand back to normal strong-runner logic with protected floor (was 1.00R)
 input double InpRecoveryExpansionMaxGivebackPct = 55.0; // Close/protect if recovered profit gives this much back from peak R
 
 struct XAUConsciousMemoryStats
@@ -5171,7 +5215,7 @@ struct XAU_CampaignState
    double                     runnerDestination;
    double                     movementConsumedPct;
    double                     exhaustionPct;
-   double                     remainingRoomR;
+   double                     remainingRoomPips;
    double                     trendHealth;
    double                     locationQuality;
    bool                       pullbackResetConfirmed;
@@ -5216,9 +5260,9 @@ struct XAU_CampaignState
    double   initialCoreMoneyRisk;
    double   basketOneRMoney;
    double   basketPeakProfitMoney;
-   double   basketPeakR;
+   double   basketPeakPips;
    double   basketProtectedFloorMoney;
-   double   basketProtectedFloorR;
+   double   basketProtectedFloorPips;
    bool     basketProtectionArmed;
    bool     basketCloseInProgress;
    // FINAL_BASKET_050R audit repair: once an add has ever been confirmed,
@@ -5863,14 +5907,14 @@ ENUM_XAU_POST_PROFIT_DECISION XAU_EvaluatePostProfitEntry(int requestedDirection
    bool isBuy = (requestedDirection == 1);
    double lastExit = g_postClose[slot].exitPrice;
    double distanceFromExit = isBuy ? (currentPrice - lastExit) : (lastExit - currentPrice);
-   double distanceFromExitR = distanceFromExit / freshSLDistance;
-   bool worsePriceThanExit = distanceFromExitR > 0.0; // already ran further the same direction since the profitable exit
+   double distanceFromExitPips = distanceFromExit / freshSLDistance;
+   bool worsePriceThanExit = distanceFromExitPips > 0.0; // already ran further the same direction since the profitable exit
 
    // Owner's existing 0.30R missed-move threshold, reused verbatim -- not a
    // new number invented for this feature.
-   if(distanceFromExitR >= 0.30)
+   if(distanceFromExitPips >= 0.30)
    {
-      reason = StringFormat("MOVE_ALREADY_MISSED distanceFromExitR=%.2f", distanceFromExitR);
+      reason = StringFormat("MOVE_ALREADY_MISSED distanceFromExitPips=%.2f", distanceFromExitPips);
       return POST_PROFIT_MOVE_ALREADY_MISSED;
    }
 
@@ -5901,7 +5945,7 @@ ENUM_XAU_POST_PROFIT_DECISION XAU_EvaluatePostProfitEntry(int requestedDirection
    // anywhere else in this file.
    bool reactionConfirmed = sameSideStillDominant ? (td.continuationConfidence >= 50.0)
                                                    : (td.oppositeReclaim || td.oppositeRetestHeld || td.oppositeDisplacement);
-   double roomForRequestedDir = sameSideStillDominant ? td.remainingRewardR : td.oppositeRemainingRewardR;
+   double roomForRequestedDir = sameSideStillDominant ? td.remainingRewardPips : td.oppositeRemainingRewardPips;
    bool roomValid = roomForRequestedDir >= 0.30;
    bool retraceEvidenceConfirmed = structureValid && pressureRestoring && reactionConfirmed && roomValid;
 
@@ -5915,11 +5959,11 @@ ENUM_XAU_POST_PROFIT_DECISION XAU_EvaluatePostProfitEntry(int requestedDirection
    {
       if(retraceEvidenceConfirmed)
       {
-         reason = StringFormat("RETRACE_CONFIRMED distanceFromExitR=%.2f -- price at or better than the last profitable exit AND structure/pressure/reaction/room evidence confirmed", distanceFromExitR);
+         reason = StringFormat("RETRACE_CONFIRMED distanceFromExitPips=%.2f -- price at or better than the last profitable exit AND structure/pressure/reaction/room evidence confirmed", distanceFromExitPips);
          return POST_PROFIT_RETRACE_CONFIRMED;
       }
-      reason = StringFormat("PRICE_IMPROVED_BUT_EVIDENCE_NOT_YET_CONFIRMED distanceFromExitR=%.2f structureValid=%s pressureRestoring=%s reactionConfirmed=%s roomValid=%s",
-                            distanceFromExitR, structureValid ? "Y" : "N", pressureRestoring ? "Y" : "N", reactionConfirmed ? "Y" : "N", roomValid ? "Y" : "N");
+      reason = StringFormat("PRICE_IMPROVED_BUT_EVIDENCE_NOT_YET_CONFIRMED distanceFromExitPips=%.2f structureValid=%s pressureRestoring=%s reactionConfirmed=%s roomValid=%s",
+                            distanceFromExitPips, structureValid ? "Y" : "N", pressureRestoring ? "Y" : "N", reactionConfirmed ? "Y" : "N", roomValid ? "Y" : "N");
       return POST_PROFIT_WAIT_FOR_RETRACE;
    }
 
@@ -5935,22 +5979,22 @@ ENUM_XAU_POST_PROFIT_DECISION XAU_EvaluatePostProfitEntry(int requestedDirection
                                   samePressureNow > oppositePressureNow && td.continuationConfidence >= 55.0 &&
                                   structureValid && roomValid;
 
-   PrintFormat("POST_PROFIT_ENTRY_EVALUATION | direction=%s lastExitPrice=%.2f lastExitTime=%s currentPrice=%.2f distanceFromExitR=%.3f "
+   PrintFormat("POST_PROFIT_ENTRY_EVALUATION | direction=%s lastExitPrice=%.2f lastExitTime=%s currentPrice=%.2f distanceFromExitPips=%.3f "
                "samePressure=%.1f sameSlope=%.1f oppositePressure=%.1f continuationScore=%.1f exhaustionScore=%.1f decision=%s",
                isBuy ? "BUY" : "SELL", lastExit, TimeToString(g_postClose[slot].closeTime, TIME_DATE | TIME_SECONDS), currentPrice,
-               distanceFromExitR, samePressureNow, samePressureSlope, oppositePressureNow, td.continuationConfidence, td.exhaustionProbability,
+               distanceFromExitPips, samePressureNow, samePressureSlope, oppositePressureNow, td.continuationConfidence, td.exhaustionProbability,
                exceptionalContinuation ? "IMMEDIATE_CONTINUATION_ALLOWED" : "WAIT_FOR_RETRACE");
 
    if(exceptionalContinuation)
    {
       reason = StringFormat("EXCEPTIONAL_CONTINUATION_PRESSURE samePressure=%.1f slope=%.1f continuationScore=%.1f", samePressureNow, samePressureSlope, td.continuationConfidence);
-      PrintFormat("POST_PROFIT_CONTINUATION_ENTRY | direction=%s pressureEvidence=%.1f/%.1f structureEvidence=continuationScore=%.1f missedMoveR=%.3f whyChaseWasJustified=\"pressure %.1f rising %.1f, opposite only %.1f, continuation %.1f still strong\"",
-                  isBuy ? "BUY" : "SELL", samePressureNow, samePressureSlope, td.continuationConfidence, distanceFromExitR,
+      PrintFormat("POST_PROFIT_CONTINUATION_ENTRY | direction=%s pressureEvidence=%.1f/%.1f structureEvidence=continuationScore=%.1f missedMovePips=%.3f whyChaseWasJustified=\"pressure %.1f rising %.1f, opposite only %.1f, continuation %.1f still strong\"",
+                  isBuy ? "BUY" : "SELL", samePressureNow, samePressureSlope, td.continuationConfidence, distanceFromExitPips,
                   samePressureNow, samePressureSlope, oppositePressureNow, td.continuationConfidence);
       return POST_PROFIT_IMMEDIATE_CONTINUATION_ALLOWED;
    }
 
-   reason = StringFormat("PRICE_EXTENDED_AFTER_PROFIT_PRESSURE_NOT_EXCEPTIONAL distanceFromExitR=%.2f samePressure=%.1f slope=%.1f", distanceFromExitR, samePressureNow, samePressureSlope);
+   reason = StringFormat("PRICE_EXTENDED_AFTER_PROFIT_PRESSURE_NOT_EXCEPTIONAL distanceFromExitPips=%.2f samePressure=%.1f slope=%.1f", distanceFromExitPips, samePressureNow, samePressureSlope);
    return POST_PROFIT_WAIT_FOR_RETRACE;
 }
 
@@ -6007,7 +6051,7 @@ void XAU_CampaignOpenCore(int direction, string setupName, ENUM_XAU_TRADE_HORIZO
    g_campaign[slot].runnerDestination         = runnerDestination;
    g_campaign[slot].movementConsumedPct       = 0.0;
    g_campaign[slot].exhaustionPct             = 0.0;
-   g_campaign[slot].remainingRoomR            = 0.0;
+   g_campaign[slot].remainingRoomPips            = 0.0;
    g_campaign[slot].trendHealth               = 100.0;
    g_campaign[slot].locationQuality           = 0.0;
    g_campaign[slot].pullbackResetConfirmed    = false;
@@ -6049,9 +6093,9 @@ void XAU_CampaignOpenCore(int direction, string setupName, ENUM_XAU_TRADE_HORIZO
    g_campaign[slot].initialCoreMoneyRisk      = coreMoneyRiskUSD;
    g_campaign[slot].basketOneRMoney           = coreMoneyRiskUSD;
    g_campaign[slot].basketPeakProfitMoney     = 0.0;
-   g_campaign[slot].basketPeakR               = 0.0;
+   g_campaign[slot].basketPeakPips               = 0.0;
    g_campaign[slot].basketProtectedFloorMoney = 0.0;
-   g_campaign[slot].basketProtectedFloorR     = 0.0;
+   g_campaign[slot].basketProtectedFloorPips     = 0.0;
    g_campaign[slot].basketProtectionArmed     = false;
    g_campaign[slot].basketCloseInProgress     = false;
    g_campaign[slot].basketModeEverActivated   = false;
@@ -6156,16 +6200,16 @@ void XAU_CampaignRegisterClose(int direction, double closedProfit)
       (g_campaign[slot].basketProtectionArmed || g_campaign[slot].basketConversionPending))
    {
       ulong survivingTicket = 0;
-      double convertedFloorR = 0.0;
-      string conversionStatus = XAU_TryConvertBasketToSingleFloor(direction, slot, survivingTicket, convertedFloorR);
-      PrintFormat("BASKET_TO_SINGLE_TRANSITION | status=%s %s remainingTicket=%I64u basketFloorMoney=%.2f diagnosticConvertedFloorR=%.3f retryCount=%d action=KEEP_SURVIVOR_PER_LEG_OWNER_FLOOR",
+      double convertedFloorPips = 0.0;
+      string conversionStatus = XAU_TryConvertBasketToSingleFloor(direction, slot, survivingTicket, convertedFloorPips);
+      PrintFormat("BASKET_TO_SINGLE_TRANSITION | status=%s %s remainingTicket=%I64u basketFloorMoney=%.2f diagnosticConvertedFloorPips=%.3f retryCount=%d action=KEEP_SURVIVOR_PER_LEG_OWNER_FLOOR",
                   conversionStatus, XAU_CampaignIdText(g_campaign[slot].campaignId), survivingTicket,
-                  g_campaign[slot].basketProtectedFloorMoney, convertedFloorR, g_campaign[slot].basketConversionRetryCount);
+                  g_campaign[slot].basketProtectedFloorMoney, convertedFloorPips, g_campaign[slot].basketConversionRetryCount);
       g_campaign[slot].basketProtectionArmed     = false;
       g_campaign[slot].basketPeakProfitMoney     = 0.0;
-      g_campaign[slot].basketPeakR               = 0.0;
+      g_campaign[slot].basketPeakPips               = 0.0;
       g_campaign[slot].basketProtectedFloorMoney = 0.0;
-      g_campaign[slot].basketProtectedFloorR     = 0.0;
+      g_campaign[slot].basketProtectedFloorPips     = 0.0;
       g_campaign[slot].basketConversionPending    = false;
       g_campaign[slot].basketConversionRetryCount = 0;
       g_campaignBasketStateDirty = true;
@@ -6211,7 +6255,7 @@ void XAU_CampaignUpdateEvidence(int direction, const XAU_AdaptiveTransitionDecis
    g_campaign[slot].lifecycle           = td.lifecycle;
    g_campaign[slot].movementConsumedPct = td.moveAlreadyConsumedPct;
    g_campaign[slot].exhaustionPct       = td.exhaustionProbability;
-   g_campaign[slot].remainingRoomR      = (direction == td.dominantDirection) ? td.remainingRewardR : td.oppositeRemainingRewardR;
+   g_campaign[slot].remainingRoomPips      = (direction == td.dominantDirection) ? td.remainingRewardPips : td.oppositeRemainingRewardPips;
    g_campaign[slot].trendHealth         = td.trendHealth;
    g_campaign[slot].locationQuality     = td.entryLocationQuality;
    g_campaign[slot].transitionPressure  = td.transitionProbability;
@@ -6336,7 +6380,15 @@ void XAU_ReconcileCampaignOnInit()
 // (a restart mid-pending-basket-to-single-conversion must not silently lose
 // the armed floor -- see XAU_CampaignBasketState_Load's relaxed activePositionCount
 // gate below).
-#define XAU_BASKET_STATE_SCHEMA_VERSION 7
+// v6.26.0: bumped 7 -> 8 specifically for the R-to-pips migration --
+// basketPeakPips/basketProtectedFloorPips persisted under schema 7 are in
+// the OLD bare-R-fraction scale; reading them as pips under the new schema
+// would misread a threshold by ~100x. Schema 7 files are now rejected by
+// XAU_CampaignBasketState_Load's version check below (not in its allow-list)
+// and safely discarded/re-armed from live broker state on the first
+// restart after this build deploys, exactly like every other genuinely
+// incompatible persisted-state case this file already handles.
+#define XAU_BASKET_STATE_SCHEMA_VERSION 8
 bool g_campaignBasketStateDirty = false;
 
 string XAU_CampaignBasketStateFilePath()
@@ -6369,9 +6421,9 @@ void XAU_CampaignBasketState_Save(bool force = false)
                 DoubleToString(g_campaign[slot].initialCoreMoneyRisk, 2),
                 DoubleToString(g_campaign[slot].basketOneRMoney, 2),
                 DoubleToString(g_campaign[slot].basketPeakProfitMoney, 2),
-                DoubleToString(g_campaign[slot].basketPeakR, 4),
+                DoubleToString(g_campaign[slot].basketPeakPips, 4),
                 DoubleToString(g_campaign[slot].basketProtectedFloorMoney, 2),
-                DoubleToString(g_campaign[slot].basketProtectedFloorR, 4),
+                DoubleToString(g_campaign[slot].basketProtectedFloorPips, 4),
                 g_campaign[slot].basketProtectionArmed ? 1 : 0,
                 g_campaign[slot].basketConversionPending ? 1 : 0,
                 g_campaign[slot].basketConversionRetryCount,
@@ -6438,9 +6490,9 @@ void XAU_CampaignBasketState_Load()
       double coreMoneyRisk = FileReadNumber(h);
       double oneRMoney = FileReadNumber(h);
       double peakMoney = FileReadNumber(h);
-      double peakR = FileReadNumber(h);
+      double peakPips = FileReadNumber(h);
       double floorMoney = FileReadNumber(h);
-      double floorR = FileReadNumber(h);
+      double floorPips = FileReadNumber(h);
       bool armed = FileReadNumber(h) != 0;
       bool conversionPending = FileReadNumber(h) != 0;
       int conversionRetryCount = (int)FileReadNumber(h);
@@ -6489,9 +6541,9 @@ void XAU_CampaignBasketState_Load()
       g_campaign[slot].initialCoreMoneyRisk      = coreMoneyRisk;
       g_campaign[slot].basketOneRMoney           = oneRMoney;
       g_campaign[slot].basketPeakProfitMoney     = peakMoney;
-      g_campaign[slot].basketPeakR               = peakR;
+      g_campaign[slot].basketPeakPips               = peakPips;
       g_campaign[slot].basketProtectedFloorMoney = floorMoney;
-      g_campaign[slot].basketProtectedFloorR     = floorR;
+      g_campaign[slot].basketProtectedFloorPips     = floorPips;
       g_campaign[slot].basketProtectionArmed     = armed;
       g_campaign[slot].basketModeEverActivated   = schema >= 7 ? basketModeEverActivated
                                                                : (g_campaign[slot].activePositionCount >= 2 || armed);
@@ -6516,8 +6568,8 @@ void XAU_CampaignBasketState_Load()
       g_campaign[slot].ownerOriginalRiskUSD = ownerOriginalRiskUSD;
       g_campaign[slot].ownerEffectiveRiskUSD = ownerEffectiveRiskUSD;
       restored++;
-      PrintFormat("BASKET_STATE_RESTORED slot=%d dir=%s basketOneRMoney=%.2f peakR=%.3f protectionArmed=%s protectedFloorR=%.3f",
-                  slot, expectedDirection == 1 ? "BUY" : "SELL", oneRMoney, peakR, armed ? "true" : "false", floorR);
+      PrintFormat("BASKET_STATE_RESTORED slot=%d dir=%s basketOneRMoney=%.2f peakPips=%.3f protectionArmed=%s protectedFloorPips=%.3f",
+                  slot, expectedDirection == 1 ? "BUY" : "SELL", oneRMoney, peakPips, armed ? "true" : "false", floorPips);
    }
    FileClose(h);
    PrintFormat("BASKET_STATE_RESTORE_SUMMARY restored=%d discarded=%d", restored, discarded);
@@ -6820,7 +6872,7 @@ struct XAU_EntryReadinessDecision
    double   buyPressure;
    double   sellPressure;
    double   movementConsumed;
-   double   remainingRoomR;
+   double   remainingRoomPips;
    bool     pullbackComplete;
    bool     reclaimConfirmed;
    bool     retestHeld;
@@ -6928,8 +6980,8 @@ XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_Ada
    // First observation never trades; later stable confirmation may trade.
    bool candidateAlreadyExisted = g_readiness[slot].active && !freshOrigin;
 
-   double roomR = (direction == td.dominantDirection) ? td.remainingRewardR : td.oppositeRemainingRewardR;
-   bool roomCollapsed = (roomR < 0.3);
+   double roomPips = (direction == td.dominantDirection) ? td.remainingRewardPips : td.oppositeRemainingRewardPips;
+   bool roomCollapsed = (roomPips < 0.3);
 
    if(mapped == READINESS_INVALIDATED || roomCollapsed)
    {
@@ -7008,7 +7060,7 @@ XAU_EntryReadinessDecision XAU_UpdateEntryReadiness(int direction, const XAU_Ada
    d.buyPressure        = td.buyConfidence;
    d.sellPressure        = td.sellConfidence;
    d.movementConsumed    = td.moveAlreadyConsumedPct;
-   d.remainingRoomR      = roomR;
+   d.remainingRoomPips      = roomPips;
    d.pullbackComplete    = !td.reversalWaitForPullback;
    d.reclaimConfirmed    = td.oppositeReclaim;
    d.retestHeld          = td.oppositeRetestHeld;
@@ -7402,7 +7454,7 @@ ENUM_MARKET_PERSONALITY g_marketPersonality = MKT_RANGE;
 double g_stratWeight[10];   // initialized to 1.0 in OnInit; range 0.70-1.20
 int    g_stratWins[10];
 int    g_stratLosses[10];
-double g_stratTotalR[10];   // sum of R multiples per strategy
+double g_stratTotalPips[10];   // sum of R multiples per strategy
 int    g_stratCount[10];    // total trades per strategy
 
 // ====================================================================
@@ -7473,7 +7525,7 @@ struct XAU_TradeBrainDrawdownTrack
    double   mfeGoldPrice;      // best favorable excursion, Gold price distance (always >= 0)
    datetime timeOfMAE;         // when the worst adverse excursion was recorded
    datetime entryTime;
-   bool     hit01R, hit02R, hit04R, hit05R;
+   bool     hit01R, hit20Pips, hit04R, hit50Pips;
    datetime time01R, time02R, time04R, time05R;
    double   internalRDistanceAtEntry; // frozen once, at first observation -- never re-derived from a moving target
    bool     everNegative;
@@ -7500,7 +7552,7 @@ XAU_TradeBrainDrawdownTrack g_brainDrawdown[];
 bool     g_pendingBrainDD_Found = false;
 double   g_pendingBrainDD_MaeGold = 0.0;
 double   g_pendingBrainDD_MfeGold = 0.0;
-double   g_pendingBrainDD_InternalR = 0.0;
+double   g_pendingBrainDD_InternalPips = 0.0;
 int      g_pendingBrainDD_SecondsToMAE = -1;
 int      g_pendingBrainDD_SecondsNegativeTotal = -1;
 int      g_pendingBrainDD_Time01R = -1;
@@ -7568,9 +7620,9 @@ void XAU_UpdateBrainDrawdownTracking(ulong ticket, bool isBuy, double openPx, do
    {
       double rMultiple = goldDistance / r;
       if(!g_brainDrawdown[idx].hit01R && rMultiple >= 0.1) { g_brainDrawdown[idx].hit01R = true; g_brainDrawdown[idx].time01R = TimeCurrent(); }
-      if(!g_brainDrawdown[idx].hit02R && rMultiple >= 0.2) { g_brainDrawdown[idx].hit02R = true; g_brainDrawdown[idx].time02R = TimeCurrent(); }
+      if(!g_brainDrawdown[idx].hit20Pips && rMultiple >= 0.2) { g_brainDrawdown[idx].hit20Pips = true; g_brainDrawdown[idx].time02R = TimeCurrent(); }
       if(!g_brainDrawdown[idx].hit04R && rMultiple >= 0.4) { g_brainDrawdown[idx].hit04R = true; g_brainDrawdown[idx].time04R = TimeCurrent(); }
-      if(!g_brainDrawdown[idx].hit05R && rMultiple >= 0.5) { g_brainDrawdown[idx].hit05R = true; g_brainDrawdown[idx].time05R = TimeCurrent(); }
+      if(!g_brainDrawdown[idx].hit50Pips && rMultiple >= 0.5) { g_brainDrawdown[idx].hit50Pips = true; g_brainDrawdown[idx].time05R = TimeCurrent(); }
    }
 }
 
@@ -8326,20 +8378,24 @@ XAU_TRADE_CONTEXT_STATE XAU_ClassifyTradeContext(bool runnerClean, int momentumS
                                                  double rDollars, int minsOpen,
                                                  double atr, double slDist)
 {
-   double profitR = (rDollars > 0.0) ? profitUSD / rDollars : 0.0;
-   double peakR = (rDollars > 0.0) ? peak / rDollars : 0.0;
+   // v6.26.0: pips-of-this-trade's-own-risk-distance (was raw R-multiples
+   // profitUSD/rDollars, peak/rDollars) -- every hardcoded literal threshold
+   // below in this function is rescaled x100 to match, so every comparison
+   // outcome is unchanged.
+   double profitPips = (rDollars > 0.0) ? (profitUSD / rDollars) * 100.0 : 0.0;
+   double peakPips = (rDollars > 0.0) ? (peak / rDollars) * 100.0 : 0.0;
    bool hardBreak = (structureConfirmedBroken || (emaAgainst && rsiAgainst && momentumScore <= 2));
    bool cleanContinuation = (runnerClean && trendAligned && momentumScore >= 4 && !hardBreak);
    bool normalPullback = (trendAligned && momentumScore >= 3 && !hardBreak && recoveryLikely);
 
    int fastWindow = MathMax(10, InpThesisHoldMinHoldMinutes / 2);
    bool fastExpansion = (minsOpen <= fastWindow &&
-                         peakR >= 1.20 &&
+                         peakPips >= 120.0 &&
                          profitUSD >= peak * 0.65 &&
                          momentumScore >= 3 &&
                          !hardBreak);
    bool abnormalRangeExpansion = (atr > 0.0 && slDist > 0.0 &&
-                                  peakR >= 1.50 &&
+                                  peakPips >= 150.0 &&
                                   MathAbs(profitUSD) >= rDollars &&
                                   slDist <= atr * 2.40 &&
                                   momentumScore >= 4 &&
@@ -8348,7 +8404,7 @@ XAU_TRADE_CONTEXT_STATE XAU_ClassifyTradeContext(bool runnerClean, int momentumS
    if(fastExpansion || abnormalRangeExpansion)
       return XAU_CONTEXT_EXPLOSIVE_MOVE;
 
-   bool exhaustion = (peakR >= 1.0 &&
+   bool exhaustion = (peakPips >= 100.0 &&
                       (hardBreak ||
                        (givebackPct >= 55.0 && momentumScore <= 2) ||
                        (givebackPct >= 70.0 && !runnerClean) ||
@@ -8357,8 +8413,8 @@ XAU_TRADE_CONTEXT_STATE XAU_ClassifyTradeContext(bool runnerClean, int momentumS
       return XAU_CONTEXT_TREND_EXHAUSTION;
 
    bool weakTrade = ((minsOpen >= InpThesisHoldMinHoldMinutes &&
-                      peakR < 0.80 &&
-                      profitR < 0.30 &&
+                      peakPips < 80.0 &&
+                      profitPips < 30.0 &&
                       !runnerClean &&
                       momentumScore <= 2) ||
                      (!trendAligned && momentumScore <= 2 && !recoveryLikely && givebackPct >= 35.0));
@@ -8663,8 +8719,8 @@ XAU_EV_DECISION XAU_EvaluateExitEV(bool isBuy,
    // "edge" thresholds -- including the direct profitAtRiskUSD>=edge trigger
    // straight into PARTIAL/PROTECT below -- at a much smaller R-fraction
    // than on a smaller lot. Floor both edges at this trade's own R.
-   double evExitEdgeUSD    = XAU_MinArmUSDForOwnR(InpEVExitEdgeUSD, rDollars);
-   double evMinHoldEdgeUSD = XAU_MinArmUSDForOwnR(InpEVMinHoldEdgeUSD, rDollars);
+   double evExitEdgeUSD    = XAU_MinArmUSDForOwnPips(InpEVExitEdgeUSD, rDollars);
+   double evMinHoldEdgeUSD = XAU_MinArmUSDForOwnPips(InpEVMinHoldEdgeUSD, rDollars);
    bool exitEdge = (ev.exitEV >= ev.holdEV + evExitEdgeUSD);
    bool holdEdge = (ev.holdEV >= ev.exitEV + evMinHoldEdgeUSD);
    if(hardBreak && exitEdge && ev.reversalProb >= InpEVExhaustionHigh)
@@ -8706,15 +8762,17 @@ bool XAU_ContextShouldTakePartial(XAU_TRADE_CONTEXT_STATE contextState,
    if(profitUSD < strongProfitUSD)
       return false;
 
-   double peakR = peak / rDollars;
+   // v6.26.0: pips-of-this-trade's-own-risk-distance (was raw R-multiple
+   // peak/rDollars) -- literal thresholds below rescaled x100 to match.
+   double peakPips = (peak / rDollars) * 100.0;
    switch(contextState)
    {
       case XAU_CONTEXT_EXPLOSIVE_MOVE:
-         return (peakR >= 1.20 && profitUSD >= peak * 0.60);
+         return (peakPips >= 120.0 && profitUSD >= peak * 0.60);
       case XAU_CONTEXT_TREND_EXHAUSTION:
-         return (peakR >= 1.00);
+         return (peakPips >= 100.0);
       case XAU_CONTEXT_WEAK_TRADE:
-         return (!runnerClean && minsOpen >= InpThesisHoldMinHoldMinutes && peakR >= 1.00);
+         return (!runnerClean && minsOpen >= InpThesisHoldMinHoldMinutes && peakPips >= 100.0);
       case XAU_CONTEXT_STRONG_TREND:
          return false;
       case XAU_CONTEXT_NORMAL_PULLBACK:
@@ -9290,7 +9348,7 @@ bool XAU_SmartExit3Layer(ulong ticket, bool isBuy, double openPx, double curPric
 // (tighter) context-based lock unchanged. Lot size is untouched everywhere.
 struct XAU_ProfitQuality
 {
-   double profitR;
+   double profitPips;
    double profitATR;
    double spreadCostUSD;
    double spreadImpactPct;
@@ -9311,7 +9369,10 @@ XAU_ProfitQuality XAU_AssessProfitQuality(double profit, double peak, double rDo
                                           bool severeGivebackAlready, double lotsOpen)
 {
    XAU_ProfitQuality q;
-   q.profitR = (rDollars > 0.0) ? profit / rDollars : 0.0;
+   // v6.26.0: pips-of-this-trade's-own-risk-distance (was raw R-multiple) --
+   // x100.0 matches InpProfitQualityMinPips/BigWinPipsMultiple's own x100
+   // rescale, so both threshold comparisons below are unchanged.
+   q.profitPips = (rDollars > 0.0) ? (profit / rDollars) * 100.0 : 0.0;
    double atrUSD = (slDist > 0.0 && atr > 0.0) ? (atr / slDist) * rDollars : 0.0;
    q.profitATR = (atrUSD > 0.0) ? profit / atrUSD : 0.0;
    double spreadPts = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
@@ -9320,10 +9381,10 @@ XAU_ProfitQuality XAU_AssessProfitQuality(double profit, double peak, double rDo
    q.spreadImpactPct = (profit > 0.0) ? (q.spreadCostUSD / profit) * 100.0 : 0.0;
    q.givebackPct = (peak > 0.0 && profit < peak) ? ((peak - profit) / peak) * 100.0 : 0.0;
    q.thesisStillValid = thesisRunnerClean;
-   q.tinyProfit = (q.profitR < InpProfitQualityMinR);
+   q.tinyProfit = (q.profitPips < InpProfitQualityMinPips);
    q.spreadDominates = (profit > 0.0 && q.spreadCostUSD > 0.0 &&
                         q.spreadImpactPct >= InpProfitQualitySpreadImpactPct);
-   q.bigWin = (q.profitR >= InpProfitQualityBigWinRMultiple);
+   q.bigWin = (q.profitPips >= InpProfitQualityBigWinPipsMultiple);
    q.exitStrength = (structureConfirmedBroken ? 2 : 0) + (!trendAligned ? 1 : 0) +
                     (momentumScore <= 2 ? 1 : 0) + (severeGivebackAlready ? 1 : 0);
    if(q.exitStrength > 5) q.exitStrength = 5;
@@ -9349,7 +9410,7 @@ XAU_ProfitQuality XAU_AssessProfitQuality(double profit, double peak, double rDo
 string XAU_ProfitQualityTelemetry(const XAU_ProfitQuality &q, double profit, double peak, string closeKind)
 {
    return StringFormat("NetProfitAfterCosts=$%.2f ProfitR=%.2f ProfitATR=%.2f PeakProfit=$%.2f GivebackPct=%.0f%% SpreadCostImpact=%.0f%% ThesisStillValid=%s ExitStrength=%d Decision=%s CloseKind=%s WouldRunnerRemain=%s AccountNormalizedProfit=%.2f%% LotSizeInfluence=%.2f",
-                        profit, q.profitR, q.profitATR, peak, q.givebackPct, q.spreadImpactPct,
+                        profit, q.profitPips, q.profitATR, peak, q.givebackPct, q.spreadImpactPct,
                         q.thesisStillValid ? "YES" : "NO", q.exitStrength, q.decision,
                         closeKind, (closeKind == "FULL_CLOSE") ? "NO" : "YES",
                         q.accountNormalizedProfit, q.lotSizeInfluence);
@@ -9386,10 +9447,10 @@ bool XAU_ProtectPeakProfitFloor(ulong ticket, bool isBuy, double openPx, double 
    armUSD = MathMax(armUSD, InpProtectedPeakMinRetainUSD); // never lower than the min-retain floor itself
    // v6.17.20: the two candidates above (and the min-retain floor) are all
    // flat-$/account-tier figures that don't know THIS position's actual lot
-   // size -- floor the final result at InpExitArmMinOwnR of this trade's own
+   // size -- floor the final result at InpExitArmMinOwnPips of this trade's own
    // R so a bigger (e.g. account-lot-floored) lot can never arm sooner in
    // R-terms than a smaller one would.
-   armUSD = XAU_MinArmUSDForOwnR(armUSD, rDollars);
+   armUSD = XAU_MinArmUSDForOwnPips(armUSD, rDollars);
    if(peak < armUSD) return false;
 
    int idx = XAU_EnsureProfitFloorIndex(ticket);
@@ -10379,7 +10440,7 @@ double GetVolAdaptiveMult()
 //|   • Volatility spike/calm (existing v4.5.1 logic)                |
 //| v4.5.3 CONVICTION RUNNER — if the trade was entered at           |
 //|   ≥ InpConvRunMinConf% AI confidence AND is already              |
-//|   ≥ InpConvRunMinR in profit, widen to InpConvRunnerMulti × ATR. |
+//|   ≥ InpConvRunMinPips in profit, widen to InpConvRunnerMulti × ATR. |
 //|   These are the trades where both AIs said "textbook setup" AND  |
 //|   the market has already validated it — ride them for max gain.  |
 //+------------------------------------------------------------------+
@@ -10394,7 +10455,7 @@ double GetTrailATRMulti(double profitRRatio = 0.0)
       else if(volMult > 1.05) baseF = InpCapTrailCalmMulti;
       // Conviction runner overlay even when trend-aware is off
       if(InpConvictionRunner && currentTradeConfidence >= InpConvRunMinConf &&
-         profitRRatio >= InpConvRunMinR)
+         profitRRatio >= InpConvRunMinPips)
          return MathMax(baseF, InpConvRunnerMulti);
       return baseF;
    }
@@ -10451,7 +10512,7 @@ double GetTrailATRMulti(double profitRRatio = 0.0)
    // is already ≥+2R in profit, upgrade to the monster-runner trail. This is the
    // "textbook setup validated by market" case — let it run for max profit.
    if(InpConvictionRunner && currentTradeConfidence >= InpConvRunMinConf &&
-      profitRRatio >= InpConvRunMinR)
+      profitRRatio >= InpConvRunMinPips)
    {
       double convTrail = InpConvRunnerMulti;
       if(convTrail > base)
@@ -11004,18 +11065,25 @@ string PropFirmLossLockReason()
 bool XAU_RunOwnerRExitSelfTests()
 {
    int passed=0,failed=0;
-   double g039=XAU_ComputeOwnerRequiredFloorR(0.39,OWNER_EXIT_GENERAL);
-   double g040=XAU_ComputeOwnerRequiredFloorR(0.40,OWNER_EXIT_GENERAL);
-   double g080=XAU_ComputeOwnerRequiredFloorR(0.80,OWNER_EXIT_GENERAL);
-   double b049=XAU_ComputeOwnerRequiredFloorR(0.49,OWNER_EXIT_BREAKOUT);
-   double b050=XAU_ComputeOwnerRequiredFloorR(0.50,OWNER_EXIT_BREAKOUT);
-   double b100=XAU_ComputeOwnerRequiredFloorR(1.00,OWNER_EXIT_BREAKOUT);
-   double p024=XAU_ComputeOwnerRequiredFloorR(0.24,OWNER_EXIT_PYRAMID);
-   double p025=XAU_ComputeOwnerRequiredFloorR(0.25,OWNER_EXIT_PYRAMID);
-   double p030=XAU_ComputeOwnerRequiredFloorR(0.30,OWNER_EXIT_PYRAMID);
-   double p050=XAU_ComputeOwnerRequiredFloorR(0.50,OWNER_EXIT_PYRAMID);
-   double p070=XAU_ComputeOwnerRequiredFloorR(0.70,OWNER_EXIT_PYRAMID);
-   double p100=XAU_ComputeOwnerRequiredFloorR(1.00,OWNER_EXIT_PYRAMID);
+   // v6.26.0: riskDistancePips=1.0 keeps every bare-fraction test value below
+   // numerically identical to its pre-migration meaning (0.40*1.0 == 0.40) --
+   // these self-test values describe a REFERENCE trade whose own risk
+   // distance is exactly 1.0 pips-worth of the (now-explicit) scaling unit,
+   // proving the fraction-of-riskDistance logic itself, not a specific
+   // real-world pip count.
+   double refRiskDistancePips=1.0;
+   double g039=XAU_ComputeOwnerRequiredFloorPips(0.39,refRiskDistancePips,OWNER_EXIT_GENERAL);
+   double g040=XAU_ComputeOwnerRequiredFloorPips(0.40,refRiskDistancePips,OWNER_EXIT_GENERAL);
+   double g080=XAU_ComputeOwnerRequiredFloorPips(0.80,refRiskDistancePips,OWNER_EXIT_GENERAL);
+   double b049=XAU_ComputeOwnerRequiredFloorPips(0.49,refRiskDistancePips,OWNER_EXIT_BREAKOUT);
+   double b050=XAU_ComputeOwnerRequiredFloorPips(0.50,refRiskDistancePips,OWNER_EXIT_BREAKOUT);
+   double b100=XAU_ComputeOwnerRequiredFloorPips(1.00,refRiskDistancePips,OWNER_EXIT_BREAKOUT);
+   double p024=XAU_ComputeOwnerRequiredFloorPips(0.24,refRiskDistancePips,OWNER_EXIT_PYRAMID);
+   double p025=XAU_ComputeOwnerRequiredFloorPips(0.25,refRiskDistancePips,OWNER_EXIT_PYRAMID);
+   double p030=XAU_ComputeOwnerRequiredFloorPips(0.30,refRiskDistancePips,OWNER_EXIT_PYRAMID);
+   double p050=XAU_ComputeOwnerRequiredFloorPips(0.50,refRiskDistancePips,OWNER_EXIT_PYRAMID);
+   double p070=XAU_ComputeOwnerRequiredFloorPips(0.70,refRiskDistancePips,OWNER_EXIT_PYRAMID);
+   double p100=XAU_ComputeOwnerRequiredFloorPips(1.00,refRiskDistancePips,OWNER_EXIT_PYRAMID);
    bool checks[26];
    checks[0]=MathAbs(g039)<0.000001;
    checks[1]=MathAbs(g040-0.30)<0.000001;
@@ -11023,20 +11091,20 @@ bool XAU_RunOwnerRExitSelfTests()
    checks[3]=MathAbs(b049)<0.000001;
    checks[4]=MathAbs(b050-0.40)<0.000001;
    checks[5]=MathAbs(b100-0.70)<0.000001;
-   checks[6]=!XAU_OwnerRExitDecisionAllowsClose(0.45,0.26,0.30,OWNER_EXIT_GENERAL,"PROFIT_CLOSE");
-   checks[7]=!XAU_OwnerRExitDecisionAllowsClose(0.39,0.20,0.0,OWNER_EXIT_GENERAL,"R_EXIT_GIVEBACK_45");
-   checks[8]=!XAU_OwnerRExitDecisionAllowsClose(0.45,0.29,0.30,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_FLOOR_BREACH");
-   checks[9]=XAU_OwnerRExitDecisionAllowsClose(0.45,0.30,0.30,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_FLOOR_BREACH");
-   checks[10]=!XAU_OwnerRExitDecisionAllowsClose(1.00,0.69,0.70,OWNER_EXIT_BREAKOUT,"OWNER_R_EXIT_FLOOR_BREACH");
-   checks[11]=XAU_OwnerRExitDecisionAllowsClose(1.00,0.70,0.70,OWNER_EXIT_BREAKOUT,"OWNER_R_EXIT_FLOOR_BREACH");
-   checks[12]=MathMax(0.56,XAU_ComputeOwnerRequiredFloorR(0.60,OWNER_EXIT_GENERAL))>=0.56;
+   checks[6]=!XAU_OwnerExitDecisionAllowsClose(0.45,0.26,0.30,refRiskDistancePips,OWNER_EXIT_GENERAL,"PROFIT_CLOSE");
+   checks[7]=!XAU_OwnerExitDecisionAllowsClose(0.39,0.20,0.0,refRiskDistancePips,OWNER_EXIT_GENERAL,"R_EXIT_GIVEBACK_45");
+   checks[8]=!XAU_OwnerExitDecisionAllowsClose(0.45,0.29,0.30,refRiskDistancePips,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_FLOOR_BREACH");
+   checks[9]=XAU_OwnerExitDecisionAllowsClose(0.45,0.30,0.30,refRiskDistancePips,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_FLOOR_BREACH");
+   checks[10]=!XAU_OwnerExitDecisionAllowsClose(1.00,0.69,0.70,refRiskDistancePips,OWNER_EXIT_BREAKOUT,"OWNER_R_EXIT_FLOOR_BREACH");
+   checks[11]=XAU_OwnerExitDecisionAllowsClose(1.00,0.70,0.70,refRiskDistancePips,OWNER_EXIT_BREAKOUT,"OWNER_R_EXIT_FLOOR_BREACH");
+   checks[12]=MathMax(0.56,XAU_ComputeOwnerRequiredFloorPips(0.60,refRiskDistancePips,OWNER_EXIT_GENERAL))>=0.56;
    checks[13]=!XAU_COUNTER_EXCURSION_BUILD;
-   checks[14]=!XAU_OwnerRExitDecisionAllowsClose(0.29,0.16,0.0,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_GIVEBACK_45");
-   checks[15]=XAU_OwnerRExitDecisionAllowsClose(0.30,0.16,0.0,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_GIVEBACK_45");
-   checks[16]=!XAU_OwnerRExitDecisionAllowsClose(0.45,0.26,0.30,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_GIVEBACK_45");
-   checks[17]=XAU_OwnerRExitDecisionAllowsClose(1.00,1.00,0.70,OWNER_EXIT_BREAKOUT,"OWNER_R_EXIT_TP_1R");
-   checks[18]=!XAU_OwnerRExitDecisionAllowsClose(0.39,0.20,0.0,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED");
-   checks[19]=XAU_OwnerRExitDecisionAllowsClose(0.50,0.35,0.35,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED");
+   checks[14]=!XAU_OwnerExitDecisionAllowsClose(0.29,0.16,0.0,refRiskDistancePips,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_GIVEBACK_45");
+   checks[15]=XAU_OwnerExitDecisionAllowsClose(0.30,0.16,0.0,refRiskDistancePips,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_GIVEBACK_45");
+   checks[16]=!XAU_OwnerExitDecisionAllowsClose(0.45,0.26,0.30,refRiskDistancePips,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_GIVEBACK_45");
+   checks[17]=XAU_OwnerExitDecisionAllowsClose(1.00,1.00,0.70,refRiskDistancePips,OWNER_EXIT_BREAKOUT,"OWNER_R_EXIT_TP_1R");
+   checks[18]=!XAU_OwnerExitDecisionAllowsClose(0.39,0.20,0.0,refRiskDistancePips,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED");
+   checks[19]=XAU_OwnerExitDecisionAllowsClose(0.50,0.35,0.35,refRiskDistancePips,OWNER_EXIT_GENERAL,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED");
    // v6.25.13 PYRAMID_0.25R_70PCT_POLICY boundary proof -- owner-specified examples:
    // peak 0.24 -> 0.00, 0.25 -> 0.20, 0.30 -> 0.21, 0.50 -> 0.35, 0.70 -> 0.49, 1.00 -> 0.70.
    checks[20]=MathAbs(p024)<0.000001;
@@ -11321,7 +11389,7 @@ int OnInit()
       g_stratWeight[si]  = 1.0;
       g_stratWins[si]    = 0;
       g_stratLosses[si]  = 0;
-      g_stratTotalR[si]  = 0.0;
+      g_stratTotalPips[si]  = 0.0;
       g_stratCount[si]   = 0;
    }
    LoadStratWeights();  // override with persisted values if file exists
@@ -11500,9 +11568,9 @@ int OnInit()
    Print("ADAPTIVE: ", InpAdaptiveGrades?"ON":"OFF",
          " (auto-tunes GradeB on recent WR) | AsiaBreakout: ", InpAsiaRangeBreakout?"ON":"OFF");
    Print("ARMOR v4.4.5: HardStop=",
-         InpHardStopRBased ? StringFormat("R-BASED %.1fR (adaptive)", InpHardStopRMulti)
+         InpHardStopPipsBased ? StringFormat("R-BASED %.1f pips-of-risk (adaptive)", InpHardStopDistanceMulti)
                            : StringFormat("$-ABS $%.2f", EffHardStopUSD()),
-         " | EarlyAdverse=", InpEarlyAdverseCut?"ON":"OFF", " (", InpEarlyAdverseMin, "min,", DoubleToString(InpEarlyAdverseR,1), "R)",
+         " | EarlyAdverse=", InpEarlyAdverseCut?"ON":"OFF", " (", InpEarlyAdverseMin, "min,", DoubleToString(InpEarlyAdversePips,1), "R)",
          " | PeakRetrace=", InpPeakRetraceExit?"ON":"OFF", " (", DoubleToString(InpPeakRetracePct,0), "%,min$", DoubleToString(EffPeakMinUSD(),2), ")",
          " | MomentumGuard=", InpMomentumGuard?"ON":"OFF", " (fade ≥", InpMomentumFadeScore, "/4)");
    Print("PYRAMID: ", InpAllowPyramid?"ON":"OFF",
@@ -11535,8 +11603,8 @@ int OnInit()
    Print("CONVICTION: ", InpConvictionSizing?"ON":"OFF",
          " | advisory telemetry only; AI confidence cannot change approved normal lot | NormalConf=", InpNormalAIConfidence,
          "% | HighConf=", InpHighAIConfidence, "%");
-   Print("TRAIL v4.5.2: BE activate=+", DoubleToString(InpBELockActivateR,2), "R  lock=+",
-         DoubleToString(InpBELockProfitR,2), "R",
+   Print("TRAIL v4.5.2: BE activate=+", DoubleToString(InpBELockActivatePips,1), " pips-of-risk  lock=+",
+         DoubleToString(InpBELockProfitPips,1), " pips-of-risk",
          " | TrendAware=", InpTrendAwareTrail?"ON":"OFF",
          " | Trend=", DoubleToString(InpTrendTrailMulti,2), "xATR",
          " StrongTrend=", DoubleToString(InpStrongTrendTrail,2), "xATR",
@@ -11546,10 +11614,10 @@ int OnInit()
          " | ClaudeAudit=", InpClaudeAuditSec, "s");
    Print("CONVICTION-RUNNER v4.5.3: ", InpConvictionRunner?"ON":"OFF",
          " | Min conf=", InpConvRunMinConf, "%",
-         " | Min profit=", DoubleToString(InpConvRunMinR,2), "R",
+         " | Min profit=", DoubleToString(InpConvRunMinPips,2), "R",
          " | Trail=", DoubleToString(InpConvRunnerMulti,2), "xATR (monster)");
    Print("PARTIAL-TP v4.5.4: ", (InpPartialTP && !InpCloudSafeDisablePartials)?"ON":"OFF",
-         " | Fires at +", DoubleToString(InpPartialTPAtR,2), "R",
+         " | Fires at +", DoubleToString(InpPartialTPAtPips,1), " pips-of-risk",
          " | Close ", DoubleToString(InpPartialPct*100, 0), "% of position",
          " | Skip on ≥", InpConvRunMinConf, "% conf=", InpPartialSkipHighConf?"Y":"N",
          " | CloudSafeNoPartials=", InpCloudSafeDisablePartials?"Y":"N");
@@ -14431,12 +14499,17 @@ void SaveStratWeights()
    string fn = XAU_StratWeightsFile();
    int h = FileOpen(fn, FILE_WRITE|FILE_CSV|FILE_COMMON, ',');
    if(h == INVALID_HANDLE) return;
-   FileWrite(h, "#XAUAI_StratWeights_v1");
-   FileWrite(h, "idx","weight","wins","losses","totalR","count");
+   // v6.26.0: v2 -- totalPips is now genuinely pips-of-risk (x100 of the old
+   // raw R-multiple accumulation). v1 files are deliberately never loaded by
+   // LoadStratWeights() below (version-mismatch discard), so a stale v1 file
+   // can never silently mix old-R-scale history with new-pips-scale future
+   // accumulation.
+   FileWrite(h, "#XAUAI_StratWeights_v2");
+   FileWrite(h, "idx","weight","wins","losses","totalPips","count");
    for(int i = 1; i <= 9; i++)
       FileWrite(h, IntegerToString(i), DoubleToString(g_stratWeight[i], 6),
                 IntegerToString(g_stratWins[i]), IntegerToString(g_stratLosses[i]),
-                DoubleToString(g_stratTotalR[i], 6), IntegerToString(g_stratCount[i]));
+                DoubleToString(g_stratTotalPips[i], 6), IntegerToString(g_stratCount[i]));
    FileClose(h);
 }
 
@@ -14447,6 +14520,20 @@ void LoadStratWeights()
    if(!FileIsExist(fn, FILE_COMMON)) return;
    int h = FileOpen(fn, FILE_READ|FILE_CSV|FILE_COMMON, ',');
    if(h == INVALID_HANDLE) return;
+   // v6.26.0: version-mismatch discard -- a pre-migration v1 file's totalPips
+   // column is raw R-multiples, not pips-of-risk. Loading it into the new
+   // g_stratTotalPips (now pips-scale) would silently mix scales and corrupt
+   // the adaptive weight calculation. Any file not exactly tagged v2 is
+   // discarded wholesale; the strategy simply starts re-accumulating fresh
+   // (same safe-discard pattern as R_EXIT_STATE_SCHEMA_VERSION elsewhere).
+   string versionLine = FileReadString(h);
+   if(versionLine != "#XAUAI_StratWeights_v2")
+   {
+      FileClose(h);
+      Print("STRATEGY WEIGHTS FILE DISCARDED (version mismatch, expected v2, got '", versionLine,
+            "') -- pre-migration R-scale data cannot be safely mixed with pips-scale data. Starting fresh.");
+      return;
+   }
    bool header = true;
    while(!FileIsEnding(h))
    {
@@ -14457,14 +14544,14 @@ void LoadStratWeights()
       string wtStr   = FileReadString(h);
       string winsStr = FileReadString(h);
       string lossStr = FileReadString(h);
-      string totalR  = FileReadString(h);
+      string totalPips  = FileReadString(h);
       string cntStr  = FileReadString(h);
       if(idx >= 1 && idx <= 9)
       {
          g_stratWeight[idx]  = MathMax(0.70, MathMin(1.20, StringToDouble(wtStr)));
          g_stratWins[idx]    = (int)StringToInteger(winsStr);
          g_stratLosses[idx]  = (int)StringToInteger(lossStr);
-         g_stratTotalR[idx]  = StringToDouble(totalR);
+         g_stratTotalPips[idx]  = StringToDouble(totalPips);
          g_stratCount[idx]   = (int)StringToInteger(cntStr);
       }
    }
@@ -14602,7 +14689,7 @@ void XAU_ComputeStructuralSL(int signal, double atr, double entryPrice, double a
 // v6.24.4 TRADE HORIZON CLASSIFIER — reads the already-computed
 // XAU_AdaptiveTransitionDecision (g_transitionDecision, refreshed every
 // closed bar by XAU_AdaptiveMarketTransitionEngine) instead of new signal
-// math. remainingRewardR/oppositeRemainingRewardR are already in R-multiples
+// math. remainingRewardPips/oppositeRemainingRewardPips are already in R-multiples
 // of the ATR-based SL distance (see line ~10927/10938); entryLocationQuality
 // is 0-100 (XAU_ATClamp). isPyramidAdd/isCounterExcursion/isReversalCandidate
 // are supplied by the caller because they describe *which path* is calling,
@@ -14618,12 +14705,12 @@ ENUM_XAU_TRADE_HORIZON XAU_ClassifyTradeHorizon(int signal, bool isPyramidAdd,
    bool oppositeConfirmed   = (td.lifecycle == OPPOSITE_DIRECTION_CONFIRMED);
    if(!alignedWithDominant && oppositeConfirmed) return XAU_HORIZON_REVERSAL;
 
-   double roomR = alignedWithDominant ? td.remainingRewardR : td.oppositeRemainingRewardR;
-   if(roomR < 1.0) return XAU_HORIZON_SCALP;
+   double roomPips = alignedWithDominant ? td.remainingRewardPips : td.oppositeRemainingRewardPips;
+   if(roomPips < 1.0) return XAU_HORIZON_SCALP;
 
    bool earlyOrHealthy = (td.lifecycle == TREND_EARLY || td.lifecycle == TREND_DEVELOPING ||
                           td.lifecycle == TREND_HEALTHY);
-   if(roomR >= 3.0 && td.entryLocationQuality >= 60.0 && earlyOrHealthy)
+   if(roomPips >= 3.0 && td.entryLocationQuality >= 60.0 && earlyOrHealthy)
       return XAU_HORIZON_SWING_RUNNER;
 
    return XAU_HORIZON_INTRADAY_TREND;
@@ -14716,7 +14803,7 @@ ENUM_XAU_MARKET_THESIS_ACTION XAU_MarketThesisAction(int signal, bool isPyramidA
                                                      ENUM_XAU_STRUCTURE_STATE structure,
                                                      const XAU_AdaptiveTransitionDecision &td, string &reason)
 {
-   double roomR = (signal == td.dominantDirection) ? td.remainingRewardR : td.oppositeRemainingRewardR;
+   double roomPips = (signal == td.dominantDirection) ? td.remainingRewardPips : td.oppositeRemainingRewardPips;
 
    // Priority 1: account/broker safety and snapshot freshness/integrity are
    // owned by the caller (g_latestDecisionSnapshot.valid, margin/exposure
@@ -14728,7 +14815,7 @@ ENUM_XAU_MARKET_THESIS_ACTION XAU_MarketThesisAction(int signal, bool isPyramidA
    { reason = "structure invalidated: confirmed opposite BOS+HTF"; return HARD_BLOCK; }
 
    // Priority 3: no realistic remaining reward at an extreme location.
-   if(loc == LOCATION_EXTREME && roomR < 0.5)
+   if(loc == LOCATION_EXTREME && roomPips < 0.5)
    { reason = "extreme location, no realistic remaining reward"; return HARD_BLOCK; }
 
    // Priority 4: campaign/direction state -- opposite-side observation.
@@ -14907,8 +14994,8 @@ struct XAU_M10EvidenceSnapshot
 
    string   pullbackState;
    string   locationState;
-   double   buyRoomR;
-   double   sellRoomR;
+   double   buyRoomPips;
+   double   sellRoomPips;
 
    string   volatilityState;
    string   newsState;
@@ -15133,8 +15220,8 @@ struct XAU_M10EvidenceRecord
    string   pullbackState;
    string   locationState;
 
-   double   buyRoomR;
-   double   sellRoomR;
+   double   buyRoomPips;
+   double   sellRoomPips;
 
    string   volatilityState;
    string   newsState;
@@ -15179,7 +15266,7 @@ void XAU_SaveM10EvidenceHistory()
                 r.structureState, r.bullishBos ? 1 : 0, r.bearishBos ? 1 : 0,
                 r.bullishReclaim ? 1 : 0, r.bearishReclaim ? 1 : 0,
                 r.bullishDisplacement ? 1 : 0, r.bearishDisplacement ? 1 : 0,
-                r.pullbackState, r.locationState, r.buyRoomR, r.sellRoomR,
+                r.pullbackState, r.locationState, r.buyRoomPips, r.sellRoomPips,
                 r.volatilityState, r.newsState, r.buyCaseScore, r.sellCaseScore,
                 r.preferredDirection, r.m10DecisionType, r.exactReason);
    }
@@ -15232,7 +15319,7 @@ bool XAU_RebuildM10HistoryFromClosedBrokerEvidence()
       r.bullishReclaim = FileReadNumber(fh)>0.5; r.bearishReclaim = FileReadNumber(fh)>0.5;
       r.bullishDisplacement = FileReadNumber(fh)>0.5; r.bearishDisplacement = FileReadNumber(fh)>0.5;
       r.pullbackState = FileReadString(fh); r.locationState = FileReadString(fh);
-      r.buyRoomR = FileReadNumber(fh); r.sellRoomR = FileReadNumber(fh);
+      r.buyRoomPips = FileReadNumber(fh); r.sellRoomPips = FileReadNumber(fh);
       r.volatilityState = FileReadString(fh); r.newsState = FileReadString(fh);
       r.buyCaseScore = FileReadNumber(fh); r.sellCaseScore = FileReadNumber(fh);
       r.preferredDirection = (int)FileReadNumber(fh); r.m10DecisionType = FileReadString(fh); r.exactReason = FileReadString(fh);
@@ -15305,8 +15392,8 @@ void XAU_RecordM10EvidenceIfNew()
    rec.bearishDisplacement= g_m10Snapshot.bearishDisplacement;
    rec.pullbackState      = g_m10Snapshot.pullbackState;
    rec.locationState      = g_m10Snapshot.locationState;
-   rec.buyRoomR           = g_m10Snapshot.buyRoomR;
-   rec.sellRoomR          = g_m10Snapshot.sellRoomR;
+   rec.buyRoomPips           = g_m10Snapshot.buyRoomPips;
+   rec.sellRoomPips          = g_m10Snapshot.sellRoomPips;
    rec.volatilityState    = g_m10Snapshot.volatilityState;
    rec.newsState           = g_m10Snapshot.newsState;
    rec.buyCaseScore        = g_m10Decision.buyCaseScore;
@@ -15728,7 +15815,7 @@ XAU_M30ConsensusDecision XAU_BuildM30ConsensusDecision()
    else
    {
       bool newestLocationPoor = (newest.locationState == "LOCATION_LATE" || newest.locationState == "LOCATION_EXTREME");
-      double remainingRoom = (dominant==1) ? newest.buyRoomR : newest.sellRoomR;
+      double remainingRoom = (dominant==1) ? newest.buyRoomPips : newest.sellRoomPips;
       bool structureInvalidatesDirection =
          (dominant==1 && newest.bearishBos && !newest.bullishReclaim) ||
          (dominant==-1 && newest.bullishBos && !newest.bearishReclaim);
@@ -15743,7 +15830,7 @@ XAU_M30ConsensusDecision XAU_BuildM30ConsensusDecision()
       {
          d.decisionType = (dominant==1) ? M30_DECISION_BUY_CANDIDATE : M30_DECISION_SELL_CANDIDATE;
          d.retracementRequired = newestLocationPoor || remainingRoom < 0.30;
-         reason = StringFormat("weighted%s=%.1f beats weighted%s=%.1f by %.1f (>=10.0), %d/3 observations agree, newest confirms; location=%s room=%.2fR are evidence for the single 120-180s revalidation window and never create a second wait",
+         reason = StringFormat("weighted%s=%.1f beats weighted%s=%.1f by %.1f (>=10.0), %d/3 observations agree, newest confirms; location=%s room=%.2f pips-of-risk are evidence for the single 120-180s revalidation window and never create a second wait",
                                 dominant==1?"Buy":"Sell", dominantScore, dominant==1?"Sell":"Buy", (dominant==1?weightedSell:weightedBuy),
                                 scoreGap, dominant==1?buyWins:sellWins, newest.locationState, remainingRoom);
       }
@@ -16140,8 +16227,8 @@ XAU_M10EvidenceSnapshot XAU_BuildM10EvidenceSnapshot()
    s.structureState = EnumToString(structBucket);
    s.pullbackState  = EnumToString(XAU_BucketTiming(td));
    s.locationState  = EnumToString(XAU_BucketLocation(td));
-   s.buyRoomR   = (dir == 1) ? td.remainingRewardR : (dir == -1 ? td.oppositeRemainingRewardR : 0.0);
-   s.sellRoomR  = (dir == -1) ? td.remainingRewardR : (dir == 1 ? td.oppositeRemainingRewardR : 0.0);
+   s.buyRoomPips   = (dir == 1) ? td.remainingRewardPips : (dir == -1 ? td.oppositeRemainingRewardPips : 0.0);
+   s.sellRoomPips  = (dir == -1) ? td.remainingRewardPips : (dir == 1 ? td.oppositeRemainingRewardPips : 0.0);
 
    double curAtr = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
    double avgAtr = XAU_AvgATR(40);
@@ -16193,7 +16280,7 @@ double XAU_ScoreDirectionCase(const XAU_AdaptiveTransitionDecision &td, int case
       trendComponent       = td.continuationConfidence;
       pressureComponent    = (caseDirection == 1) ? td.buyConfidence : td.sellConfidence;
       exhaustionComponent  = XAU_AnchorScore(td.exhaustionProbability, 0.0, 100.0); // high exhaustion hurts the continuing side
-      roomComponent        = XAU_AnchorScore(td.remainingRewardR, 3.0, 0.0);
+      roomComponent        = XAU_AnchorScore(td.remainingRewardPips, 3.0, 0.0);
    }
    else
    {
@@ -16206,7 +16293,7 @@ double XAU_ScoreDirectionCase(const XAU_AdaptiveTransitionDecision &td, int case
       double reactionBonus = (td.oppositeReclaim ? 15.0 : 0.0) + (td.oppositeRetestHeld ? 10.0 : 0.0) + (td.oppositeDisplacement ? 10.0 : 0.0);
       locationComponent    = MathMax(0.0, MathMin(100.0, extensionSupport * 0.65 + reactionBonus));
       exhaustionComponent  = XAU_AnchorScore(td.exhaustionProbability, 100.0, 0.0); // high dominant-side exhaustion genuinely supports the reversal case
-      roomComponent        = XAU_AnchorScore(td.oppositeRemainingRewardR, 3.0, 0.0);
+      roomComponent        = XAU_AnchorScore(td.oppositeRemainingRewardPips, 3.0, 0.0);
    }
 
    return trendComponent * 0.25 + pressureComponent * 0.20 + structureComponent * 0.15 +
@@ -16376,12 +16463,12 @@ void LogM10SignalAnalysis(const XAU_M10SignalDecision &d)
 
    PrintFormat("M10_SIGNAL_ANALYSIS | evidenceId=%d barTime=%s trendState=%s buyPressure=%.1f buySlope=%.1f "
                "sellPressure=%.1f sellSlope=%.1f buyCaseScore=%.1f sellCaseScore=%.1f continuationScore=%.1f "
-               "exhaustionScore=%.1f exhaustionPct=%.1f structure=%s location=%s buyRoomR=%.2f sellRoomR=%.2f "
+               "exhaustionScore=%.1f exhaustionPct=%.1f structure=%s location=%s buyRoomPips=%.2f sellRoomPips=%.2f "
                "preferredDirection=%s decision=%s confidence=%.1f reason=%s",
                (int)d.evidenceId, TimeToString(g_m10Snapshot.closedBarTime, TIME_DATE | TIME_MINUTES), g_m10Snapshot.trendState,
                g_m10Snapshot.buyPressure, g_m10Snapshot.buyPressureSlope, g_m10Snapshot.sellPressure, g_m10Snapshot.sellPressureSlope,
                d.buyCaseScore, d.sellCaseScore, g_m10Snapshot.continuationScore, g_m10Snapshot.exhaustionScore, g_m10Snapshot.exhaustionPct,
-               g_m10Snapshot.structureState, g_m10Snapshot.locationState, g_m10Snapshot.buyRoomR, g_m10Snapshot.sellRoomR,
+               g_m10Snapshot.structureState, g_m10Snapshot.locationState, g_m10Snapshot.buyRoomPips, g_m10Snapshot.sellRoomPips,
                d.preferredDirection == 1 ? "BUY" : (d.preferredDirection == -1 ? "SELL" : "NONE"),
                XAU_M10DecisionName(d.decisionType), d.confidence, d.exactReason);
 }
@@ -16779,7 +16866,7 @@ bool XAU_ValidateAdaptiveTransitionConfig()
        InpTransitionPreferredOppositeAt<=InpTransitionExhaustThreshold || InpTransitionPreferredOppositeAt>100.0 ||
        InpTransitionProbabilityThreshold<=0.0 || InpTransitionProbabilityThreshold>100.0 ||
        InpTransitionReversalThreshold<InpTransitionProbabilityThreshold || InpTransitionReversalThreshold>100.0 ||
-       InpTransitionMinRewardR<=0.0 || InpTransitionMinRewardR>10.0 ||
+       InpTransitionMinRewardPips<=0.0 || InpTransitionMinRewardPips>10.0 ||
        InpTransitionFastConfirmSeconds<15 || InpTransitionFastConfirmSeconds>60 ||
        InpTransitionOldConfidenceCap<0.0 || InpTransitionOldConfidenceCap>45.0 ||
        InpTransitionCounterDecayMinutes<15 || InpTransitionCounterDecayMinutes>1440 ||
@@ -16796,11 +16883,11 @@ bool XAU_ValidateAdaptiveTransitionConfig()
            InpAdaptiveTransitionPresetId!="XAUUSD_AI_Sniper_EA_v6.24.1_ACTIVE.set")
       why="ACTIVE preset identity does not match the production v6.24.0 ACTIVE preset";
 
-   PrintFormat("ADAPTIVE_TRANSITION_AUTHORITY_CONFIG mode=%s exhaustionHardBlock=%.0f preferredOppositeAt=%.0f persistence=%d transitionAt=%.0f reversalAt=%.0f fastConfirmSec=%d minRewardR=%.2f maxOriginATR=%.2f maxValueATR=%.2f maxConsumedPct=%.0f pullbackResetATR=%.2f evidenceWindowBars=%d opportunityMaxBars=%d oldConfidenceCap=%.0f counterDecayMin=%d activeExitAuthority=%s valid=%s%s%s",
+   PrintFormat("ADAPTIVE_TRANSITION_AUTHORITY_CONFIG mode=%s exhaustionHardBlock=%.0f preferredOppositeAt=%.0f persistence=%d transitionAt=%.0f reversalAt=%.0f fastConfirmSec=%d minRewardPips=%.2f maxOriginATR=%.2f maxValueATR=%.2f maxConsumedPct=%.0f pullbackResetATR=%.2f evidenceWindowBars=%d opportunityMaxBars=%d oldConfidenceCap=%.0f counterDecayMin=%d activeExitAuthority=%s valid=%s%s%s",
                InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_SHADOW?"SHADOW":"OFF",
                InpTransitionExhaustThreshold,InpTransitionPreferredOppositeAt,InpTransitionPersistenceBars,
                InpTransitionProbabilityThreshold,InpTransitionReversalThreshold,InpTransitionFastConfirmSeconds,
-               InpTransitionMinRewardR,InpTransitionMaxOriginExtensionATR,InpTransitionMaxValueDistanceATR,
+               InpTransitionMinRewardPips,InpTransitionMaxOriginExtensionATR,InpTransitionMaxValueDistanceATR,
                InpTransitionMaxConsumedPct,InpTransitionPullbackResetATR,InpTransitionEvidenceWindowBars,InpTransitionOpportunityMaxBars,InpTransitionOldConfidenceCap,
                InpTransitionCounterDecayMinutes,InpTransitionActiveExitAuthority?"true":"false",
                StringLen(why)==0?"true":"false",StringLen(why)>0?" invalidReason=":"",why);
@@ -17067,20 +17154,20 @@ double XAU_CounterTransitionEvidence()
 }
 
 void XAU_RecordCounterTransitionEvidence(int direction, double candidateScore,
-                                         double mfeR, double maeR, double realizedR,
+                                         double mfePips, double maePips, double realizedPips,
                                          bool structureAligned)
 {
    if(direction != 1 && direction != -1) return;
    XAU_ATLoadPersistentState();
    double quality = XAU_ATClamp(candidateScore / 6.0 * 35.0 +
-                                 MathMax(0.0, mfeR) * 55.0 +
-                                 MathMax(0.0, realizedR) * 25.0 -
-                                 MathMax(0.0, maeR - 0.35) * 20.0 +
+                                 MathMax(0.0, mfePips) * 55.0 +
+                                 MathMax(0.0, realizedPips) * 25.0 -
+                                 MathMax(0.0, maePips - 0.35) * 20.0 +
                                  (structureAligned ? 12.0 : 0.0));
    // A failure records weak negative feedback; one counter event can never
    // force reversal because the final gate still requires structure,
    // persistence, reclaim, retest and displacement.
-   if(mfeR < 0.20 && realizedR < 0.0) quality = -MathMin(25.0, 10.0 + MathAbs(realizedR) * 15.0);
+   if(mfePips < 0.20 && realizedPips < 0.0) quality = -MathMin(25.0, 10.0 + MathAbs(realizedPips) * 15.0);
    double prior = XAU_CounterTransitionEvidence();
    g_counterTransitionEvidence = XAU_ATClamp(prior * 0.55 + direction * quality, -100.0, 100.0);
    g_counterTransitionEvidenceAt = TimeCurrent();
@@ -17090,8 +17177,8 @@ void XAU_RecordCounterTransitionEvidence(int direction, double candidateScore,
    // evidence.  Price/structure inputs remain closed-bar-only.
    g_transitionLastComputedBar = 0;
    XAU_ATSavePersistentState();
-   PrintFormat("[COUNTER_TRANSITION_EVIDENCE] counterDirection=%s score=%.1f MFE=%.3f MAE=%.3f outcomeR=%.3f structureAligned=%s normalContinuationConfidenceImpact=%.1f decayMinutes=%d",
-               direction == 1 ? "BUY" : "SELL", candidateScore, mfeR, maeR, realizedR,
+   PrintFormat("[COUNTER_TRANSITION_EVIDENCE] counterDirection=%s score=%.1f MFE=%.3f MAE=%.3f outcomePips=%.3f structureAligned=%s normalContinuationConfidenceImpact=%.1f decayMinutes=%d",
+               direction == 1 ? "BUY" : "SELL", candidateScore, mfePips, maePips, realizedPips,
                structureAligned ? "true" : "false", direction * quality, InpTransitionCounterDecayMinutes);
 }
 
@@ -17119,8 +17206,8 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    d.lifecycle = TREND_EARLY;
    d.existingBuyAction = TRANSITION_HOLD;
    d.existingSellAction = TRANSITION_HOLD;
-   d.remainingRewardR = 9.0;
-   d.oppositeRemainingRewardR = 0.0;
+   d.remainingRewardPips = 9.0;
+   d.oppositeRemainingRewardPips = 0.0;
    d.entryLocationQuality = 0.0;
    d.entryDecision = "REVERSAL_FORMING_NOT_READY";
 
@@ -17258,7 +17345,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    // normal initial-risk geometry (2.2 ATR proxy). At an exhausted extreme
    // this approaches zero even while H1 still points in the old direction.
    double room = dir==1 ? rangeHigh-c1 : c1-rangeLow;
-   d.remainingRewardR = MathMax(0.0, room / MathMax(atr*2.2, atr));
+   d.remainingRewardPips = MathMax(0.0, room / MathMax(atr*2.2, atr));
    // Direction and entry value are separate.  Opposite reward uses the next
    // LOCAL obstacle, not the exhausted old-direction room and not the full
    // 24h extreme.  This is the quantity a reversal order can actually earn.
@@ -17269,20 +17356,20 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
       localObstacleLow=MathMin(localObstacleLow,iLow(Symbol(),XAU_PRIMARY_DECISION_TF,i));
    }
    double oppositeRoom=dir==-1?localObstacleHigh-c1:c1-localObstacleLow;
-   d.oppositeRemainingRewardR=MathMax(0.0,oppositeRoom/MathMax(atr*2.2,atr));
+   d.oppositeRemainingRewardPips=MathMax(0.0,oppositeRoom/MathMax(atr*2.2,atr));
    d.counterEvidence = XAU_CounterTransitionEvidence();
    double counterOpposite = dir==-1 ? MathMax(0.0,d.counterEvidence) : MathMax(0.0,-d.counterEvidence);
 
    d.trendMaturity = XAU_ATClamp(d.distanceTravelledATR*14.0 + d.sessionRangeConsumed*0.42);
    d.continuationConfidence = XAU_ATClamp(continuationQuality - absorption*0.18 - oppositeMomentum*0.15 - counterOpposite*0.12);
    bool oldDirectionFailureActive=(g_sameDirLossStreak>0 && g_lastLossDir==dir);
-   double rawExhaustion = XAU_ATClamp(d.trendMaturity*0.34 + (100.0-d.continuationConfidence)*0.28 + absorption*0.18 + oppositeMomentum*0.10 + (d.remainingRewardR<1.0?25.0:0.0) + counterOpposite*0.10 + (oldDirectionFailureActive?12.0:0.0));
+   double rawExhaustion = XAU_ATClamp(d.trendMaturity*0.34 + (100.0-d.continuationConfidence)*0.28 + absorption*0.18 + oppositeMomentum*0.10 + (d.remainingRewardPips<1.0?25.0:0.0) + counterOpposite*0.10 + (oldDirectionFailureActive?12.0:0.0));
    // Exhaustion memory is evidence-decayed, never bar-count-decayed.  The
    // 2026-07-14 failure (86% -> forgotten -> SELL again) is impossible here:
    // only a genuine reset package may lower a remembered high reading.
    bool realContinuationReset = freshProgress && continuationQuality>=82.0 &&
                                 oppositeMomentum<=30.0 && failedExtremes<=1 &&
-                                d.remainingRewardR>=InpTransitionMinRewardR;
+                                d.remainingRewardPips>=InpTransitionMinRewardPips;
    if(g_transitionPersistentDirection!=dir)
    {
       g_transitionPersistentDirection=dir;
@@ -17303,7 +17390,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
                "momentumDecayScore=%.2f rejectionScore=%.2f oppositePressureScore=%.2f remainingRoomScore=%.2f "
                "rawScore=%.2f finalPct=%.2f dataTimestamp=%s dataFreshnessSec=%d",
                dir==1?"BUY":"SELL", d.trendMaturity, d.sessionRangeConsumed, 100.0-d.continuationConfidence,
-               absorption, absorption, oppositeMomentum, MathMin(100.0, d.remainingRewardR*33.3),
+               absorption, absorption, oppositeMomentum, MathMin(100.0, d.remainingRewardPips*33.3),
                rawExhaustion, d.exhaustionProbability, TimeToString(bar, TIME_DATE|TIME_SECONDS), barAgeSec);
    if(d.exhaustionProbability>=70.0)
       d.continuationConfidence=MathMin(d.continuationConfidence,45.0);
@@ -17341,19 +17428,19 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    bool bearishDisplacement = (dir ==  1) ? d.oppositeDisplacement : false;
    double bullishBodyShare  = (dir ==  1) ? (100.0 - oppositeMomentum) : oppositeMomentum;
    double bearishBodyShare  = (dir == -1) ? (100.0 - oppositeMomentum) : oppositeMomentum;
-   double buyRoomR  = (dir ==  1) ? d.remainingRewardR : d.oppositeRemainingRewardR;
-   double sellRoomR = (dir == -1) ? d.remainingRewardR : d.oppositeRemainingRewardR;
+   double buyRoomPips  = (dir ==  1) ? d.remainingRewardPips : d.oppositeRemainingRewardPips;
+   double sellRoomPips = (dir == -1) ? d.remainingRewardPips : d.oppositeRemainingRewardPips;
    PrintFormat("PRESSURE_CALC | primaryTf=M10 | buyRaw=%.2f sellRaw=%.2f buyNormalized=%.2f sellNormalized=%.2f "
                "dominantDirection=%s continuationConfidence=%.2f reversalProbability=%.2f "
                "bullishReclaim=%s bearishReclaim=%s bullishRetestHeld=%s bearishRetestHeld=%s "
                "bullishDisplacement=%s bearishDisplacement=%s bullishBodyShare=%.2f bearishBodyShare=%.2f "
-               "buyRoomR=%.2f sellRoomR=%.2f timestamp=%s freshnessSec=%d",
+               "buyRoomPips=%.2f sellRoomPips=%.2f timestamp=%s freshnessSec=%d",
                d.buyConfidence, d.sellConfidence, XAU_ATClamp(d.buyConfidence), XAU_ATClamp(d.sellConfidence),
                dir == 1 ? "BUY" : "SELL", d.continuationConfidence, d.reversalProbability,
                bullishReclaim ? "Y" : "N", bearishReclaim ? "Y" : "N",
                bullishRetestHeld ? "Y" : "N", bearishRetestHeld ? "Y" : "N",
                bullishDisplacement ? "Y" : "N", bearishDisplacement ? "Y" : "N",
-               bullishBodyShare, bearishBodyShare, buyRoomR, sellRoomR,
+               bullishBodyShare, bearishBodyShare, buyRoomPips, sellRoomPips,
                TimeToString(bar, TIME_DATE|TIME_SECONDS), barAgeSec);
 
    bool mature = d.trendMaturity >= InpTransitionMatureThreshold || d.exhaustionProbability>=60.0;
@@ -17435,7 +17522,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    {
       int trackedDir=g_reversalOpportunity.direction;
       double trackedRoom=trackedDir==1?localObstacleHigh-c1:c1-localObstacleLow;
-      d.oppositeRemainingRewardR=MathMax(0.0,trackedRoom/MathMax(atr*2.2,atr));
+      d.oppositeRemainingRewardPips=MathMax(0.0,trackedRoom/MathMax(atr*2.2,atr));
       d.impulseExtensionATR=MathAbs(c1-g_reversalOpportunity.originPrice)/atr;
       d.distanceFromValueATR=MathAbs(c1-localValue)/atr;
       double totalLeg=MathAbs(c1-g_reversalOpportunity.originPrice)+MathMax(0.0,trackedRoom);
@@ -17457,7 +17544,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
       bool structureReset=heldReclaim || (compactBase && directionalBase && freshSwingReset && displacementFresh);
       bool valueReset=(pullbackReset || structureReset) &&
                       d.distanceFromValueATR<=InpTransitionMaxValueDistanceATR &&
-                      d.oppositeRemainingRewardR>=InpTransitionMinRewardR;
+                      d.oppositeRemainingRewardPips>=InpTransitionMinRewardPips;
       bool resetNeeded=g_reversalOpportunity.impulseConsumedByEntry ||
                        g_reversalOpportunity.state==REVERSAL_WAITING_FOR_PULLBACK ||
                        g_reversalOpportunity.state==REVERSAL_IMPULSE_EXTENDED ||
@@ -17474,8 +17561,8 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
          g_reversalOpportunity.expectedPullbackPrice=c1;
          g_reversalOpportunity.state=REVERSAL_VALUE_RESET;
          g_reversalOpportunity.contradictionBars=0;
-         PrintFormat("REVERSAL_VALUE_RESET id=%s method=%s price=%.2f distanceFromValue=%.2fATR reward=%.2fR — same elapsed time alone cannot create this reset",
-                     XAU_ATReversalOpportunityId(),pullbackReset?"ATR_PULLBACK":"STRUCTURE_RETEST_BASE",c1,d.distanceFromValueATR,d.oppositeRemainingRewardR);
+         PrintFormat("REVERSAL_VALUE_RESET id=%s method=%s price=%.2f distanceFromValue=%.2fATR reward=%.2f pips-of-risk — same elapsed time alone cannot create this reset",
+                     XAU_ATReversalOpportunityId(),pullbackReset?"ATR_PULLBACK":"STRUCTURE_RETEST_BASE",c1,d.distanceFromValueATR,d.oppositeRemainingRewardPips);
       }
       int opportunityAgeBars=(g_reversalOpportunity.createdAt>0)?(int)((bar-g_reversalOpportunity.createdAt)/PeriodSeconds(XAU_PRIMARY_DECISION_TF)):0;
       bool evidenceStale=g_reversalOpportunity.lastEvidenceAt<=0 ||
@@ -17494,12 +17581,12 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
                                   d.moveAlreadyConsumedPct>InpTransitionMaxConsumedPct ||
                                   liveBeyondInitialZone;
       d.reversalLocationGood=g_reversalOpportunity.state!=REVERSAL_OPPORTUNITY_EXPIRED &&
-                             d.oppositeRemainingRewardR>=InpTransitionMinRewardR &&
+                             d.oppositeRemainingRewardPips>=InpTransitionMinRewardPips &&
                              d.distanceFromValueATR<=InpTransitionMaxValueDistanceATR &&
                              ((!initialImpulseExtended && !g_reversalOpportunity.impulseConsumedByEntry) || valueReset);
       d.reversalWaitForPullback=!d.reversalLocationGood && (initialImpulseExtended || g_reversalOpportunity.impulseConsumedByEntry);
       d.entryLocationQuality=XAU_ATClamp(100.0-d.distanceFromValueATR*28.0-d.moveAlreadyConsumedPct*0.45+
-                                         MathMin(30.0,d.oppositeRemainingRewardR*12.0));
+                                         MathMin(30.0,d.oppositeRemainingRewardPips*12.0));
       if(g_reversalOpportunity.state==REVERSAL_OPPORTUNITY_EXPIRED)
       {
          d.reversalWaitForPullback=false;
@@ -17540,7 +17627,7 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
                         g_reversalOpportunity.state!=REVERSAL_OPPORTUNITY_EXPIRED &&
                         d.reversalProbability>=InpTransitionReversalThreshold &&
                         (d.exhaustionProbability>=90.0?compactReversalPackage:fullReversalPackage) &&
-                        d.oppositeRemainingRewardR>=InpTransitionMinRewardR &&
+                        d.oppositeRemainingRewardPips>=InpTransitionMinRewardPips &&
                         d.reversalLocationGood;
    ENUM_XAU_MARKET_LIFECYCLE rawState = TREND_HEALTHY;
    if(reversalReady) rawState=OPPOSITE_DIRECTION_CONFIRMED;
@@ -17581,11 +17668,11 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
    if(d.lifecycle==TREND_EXHAUSTING || d.lifecycle==TRANSITION_NEUTRAL || d.lifecycle==OPPOSITE_DIRECTION_FORMING) oldAction=TRANSITION_TIGHTEN_PROTECTION;
    if(d.lifecycle==OPPOSITE_DIRECTION_CONFIRMED) oldAction=TRANSITION_WAIT_FOR_OPPOSITE_SETUP;
    if(dir==1) d.existingBuyAction=oldAction; else d.existingSellAction=oldAction;
-   d.reason=StringFormat("travel=%.2fATR rangeConsumed=%.0f continuation=%.0f absorption=%.0f oppositeMomentum=%.0f failedExtremes=%d reclaimNow=%s retestNow=%s displacementNow=%s reclaimTracked=%s retestTracked=%s displacementTracked=%s counter=%.0f oldDirectionFailure=%s oldRemainingReward=%.2fR oppositeRemainingReward=%.2fR valueDistance=%.2fATR impulseExtension=%.2fATR consumed=%.0f%% locationQuality=%.0f entryDecision=%s opportunityId=%s opportunityState=%s persistence=%d",
+   d.reason=StringFormat("travel=%.2fATR rangeConsumed=%.0f continuation=%.0f absorption=%.0f oppositeMomentum=%.0f failedExtremes=%d reclaimNow=%s retestNow=%s displacementNow=%s reclaimTracked=%s retestTracked=%s displacementTracked=%s counter=%.0f oldDirectionFailure=%s oldRemainingReward=%.2f pips-of-risk oppositeRemainingReward=%.2f pips-of-risk valueDistance=%.2fATR impulseExtension=%.2fATR consumed=%.0f%% locationQuality=%.0f entryDecision=%s opportunityId=%s opportunityState=%s persistence=%d",
                          d.distanceTravelledATR,d.sessionRangeConsumed,d.continuationConfidence,absorption,oppositeMomentum,failedExtremes,
                          d.oppositeReclaim?"Y":"N",d.oppositeRetestHeld?"Y":"N",d.oppositeDisplacement?"Y":"N",
                          accumulatedReclaim?"Y":"N",accumulatedRetest?"Y":"N",accumulatedDisplacement?"Y":"N",
-                         d.counterEvidence,oldDirectionFailureActive?"Y":"N",d.remainingRewardR,d.oppositeRemainingRewardR,d.distanceFromValueATR,d.impulseExtensionATR,d.moveAlreadyConsumedPct,d.entryLocationQuality,d.entryDecision,XAU_ATReversalOpportunityId(),XAU_ATReversalStateName(g_reversalOpportunity.state),oppositePersistence);
+                         d.counterEvidence,oldDirectionFailureActive?"Y":"N",d.remainingRewardPips,d.oppositeRemainingRewardPips,d.distanceFromValueATR,d.impulseExtensionATR,d.moveAlreadyConsumedPct,d.entryLocationQuality,d.entryDecision,XAU_ATReversalOpportunityId(),XAU_ATReversalStateName(g_reversalOpportunity.state),oppositePersistence);
    g_transitionDecision=d;
    g_transitionLastComputedBar=bar;
    XAU_ATSavePersistentState();
@@ -17719,7 +17806,7 @@ XAU_ExhaustionDecisionResult XAU_EvaluateExhaustionDecision(const XAU_AdaptiveTr
    bool reactionConfirmed        = td.oppositeReclaim || td.oppositeRetestHeld || td.oppositeDisplacement;
    bool oppositeRisingAndDominant = oppositePressureNow >= 55.0 && r.oppositePressureSlope > 3.0;
    bool originalWeakening        = r.continuationScore < 45.0;
-   bool roomOk                   = td.oppositeRemainingRewardR >= 0.50;
+   bool roomOk                   = td.oppositeRemainingRewardPips >= 0.50;
 
    if(r.exhaustionScore < 70.0)
    {
@@ -17822,13 +17909,13 @@ void XAU_ProductionActiveFinalEntryAssertion(int direction,string source,string 
    bool manualCloseReset=(g_lastManualCloseResetDirection==direction && g_lastManualCloseResetAt>0 &&
                           TimeCurrent()-g_lastManualCloseResetAt<=24*3600);
    string finalDecision=allowed?"TRADE_NOW":badLocation?"WAIT_FOR_VALUE":oldDirection&&d.exhaustionProbability>=70.0?"BLOCK_OLD_DIRECTION":"CANCEL_OPPORTUNITY";
-   PrintFormat("[PRODUCTION_ACTIVE_FINAL_ENTRY_ASSERTION] mode=%s source=%s candidateId=%s opportunityId=%s direction=%s signalTime=%s firstSeenTime=%s configuredDelaySec=%.0f actualElapsedSec=%.0f trendHealth=%.0f maturity=%.0f exhaustion=%.0f continuationConfidence=%.0f transitionProbability=%.0f reversalProbability=%.0f locationQuality=%.0f badLocation=%s moveConsumedPct=%.0f distanceFromValueATR=%.2f remainingRewardR=%.2f freshCandidate=%s manualCloseReset=%s finalDecision=%s reason=%s",
+   PrintFormat("[PRODUCTION_ACTIVE_FINAL_ENTRY_ASSERTION] mode=%s source=%s candidateId=%s opportunityId=%s direction=%s signalTime=%s firstSeenTime=%s configuredDelaySec=%.0f actualElapsedSec=%.0f trendHealth=%.0f maturity=%.0f exhaustion=%.0f continuationConfidence=%.0f transitionProbability=%.0f reversalProbability=%.0f locationQuality=%.0f badLocation=%s moveConsumedPct=%.0f distanceFromValueATR=%.2f remainingRewardPips=%.2f freshCandidate=%s manualCloseReset=%s finalDecision=%s reason=%s",
                InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_SHADOW?"SHADOW":"OFF",
                source,candidateId,XAU_ATReversalOpportunityId(),direction==1?"BUY":"SELL",
                TimeToString(d.evaluatedBar,TIME_DATE|TIME_SECONDS),TimeToString(firstSeen,TIME_DATE|TIME_SECONDS),
                configuredDelay,elapsed,d.trendHealth,d.trendMaturity,d.exhaustionProbability,d.continuationConfidence,
                d.transitionProbability,d.reversalProbability,d.entryLocationQuality,badLocation?"true":"false",
-               d.moveAlreadyConsumedPct,d.distanceFromValueATR,oldDirection?d.remainingRewardR:d.oppositeRemainingRewardR,
+               d.moveAlreadyConsumedPct,d.distanceFromValueATR,oldDirection?d.remainingRewardPips:d.oppositeRemainingRewardPips,
                elapsed<=configuredDelay+5.0?"true":"false",manualCloseReset?"true":"false",finalDecision,reason);
 }
 
@@ -18630,7 +18717,7 @@ double AccountSizeTPMultiplier()
 // ~0.05-0.15R on VPS's floored, much bigger lot -- arming/triggering
 // protection at a fraction of the R a smaller-lot trade would need, which is
 // exactly backwards (bigger lot should never mean "protect earlier in
-// R-terms"). Floors any such threshold at InpExitArmMinOwnR (0.20R default)
+// R-terms"). Floors any such threshold at InpExitArmMinOwnPips (0.20R default)
 // of the position's OWN risk so a bigger lot can never make it fire sooner,
 // in R-terms, than a smaller one would.
 // v6.20.4 (Commit E) — ONE central adaptive profit-protection threshold
@@ -18653,20 +18740,20 @@ double AccountSizeTPMultiplier()
 // callers that have a genuine, evidenced reason to scale further can pass
 // adjMult; this function does not invent grade/setup-specific rules itself.
 //
-// XAU_MinArmUSDForOwnR() (used by EV_PROTECT and A+ Shield already) is now
+// XAU_MinArmUSDForOwnPips() (used by EV_PROTECT and A+ Shield already) is now
 // a thin wrapper over this, so those 2 existing call sites are unchanged.
 double XAU_AdaptiveProfitArmUSD(double rawDollarThreshold, double positionRiskUSD,
-                                double basketRiskUSD = 0.0, double minOwnR = -1.0,
+                                double basketRiskUSD = 0.0, double minOwnPips = -1.0,
                                 double adjMult = 1.0)
 {
    double effectiveRisk = MathMax(positionRiskUSD, basketRiskUSD);
    if(effectiveRisk <= 0.0) return rawDollarThreshold; // no known risk figure yet -- fail safe to the module's own pre-existing behavior, never guess
-   double minR = (minOwnR > 0.0) ? minOwnR : InpExitArmMinOwnR;
+   double minPips = (minOwnPips > 0.0) ? minOwnPips : InpExitArmMinOwnPips;
    double adjustedThreshold = MathMax(1.0, adjMult) * rawDollarThreshold;
-   return MathMax(adjustedThreshold, effectiveRisk * minR);
+   return MathMax(adjustedThreshold, effectiveRisk * minPips);
 }
 
-double XAU_MinArmUSDForOwnR(double dollarArm, double rDollars)
+double XAU_MinArmUSDForOwnPips(double dollarArm, double rDollars)
 {
    return XAU_AdaptiveProfitArmUSD(dollarArm, rDollars);
 }
@@ -18972,7 +19059,7 @@ void CheckPyramidOpportunity()
                EnumToString(isBuy ? pyramidTransition.existingBuyAction : pyramidTransition.existingSellAction),
                dir==1?pyramidTransition.buyConfidence:pyramidTransition.sellConfidence,
                dir==1?pyramidTransition.sellConfidence:pyramidTransition.buyConfidence,
-               pyramidTransition.remainingRewardR);
+               pyramidTransition.remainingRewardPips);
 
    string pyramidGrade="A";
    double minLot=SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MIN);
@@ -19167,7 +19254,7 @@ void CheckPyramidOpportunity()
          pyramidOwnerSLConfirmed=MathAbs(pyLiveSL-expectedPyramidSL)<=pyTol;
       }
       if(pyramidOwnerSLConfirmed)
-         PrintFormat("OWNER_SL_BROKER_CONFIRMED | path=PYRAMID ticket=%I64u entry=%.5f actualSL=%.5f structuralSLR=1.00 effectiveDistance=%.5f lots=%.4f",
+         PrintFormat("OWNER_SL_BROKER_CONFIRMED | path=PYRAMID ticket=%I64u entry=%.5f actualSL=%.5f structuralSLPips=1.00 effectiveDistance=%.5f lots=%.4f",
                      pyLiveTicket,pyLiveOpen,pyLiveSL,MathAbs(pyLiveOpen-pyLiveSL),addLot);
       else
       {
@@ -19246,7 +19333,7 @@ void CheckPyramidOpportunity()
          // Do not transplant a pre-existing campaign floor R onto a newly
          // priced add. v6.25.9 did that after registration, creating an
          // immediately unreachable per-leg floor and a fail-open retry storm.
-         // The add starts with fresh per-leg R state (peakR=0,
+         // The add starts with fresh per-leg R state (peakPips=0,
          // profitGuaranteeArmed=false); its owner R-exit arms independently
          // from this leg's own chronological peak, never the core's.
          XAU_RExit_SaveState(true);
@@ -20620,7 +20707,7 @@ void OnTick()
    {
       if(g_alignedCandidates[0].firstCandidateTime > 0 && alignedPrimaryDelayDue)
       {
-         PrintFormat("ENTRY_REVALIDATED | candidateId=%s signalValid=false moveR=NA result=CANCEL_INDICATOR_UNAVAILABLE",
+         PrintFormat("ENTRY_REVALIDATED | candidateId=%s signalValid=false movePips=NA result=CANCEL_INDICATOR_UNAVAILABLE",
                      XAU_EntryCandidateId(g_alignedCandidates[0].candidateDirection,
                                           g_alignedCandidates[0].candidateSetup,
                                           g_alignedCandidates[0].candidateGeneration));
@@ -20921,14 +21008,14 @@ void OnTick()
       double reversalAuditATR=(ArraySize(bufATR)>1 && bufATR[1]>0.0)?bufATR[1]:0.0;
       double travelSinceFirstATR=(reversalAuditATR>0.0 && g_reversalOpportunity.firstDetectionPrice>0.0)?
                                   MathAbs(iClose(Symbol(),XAU_PRIMARY_DECISION_TF,1)-g_reversalOpportunity.firstDetectionPrice)/reversalAuditATR:0.0;
-      PrintFormat("[REVERSAL_ENTRY_AUDIT] candidateId=%s oldDirection=%s newDirection=%s opportunityCreated=%s reversalOrigin=%.2f firstDetectionPrice=%.2f reclaimPrice=%.2f latestAcceptablePrice=%.2f impulsePeak=%.2f expectedPullbackPrice=%.2f priceTravelSinceCandidateATR=%.2f reclaim=%s retestHeld=%s displacement=%s entryLocationQuality=%.0f moveAlreadyConsumedPct=%.0f distanceFromValueATR=%.2f impulseExtensionATR=%.2f remainingRewardR=%.2f pullbackOpportunityExpected=%s HTFContext=%s decision=%s reason=%s",
+      PrintFormat("[REVERSAL_ENTRY_AUDIT] candidateId=%s oldDirection=%s newDirection=%s opportunityCreated=%s reversalOrigin=%.2f firstDetectionPrice=%.2f reclaimPrice=%.2f latestAcceptablePrice=%.2f impulsePeak=%.2f expectedPullbackPrice=%.2f priceTravelSinceCandidateATR=%.2f reclaim=%s retestHeld=%s displacement=%s entryLocationQuality=%.0f moveAlreadyConsumedPct=%.0f distanceFromValueATR=%.2f impulseExtensionATR=%.2f remainingRewardPips=%.2f pullbackOpportunityExpected=%s HTFContext=%s decision=%s reason=%s",
                   XAU_ATReversalOpportunityId(),transitionNow.dominantDirection==1?"BUY":"SELL",adaptiveReversalDir==1?"BUY":"SELL",
                   TimeToString(g_reversalOpportunity.createdAt,TIME_DATE|TIME_MINUTES),g_reversalOpportunity.originPrice,
                   g_reversalOpportunity.firstDetectionPrice,g_reversalOpportunity.reclaimPrice,g_reversalOpportunity.latestAcceptablePrice,
                   g_reversalOpportunity.impulsePeak,g_reversalOpportunity.expectedPullbackPrice,travelSinceFirstATR,
                   transitionNow.oppositeReclaim?"true":"false",transitionNow.oppositeRetestHeld?"true":"false",
                   transitionNow.oppositeDisplacement?"true":"false",transitionNow.entryLocationQuality,transitionNow.moveAlreadyConsumedPct,
-                  transitionNow.distanceFromValueATR,transitionNow.impulseExtensionATR,transitionNow.oppositeRemainingRewardR,
+                  transitionNow.distanceFromValueATR,transitionNow.impulseExtensionATR,transitionNow.oppositeRemainingRewardPips,
                   transitionNow.reversalWaitForPullback?"true":"false",
                   g_htfConsensusDir==1?"BUY":g_htfConsensusDir==-1?"SELL":"MIXED",
                   transitionNow.oppositeEntryAllowed?"WOULD_ENTER":"WAIT",transitionNow.reason);
@@ -23818,7 +23905,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          ownerSLConfirmed = MathAbs(confirmedSL - confirmedOwnerSL) <= tickTolerance;
       }
       if(ownerSLConfirmed)
-         PrintFormat("OWNER_SL_BROKER_CONFIRMED | ticket=%I64u entry=%.5f actualSL=%.5f structuralSLR=1.00 effectiveDistance=%.5f lots=%.4f",
+         PrintFormat("OWNER_SL_BROKER_CONFIRMED | ticket=%I64u entry=%.5f actualSL=%.5f structuralSLPips=1.00 effectiveDistance=%.5f lots=%.4f",
                      confirmedTicket, confirmedOpen, confirmedSL, MathAbs(confirmedOpen-confirmedSL), confirmedVolume);
       else
       {
@@ -23995,8 +24082,8 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       // any stale block/cooldown that would have suppressed a genuine re-entry.
       if(reason != "RE_ENTRY")
       {
-         double reentryOrigEntry, reentryExitR; datetime reentryExitTime; ulong reentryPrevPosId;
-         if(XAU_FindRecentProtectedExit(signal, reentryOrigEntry, reentryExitR, reentryExitTime, reentryPrevPosId))
+         double reentryOrigEntry, reentryExitPips; datetime reentryExitTime; ulong reentryPrevPosId;
+         if(XAU_FindRecentProtectedExit(signal, reentryOrigEntry, reentryExitPips, reentryExitTime, reentryPrevPosId))
          {
             double reentryATR = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
             bool zoneReclaimed = (reentryATR > 0) ? (MathAbs(price - reentryOrigEntry) <= reentryATR * 1.0) : true;
@@ -24471,22 +24558,42 @@ bool XAU_RecoveryExpansionBasketVeto(double totalPnL, double basketRDollars,
                                      string requestedBy, string requestedExitReason)
 {
    if(!InpRecoveryExpansionEnable || basketRDollars <= 0.0) return false;
-   double basketR = totalPnL / basketRDollars;
-   if(basketR >= InpRecoveryExpansionMeaningfulR) return false;
+   // v6.26.0: preserves the ORIGINAL single basket-wide gate (one ratio,
+   // checked once, same early-return control flow as before) -- uses the
+   // first active TTM candidate's own risk distance (g_ttm[i].slDist,
+   // "price distance of SL at entry") as the representative pips scaling
+   // reference, since the basket-level dollar figures here have no single
+   // natural price distance of their own (see the analogous
+   // XAU_CloseCampaignBasketAtProtectedFloor conversion above for the
+   // fuller reasoning). InpRecoveryExpansionMeaningfulPips's/
+   // InpRecoveryExpansionActivatePips's MAE-gating half (triWorstAdversePct)
+   // is intentionally left unconverted -- see that input's own declaration
+   // comment.
+   double basketRatio = totalPnL / basketRDollars; // dimensionless, same ratio as before
+   double representativeRiskDistancePips = 0.0;
+   for(int r = 0; r < TTM_MAX_POSITIONS; r++)
+   {
+      if(!g_ttm[r].active) continue;
+      double candidateDist = MathAbs(g_ttm[r].entryPrice - g_ttm[r].invalidationPrice); // SL distance at entry
+      if(candidateDist > 0.0) { representativeRiskDistancePips = candidateDist * XAUCLOUD_PIPS_PER_PRICE_UNIT; break; }
+   }
+   if(representativeRiskDistancePips <= 0.0) return false;
+   double basketPips = basketRatio * representativeRiskDistancePips;
+   if(basketPips >= (InpRecoveryExpansionMeaningfulPips/100.0)*representativeRiskDistancePips) return false;
 
    for(int i = 0; i < TTM_MAX_POSITIONS; i++)
    {
       if(!g_ttm[i].active) continue;
       bool recoveredCandidate = g_ttm[i].recoveryExpansionActive ||
-                                (g_ttm[i].triWorstAdversePct >= InpRecoveryExpansionMinMAER &&
-                                 basketR >= InpRecoveryExpansionActivateR);
+                                (g_ttm[i].triWorstAdversePct >= InpRecoveryExpansionMinMAEPips &&
+                                 basketPips >= (InpRecoveryExpansionActivatePips/100.0)*representativeRiskDistancePips);
       if(!recoveredCandidate) continue;
       int dir = g_ttm[i].signal;
       bool basketStructureBroken = XAU_BasketStructureBroken(dir);
       if(basketStructureBroken) continue;
-      PrintFormat("RECOVERY_EXPANSION_EXIT_VETO requestedBy=%s requestedExitReason=%s ticket=%I64u basketR=%.2f minimumMeaningfulRecoveryR=%.2f holdReason=Recovered runner active/eligible; basket tiny-profit exit suppressed while structure remains valid.",
-                  requestedBy, requestedExitReason, g_ttm[i].posId, basketR,
-                  InpRecoveryExpansionMeaningfulR);
+      PrintFormat("RECOVERY_EXPANSION_EXIT_VETO requestedBy=%s requestedExitReason=%s ticket=%I64u basketPips=%.2f minimumMeaningfulRecoveryPips=%.2f holdReason=Recovered runner active/eligible; basket tiny-profit exit suppressed while structure remains valid.",
+                  requestedBy, requestedExitReason, g_ttm[i].posId, basketPips,
+                  InpRecoveryExpansionMeaningfulPips);
       return true;
    }
    return false;
@@ -24562,9 +24669,9 @@ bool XAU_BasketLifecycleManager(double totalPnL, double bal, bool protectedPeakA
       if(XAU_RecoveryExpansionBasketVeto(totalPnL, basketRDollars,
                                          "BasketLifecycle", "SECOND_CHANCE_PROFIT_EXIT BASKET"))
       {
-         PrintFormat("SECOND_CHANCE_HOLD_CONTINUING BASKET | recovery expansion owns a deep recovered runner; basketR=%.2f < meaningful %.2f, no confirmed structure break",
+         PrintFormat("SECOND_CHANCE_HOLD_CONTINUING BASKET | recovery expansion owns a deep recovered runner; basketPips=%.2f < meaningful %.2f, no confirmed structure break",
                      basketRDollars > 0.0 ? totalPnL / basketRDollars : 0.0,
-                     InpRecoveryExpansionMeaningfulR);
+                     InpRecoveryExpansionMeaningfulPips);
          return false;
       }
       if(g_basketProfitLossCycles >= InpLifecycleMaxProfitLossCycles)
@@ -24693,7 +24800,7 @@ bool ManageBasket()
    // v6.20.4 (Commit D) — aggregate basket risk (sum of each open position's
    // own lots * risk-per-lot-for-its-own-SL-distance), the basket-level
    // analog of the per-position rDollars already used by EV_PROTECT/A+
-   // Shield via XAU_MinArmUSDForOwnR(). Used below so Basket Lock's floor
+   // Shield via XAU_MinArmUSDForOwnPips(). Used below so Basket Lock's floor
    // can be judged against the basket's OWN real risk instead of a flat
    // percentage of peak, closing the gap the 2026-07-09 audit found: this
    // was the one exit path never given the same R-normalization the other
@@ -24776,7 +24883,7 @@ bool ManageBasket()
    }
    // v6.20.4 (Commit D) — R-normalize the basket arm threshold the same way
    // EV_PROTECT (line ~5089) and A+ Shield (line ~18567) already do via
-   // XAU_MinArmUSDForOwnR(). Without this, armUSD is a flat dollar/equity-%
+   // XAU_MinArmUSDForOwnPips(). Without this, armUSD is a flat dollar/equity-%
    // value: a bigger-lot basket's floating profit crosses it after a SMALLER
    // price move (fewer R) than a smaller-lot basket would need, "arming"
    // protection sooner in R-terms purely because the lot is bigger -- the
@@ -24789,14 +24896,14 @@ bool ManageBasket()
    if(basketRDollars > 0.0)
    {
       double armUSDBeforeRNorm = armUSD;
-      armUSD = XAU_MinArmUSDForOwnR(armUSD, basketRDollars);
+      armUSD = XAU_MinArmUSDForOwnPips(armUSD, basketRDollars);
       if(armUSD > armUSDBeforeRNorm + 0.01)
          PrintFormat("BASKET_ARM_R_NORMALIZED: raw armUSD=$%.2f -> $%.2f (basket risk=$%.2f, floor=%.0f%% of own R) -- prevents a bigger-lot basket from arming protection sooner in R-terms than a smaller one would",
-                     armUSDBeforeRNorm, armUSD, basketRDollars, InpExitArmMinOwnR * 100.0);
+                     armUSDBeforeRNorm, armUSD, basketRDollars, InpExitArmMinOwnPips * 100.0);
    }
    // v6.20.3: same R-normalization as the classic armUSD above -- a flat-$
    // InpProtectedPeakMinUSD is meaningless across account sizes/lot sizes on
-   // its own, so require it to also clear InpExitArmMinOwnR of this basket's
+   // its own, so require it to also clear InpExitArmMinOwnPips of this basket's
    // own risk. Computed once and reused at every InpProtectedPeakMinUSD gate
    // in this function so they can't drift apart.
    double basketProtectedPeakMinUSD_R = XAU_AdaptiveProfitArmUSD(InpProtectedPeakMinUSD, basketRDollars);
@@ -25319,7 +25426,7 @@ bool CleanRecoveryLikely(bool isBuy, bool trendAligned, int momentumScore,
                          bool rsiAgainst, double rMult)
 {
    if(!InpGoldPullbackSurvivalMode) return false;
-   if(rMult <= -InpCleanEmergencyLossR) return false;
+   if(rMult <= -InpCleanEmergencyLossPips) return false;
    if(structureConfirmedBroken && emaAgainst && rsiAgainst) return false;
    if(trendAligned && momentumScore >= InpGoldPullbackMinMomentum && !structureConfirmedBroken)
       return true;
@@ -25349,7 +25456,7 @@ void XAU_CheckInHoldCheckpoint(ulong ticket, int minsOpen, double rMult, double 
    {
       int thresholdMin = g_checkpointMinutes[g_brainOpenTrades[idx].checkpointNextIdx];
       string checkpointNote = StringFormat(
-         "CHECKPOINT checkpointMin=%d actualMinsOpen=%d floatingUSD=%.2f currentR=%.3f peakUSD=%.2f regime=%s spread=%.0f",
+         "CHECKPOINT checkpointMin=%d actualMinsOpen=%d floatingUSD=%.2f currentPips=%.3f peakUSD=%.2f regime=%s spread=%.0f",
          thresholdMin, minsOpen, floatingUSD, rMult, peakUSD, RegimeName(),
          (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD));
       XAU_AppendTradeBrain("CHECKPOINT", g_brainOpenTrades[idx], 0.0, floatingUSD, 0.0, minsOpen * 60,
@@ -25370,12 +25477,18 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    if(!InpCleanExits) return false;
    if(slDist <= 0 || atr <= 0) return false;
 
-   // Compute current R-multiple of profit in price terms
+   // v6.26.0: rMult is pips-of-this-trade's-own-risk-distance (was a raw
+   // R-multiple, priceProfit/slDist) -- x100.0 here is a pure linear
+   // rescale, and every InpClean*/InpExpectancy*/InpEarlyConviction*/
+   // InpStructureFailFastLoss*/InpHardStopDistanceMulti/InpNoPartialSmartLoss*
+   // threshold this variable is compared against anywhere in this function
+   // was rescaled by the same x100 factor, so every comparison outcome
+   // below is unchanged. Negative if underwater.
    double priceProfit = isBuy ? (curPrice - openPx) : (openPx - curPrice);
-   double rMult = priceProfit / slDist;   // negative if underwater
+   double rMult = (priceProfit / slDist) * 100.0;
    // v6.20.3 telemetry-only — see XAU_CheckInHoldCheckpoint() declaration
    // comment. Does not affect anything computed below; purely observes.
-   XAU_CheckInHoldCheckpoint(ticket, minsOpen, rMult, rMult * rDollars, peak);
+   XAU_CheckInHoldCheckpoint(ticket, minsOpen, rMult, (rMult / 100.0) * rDollars, peak);
    double close2 = iClose(Symbol(), PERIOD_M5, 2);
    int momentumScore = CleanMomentumScore(isBuy, close1, open1, close2, emaF, emaS, rsi);
    bool trendAligned = CleanRegimeAligned(isBuy);
@@ -25415,21 +25528,21 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    //   - Reversal candle present
    //   = invalidScore >= 4 (maximum conviction that setup failed)
    //
-   // In that case, exit at -InpEarlyConvictionCutR (default 0.5R) after just
+   // In that case, exit at -InpEarlyConvictionCutPips (default 0.5R) after just
    // InpEarlyConvictionMinMin minutes. This saves 50-70% of the full SL dollar loss.
    // The main 40-min invalidation still handles ambiguous pullbacks.
    if(InpEarlyConvictionCut && rMult < 0 && minsOpen >= InpEarlyConvictionMinMin &&
-      rMult <= -InpEarlyConvictionCutR && !recoveryLikely && invalidScore >= 4)
+      rMult <= -InpEarlyConvictionCutPips && !recoveryLikely && invalidScore >= 4)
    {
-      PrintFormat("EARLY_CONVICTION_CUT #%I64u %s | %.2fR in %dm | invalidScore=%d/5 | struct=%s ema=%s rsi=%s rev=%s | EXIT NOW — saves %.0f%% vs full SL",
+      PrintFormat("EARLY_CONVICTION_CUT #%I64u %s | %.2f pips-of-risk in %dm | invalidScore=%d/5 | struct=%s ema=%s rsi=%s rev=%s | EXIT NOW — saves %.0f%% vs full SL",
                   ticket, isBuy?"BUY":"SELL", rMult, minsOpen, invalidScore,
                   structureConfirmedBroken?"Y":"N", emaAgainst?"Y":"N", rsiAgainst?"Y":"N", reversalCandle?"Y":"N",
-                  (1.0 - InpEarlyConvictionCutR / MathMax(0.01, InpCleanMaxLossR)) * 100.0);
-      lastExitReason = StringFormat("EARLY_CUT │ %.2fR all signals failed (%.0f%% vs full SL)", rMult,
-                                    (1.0 - InpEarlyConvictionCutR / MathMax(0.01, InpCleanMaxLossR)) * 100.0);
+                  (1.0 - InpEarlyConvictionCutPips / MathMax(0.01, InpCleanMaxLossPips)) * 100.0);
+      lastExitReason = StringFormat("EARLY_CUT │ %.2f pips-of-risk all signals failed (%.0f%% vs full SL)", rMult,
+                                    (1.0 - InpEarlyConvictionCutPips / MathMax(0.01, InpCleanMaxLossPips)) * 100.0);
       // invalidScore>=4 mathematically requires structureConfirmedBroken (its 2 points
       // are needed to reach 4), so this is already a confirmed structural invalidation.
-      if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
+      if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, (rMult / 100.0) * rDollars, peak,
                                  "EARLY_CONVICTION_CUT", structureConfirmedBroken, false))
          return false;
       if(!SafePositionClose(ticket, "EARLY_CONVICTION_CUT")) return false;
@@ -25441,9 +25554,9 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    // meaningfully profitable, suppress stagnant/stale exits. The EA was exiting
    // profitable runners purely because short-term momentum paused — this is wrong
    // when the higher-timeframe trend is still fully intact.
-   // Only active on profitable trades (rMult >= 0.25) with TCP >= configured minimum.
+   // Only active on profitable trades (rMult >= 25.0) with TCP >= configured minimum.
    bool stiHighTCP = false;
-   if(InpSTI_Enable && rMult >= 0.25)
+   if(InpSTI_Enable && rMult >= 25.0)
    {
       double tcpNow = STI_ComputeTCP(isBuy ? 1 : -1);
       stiHighTCP = (tcpNow >= InpSTI_TCPContinueMinimum);
@@ -25452,7 +25565,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
          static datetime lastTCPHoldLog = 0;
          if(TimeCurrent() - lastTCPHoldLog >= 120)
          {
-            PrintFormat("STI_TCP_HOLD #%I64u %s | rMult=%.2fR tcp=%.0f >= %.0f | macro trend valid — suppressing premature stagnant/stale exit, runner continues",
+            PrintFormat("STI_TCP_HOLD #%I64u %s | rMult=%.2f pips-of-risk tcp=%.0f >= %.0f | macro trend valid — suppressing premature stagnant/stale exit, runner continues",
                         ticket, isBuy?"BUY":"SELL", rMult, tcpNow, InpSTI_TCPContinueMinimum);
             lastTCPHoldLog = TimeCurrent();
          }
@@ -25460,12 +25573,12 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    }
 
    if(!stiHighTCP && InpCleanStagnantMinutes > 0 && minsOpen >= InpCleanStagnantMinutes &&
-      MathAbs(rMult) <= InpCleanStagnantMaxR && choppyRegime && !trendAligned)
+      MathAbs(rMult) <= InpCleanStagnantMaxPips && choppyRegime && !trendAligned)
    {
-      PrintFormat("CLEAN_STAGNANT #%I64u %s | %dm open, %.2fR in %s → CLOSE",
+      PrintFormat("CLEAN_STAGNANT #%I64u %s | %dm open, %.2f pips-of-risk in %s → CLOSE",
                   ticket, isBuy?"BUY":"SELL", minsOpen, rMult, RegimeName());
-      lastExitReason = StringFormat("STAGNANT │ %.2fR after %dm in %s", rMult, minsOpen, RegimeName());
-      if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
+      lastExitReason = StringFormat("STAGNANT │ %.2f pips-of-risk after %dm in %s", rMult, minsOpen, RegimeName());
+      if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, (rMult / 100.0) * rDollars, peak,
                                  "CLEAN_STAGNANT", structureConfirmedBroken, false))
          return false;
       if(!SafePositionClose(ticket, "CLEAN_STAGNANT")) return false;
@@ -25473,12 +25586,12 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    }
 
    if(!stiHighTCP && InpCleanStaleHours > 0 && minsOpen >= InpCleanStaleHours * 60 &&
-      rMult < InpCleanStaleMinR && (!trendAligned || momentumScore <= 2))
+      rMult < InpCleanStaleMinPips && (!trendAligned || momentumScore <= 2))
    {
-      PrintFormat("CLEAN_STALE #%I64u %s | %dm open, %.2fR, trendAligned=%s momentum=%d/5 → CLOSE",
+      PrintFormat("CLEAN_STALE #%I64u %s | %dm open, %.2f pips-of-risk, trendAligned=%s momentum=%d/5 → CLOSE",
                   ticket, isBuy?"BUY":"SELL", minsOpen, rMult, trendAligned?"Y":"N", momentumScore);
-      lastExitReason = StringFormat("STALE │ %.2fR after %dm momentum %d/5", rMult, minsOpen, momentumScore);
-      if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
+      lastExitReason = StringFormat("STALE │ %.2f pips-of-risk after %dm momentum %d/5", rMult, minsOpen, momentumScore);
+      if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, (rMult / 100.0) * rDollars, peak,
                                  "CLEAN_STALE", structureConfirmedBroken, false))
          return false;
       if(!SafePositionClose(ticket, "CLEAN_STALE")) return false;
@@ -25491,20 +25604,20 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    if(InpCleanMomentumInvalidation && minsOpen >= minInvalidationMin)
    {
       bool confirmedInvalid = !recoveryLikely &&
-                              ((rMult <= -InpCleanMaxLossR && invalidScore >= 3) ||
-                               (rMult <= -0.80 && structureConfirmedBroken && emaAgainst && rsiAgainst && invalidScore >= 4));
-      bool emergencyInvalid = (rMult <= -InpCleanEmergencyLossR && invalidScore >= 3);
+                              ((rMult <= -InpCleanMaxLossPips && invalidScore >= 3) ||
+                               (rMult <= -80.0 && structureConfirmedBroken && emaAgainst && rsiAgainst && invalidScore >= 4));
+      bool emergencyInvalid = (rMult <= -InpCleanEmergencyLossPips && invalidScore >= 3);
       if(confirmedInvalid || emergencyInvalid)
       {
-         PrintFormat("CLEAN_INVALID #%I64u %s | %.2fR invalidScore=%d struct=%s bars=%d/%d ema=%s rsi=%s rev=%s recovery=%s → CLOSE",
+         PrintFormat("CLEAN_INVALID #%I64u %s | %.2f pips-of-risk invalidScore=%d struct=%s bars=%d/%d ema=%s rsi=%s rev=%s recovery=%s → CLOSE",
                      ticket, isBuy?"BUY":"SELL", rMult, invalidScore,
                      structureConfirmedBroken?"Y":"N", structureBreakBars, InpGoldPullbackConfirmBars,
                      emaAgainst?"Y":"N", rsiAgainst?"Y":"N", reversalCandle?"Y":"N",
                      recoveryLikely?"Y":"N");
-         lastExitReason = StringFormat("INVALIDATION │ %.2fR score %d", rMult, invalidScore);
-         // emergencyInvalid = deep -InpCleanEmergencyLossR loss, a catastrophic-loss backstop
+         lastExitReason = StringFormat("INVALIDATION │ %.2f pips-of-risk score %d", rMult, invalidScore);
+         // emergencyInvalid = deep -InpCleanEmergencyLossPips loss, a catastrophic-loss backstop
          // independent of structure — treated as the "emergency" carve-out.
-         if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
+         if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, (rMult / 100.0) * rDollars, peak,
                                     "CLEAN_INVALID", structureConfirmedBroken, emergencyInvalid))
             return false;
          if(!SafePositionClose(ticket, "CLEAN_INVALID")) return false;
@@ -25515,7 +25628,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
          static datetime lastRecoveryLog = 0;
          if(TimeCurrent() - lastRecoveryLog >= 60)
          {
-            PrintFormat("CLEAN_BREATHE #%I64u %s | %.2fR pullback but recovery likely: trend=%s momentum=%d/5 structureBars=%d/%d emaAgainst=%s rsiAgainst=%s",
+            PrintFormat("CLEAN_BREATHE #%I64u %s | %.2f pips-of-risk pullback but recovery likely: trend=%s momentum=%d/5 structureBars=%d/%d emaAgainst=%s rsiAgainst=%s",
                         ticket, isBuy?"BUY":"SELL", rMult, trendAligned?"Y":"N", momentumScore,
                         structureBreakBars, InpGoldPullbackConfirmBars,
                         emaAgainst?"Y":"N", rsiAgainst?"Y":"N");
@@ -25526,7 +25639,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
 
    // Structure runner fail-fast is deliberately strict: only cut before the wider
    // runner logic if adverse move, structure, and momentum all confirm failure.
-   if(StructureRunnerActive() && minsOpen >= InpStructureFailFastMinMinutes && rMult <= -InpStructureFailFastLossR)
+   if(StructureRunnerActive() && minsOpen >= InpStructureFailFastMinMinutes && rMult <= -InpStructureFailFastLossPips)
    {
       double adverseDist = MathAbs(curPrice - openPx);
       bool adverseWide = (atr > 0 && adverseDist >= atr * InpStructureFailFastMaxAdverseATR);
@@ -25534,12 +25647,12 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       bool failedMomentum = (emaAgainst && rsiAgainst && !trendAligned && momentumScore <= 1);
       if(adverseWide && failedStructure && failedMomentum)
       {
-         PrintFormat("STRUCTURE_FAILFAST #%I64u %s | %.2fR adverse=%.2fATR invalidScore=%d structBars=%d/%d momentum=%d/5 recovery=%s → CLOSE",
+         PrintFormat("STRUCTURE_FAILFAST #%I64u %s | %.2f pips-of-risk adverse=%.2fATR invalidScore=%d structBars=%d/%d momentum=%d/5 recovery=%s → CLOSE",
                      ticket, isBuy?"BUY":"SELL", rMult, adverseDist/atr, invalidScore,
                      structureBreakBars, InpGoldPullbackConfirmBars, momentumScore,
                      recoveryLikely?"Y":"N");
-         lastExitReason = StringFormat("STRUCTURE_FAILFAST │ %.2fR confirmed failed structure", rMult);
-         if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, rMult * rDollars, peak,
+         lastExitReason = StringFormat("STRUCTURE_FAILFAST │ %.2f pips-of-risk confirmed failed structure", rMult);
+         if(!XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, (rMult / 100.0) * rDollars, peak,
                                     "STRUCTURE_FAILFAST", failedStructure, false))
             return false;
          if(!SafePositionClose(ticket, "STRUCTURE_FAILFAST")) return false;
@@ -25574,39 +25687,42 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       {
          double refBal        = StrategyReferenceBalance();
          double curProfitUSD  = XAU_ProjectProfitUSD(isBuy, openPx, curPrice, lotsOpen);
-         double peakR         = (rDollars > 0) ? peak / rDollars : 0.0;
+         // v6.26.0: pips-of-this-trade's-own-risk-distance (was raw
+         // R-multiple) -- x100.0 matches InpAPlusShieldArmPips/ProtectPips's
+         // own x100 rescale, so tier1R/tier2R comparisons are unchanged.
+         double peakPips         = (rDollars > 0) ? (peak / rDollars) * 100.0 : 0.0;
 
          // ---- TIER 1: arm condition (observe by default, no BE move) ----
          // v6.17.20: tier1ArmUSD/tier2ArmUSD are equity-% figures -- lot-blind
          // by construction. Floor them at this trade's own R (see
-         // XAU_MinArmUSDForOwnR) so a bigger account-floored lot can't arm
+         // XAU_MinArmUSDForOwnPips) so a bigger account-floored lot can't arm
          // the shield at a trivial R-fraction just because it's a bigger lot.
-         double tier1ArmUSD  = XAU_MinArmUSDForOwnR(MathMax(InpAPlusShieldMinArmUSD, refBal * InpAPlusShieldEquityPct / 100.0), rDollars);
+         double tier1ArmUSD  = XAU_MinArmUSDForOwnPips(MathMax(InpAPlusShieldMinArmUSD, refBal * InpAPlusShieldEquityPct / 100.0), rDollars);
          bool   tier1Equity  = (peak >= tier1ArmUSD);
-         bool   tier1R       = (peak >= InpAPlusShieldMinArmUSD && peakR >= InpAPlusShieldArmR);
-         double tier2ArmUSD  = XAU_MinArmUSDForOwnR(MathMax(InpAPlusShieldMinProtectUSD, refBal * InpAPlusShieldProtectEquityPct / 100.0), rDollars);
+         bool   tier1R       = (peak >= InpAPlusShieldMinArmUSD && peakPips >= InpAPlusShieldArmPips);
+         double tier2ArmUSD  = XAU_MinArmUSDForOwnPips(MathMax(InpAPlusShieldMinProtectUSD, refBal * InpAPlusShieldProtectEquityPct / 100.0), rDollars);
          bool   tier2Equity  = (peak >= tier2ArmUSD);
-         bool   tier2R       = (peak >= InpAPlusShieldMinProtectUSD && peakR >= InpAPlusShieldProtectR);
-         bool   tier2Ready   = InpAPlusShieldRequireUSDAndR ? (tier2Equity && tier2R) : (tier2Equity || tier2R);
+         bool   tier2R       = (peak >= InpAPlusShieldMinProtectUSD && peakPips >= InpAPlusShieldProtectPips);
+         bool   tier2Ready   = InpAPlusShieldRequireUSDAndPips ? (tier2Equity && tier2R) : (tier2Equity || tier2R);
 
          if((tier1Equity || tier1R) && !APlusShieldArmed(ticket))
          {
             APlusMarkShieldArmed(ticket);
-            PrintFormat("APLUS_PROFIT_SHIELD_ARMED #%I64u %s | grade=%s peakUSD=$%.2f peakR=%.2fR | "
-                        "trigger=%s | tier2needs>=%.2f%%($%.2f) %s %.2fR",
-                        ticket, isBuy?"BUY":"SELL", grade, peak, peakR,
-                        tier1Equity?"EQUITY_PCT":"R_MULT",
+            PrintFormat("APLUS_PROFIT_SHIELD_ARMED #%I64u %s | grade=%s peakUSD=$%.2f peakPips=%.1fpips-of-risk | "
+                        "trigger=%s | tier2needs>=%.2f%%($%.2f) %s %.1fpips-of-risk",
+                        ticket, isBuy?"BUY":"SELL", grade, peak, peakPips,
+                        tier1Equity?"EQUITY_PCT":"PIPS_OF_RISK",
                         InpAPlusShieldProtectEquityPct,
                         MathMax(InpAPlusShieldMinProtectUSD, refBal * InpAPlusShieldProtectEquityPct / 100.0),
-                        InpAPlusShieldRequireUSDAndR ? "and" : "or",
-                        InpAPlusShieldProtectR);
+                        InpAPlusShieldRequireUSDAndPips ? "and" : "or",
+                        InpAPlusShieldProtectPips);
          }
 
          if(APlusShieldArmed(ticket))
          {
             // TIER 1 is observe-only by default. Move BE only if explicitly enabled,
             // or if tier 2 is already ready and the trade has earned meaningful protection.
-            double cushionDist  = slDist * InpAPlusShieldBECushR;
+            double cushionDist  = slDist * InpAPlusShieldBECushPips / 100.0;  // v6.26.0: same x100 rescale cancellation as BE_LOCK
             double shieldBESL   = isBuy ? NormalizeDouble(openPx + cushionDist, digits)
                                         : NormalizeDouble(openPx - cushionDist, digits);
             bool   allowBEMove  = (InpAPlusShieldMoveBEOnTier1 || tier2Ready);
@@ -25618,11 +25734,11 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                double buf = MathMax(lvl * pt, pt * 30);
                bool   sane = isBuy ? (shieldBESL < curPrice - buf) : (shieldBESL > curPrice + buf);
                if(sane && SafeModifySL(ticket, shieldBESL, curTP, isBuy, curPrice, "APLUS_BE"))
-                  PrintFormat("APLUS_BE_MOVED #%I64u %s | trigger=%s peakUSD=$%.2f peakR=%.2fR | "
+                  PrintFormat("APLUS_BE_MOVED #%I64u %s | trigger=%s peakUSD=$%.2f peakPips=%.1fpips-of-risk | "
                               "newSL=%s | meaningful protection active, runner still open",
                               ticket, isBuy?"BUY":"SELL",
                               tier2Ready ? "TIER2" : "TIER1_OPT_IN",
-                              peak, peakR,
+                              peak, peakPips,
                               DoubleToString(shieldBESL, digits));
             }
 
@@ -25648,9 +25764,9 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                   {
                      if(InpAPlusShieldAllowMarketClose)
                      {
-                        PrintFormat("APLUS_GIVEBACK_EXIT #%I64u %s | peakUSD=$%.2f peakR=%.2fR | "
+                        PrintFormat("APLUS_GIVEBACK_EXIT #%I64u %s | peakUSD=$%.2f peakPips=%.1fpips-of-risk | "
                                     "curProfit=$%.2f givebackPct=%.0f%% | momentum=%d trendWith=%s rsi=%.1f",
-                                    ticket, isBuy?"BUY":"SELL", peak, peakR,
+                                    ticket, isBuy?"BUY":"SELL", peak, peakPips,
                                     curProfitUSD, givebackPct, momentumScore,
                                     trendStillWith?"Y":"N", rsi);
                         lastExitReason = StringFormat("APLUS_GIVEBACK_EXIT | %.0f%% giveback from $%.2f peak, reversal confirmed",
@@ -25680,16 +25796,16 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
                      bool patientSane = isBuy ? (patientSL < curPrice - buf3) : (patientSL > curPrice + buf3);
                      if(patientAdv && patientSane && SafeModifySL(ticket, patientSL, curTP, isBuy, curPrice, "APLUS_PATIENT_LOCK"))
                      {
-                        PrintFormat("APLUS_PATIENT_LOCK #%I64u %s | market-close OFF | peakUSD=$%.2f peakR=%.2fR "
+                        PrintFormat("APLUS_PATIENT_LOCK #%I64u %s | market-close OFF | peakUSD=$%.2f peakPips=%.1fpips-of-risk "
                                     "givebackPct=%.0f%% lockUSD=$%.2f newSL=%s | trade still allowed to run",
-                                    ticket, isBuy?"BUY":"SELL", peak, peakR, givebackPct,
+                                    ticket, isBuy?"BUY":"SELL", peak, peakPips, givebackPct,
                                     lockUSD, DoubleToString(patientSL, digits));
                      }
                      else
                      {
-                        PrintFormat("APLUS_PATIENT_HOLD #%I64u %s | market-close OFF | peakUSD=$%.2f peakR=%.2fR "
+                        PrintFormat("APLUS_PATIENT_HOLD #%I64u %s | market-close OFF | peakUSD=$%.2f peakPips=%.1fpips-of-risk "
                                     "givebackPct=%.0f%% | no valid tighter SL yet",
-                                    ticket, isBuy?"BUY":"SELL", peak, peakR, givebackPct);
+                                    ticket, isBuy?"BUY":"SELL", peak, peakPips, givebackPct);
                      }
                   }
                   else
@@ -25773,7 +25889,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       {
          // Signal 1: Explosive candle — large body in trade direction vs ATR
          double barBody   = MathAbs(close1 - open1);
-         bool   bigCandle = (barBody >= atr * InpAMPL_ExplosiveBodyR) &&
+         bool   bigCandle = (barBody >= atr * InpAMPL_ExplosiveBodyPips) &&
                             ((isBuy && close1 > open1) || (!isBuy && close1 < open1));
 
          // Signal 2: Fast recent velocity — net move >= N×ATR over last 5 bars
@@ -25880,17 +25996,20 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    // ============ END AMPL ============
 
    // ============ PHASE 1: BREAKEVEN LOCK @ +1R ============
-   double beActivateR = EffCleanBEActivateR();
-   if(trendAligned && momentumScore >= 4) beActivateR += 0.35;
-   if(choppyRegime) beActivateR = MathMax(1.0, beActivateR - 0.25);
-   if(rMult >= beActivateR)
+   // v6.26.0: EffCleanBEActivatePips()/EffCleanBECushionPips() are now
+   // pips-of-this-trade's-own-risk-distance -- literal adjustments below
+   // rescaled x100 to match.
+   double beActivatePips = EffCleanBEActivatePips();
+   if(trendAligned && momentumScore >= 4) beActivatePips += 35.0;
+   if(choppyRegime) beActivatePips = MathMax(100.0, beActivatePips - 25.0);
+   if(rMult >= beActivatePips)
    {
-      double cushionDist = slDist * EffCleanBECushionR();
+      double cushionDist = slDist * EffCleanBECushionPips() / 100.0;
       double beSL = isBuy ? NormalizeDouble(openPx + cushionDist, digits)
                           : NormalizeDouble(openPx - cushionDist, digits);
       // Only move SL forward, never back
       bool shouldMove = isBuy ? (beSL > curSL) : (beSL < curSL || curSL == 0);
-      if(shouldMove && rMult < EffCleanChandelierStartR())
+      if(shouldMove && rMult < EffCleanChandelierStartPips())
       {
          // Broker stops-level buffer
          double pt = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
@@ -25900,15 +26019,15 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
          if(sane)
          {
             if(SafeModifySL(ticket, beSL, curTP, isBuy, curPrice, "CLEAN_BE"))
-               PrintFormat("CLEAN_BE #%I64u %s | %.2fR → SL=%s (lock +%.2fR, trigger %.2fR)",
+               PrintFormat("CLEAN_BE #%I64u %s | %.2f pips-of-risk → SL=%s (lock +%.2f pips-of-risk, trigger %.2f pips-of-risk)",
                            ticket, isBuy?"BUY":"SELL", rMult,
-                           DoubleToString(beSL, digits), EffCleanBECushionR(), beActivateR);
+                           DoubleToString(beSL, digits), EffCleanBECushionPips(), beActivatePips);
          }
       }
    }
 
    // ============ PHASE 3: PARTIAL @ +3R (close 30% once) ============
-   if(rMult >= InpCleanPartialR && !InpCloudSafeDisablePartials && !CleanPartialAlreadyTaken(ticket) &&
+   if(rMult >= InpCleanPartialPips && !InpCloudSafeDisablePartials && !CleanPartialAlreadyTaken(ticket) &&
       InpCleanPartialPct > 0 && lotsOpen > 0)
    {
       double step = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
@@ -25921,7 +26040,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
          if(SafePositionClosePartial(ticket, partialLots, "CLEAN_PARTIAL"))
          {
             CleanMarkPartialTaken(ticket);
-            PrintFormat("CLEAN_PARTIAL #%I64u %s | %.2fR → closed %.2f lots (%.0f%%), runner=%.2f",
+            PrintFormat("CLEAN_PARTIAL #%I64u %s | %.2f pips-of-risk → closed %.2f lots (%.0f%%), runner=%.2f",
                         ticket, isBuy?"BUY":"SELL", rMult, partialLots,
                         InpCleanPartialPct, lotsOpen - partialLots);
          }
@@ -25929,11 +26048,13 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
    }
 
    // ============ PHASE 2 & 4: CHANDELIER TRAIL ============
-   double trailStartR = EffCleanChandelierStartR();
-   if(trendAligned && momentumScore >= 4) trailStartR += 0.50;
-   if(choppyRegime) trailStartR = MathMax(1.50, trailStartR - 0.50);
-   bool momentumConfirmed = (momentumScore >= (trendAligned ? 3 : 2)) || rMult >= 4.0;
-   if(rMult >= trailStartR && momentumConfirmed)
+   // v6.26.0: EffCleanChandelierStartPips() is pips-of-this-trade's-own-
+   // risk-distance -- literal adjustments below rescaled x100 to match.
+   double trailStartPips = EffCleanChandelierStartPips();
+   if(trendAligned && momentumScore >= 4) trailStartPips += 50.0;
+   if(choppyRegime) trailStartPips = MathMax(150.0, trailStartPips - 50.0);
+   bool momentumConfirmed = (momentumScore >= (trendAligned ? 3 : 2)) || rMult >= 400.0;
+   if(rMult >= trailStartPips && momentumConfirmed)
    {
       // v6.3.4 ADAPTIVE CHANDELIER: ATR multiplier adapts to market state in real time.
       // Base: 3.2× (start) or 2.5× (after +4R). Adjusts up or down based on:
@@ -25943,7 +26064,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       //   - Momentum score ≤ 2                         → tighten (-0.5) — momentum fading
       //   - RSI extreme against position               → tighten (-0.3) — overextended
       // Floor: 1.8× (always gives price 1-2 ATR breathing room to avoid normal pullback exit)
-      double chanATR = (rMult >= 4.0) ? EffCleanChandelierATR2() : EffCleanChandelierATR1();
+      double chanATR = (rMult >= 400.0) ? EffCleanChandelierATR2() : EffCleanChandelierATR1();
       // Widen: HTF consensus still confirms our direction → trend is structurally sound → hold
       bool htfStillWithUs = (isBuy && g_htfConsensusDir == 1) || (!isBuy && g_htfConsensusDir == -1);
       if(htfStillWithUs) chanATR += 0.50;
@@ -25977,7 +26098,7 @@ bool ManageCleanExitsForPosition(ulong ticket, bool isBuy, double openPx, double
       if(advance && profitZone && sane)
       {
          if(SafeModifySL(ticket, chanSL, curTP, isBuy, curPrice, "CLEAN_CHAN"))
-            PrintFormat("CLEAN_CHAN #%I64u %s | %.2fR | chan=%.1fxATR | momentum=%d/5 | SL=%s",
+            PrintFormat("CLEAN_CHAN #%I64u %s | %.2f pips-of-risk | chan=%.1fxATR | momentum=%d/5 | SL=%s",
                         ticket, isBuy?"BUY":"SELL", rMult, chanATR, momentumScore,
                         DoubleToString(chanSL, digits));
       }
@@ -26103,9 +26224,9 @@ void TTM_RecordEntry(ulong posId, int signal, string setupName, string grade,
    r.recoveryExpansionActive      = false;
    r.recoveryExpansionActivatedAt = 0;
    r.recoveryExpansionCrossTime   = 0;
-   r.recoveryExpansionProtectedR  = 0.0;
-   r.recoveryExpansionPeakR       = 0.0;
-   r.recoveryExpansionMFER        = 0.0;
+   r.recoveryExpansionProtectedPips  = 0.0;
+   r.recoveryExpansionPeakPips       = 0.0;
+   r.recoveryExpansionMFEPips        = 0.0;
    r.recoveryExpansionLastOwner   = "";
    g_ttm[idx] = r;
 
@@ -26615,33 +26736,40 @@ bool XAU_RecoveryExpansionHardInvalid(bool isBuy, int momentumScore, bool struct
           (htfHostile && emaAgainst && rsiAgainst && momentumScore <= 2);
 }
 
-double XAU_RecoveryExpansionFloorR(double currentR, double peakR)
+// v6.26.0: all bare fractions here (1.00/0.50/0.30/0.20 thresholds,
+// 0.45/0.25/0.12/0.05/0.02 floor levels) are scaled by riskDistancePips --
+// this trade's own risk distance in pips -- preserving the exact same
+// normalized-fraction staged-floor policy, expressed in pips.
+double XAU_RecoveryExpansionFloorPips(double currentPips, double peakPips, double riskDistancePips)
 {
-   double floorR = 0.0;
-   if(currentR >= 1.00 || peakR >= 1.00)      floorR = 0.45;
-   else if(currentR >= 0.50 || peakR >= 0.50) floorR = 0.25;
-   else if(currentR >= 0.30 || peakR >= 0.30) floorR = 0.12;
-   else if(currentR >= 0.20 || peakR >= 0.20) floorR = 0.05;
-   else if(currentR >= InpRecoveryExpansionActivateR) floorR = 0.02;
-   return floorR;
+   double floorPips = 0.0;
+   if(currentPips >= 1.00*riskDistancePips || peakPips >= 1.00*riskDistancePips)      floorPips = 0.45*riskDistancePips;
+   else if(currentPips >= 0.50*riskDistancePips || peakPips >= 0.50*riskDistancePips) floorPips = 0.25*riskDistancePips;
+   else if(currentPips >= 0.30*riskDistancePips || peakPips >= 0.30*riskDistancePips) floorPips = 0.12*riskDistancePips;
+   else if(currentPips >= 0.20*riskDistancePips || peakPips >= 0.20*riskDistancePips) floorPips = 0.05*riskDistancePips;
+   else if(currentPips >= (InpRecoveryExpansionActivatePips/100.0)*riskDistancePips) floorPips = 0.02*riskDistancePips;
+   return floorPips;
 }
 
 bool XAU_RecoveryExpansionApplyFloor(int ttmIdx, ulong ticket, bool isBuy, double openPx,
                                      double curPrice, double curSL, double curTP,
-                                     double slDist, double currentR, double peakR)
+                                     double slDist, double currentPips, double peakPips)
 {
    if(ttmIdx < 0 || ttmIdx >= TTM_MAX_POSITIONS || slDist <= 0.0) return false;
-   double requestedFloorR = XAU_RecoveryExpansionFloorR(currentR, peakR);
-   if(requestedFloorR <= 0.0) return false;
+   double riskDistancePips = slDist * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+   double requestedFloorPips = XAU_RecoveryExpansionFloorPips(currentPips, peakPips, riskDistancePips);
+   if(requestedFloorPips <= 0.0) return false;
 
-   double floorR = MathMax(g_ttm[ttmIdx].recoveryExpansionProtectedR, requestedFloorR);
+   double floorPips = MathMax(g_ttm[ttmIdx].recoveryExpansionProtectedPips, requestedFloorPips);
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    long stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
    long freezeLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_FREEZE_LEVEL);
    double minStop = MathMax(stopLevel, freezeLevel) * point;
-   double newSL = isBuy ? NormalizeDouble(openPx + slDist * floorR, digits)
-                        : NormalizeDouble(openPx - slDist * floorR, digits);
+   // v6.26.0: floorPips is now absolute pips -- unscale back to price by
+   // dividing, not by multiplying by slDist again.
+   double newSL = isBuy ? NormalizeDouble(openPx + floorPips / XAUCLOUD_PIPS_PER_PRICE_UNIT, digits)
+                        : NormalizeDouble(openPx - floorPips / XAUCLOUD_PIPS_PER_PRICE_UNIT, digits);
    bool sane = isBuy ? (newSL < curPrice - minStop) : (newSL > curPrice + minStop);
    bool ratchet = (curSL <= 0.0) || (isBuy ? newSL > curSL + point : newSL < curSL - point);
    if(!sane || !ratchet)
@@ -26649,8 +26777,8 @@ bool XAU_RecoveryExpansionApplyFloor(int ttmIdx, ulong ticket, bool isBuy, doubl
       static datetime lastRecoveryFloorSkip = 0;
       if(TimeCurrent() - lastRecoveryFloorSkip >= 30)
       {
-         PrintFormat("RECOVERY_EXPANSION_FLOOR_WAIT ticket=%I64u requestedFloorR=%.2f currentR=%.2f peakR=%.2f sane=%s ratchet=%s curSL=%.2f proposedSL=%.2f",
-                     ticket, floorR, currentR, peakR, sane ? "Y" : "N", ratchet ? "Y" : "N", curSL, newSL);
+         PrintFormat("RECOVERY_EXPANSION_FLOOR_WAIT ticket=%I64u requestedFloorPips=%.2f currentPips=%.2f peakPips=%.2f sane=%s ratchet=%s curSL=%.2f proposedSL=%.2f",
+                     ticket, floorPips, currentPips, peakPips, sane ? "Y" : "N", ratchet ? "Y" : "N", curSL, newSL);
          lastRecoveryFloorSkip = TimeCurrent();
       }
       return false;
@@ -26658,14 +26786,14 @@ bool XAU_RecoveryExpansionApplyFloor(int ttmIdx, ulong ticket, bool isBuy, doubl
 
    if(SafeModifySL(ticket, newSL, curTP, isBuy, curPrice, "RECOVERY_EXPANSION_FLOOR"))
    {
-      g_ttm[ttmIdx].recoveryExpansionProtectedR = floorR;
-      PrintFormat("RECOVERY_EXPANSION_FLOOR_SET ticket=%I64u protectedR=%.2f currentR=%.2f peakR=%.2f floorSL=%.2f",
-                  ticket, floorR, currentR, peakR, newSL);
+      g_ttm[ttmIdx].recoveryExpansionProtectedPips = floorPips;
+      PrintFormat("RECOVERY_EXPANSION_FLOOR_SET ticket=%I64u protectedPips=%.2f currentPips=%.2f peakPips=%.2f floorSL=%.2f",
+                  ticket, floorPips, currentPips, peakPips, newSL);
       return true;
    }
 
-   PrintFormat("RECOVERY_EXPANSION_FLOOR_MODIFY_FAILED ticket=%I64u protectedR=%.2f currentR=%.2f ret=%u (%s) err=%d",
-               ticket, floorR, currentR, trade.ResultRetcode(), trade.ResultRetcodeDescription(), GetLastError());
+   PrintFormat("RECOVERY_EXPANSION_FLOOR_MODIFY_FAILED ticket=%I64u protectedPips=%.2f currentPips=%.2f ret=%u (%s) err=%d",
+               ticket, floorPips, currentPips, trade.ResultRetcode(), trade.ResultRetcodeDescription(), GetLastError());
    return false;
 }
 
@@ -26681,12 +26809,20 @@ int XAU_RecoveryExpansionManage(int ttmIdx, ulong ticket, bool isBuy, double ope
       !g_ttm[ttmIdx].active || rDollars <= 0.0 || slDist <= 0.0)
       return RECOVERY_EXPANSION_NONE;
 
-   double currentR = profit / rDollars;
-   double peakR = (peak > 0.0 ? peak / rDollars : currentR);
-   if(peakR > g_ttm[ttmIdx].recoveryExpansionPeakR)
-      g_ttm[ttmIdx].recoveryExpansionPeakR = peakR;
-   if(peakR > g_ttm[ttmIdx].recoveryExpansionMFER)
-      g_ttm[ttmIdx].recoveryExpansionMFER = peakR;
+   // v6.26.0: currentPips is now a genuine price-distance pips figure
+   // (this subsystem is single-position, never netted, so slDist alone is
+   // the scaling reference); peakPips has no directly-available peak
+   // price, only a peak dollar amount, so it's expressed as the
+   // equivalent pips via the same profit/rDollars ratio this always used,
+   // scaled by this trade's own riskDistancePips -- same reasoning as the
+   // basket conversion above.
+   double recoveryRiskDistancePips = slDist * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+   double currentPips = (isBuy ? (curPrice - openPx) : (openPx - curPrice)) * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+   double peakPips = (peak > 0.0 ? (peak / rDollars) * recoveryRiskDistancePips : currentPips);
+   if(peakPips > g_ttm[ttmIdx].recoveryExpansionPeakPips)
+      g_ttm[ttmIdx].recoveryExpansionPeakPips = peakPips;
+   if(peakPips > g_ttm[ttmIdx].recoveryExpansionMFEPips)
+      g_ttm[ttmIdx].recoveryExpansionMFEPips = peakPips;
 
    bool continuationValid = XAU_RecoveryExpansionContinuationValid(isBuy, momentumScore, trendAligned,
                                                                    structureConfirmedBroken, emaAgainst,
@@ -26694,32 +26830,32 @@ int XAU_RecoveryExpansionManage(int ttmIdx, ulong ticket, bool isBuy, double ope
    bool hardInvalid = XAU_RecoveryExpansionHardInvalid(isBuy, momentumScore,
                                                        structureConfirmedBroken,
                                                        emaAgainst, rsiAgainst, currentHTF);
-   double maeR = g_ttm[ttmIdx].triWorstAdversePct;
+   double maePips = g_ttm[ttmIdx].triWorstAdversePct;
 
    if(!g_ttm[ttmIdx].recoveryExpansionActive)
    {
-      if(maeR < InpRecoveryExpansionMinMAER || currentR < InpRecoveryExpansionActivateR || !continuationValid)
+      if(maePips < (InpRecoveryExpansionMinMAEPips/100.0) || currentPips < (InpRecoveryExpansionActivatePips/100.0)*recoveryRiskDistancePips || !continuationValid)
          return RECOVERY_EXPANSION_NONE;
 
       g_ttm[ttmIdx].recoveryExpansionActive = true;
       g_ttm[ttmIdx].recoveryExpansionActivatedAt = TimeCurrent();
       g_ttm[ttmIdx].recoveryExpansionCrossTime = TimeCurrent();
-      g_ttm[ttmIdx].recoveryExpansionProtectedR = 0.0;
-      g_ttm[ttmIdx].recoveryExpansionPeakR = MathMax(g_ttm[ttmIdx].recoveryExpansionPeakR, currentR);
+      g_ttm[ttmIdx].recoveryExpansionProtectedPips = 0.0;
+      g_ttm[ttmIdx].recoveryExpansionPeakPips = MathMax(g_ttm[ttmIdx].recoveryExpansionPeakPips, currentPips);
       g_ttm[ttmIdx].recoveryExpansionLastOwner = "RECOVERY_EXPANSION_MANAGER";
-      PrintFormat("RECOVERY_EXPANSION_ELIGIBLE ticket=%I64u direction=%s initialRiskUSD=%.2f MAE_R=-%.2f MAE_USD=-%.2f timeUnderwater=%d currentR=%.2f",
-                  ticket, isBuy ? "BUY" : "SELL", rDollars, maeR,
+      PrintFormat("RECOVERY_EXPANSION_ELIGIBLE ticket=%I64u direction=%s initialRiskUSD=%.2f MAE_R=-%.2f MAE_USD=-%.2f timeUnderwater=%d currentPips=%.2f",
+                  ticket, isBuy ? "BUY" : "SELL", rDollars, maePips,
                   g_ttm[ttmIdx].triWorstAdverseUSD,
-                  (int)(TimeCurrent() - g_ttm[ttmIdx].triEnteredAt), currentR);
-      PrintFormat("RECOVERY_EXPANSION_ACTIVATED ticket=%I64u recoveryCrossTime=%s currentR=%.2f structure=%s momentum=%d protectedFloor=%.2fR",
+                  (int)(TimeCurrent() - g_ttm[ttmIdx].triEnteredAt), currentPips);
+      PrintFormat("RECOVERY_EXPANSION_ACTIVATED ticket=%I64u recoveryCrossTime=%s currentPips=%.2f structure=%s momentum=%d protectedFloor=%.2f pips-of-risk",
                   ticket, TimeToString(g_ttm[ttmIdx].recoveryExpansionCrossTime, TIME_SECONDS),
-                  currentR, structureConfirmedBroken ? "BROKEN" : "VALID",
-                  momentumScore, g_ttm[ttmIdx].recoveryExpansionProtectedR);
+                  currentPips, structureConfirmedBroken ? "BROKEN" : "VALID",
+                  momentumScore, g_ttm[ttmIdx].recoveryExpansionProtectedPips);
       BotMonitorDecisionEvent("RECOVERY_EXPANSION_ACTIVATED", "OVERRIDE", "RecoveryExpansion",
                               "Trade recovered from deep MAE; holding for meaningful R while thesis remains valid.",
                               true,
-                              StringFormat("MAE=-%.2fR currentR=%.2f momentum=%d structure=%s",
-                                           maeR, currentR, momentumScore,
+                              StringFormat("MAE=-%.2f pips-of-risk currentPips=%.2f momentum=%d structure=%s",
+                                           maePips, currentPips, momentumScore,
                                            structureConfirmedBroken ? "BROKEN" : "VALID"),
                               "", (string)((long)ticket), profit, curPrice,
                               "", "", false, false, false, false,
@@ -26728,13 +26864,13 @@ int XAU_RecoveryExpansionManage(int ttmIdx, ulong ticket, bool isBuy, double ope
    }
 
    XAU_RecoveryExpansionApplyFloor(ttmIdx, ticket, isBuy, openPx, curPrice, curSL, curTP,
-                                   slDist, currentR, g_ttm[ttmIdx].recoveryExpansionPeakR);
+                                   slDist, currentPips, g_ttm[ttmIdx].recoveryExpansionPeakPips);
 
    if(hardInvalid)
    {
       string closeReason = "RECOVERY_EXPANSION_CLOSE_THESIS_FAILED";
-      PrintFormat("RECOVERY_EXPANSION_CLOSE ticket=%I64u exitOwner=RECOVERY_EXPANSION_MANAGER realizedR=%.2f realizedUSD=%.2f MAE_R=-%.2f MFE_R=%.2f holdAfterRecoverySeconds=%d exitReason=%s",
-                  ticket, currentR, profit, maeR, g_ttm[ttmIdx].recoveryExpansionMFER,
+      PrintFormat("RECOVERY_EXPANSION_CLOSE ticket=%I64u exitOwner=RECOVERY_EXPANSION_MANAGER realizedPips=%.2f realizedUSD=%.2f MAE_R=-%.2f MFE_R=%.2f holdAfterRecoverySeconds=%d exitReason=%s",
+                  ticket, currentPips, profit, maePips, g_ttm[ttmIdx].recoveryExpansionMFEPips,
                   (int)(TimeCurrent() - g_ttm[ttmIdx].recoveryExpansionActivatedAt), closeReason);
       if(SafePositionClose(ticket, closeReason))
       {
@@ -26744,30 +26880,30 @@ int XAU_RecoveryExpansionManage(int ttmIdx, ulong ticket, bool isBuy, double ope
       return RECOVERY_EXPANSION_HOLD;
    }
 
-   if(StringLen(requestedBy) > 0 && continuationValid && currentR < InpRecoveryExpansionMeaningfulR)
+   if(StringLen(requestedBy) > 0 && continuationValid && currentPips < (InpRecoveryExpansionMeaningfulPips/100.0)*recoveryRiskDistancePips)
    {
-      PrintFormat("RECOVERY_EXPANSION_EXIT_VETO requestedBy=%s requestedExitReason=%s ticket=%I64u currentR=%.2f minimumMeaningfulRecoveryR=%.2f holdReason=Trade recovered from -%.2fR; continuation remains valid, protecting instead of banking tiny profit.",
-                  requestedBy, requestedExitReason, ticket, currentR,
-                  InpRecoveryExpansionMeaningfulR, maeR);
+      PrintFormat("RECOVERY_EXPANSION_EXIT_VETO requestedBy=%s requestedExitReason=%s ticket=%I64u currentPips=%.2f minimumMeaningfulRecoveryPips=%.2f holdReason=Trade recovered from -%.2f pips-of-risk; continuation remains valid, protecting instead of banking tiny profit.",
+                  requestedBy, requestedExitReason, ticket, currentPips,
+                  InpRecoveryExpansionMeaningfulPips, maePips);
       BotMonitorDecisionEvent("RECOVERY_EXPANSION_EXIT_VETO", "OVERRIDE", "RecoveryExpansion",
                               "Small-profit recovery exit suppressed; continuation remains valid.",
                               false,
-                              StringFormat("requestedBy=%s currentR=%.2f minMeaningfulR=%.2f MAE=-%.2fR",
-                                           requestedBy, currentR, InpRecoveryExpansionMeaningfulR, maeR),
+                              StringFormat("requestedBy=%s currentPips=%.2f minMeaningfulPips=%.2f MAE=-%.2f pips-of-risk",
+                                           requestedBy, currentPips, InpRecoveryExpansionMeaningfulPips, maePips),
                               requestedExitReason, (string)((long)ticket), profit, curPrice,
                               "", "", false, false, false, false,
                               isBuy ? "BUY" : "SELL", "", "", 0.0, 0.0, isBuy ? 1 : -1,
                               g_ttm[ttmIdx].grade, "");
    }
 
-   double givebackPct = (g_ttm[ttmIdx].recoveryExpansionPeakR > 0.0 && currentR < g_ttm[ttmIdx].recoveryExpansionPeakR)
-                        ? (g_ttm[ttmIdx].recoveryExpansionPeakR - currentR) / g_ttm[ttmIdx].recoveryExpansionPeakR * 100.0
+   double givebackPct = (g_ttm[ttmIdx].recoveryExpansionPeakPips > 0.0 && currentPips < g_ttm[ttmIdx].recoveryExpansionPeakPips)
+                        ? (g_ttm[ttmIdx].recoveryExpansionPeakPips - currentPips) / g_ttm[ttmIdx].recoveryExpansionPeakPips * 100.0
                         : 0.0;
-   if(currentR >= InpRecoveryExpansionMeaningfulR && !continuationValid)
+   if(currentPips >= (InpRecoveryExpansionMeaningfulPips/100.0)*recoveryRiskDistancePips && !continuationValid)
    {
       string closeReason = "RECOVERY_EXPANSION_CLOSE_CONTINUATION_FAILED";
-      PrintFormat("RECOVERY_EXPANSION_CLOSE ticket=%I64u exitOwner=RECOVERY_EXPANSION_MANAGER realizedR=%.2f realizedUSD=%.2f MAE_R=-%.2f MFE_R=%.2f holdAfterRecoverySeconds=%d exitReason=%s",
-                  ticket, currentR, profit, maeR, g_ttm[ttmIdx].recoveryExpansionMFER,
+      PrintFormat("RECOVERY_EXPANSION_CLOSE ticket=%I64u exitOwner=RECOVERY_EXPANSION_MANAGER realizedPips=%.2f realizedUSD=%.2f MAE_R=-%.2f MFE_R=%.2f holdAfterRecoverySeconds=%d exitReason=%s",
+                  ticket, currentPips, profit, maePips, g_ttm[ttmIdx].recoveryExpansionMFEPips,
                   (int)(TimeCurrent() - g_ttm[ttmIdx].recoveryExpansionActivatedAt), closeReason);
       if(SafePositionClose(ticket, closeReason))
       {
@@ -26776,11 +26912,11 @@ int XAU_RecoveryExpansionManage(int ttmIdx, ulong ticket, bool isBuy, double ope
       }
       return RECOVERY_EXPANSION_HOLD;
    }
-   if(currentR >= InpRecoveryExpansionMeaningfulR && givebackPct >= InpRecoveryExpansionMaxGivebackPct)
+   if(currentPips >= (InpRecoveryExpansionMeaningfulPips/100.0)*recoveryRiskDistancePips && givebackPct >= InpRecoveryExpansionMaxGivebackPct)
    {
       string closeReason = "RECOVERY_EXPANSION_CLOSE_GIVEBACK";
-      PrintFormat("RECOVERY_EXPANSION_CLOSE ticket=%I64u exitOwner=RECOVERY_EXPANSION_MANAGER realizedR=%.2f realizedUSD=%.2f MAE_R=-%.2f MFE_R=%.2f holdAfterRecoverySeconds=%d exitReason=%s giveback=%.0f%%",
-                  ticket, currentR, profit, maeR, g_ttm[ttmIdx].recoveryExpansionMFER,
+      PrintFormat("RECOVERY_EXPANSION_CLOSE ticket=%I64u exitOwner=RECOVERY_EXPANSION_MANAGER realizedPips=%.2f realizedUSD=%.2f MAE_R=-%.2f MFE_R=%.2f holdAfterRecoverySeconds=%d exitReason=%s giveback=%.0f%%",
+                  ticket, currentPips, profit, maePips, g_ttm[ttmIdx].recoveryExpansionMFEPips,
                   (int)(TimeCurrent() - g_ttm[ttmIdx].recoveryExpansionActivatedAt), closeReason, givebackPct);
       if(SafePositionClose(ticket, closeReason))
       {
@@ -26790,18 +26926,18 @@ int XAU_RecoveryExpansionManage(int ttmIdx, ulong ticket, bool isBuy, double ope
       return RECOVERY_EXPANSION_HOLD;
    }
 
-   if(currentR >= InpRecoveryExpansionTargetR)
+   if(currentPips >= (InpRecoveryExpansionTargetPips/100.0)*recoveryRiskDistancePips)
    {
-      PrintFormat("RECOVERY_EXPANSION_HOLD ticket=%I64u currentR=%.2f peakR=%.2f protectedFloor=%.2fR structure=%s momentum=%d reason=targetR reached; normal strong-runner logic may continue with floor protected",
-                  ticket, currentR, g_ttm[ttmIdx].recoveryExpansionPeakR,
-                  g_ttm[ttmIdx].recoveryExpansionProtectedR,
+      PrintFormat("RECOVERY_EXPANSION_HOLD ticket=%I64u currentPips=%.2f peakPips=%.2f protectedFloor=%.2f pips-of-risk structure=%s momentum=%d reason=targetR reached; normal strong-runner logic may continue with floor protected",
+                  ticket, currentPips, g_ttm[ttmIdx].recoveryExpansionPeakPips,
+                  g_ttm[ttmIdx].recoveryExpansionProtectedPips,
                   structureConfirmedBroken ? "BROKEN" : "VALID", momentumScore);
       return RECOVERY_EXPANSION_NONE;
    }
 
-   PrintFormat("RECOVERY_EXPANSION_HOLD ticket=%I64u currentR=%.2f peakR=%.2f protectedFloor=%.2fR structure=%s momentum=%d reason=deep recovery working; holding for meaningful R",
-               ticket, currentR, g_ttm[ttmIdx].recoveryExpansionPeakR,
-               g_ttm[ttmIdx].recoveryExpansionProtectedR,
+   PrintFormat("RECOVERY_EXPANSION_HOLD ticket=%I64u currentPips=%.2f peakPips=%.2f protectedFloor=%.2f pips-of-risk structure=%s momentum=%d reason=deep recovery working; holding for meaningful R",
+               ticket, currentPips, g_ttm[ttmIdx].recoveryExpansionPeakPips,
+               g_ttm[ttmIdx].recoveryExpansionProtectedPips,
                structureConfirmedBroken ? "BROKEN" : "VALID", momentumScore);
    return RECOVERY_EXPANSION_HOLD;
 }
@@ -26907,15 +27043,16 @@ bool XAU_OwnerProtectedFloorAllowsClose(ulong ticket, string ctx)
    }
 
    ENUM_XAU_OWNER_EXIT_PROFILE profile = (ENUM_XAU_OWNER_EXIT_PROFILE)g_rExit[idx].ownerExitProfile;
-   double ownerRequiredFloorR = XAU_ComputeOwnerRequiredFloorR(g_rExit[idx].peakR, profile);
-   double protectedFloorR = MathMax(g_rExit[idx].guaranteedFloorR, ownerRequiredFloorR);
-   if(protectedFloorR <= 0.0) return true;
+   double riskDistancePips = g_rExit[idx].originalStopDistance * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+   if(riskDistancePips <= 0.0) return true;
+   double ownerRequiredFloorPips = XAU_ComputeOwnerRequiredFloorPips(g_rExit[idx].peakPips, riskDistancePips, profile);
+   double protectedFloorPips = MathMax(g_rExit[idx].guaranteedFloorPips, ownerRequiredFloorPips);
+   if(protectedFloorPips <= 0.0) return true;
 
-   double riskUSD = g_rExit[idx].cumulativeOriginalRiskUSD;
-   if(riskUSD <= 0.0) return true;
-   double profit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-   double attemptedExitR = profit / riskUSD;
-   if(attemptedExitR + 0.000001 >= protectedFloorR) return true;
+   bool posIsBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+   double attemptedExitPips = (posIsBuy ? (PositionGetDouble(POSITION_PRICE_CURRENT) - g_rExit[idx].originalEntryPrice)
+                                        : (g_rExit[idx].originalEntryPrice - PositionGetDouble(POSITION_PRICE_CURRENT))) * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+   if(attemptedExitPips + 0.000001 >= protectedFloorPips) return true;
 
    static ulong lastOverrideTicket = 0;
    static string lastOverrideCtx = "";
@@ -26927,9 +27064,9 @@ bool XAU_OwnerProtectedFloorAllowsClose(ulong ticket, string ctx)
       lastOverrideCtx = ctx;
       lastOverrideLogAt = TimeCurrent();
       PrintFormat("OWNER_FLOOR_OVERRIDE | attempted_exit_authority=%s | attempted_exit_r=%.3f | protected_floor_r=%.3f | action=REJECT_LOWER_EXIT",
-                  ctx, attemptedExitR, protectedFloorR);
+                  ctx, attemptedExitPips, protectedFloorPips);
       PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_BELOW_FLOOR | ticket=%I64u | attempted_authority=%s | attempted_exit_r=%.3f | protected_floor_r=%.3f",
-                  ticket, ctx, attemptedExitR, protectedFloorR);
+                  ticket, ctx, attemptedExitPips, protectedFloorPips);
    }
    return false;
 }
@@ -26988,15 +27125,20 @@ bool XAU_OwnerProtectedFloorAllowsModify(ulong ticket, double proposedSL, string
       return false;
    }
 
-   double protectedFloorR = MathMax(g_rExit[idx].guaranteedFloorR,
-                                    XAU_ComputeOwnerRequiredFloorR(g_rExit[idx].peakR, profile));
-   if(protectedFloorR <= 0.0) return true;
+   double riskDistancePipsForFloor = g_rExit[idx].originalStopDistance * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+   double protectedFloorPips = MathMax(g_rExit[idx].guaranteedFloorPips,
+                                    XAU_ComputeOwnerRequiredFloorPips(g_rExit[idx].peakPips, riskDistancePipsForFloor, profile));
+   if(protectedFloorPips <= 0.0) return true;
 
    bool isBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
    double openPrice = g_rExit[idx].originalEntryPrice;
+   // protectedFloorPips is already a pips distance (see XAU_ComputeOwnerRequiredFloorPips) --
+   // convert back to a raw price distance by dividing out the fixed pips-per-price-unit
+   // conversion, NOT by multiplying by originalStopDistance again (that was the correct
+   // conversion only when protectedFloorPips was still a bare R-multiple).
    double minimumProtectedSL = isBuy
-      ? openPrice + g_rExit[idx].originalStopDistance * protectedFloorR
-      : openPrice - g_rExit[idx].originalStopDistance * protectedFloorR;
+      ? openPrice + protectedFloorPips / XAUCLOUD_PIPS_PER_PRICE_UNIT
+      : openPrice - protectedFloorPips / XAUCLOUD_PIPS_PER_PRICE_UNIT;
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    double tolerance = MathMax(point * 2.0, 0.00001);
    bool respectsFloor = isBuy ? proposedSL + tolerance >= minimumProtectedSL
@@ -27011,11 +27153,11 @@ bool XAU_OwnerProtectedFloorAllowsModify(ulong ticket, double proposedSL, string
       lastOverrideTicket = ticket;
       lastOverrideCtx = ctx;
       lastOverrideLogAt = TimeCurrent();
-      double attemptedFloorR = isBuy
+      double attemptedFloorPips = isBuy
          ? (proposedSL - openPrice) / g_rExit[idx].originalStopDistance
          : (openPrice - proposedSL) / g_rExit[idx].originalStopDistance;
       PrintFormat("OWNER_FLOOR_OVERRIDE | attempted_exit_authority=%s | attempted_exit_r=%.3f | protected_floor_r=%.3f | action=REJECT_LOWER_EXIT",
-                  ctx, attemptedFloorR, protectedFloorR);
+                  ctx, attemptedFloorPips, protectedFloorPips);
    }
    return false;
 }
@@ -27075,9 +27217,10 @@ bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = fal
       if(idx >= 0)
       {
          ENUM_XAU_OWNER_EXIT_PROFILE profile = (ENUM_XAU_OWNER_EXIT_PROFILE)g_rExit[idx].ownerExitProfile;
-         if(XAU_ComputeOwnerRequiredFloorR(g_rExit[idx].peakR, profile) <= 0.0)
-            PrintFormat("OWNER_R_EXIT_BROKER_SL_ONLY_BEFORE_TRIGGER | ticket=%I64u | profile=%s | peak_r=%.3f | rejected_authority=%s",
-                        ticket, XAU_OwnerExitProfileName(profile), g_rExit[idx].peakR, ctx);
+         double riskDistancePipsForReject = g_rExit[idx].originalStopDistance * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+         if(XAU_ComputeOwnerRequiredFloorPips(g_rExit[idx].peakPips, riskDistancePipsForReject, profile) <= 0.0)
+            PrintFormat("OWNER_R_EXIT_BROKER_SL_ONLY_BEFORE_TRIGGER | ticket=%I64u | profile=%s | peak_pips=%.3f | rejected_authority=%s",
+                        ticket, XAU_OwnerExitProfileName(profile), g_rExit[idx].peakPips, ctx);
       }
       PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_LEGACY_AUTHORITY | ticket=%I64u | attempted_authority=%s | action=TELEMETRY_ONLY",
                   ticket, ctx);
@@ -27202,7 +27345,14 @@ bool SafePositionClosePartial(ulong ticket, double lots, string ctx = "")
 #define R_CLOSE_REQUESTED     2
 #define R_CLOSE_PENDING_RETRY 3
 #define R_CLOSE_CONFIRMED     4
-#define R_EXIT_STATE_SCHEMA_VERSION 7
+// v6.26.0: bumped 7 -> 8 for the R-to-pips migration -- peakPips/currentPips/
+// guaranteedFloorPips/extension*Pips persisted under schema 7 are in the OLD
+// bare-R-fraction scale. Schema 7 rows are now rejected by
+// XAU_RExit_LoadPersistedState's version check (not in its allow-list) and
+// safely discarded, letting live-position reconciliation re-arm fresh from
+// broker state on the first restart after this build deploys -- see the
+// identical reasoning on XAU_BASKET_STATE_SCHEMA_VERSION above.
+#define R_EXIT_STATE_SCHEMA_VERSION 8
 // v6.25.0 owner directive 2026-07-17 -- orphan-cleanup debounce thresholds.
 // Both must be satisfied before a "not found this tick" observation is
 // trusted as a genuine close -- see XAU_RExit_ReconcileOrphans().
@@ -27224,14 +27374,14 @@ struct XAU_RExitState
    int      addCount;                 // v6.21.2 (Fix 12): number of fills merged into this position (netting) -- 1 for a normal single-fill position
    int      positionDirection;        // 1 = BUY, -1 = SELL -- from POSITION_TYPE only, never a stored signal direction
    double   peakProfitUSD;
-   double   peakR;
+   double   peakPips;
    datetime timePeakReached;
    double   troughProfitUSD;          // MAE tracking -- most negative net profit ever observed
-   double   troughR;
+   double   troughPips;
    double   currentProfitUSD;
-   double   currentR;
+   double   currentPips;
    int      stageReached;
-   bool     decisionMadeAt05R;
+   bool     decisionMadeAt50Pips;
    double   lastProtectedSL;
    double   rCheckpointProfitUSD[6];  // first-crossing snapshots at 0.2/0.3/0.4/0.5/0.75/1.0R -- counterfactual only
    bool     rCheckpointHit[6];
@@ -27246,8 +27396,8 @@ struct XAU_RExitState
    // v6.21.3 — PROFIT GUARANTEE (owner rule 2026-07-13): once armed, permanent
    // and ratchet-only for the life of this ticket; persisted across restarts.
    bool     profitGuaranteeArmed;
-   double   guaranteedFloorR;              // internal ratchet-only floor, in R
-   double   guaranteedFloorDesiredSL;      // last-computed broker SL price for guaranteedFloorR
+   double   guaranteedFloorPips;              // internal ratchet-only floor, in R
+   double   guaranteedFloorDesiredSL;      // last-computed broker SL price for guaranteedFloorPips
    bool     guaranteedFloorGeometryBlocked;// true when stops/freeze level prevented placing guaranteedFloorDesiredSL
    datetime lastBelowFloorRejectLog;       // rate limit retry evidence; never changes the retry decision
 
@@ -27259,7 +27409,7 @@ struct XAU_RExitState
    bool     extensionCompleted;
    datetime extensionStartTime;
    datetime extensionDeadline;
-   double   extensionTriggerR;
+   double   extensionTriggerPips;
    double   extensionTriggerPrice;
    double   extensionTriggerProfitUSD;
    string   extensionTriggerAuthority;
@@ -27267,7 +27417,7 @@ struct XAU_RExitState
    bool     extensionDeadlineCloseSent;
    bool     extensionDeadlineCloseConfirmed;
    datetime extensionDeadlineRequestTime;
-   double   extensionDeadlineR;
+   double   extensionDeadlinePips;
    double   extensionDeadlineProfitUSD;
    datetime extensionLastSuppressionLog;
 
@@ -27275,9 +27425,9 @@ struct XAU_RExitState
    // Scoped strictly to the active 600s extension window (see
    // XAU_General10MArmExtensionFloor / XAU_General10MUpdateExtensionRatchet);
    // never read or written by any pre-extension GENERAL exit code.
-   double   extensionHighestPeakR;      // highest R reached DURING this extension only (not the trade's overall peakR)
-   bool     extensionRatchetActivated;  // true once extensionHighestPeakR first reached +0.70R
-   double   extensionProtectedFloorR;   // current protected floor, in R -- monotonic, never decreases
+   double   extensionHighestPeakPips;      // highest R reached DURING this extension only (not the trade's overall peakPips)
+   bool     extensionRatchetActivated;  // true once extensionHighestPeakPips first reached +0.70R
+   double   extensionProtectedFloorPips;   // current protected floor, in R -- monotonic, never decreases
 
    // v6.25.0 owner directive 2026-07-17 -- URGENT LIVE EXIT FORENSIC fix.
    // Debounce state for XAU_RExit_ReconcileOrphans(): a live position must
@@ -27295,7 +27445,7 @@ struct XAU_RExitState
    datetime lastOrphanRecheckAt;
 };
 XAU_RExitState g_rExit[];
-double g_rCheckpointLevels[6] = {0.20, 0.30, 0.40, 0.50, 0.75, 1.00};
+double g_pipsCheckpointLevels[6] = {0.20, 0.30, 0.40, 0.50, 0.75, 1.00};
 bool   g_rExitConfigValid = true;
 bool   g_rExitStateDirty  = false;    // v6.21.2 (Fix 16): set true on any meaningful state change; save only when dirty or on the periodic floor
 
@@ -27304,7 +27454,7 @@ bool   g_rExitStateDirty  = false;    // v6.21.2 (Fix 16): set true on any meani
 // SEPARATE array from g_rExit/XAU_RExitState, not new fields bolted onto it
 // -- g_rExit is the live, persisted, exit-DECISION-making state for the
 // non-negotiable "exit behaviour must not change" system; this array only
-// ever READS g_rExit's already-computed profit/currentR values at the one
+// ever READS g_rExit's already-computed profit/currentPips values at the one
 // safe point in XAU_RExitCoreLoop (before any close-decision branch runs)
 // and never writes back to it, never calls XAU_RExit_RequestClose, and is
 // never read by any exit-decision code. Pure observation, for learning and
@@ -27329,9 +27479,9 @@ struct XAU_EntryQualityRecord
    double   runningWorstUSD;      // running MAE (most negative profit observed so far)
    double   runningBestUSD;       // running MFE (most positive profit observed so far)
    double   maeUSD[XAU_EQ_CHECKPOINTS];
-   double   maeR[XAU_EQ_CHECKPOINTS];
+   double   maePips[XAU_EQ_CHECKPOINTS];
    double   mfeUSD[XAU_EQ_CHECKPOINTS];
-   double   mfeR[XAU_EQ_CHECKPOINTS];
+   double   mfePips[XAU_EQ_CHECKPOINTS];
    bool     checkpointRecorded[XAU_EQ_CHECKPOINTS];
    datetime timeToFirstProfit;    // 0 until profit first crosses > 0
    datetime timeTo025R;
@@ -27355,7 +27505,7 @@ int XAU_EntryQuality_FindIdx(ulong positionId)
 }
 
 // Called once per tick per open position from the one safe point in
-// XAU_RExitCoreLoop (after profit/currentR are computed, before any
+// XAU_RExitCoreLoop (after profit/currentPips are computed, before any
 // close-decision branch). Pure recorder: no return value read by any
 // caller, no influence on control flow.
 void XAU_RecordEntryQualityTelemetry(ulong positionId, int direction, datetime entryTime,
@@ -27391,9 +27541,9 @@ void XAU_RecordEntryQualityTelemetry(ulong positionId, int direction, datetime e
       }
       g_entryQuality[idx].seenPositive = true;
    }
-   double curR = riskUSD > 0.0 ? profit / riskUSD : 0.0;
-   if(curR >= 0.25 && g_entryQuality[idx].timeTo025R == 0) g_entryQuality[idx].timeTo025R = TimeCurrent();
-   if(curR >= 0.50 && g_entryQuality[idx].timeTo05R  == 0) g_entryQuality[idx].timeTo05R  = TimeCurrent();
+   double curPips = riskUSD > 0.0 ? profit / riskUSD : 0.0;
+   if(curPips >= 0.25 && g_entryQuality[idx].timeTo025R == 0) g_entryQuality[idx].timeTo025R = TimeCurrent();
+   if(curPips >= 0.50 && g_entryQuality[idx].timeTo05R  == 0) g_entryQuality[idx].timeTo05R  = TimeCurrent();
 
    if(entryATR > 0.0)
    {
@@ -27409,8 +27559,8 @@ void XAU_RecordEntryQualityTelemetry(ulong positionId, int direction, datetime e
       {
          g_entryQuality[idx].maeUSD[c] = g_entryQuality[idx].runningWorstUSD;
          g_entryQuality[idx].mfeUSD[c] = g_entryQuality[idx].runningBestUSD;
-         g_entryQuality[idx].maeR[c]   = riskUSD > 0.0 ? g_entryQuality[idx].runningWorstUSD / riskUSD : 0.0;
-         g_entryQuality[idx].mfeR[c]   = riskUSD > 0.0 ? g_entryQuality[idx].runningBestUSD  / riskUSD : 0.0;
+         g_entryQuality[idx].maePips[c]   = riskUSD > 0.0 ? g_entryQuality[idx].runningWorstUSD / riskUSD : 0.0;
+         g_entryQuality[idx].mfePips[c]   = riskUSD > 0.0 ? g_entryQuality[idx].runningBestUSD  / riskUSD : 0.0;
          g_entryQuality[idx].checkpointRecorded[c] = true;
       }
    }
@@ -27424,7 +27574,7 @@ string XAU_ClassifyEntryQuality(int idx, double finalProfit)
 {
    if(idx < 0 || idx >= ArraySize(g_entryQuality)) return "ENTRY_UNKNOWN";
    double riskUSD = g_entryQuality[idx].riskUSD;
-   double worstR = riskUSD > 0.0 ? g_entryQuality[idx].runningWorstUSD / riskUSD : 0.0; // negative
+   double worstPips = riskUSD > 0.0 ? g_entryQuality[idx].runningWorstUSD / riskUSD : 0.0; // negative
    bool won = finalProfit >= 0.01;
 
    if(g_entryQuality[idx].locationAtEntry == "LOCATION_LATE" || g_entryQuality[idx].locationAtEntry == "LOCATION_EXTREME")
@@ -27433,11 +27583,11 @@ string XAU_ClassifyEntryQuality(int idx, double finalProfit)
       return "ENTRY_DIRECTION_WRONG";  // never once showed favor and lost
    if(!g_entryQuality[idx].seenPositive && won)
       return "ENTRY_NO_FOLLOW_THROUGH"; // won without ever showing clean favor first (e.g. straight to BE/TP via other mgmt)
-   if(worstR <= -0.70)
+   if(worstPips <= -0.70)
       return won ? "ENTRY_TOO_EARLY" : "ENTRY_WRONG_LOCATION";
-   if(worstR <= -0.40)
+   if(worstPips <= -0.40)
       return won ? "ENTRY_ACCEPTABLE" : "ENTRY_FALSE_CONFIRMATION";
-   if(worstR > -0.15)
+   if(worstPips > -0.15)
       return "ENTRY_CLEAN";
    return "ENTRY_ACCEPTABLE";
 }
@@ -27454,7 +27604,7 @@ struct XAU_ProtectedExitRecord
    int      direction;      // 1=BUY, -1=SELL
    double   originalEntry;
    double   exitPrice;
-   double   exitR;
+   double   exitPips;
    datetime exitTime;
    string   setupName;
 };
@@ -27462,23 +27612,23 @@ XAU_ProtectedExitRecord g_protectedExits[R_PROTECTED_EXIT_HISTORY];
 int g_protectedExitCount = 0; // ring cursor, wraps mod R_PROTECTED_EXIT_HISTORY
 #define R_REENTRY_LOOKBACK_SECONDS (4*3600) // a protected exit older than this no longer counts as "recent" for re-entry audit purposes
 
-void XAU_RecordProtectedExit(ulong positionId, int direction, double originalEntry, double exitPrice, double exitR, string setupName)
+void XAU_RecordProtectedExit(ulong positionId, int direction, double originalEntry, double exitPrice, double exitPips, string setupName)
 {
    int slot = g_protectedExitCount % R_PROTECTED_EXIT_HISTORY;
    g_protectedExits[slot].positionId = positionId;
    g_protectedExits[slot].direction = direction;
    g_protectedExits[slot].originalEntry = originalEntry;
    g_protectedExits[slot].exitPrice = exitPrice;
-   g_protectedExits[slot].exitR = exitR;
+   g_protectedExits[slot].exitPips = exitPips;
    g_protectedExits[slot].exitTime = TimeCurrent();
    g_protectedExits[slot].setupName = setupName;
    g_protectedExitCount++;
 }
 
-// Returns true and fills outEntry/outExitR if a recent protected exit exists
+// Returns true and fills outEntry/outExitPips if a recent protected exit exists
 // in the given direction on this symbol -- used only for audit logging at a
 // fresh normal entry, never to gate or alter that entry's own approval.
-bool XAU_FindRecentProtectedExit(int direction, double &outOriginalEntry, double &outExitR, datetime &outExitTime, ulong &outPositionId)
+bool XAU_FindRecentProtectedExit(int direction, double &outOriginalEntry, double &outExitPips, datetime &outExitTime, ulong &outPositionId)
 {
    datetime cutoff = TimeCurrent() - R_REENTRY_LOOKBACK_SECONDS;
    int n = MathMin(g_protectedExitCount, R_PROTECTED_EXIT_HISTORY);
@@ -27492,7 +27642,7 @@ bool XAU_FindRecentProtectedExit(int direction, double &outOriginalEntry, double
       {
          bestTime = g_protectedExits[i].exitTime;
          outOriginalEntry = g_protectedExits[i].originalEntry;
-         outExitR = g_protectedExits[i].exitR;
+         outExitPips = g_protectedExits[i].exitPips;
          outExitTime = g_protectedExits[i].exitTime;
          outPositionId = g_protectedExits[i].positionId;
          found = true;
@@ -27505,13 +27655,13 @@ bool XAU_FindRecentProtectedExit(int direction, double &outOriginalEntry, double
 // v6.24.17 URGENT FIX -- order #2970912954 forensic root cause:
 // XAU_ApplyTransitionPositionAuthority() (below) independently tightened this
 // primary SELL's SL FIVE times (17:56:47-17:57:25) using its own ad-hoc
-// `floorR = peakR * 0.35` formula, gated only on `d.exhaustionProbability >=
+// `floorPips = peakPips * 0.35` formula, gated only on `d.exhaustionProbability >=
 // 70.0` (a MACRO/campaign-level exhaustion reading, already >=70 from the
 // very first tick post-entry per the live journal, unrelated to THIS trade's
-// own P&L journey) and `peakR >= 0.10` -- a threshold ten times more
+// own P&L journey) and `peakPips >= 0.10` -- a threshold ten times more
 // aggressive than this file's OWN, already-correct, already-persisted
 // R_EXIT_MANAGER profit-guarantee system three sections below (which
-// correctly arms at InpRProtectTrigger=0.30R). Two independently-tightening
+// correctly arms at InpProtectTriggerPips=0.30R). Two independently-tightening
 // authorities on the same position, racing each other, with the more
 // aggressive/wrong one winning by firing first -- exactly the "two brains"
 // failure mode this file's own audits keep finding elsewhere. The position
@@ -27522,21 +27672,21 @@ bool XAU_FindRecentProtectedExit(int direction, double &outOriginalEntry, double
 // (Counter-Excursion is explicitly excluded -- separate magic number, never
 // reaches this loop, its own distinct 0.3R-1R target design untouched):
 //   MAIN policy (TRADE_HEALTHY / TRADE_PAUSING_NORMALLY):
-//     peakR < 0.50  -> NO floor at all; the original (already 1.20x-widened,
+//     peakPips < 0.50  -> NO floor at all; the original (already 1.20x-widened,
 //                      see XAU_SL_WIDENING_FACTOR) structural SL is preserved
 //                      untouched. The trade must have room to develop.
-//     peakR >= 0.50 -> floorR = max(0.35, peakR * 0.70), permanent, ratchet-
+//     peakPips >= 0.50 -> floorPips = max(0.35, peakPips * 0.70), permanent, ratchet-
 //                      only from here on.
 //   STRUGGLING fallback (TRADE_STRUGGLING only -- requires real, multi-
 //   factor evidence the move is objectively failing, never one weak candle
 //   or mere elapsed time):
-//     peakR < 0.30        -> NO floor (same as healthy).
-//     0.30 <= peakR < 0.35 -> arm at the existing flat InpRGuaranteedFloor (0.10R).
-//     0.35 <= peakR < 0.50 -> floorR = max(existingFloorR, peakR - InpRAdaptiveTrailOffset)
+//     peakPips < 0.30        -> NO floor (same as healthy).
+//     0.30 <= peakPips < 0.35 -> arm at the existing flat InpGuaranteedFloorPips (0.10R).
+//     0.35 <= peakPips < 0.50 -> floorPips = max(existingFloorPips, peakPips - InpAdaptiveTrailOffsetPips)
 //                              (0.35R->0.20R, 0.40R->0.25R, 0.45R->0.30R, per owner's own examples).
-//     peakR >= 0.50        -> converges onto the SAME MAIN 0.50R/70% formula.
+//     peakPips >= 0.50        -> converges onto the SAME MAIN 0.50R/70% formula.
 // This reuses (never duplicates) the existing, already-correct, already-
-// persisted/restart-safe/ratchet-only g_rExit[idx].guaranteedFloorR/
+// persisted/restart-safe/ratchet-only g_rExit[idx].guaranteedFloorPips/
 // guaranteedFloorDesiredSL/guaranteedFloorGeometryBlocked machinery below --
 // only WHEN it arms and WHAT floor value it computes changes; the broker-
 // facing modify/breach-protection mechanics are untouched.
@@ -27557,9 +27707,9 @@ string XAU_TradeHealthName(ENUM_XAU_TRADE_HEALTH h)
 
 // Objective, multi-factor struggling classifier. Never fires from one weak
 // candle, elapsed time, a single retracement, or a solo exhaustion reading --
-// requires the peakR precondition PLUS a real combination of opposing
+// requires the peakPips precondition PLUS a real combination of opposing
 // evidence, matching the owner's explicit "must be evidence, not fear" rule.
-ENUM_XAU_TRADE_HEALTH XAU_ClassifyTradeHealth(int direction, double currentR, double peakR,
+ENUM_XAU_TRADE_HEALTH XAU_ClassifyTradeHealth(int direction, double currentPips, double peakPips,
                                              const XAU_AdaptiveTransitionDecision &td, string &why)
 {
    bool structureInvalidated = (td.lifecycle == OPPOSITE_DIRECTION_CONFIRMED && direction != td.dominantDirection);
@@ -27572,21 +27722,21 @@ ENUM_XAU_TRADE_HEALTH XAU_ClassifyTradeHealth(int direction, double currentR, do
    // Preconditions before "struggling" can even be considered: the trade must
    // have reached at least 0.30R (owner's explicit floor for the fallback
    // path) AND have since given back a meaningful share of that peak.
-   bool reachedMeaningfulProfit = (peakR >= 0.30);
-   bool retracedSignificantly   = (peakR - currentR) >= 0.20 * MathMax(peakR, 0.30);
+   bool reachedMeaningfulProfit = (peakPips >= 0.30);
+   bool retracedSignificantly   = (peakPips - currentPips) >= 0.20 * MathMax(peakPips, 0.30);
 
    int strugglingVotes = 0;
    if(td.exhaustionProbability >= 70.0) strugglingVotes++;          // momentum collapse / repeated failure to extend
    if(td.reversalProbability   >= 55.0) strugglingVotes++;          // adverse/opposite pressure building
    if(td.oppositeDisplacement)          strugglingVotes++;          // real opposite displacement observed
-   if(td.remainingRewardR < 1.0)        strugglingVotes++;          // remaining reward room collapsing
+   if(td.remainingRewardPips < 1.0)        strugglingVotes++;          // remaining reward room collapsing
    if(retracedSignificantly)            strugglingVotes++;          // price returning deeply toward entry after profit
 
    if(reachedMeaningfulProfit && strugglingVotes >= 3)
    {
-      why = StringFormat("peakR=%.2f>=0.30 with %d/5 objective struggling factors (exhaustion=%.0f reversal=%.0f oppositeDisp=%s remainingRoomR=%.2f retraced=%s)",
-                         peakR, strugglingVotes, td.exhaustionProbability, td.reversalProbability,
-                         td.oppositeDisplacement?"Y":"N", td.remainingRewardR, retracedSignificantly?"Y":"N");
+      why = StringFormat("peakPips=%.2f>=0.30 with %d/5 objective struggling factors (exhaustion=%.0f reversal=%.0f oppositeDisp=%s remainingRoomPips=%.2f retraced=%s)",
+                         peakPips, strugglingVotes, td.exhaustionProbability, td.reversalProbability,
+                         td.oppositeDisplacement?"Y":"N", td.remainingRewardPips, retracedSignificantly?"Y":"N");
       return TRADE_STRUGGLING;
    }
 
@@ -27601,33 +27751,47 @@ ENUM_XAU_TRADE_HEALTH XAU_ClassifyTradeHealth(int direction, double currentR, do
 }
 
 // The one canonical primary-trade profit-protection floor. Returns the
-// desired floor in R (0.0 = no floor / preserve structural SL) and a named
-// reason. Never called for Counter-Excursion (separate magic/family, never
-// reaches XAU_RExitCoreLoop) or pyramid-only sizing decisions (those keep
-// their own existing exposure architecture; this only governs the SHARED
+// desired floor in XauCloud pips of THIS position's own risk distance
+// (0.0 = no floor / preserve structural SL) and a named reason. Never
+// called for Counter-Excursion (separate magic/family, never reaches
+// XAU_RExitCoreLoop) or pyramid-only sizing decisions (those keep their
+// own existing exposure architecture; this only governs the SHARED
 // position's SL floor once it exists in g_rExit).
 // The one canonical owner-floor calculation, shared by individual and
 // campaign/basket exit authorities. It computes only the owner minimum;
 // callers consolidate it with their existing valid floor via MathMax.
-double XAU_ComputeOwnerRequiredFloorR(double peakR, ENUM_XAU_OWNER_EXIT_PROFILE profile)
+//
+// v6.26.0 owner directive: every threshold here used to be a bare R
+// fraction (0.25R, 0.40R, 0.70x-of-peak) compared directly against a
+// pre-normalized currentR/peakR ratio. peakPips/currentPips are now real,
+// ABSOLUTE pip distances (not normalized per-position) -- so the same
+// fractions are now applied against riskDistancePips (this position's own
+// blended risk distance in pips, from g_rExit[idx].originalStopDistance *
+// XAUCLOUD_PIPS_PER_PRICE_UNIT) at the point of comparison. This is the
+// exact same normalized-fraction math as before (0.25R meant "25% of this
+// trade's own risk distance"; 0.25*riskDistancePips means the identical
+// thing in pips) -- only the unit changed, per the owner's "preserve exact
+// behavior, only convert units" requirement. A `peakPips * 0.70` ratio
+// multiplier needs no separate scaling -- it is already pips-of-peak.
+double XAU_ComputeOwnerRequiredFloorPips(double peakPips, double riskDistancePips, ENUM_XAU_OWNER_EXIT_PROFILE profile)
 {
    if(profile == OWNER_EXIT_PYRAMID)
    {
       // v6.25.13 owner-approved pyramid-leg protection policy: PYRAMID_0.25R_70PCT_POLICY.
       // Independent of CORE's GENERAL/BREAKOUT bands -- measured from this leg's own
       // entry/peak, never the campaign's.
-      if(peakR < 0.25) return 0.0;
-      return MathMax(0.20, peakR * 0.70);
+      if(peakPips < 0.25 * riskDistancePips) return 0.0;
+      return MathMax(0.20 * riskDistancePips, peakPips * 0.70);
    }
    if(profile == OWNER_EXIT_BREAKOUT)
    {
-      if(peakR < 0.50) return 0.0;
-      if(peakR < 0.70) return 0.40;
-      return MathMax(0.40, peakR * 0.70);
+      if(peakPips < 0.50 * riskDistancePips) return 0.0;
+      if(peakPips < 0.70 * riskDistancePips) return 0.40 * riskDistancePips;
+      return MathMax(0.40 * riskDistancePips, peakPips * 0.70);
    }
-   if(peakR < 0.40) return 0.0;
-   if(peakR < 0.50) return 0.30;
-   return MathMax(0.30, peakR * 0.70);
+   if(peakPips < 0.40 * riskDistancePips) return 0.0;
+   if(peakPips < 0.50 * riskDistancePips) return 0.30 * riskDistancePips;
+   return MathMax(0.30 * riskDistancePips, peakPips * 0.70);
 }
 
 // Pure deterministic decision used by the live close chokepoint and by the
@@ -27636,50 +27800,53 @@ double XAU_ComputeOwnerRequiredFloorR(double peakR, ENUM_XAU_OWNER_EXIT_PROFILE 
 // and closed-bar runner failure after an owner floor is armed. Independent
 // legacy exit modules remain blocked. Every restored rule still defers to an
 // active owner floor and can never intentionally close below it.
-bool XAU_OwnerRExitDecisionAllowsClose(double peakR, double currentR,
-                                       double previousFloorR,
+// v6.26.0: InpFinalTargetPips/InpProtectTriggerPips are the owner's fixed
+// pips-of-risk-distance inputs -- scaled by riskDistancePips at the
+// comparison, same reasoning as XAU_ComputeOwnerRequiredFloorPips above.
+bool XAU_OwnerExitDecisionAllowsClose(double peakPips, double currentPips,
+                                       double previousFloorPips, double riskDistancePips,
                                        ENUM_XAU_OWNER_EXIT_PROFILE profile,
                                        string reason)
 {
-   double requiredFloorR=MathMax(previousFloorR,
-                                 XAU_ComputeOwnerRequiredFloorR(peakR,profile));
+   double requiredFloorPips=MathMax(previousFloorPips,
+                                 XAU_ComputeOwnerRequiredFloorPips(peakPips,riskDistancePips,profile));
    bool approvedRule=false;
    if(StringFind(reason,"OWNER_R_EXIT_FLOOR_BREACH") == 0)
-      approvedRule=requiredFloorR>0.0;
+      approvedRule=requiredFloorPips>0.0;
    else if(StringFind(reason,"OWNER_R_EXIT_TP_1R") == 0)
-      approvedRule=currentR+0.000001>=InpRFinalTarget;
+      approvedRule=currentPips+0.000001>=(InpFinalTargetPips/100.0)*riskDistancePips;
    else if(StringFind(reason,"OWNER_R_EXIT_GIVEBACK_45") == 0)
-      approvedRule=peakR+0.000001>=InpRProtectTrigger && currentR>0.0;
+      approvedRule=peakPips+0.000001>=(InpProtectTriggerPips/100.0)*riskDistancePips && currentPips>0.0;
    else if(StringFind(reason,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED") == 0)
-      approvedRule=requiredFloorR>0.0;
+      approvedRule=requiredFloorPips>0.0;
    else if(StringFind(reason,"OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0)
       return profile == OWNER_EXIT_GENERAL;
    if(!approvedRule) return false;
-   return requiredFloorR<=0.0 || currentR+0.000001>=requiredFloorR;
+   return requiredFloorPips<=0.0 || currentPips+0.000001>=requiredFloorPips;
 }
 
-string XAU_OwnerFloorUpdateReason(double peakR, ENUM_XAU_OWNER_EXIT_PROFILE profile)
+string XAU_OwnerFloorUpdateReason(double peakPips, double riskDistancePips, ENUM_XAU_OWNER_EXIT_PROFILE profile)
 {
    if(profile == OWNER_EXIT_PYRAMID)
       return "PYRAMID_0.25R_70PCT_POLICY";
    if(profile == OWNER_EXIT_BREAKOUT)
-      return peakR >= 0.70 ? "ADAPTIVE_70_PERCENT" : "FIRST_LOCK";
-   return peakR >= 0.50 ? "ADAPTIVE_70_PERCENT" : "FIRST_LOCK";
+      return peakPips >= 0.70 * riskDistancePips ? "ADAPTIVE_70_PERCENT" : "FIRST_LOCK";
+   return peakPips >= 0.50 * riskDistancePips ? "ADAPTIVE_70_PERCENT" : "FIRST_LOCK";
 }
 
-double XAU_ComputePrimaryExitFloor(double peakR, double existingFloorR,
+double XAU_ComputePrimaryExitFloor(double peakPips, double existingFloorPips, double riskDistancePips,
                                    ENUM_XAU_OWNER_EXIT_PROFILE profile,
-                                   double &ownerRequiredFloorR, double &existingValidFloorR,
+                                   double &ownerRequiredFloorPips, double &existingValidFloorPips,
                                    string &reason)
 {
-   existingValidFloorR = existingFloorR;
-   ownerRequiredFloorR = XAU_ComputeOwnerRequiredFloorR(peakR, profile);
-   double finalFloorR = MathMax(existingValidFloorR, ownerRequiredFloorR);
-   if(ownerRequiredFloorR > 0.0)
-      reason = "OWNER_" + XAU_OwnerExitProfileName(profile) + "_" + XAU_OwnerFloorUpdateReason(peakR, profile);
+   existingValidFloorPips = existingFloorPips;
+   ownerRequiredFloorPips = XAU_ComputeOwnerRequiredFloorPips(peakPips, riskDistancePips, profile);
+   double finalFloorPips = MathMax(existingValidFloorPips, ownerRequiredFloorPips);
+   if(ownerRequiredFloorPips > 0.0)
+      reason = "OWNER_" + XAU_OwnerExitProfileName(profile) + "_" + XAU_OwnerFloorUpdateReason(peakPips, riskDistancePips, profile);
    else
       reason = "OWNER_" + XAU_OwnerExitProfileName(profile) + "_BELOW_TRIGGER_NO_FLOOR";
-   return finalFloorR;
+   return finalFloorPips;
 }
 
 //+------------------------------------------------------------------+
@@ -27789,8 +27956,8 @@ bool XAU_General10MRestoreOriginalProtection(int idx, ulong ticket, string &fail
 // codebase convention) -- it supersedes which function TryArm calls at the
 // exact same single call site.
 //
-// Rule: extensionProtectedFloorR = max(existingProtectedFloorR, 0.15).
-// existingProtectedFloorR is derived from whatever SL is already on the
+// Rule: extensionProtectedFloorPips = max(existingProtectedFloorPips, 0.15).
+// existingProtectedFloorPips is derived from whatever SL is already on the
 // broker at this instant (could be the frozen original structural stop --
 // a negative R -- or, in principle, an already-stronger floor); the max()
 // guarantees this step can only improve protection, never weaken it.
@@ -27823,18 +27990,25 @@ bool XAU_General10MArmExtensionFloor(int idx, ulong ticket, string &failureReaso
       if(internalRDistance <= 0.0) { failureReason="INVALID_INTERNAL_R_DISTANCE"; return false; }
    }
 
-   double existingProtectedFloorR = internalRDistance > 0.0 && currentSL > 0.0
-      ? (isBuy ? (currentSL - entryPrice) : (entryPrice - currentSL)) / internalRDistance
-      : -1.0; // no valid existing SL to compare against -- treat as worse than any positive floor
-   double minimumExtensionFloorR = 0.15;
-   double extensionProtectedFloorR = MathMax(existingProtectedFloorR, minimumExtensionFloorR);
-   double calculatedSL = isBuy ? (entryPrice + internalRDistance * extensionProtectedFloorR)
-                                : (entryPrice - internalRDistance * extensionProtectedFloorR);
+   // v6.26.0: existingProtectedFloorPips/extensionProtectedFloorPips are now
+   // genuine absolute pips (price distance * XAUCLOUD_PIPS_PER_PRICE_UNIT),
+   // not a bare fraction of internalRDistance -- minimumExtensionFloorPips
+   // (was a bare 0.15R) is scaled by this position's own risk distance in
+   // pips at the point of use, same normalized-fraction reasoning as the
+   // primary floor engine above.
+   double internalRDistancePips = internalRDistance * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+   double existingProtectedFloorPips = currentSL > 0.0
+      ? (isBuy ? (currentSL - entryPrice) : (entryPrice - currentSL)) * XAUCLOUD_PIPS_PER_PRICE_UNIT
+      : -1000000.0; // no valid existing SL to compare against -- treat as worse than any positive floor
+   double minimumExtensionFloorPips = 0.15 * internalRDistancePips;
+   double extensionProtectedFloorPips = MathMax(existingProtectedFloorPips, minimumExtensionFloorPips);
+   double calculatedSL = isBuy ? (entryPrice + extensionProtectedFloorPips / XAUCLOUD_PIPS_PER_PRICE_UNIT)
+                                : (entryPrice - extensionProtectedFloorPips / XAUCLOUD_PIPS_PER_PRICE_UNIT);
    calculatedSL = NormalizeDouble(calculatedSL, digits);
 
-   PrintFormat("EXTENSION_STARTED | position=%I64u | entryPrice=%.5f | internalRDistance=%.5f | existingProtectedFloorR=%.3f | minimumExtensionFloorR=%.2f | activeExtensionFloorR=%.3f | deadline=%s | ratchetActivated=false | calculatedSL=%.5f | previousSL=%.5f",
-               g_rExit[idx].positionId, entryPrice, internalRDistance, existingProtectedFloorR,
-               minimumExtensionFloorR, extensionProtectedFloorR,
+   PrintFormat("EXTENSION_STARTED | position=%I64u | entryPrice=%.5f | internalRDistance=%.5f | existingProtectedFloorPips=%.3f | minimumExtensionFloorPips=%.2f | activeExtensionFloorPips=%.3f | deadline=%s | ratchetActivated=false | calculatedSL=%.5f | previousSL=%.5f",
+               g_rExit[idx].positionId, entryPrice, internalRDistance, existingProtectedFloorPips,
+               minimumExtensionFloorPips, extensionProtectedFloorPips,
                TimeToString(g_rExit[idx].extensionDeadline, TIME_DATE|TIME_SECONDS), calculatedSL, currentSL);
 
    bool validSide = isBuy ? (calculatedSL < bid) : (calculatedSL > ask);
@@ -27865,16 +28039,14 @@ bool XAU_General10MArmExtensionFloor(int idx, ulong ticket, string &failureReaso
       return false;
    }
 
-   double protectedR = internalRDistance > 0.0
-      ? (isBuy ? (actualSL - entryPrice) : (entryPrice - actualSL)) / internalRDistance
-      : 0.0;
+   double protectedPips = (isBuy ? (actualSL - entryPrice) : (entryPrice - actualSL)) * XAUCLOUD_PIPS_PER_PRICE_UNIT;
    g_rExit[idx].guaranteedFloorDesiredSL = actualSL;
    g_rExit[idx].lastProtectedSL = actualSL;
-   g_rExit[idx].extensionProtectedFloorR = protectedR;
-   g_rExit[idx].extensionHighestPeakR = MathMax(protectedR, g_rExit[idx].extensionTriggerR);
+   g_rExit[idx].extensionProtectedFloorPips = protectedPips;
+   g_rExit[idx].extensionHighestPeakPips = MathMax(protectedPips, g_rExit[idx].extensionTriggerPips);
    g_rExit[idx].extensionRatchetActivated = false;
-   PrintFormat("EXTENSION_PROTECTION_CONFIRMED | position=%I64u | actualBrokerSL=%.5f | protectedR=%.3f | timerActive=true",
-               g_rExit[idx].positionId, actualSL, protectedR);
+   PrintFormat("EXTENSION_PROTECTION_CONFIRMED | position=%I64u | actualBrokerSL=%.5f | protectedPips=%.3f | timerActive=true",
+               g_rExit[idx].positionId, actualSL, protectedPips);
    return true;
 }
 
@@ -27882,13 +28054,13 @@ bool XAU_General10MArmExtensionFloor(int idx, ulong ticket, string &failureReaso
 // PHASE 2: the peak-tracking ratchet. Called every tick while the extension
 // is active (from the Priority-1.5 extension-hold branch in the main R-exit
 // loop) AND once immediately after arming (covers the edge case where the
-// trigger R itself is already >= 0.70). Pure: reads g_rExit[idx].currentR,
+// trigger R itself is already >= 0.70). Pure: reads g_rExit[idx].currentPips,
 // which the caller has already refreshed this tick; never recomputes
 // profit/R itself, so it cannot drift from the one canonical R calculation.
 //
-// Activation: only at extensionHighestPeakR >= 0.70 (not at entry, not at
+// Activation: only at extensionHighestPeakPips >= 0.70 (not at entry, not at
 // extension start, not at 0.15/0.40/0.50R). Once activated, the floor is
-// max(previous floor, highestPeakR * 0.70) -- monotonic by construction
+// max(previous floor, highestPeakPips * 0.70) -- monotonic by construction
 // since both operands of the max() can only ever increase or stay level.
 void XAU_General10MUpdateExtensionRatchet(int idx, ulong ticket)
 {
@@ -27896,30 +28068,48 @@ void XAU_General10MUpdateExtensionRatchet(int idx, ulong ticket)
    if(g_rExit[idx].ownerExitProfile != (int)OWNER_EXIT_GENERAL) return;
    if(!XAU_General10MExtensionActive(idx)) return;
 
-   double currentR = g_rExit[idx].currentR;
-   double previousPeakR = g_rExit[idx].extensionHighestPeakR;
-   if(currentR > g_rExit[idx].extensionHighestPeakR)
-      g_rExit[idx].extensionHighestPeakR = currentR;
+   // v6.26.0: activation threshold (was RATCHET_ACTIVATION_R=0.70) must be
+   // scaled by this position's own risk distance in pips -- computed
+   // up-front now (previously only derived later in this function) so it's
+   // available for the activation check below. RATCHET_RETENTION_PCT stays
+   // a pure ratio multiplier (already pips-of-peak once peak is pips).
+   // Uses g_rExit[idx].positionDirection (already known, selection-
+   // independent) rather than PositionGetInteger here -- the position is
+   // not guaranteed selected yet at this point in the function (the
+   // explicit PositionSelectByTicket re-select still happens below, right
+   // before it's actually needed for a live broker read).
+   bool isBuy = g_rExit[idx].positionDirection == 1;
+   int slot = XAU_CampaignSlot(isBuy ? 1 : -1);
+   double internalRDistance = g_campaign[slot].ownerEffectiveHardStopDistance;
+   if(!(g_campaign[slot].active && internalRDistance > 0.0))
+      internalRDistance = isBuy ? (g_rExit[idx].originalEntryPrice - g_rExit[idx].originalStopLoss)
+                                 : (g_rExit[idx].originalStopLoss - g_rExit[idx].originalEntryPrice);
+   if(internalRDistance <= 0.0) return;
+   double internalRDistancePips = internalRDistance * XAUCLOUD_PIPS_PER_PRICE_UNIT;
 
-   const double RATCHET_ACTIVATION_R = 0.70;
+   double currentPips = g_rExit[idx].currentPips;
+   double previousPeakPips = g_rExit[idx].extensionHighestPeakPips;
+   if(currentPips > g_rExit[idx].extensionHighestPeakPips)
+      g_rExit[idx].extensionHighestPeakPips = currentPips;
+
+   double RATCHET_ACTIVATION_PIPS = 0.70 * internalRDistancePips;
    const double RATCHET_RETENTION_PCT = 0.70;
 
-   if(!g_rExit[idx].extensionRatchetActivated && g_rExit[idx].extensionHighestPeakR >= RATCHET_ACTIVATION_R)
+   if(!g_rExit[idx].extensionRatchetActivated && g_rExit[idx].extensionHighestPeakPips >= RATCHET_ACTIVATION_PIPS)
    {
       g_rExit[idx].extensionRatchetActivated = true;
-      double activationFloorR = g_rExit[idx].extensionHighestPeakR * RATCHET_RETENTION_PCT;
-      PrintFormat("EXTENSION_70PCT_RATCHET_ACTIVATED | position=%I64u | highestExtensionPeakR=%.3f | activationThresholdR=%.2f | calculatedFloorR=%.3f",
-                  g_rExit[idx].positionId, g_rExit[idx].extensionHighestPeakR, RATCHET_ACTIVATION_R, activationFloorR);
+      double activationFloorPips = g_rExit[idx].extensionHighestPeakPips * RATCHET_RETENTION_PCT;
+      PrintFormat("EXTENSION_70PCT_RATCHET_ACTIVATED | position=%I64u | highestExtensionPeakPips=%.3f | activationThresholdPips=%.2f | calculatedFloorPips=%.3f",
+                  g_rExit[idx].positionId, g_rExit[idx].extensionHighestPeakPips, RATCHET_ACTIVATION_PIPS, activationFloorPips);
    }
 
    if(!g_rExit[idx].extensionRatchetActivated) return;
 
-   double ratchetFloorR = g_rExit[idx].extensionHighestPeakR * RATCHET_RETENTION_PCT;
-   double newFloorR = MathMax(g_rExit[idx].extensionProtectedFloorR, ratchetFloorR);
-   if(newFloorR <= g_rExit[idx].extensionProtectedFloorR + 0.0001) return; // no genuine improvement -- do not touch the broker
+   double ratchetFloorPips = g_rExit[idx].extensionHighestPeakPips * RATCHET_RETENTION_PCT;
+   double newFloorPips = MathMax(g_rExit[idx].extensionProtectedFloorPips, ratchetFloorPips);
+   if(newFloorPips <= g_rExit[idx].extensionProtectedFloorPips + 0.0001) return; // no genuine improvement -- do not touch the broker
 
    if(!PositionSelectByTicket(ticket)) return; // position gone -- OnTradeTransaction reconciliation owns this, not this function
-   bool isBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    double entryPrice = g_rExit[idx].originalEntryPrice;
@@ -27929,19 +28119,12 @@ void XAU_General10MUpdateExtensionRatchet(int idx, ulong ticket)
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double currentPrice = isBuy ? bid : ask;
 
-   int slot = XAU_CampaignSlot(isBuy ? 1 : -1);
-   double internalRDistance = g_campaign[slot].ownerEffectiveHardStopDistance;
-   if(!(g_campaign[slot].active && internalRDistance > 0.0))
-      internalRDistance = isBuy ? (entryPrice - g_rExit[idx].originalStopLoss)
-                                 : (g_rExit[idx].originalStopLoss - entryPrice);
-   if(internalRDistance <= 0.0) return;
-
-   double requestedSL = isBuy ? (entryPrice + internalRDistance * newFloorR)
-                               : (entryPrice - internalRDistance * newFloorR);
+   double requestedSL = isBuy ? (entryPrice + newFloorPips / XAUCLOUD_PIPS_PER_PRICE_UNIT)
+                               : (entryPrice - newFloorPips / XAUCLOUD_PIPS_PER_PRICE_UNIT);
    requestedSL = NormalizeDouble(requestedSL, digits);
 
    // For BUY the protected SL may only move upward; for SELL only downward.
-   // newFloorR > previous floor already guarantees this algebraically, but
+   // newFloorPips > previous floor already guarantees this algebraically, but
    // re-derive it as an explicit geometric assertion rather than trust the
    // R-space comparison alone.
    bool directionOk = isBuy ? (currentSL <= 0.0 || requestedSL > currentSL)
@@ -27956,7 +28139,7 @@ void XAU_General10MUpdateExtensionRatchet(int idx, ulong ticket)
       return; // fail closed -- do not report the higher floor as protected until broker confirmation exists
    }
 
-   double previousFloorR = g_rExit[idx].extensionProtectedFloorR;
+   double previousFloorPips = g_rExit[idx].extensionProtectedFloorPips;
    bool accepted = SafeModifySL(ticket, requestedSL, 0.0, isBuy, currentPrice, "GENERAL_10M_EXTENSION_RATCHET");
    if(!accepted)
    {
@@ -27975,20 +28158,20 @@ void XAU_General10MUpdateExtensionRatchet(int idx, ulong ticket)
       return; // do not update floor state -- broker did not confirm the improvement
    }
 
-   g_rExit[idx].extensionProtectedFloorR = newFloorR;
+   g_rExit[idx].extensionProtectedFloorPips = newFloorPips;
    g_rExit[idx].lastProtectedSL = confirmedSL;
    g_rExit[idx].guaranteedFloorDesiredSL = confirmedSL;
    g_rExitStateDirty = true;
-   PrintFormat("EXTENSION_PEAK_RATCHET_UPDATED | position=%I64u | previousPeakR=%.3f | newPeakR=%.3f | previousFloorR=%.3f | newFloorR=%.3f | requestedSL=%.5f | confirmedSL=%.5f",
-               g_rExit[idx].positionId, previousPeakR, g_rExit[idx].extensionHighestPeakR,
-               previousFloorR, newFloorR, requestedSL, confirmedSL);
+   PrintFormat("EXTENSION_PEAK_RATCHET_UPDATED | position=%I64u | previousPeakPips=%.3f | newPeakPips=%.3f | previousFloorPips=%.3f | newFloorPips=%.3f | requestedSL=%.5f | confirmedSL=%.5f",
+               g_rExit[idx].positionId, previousPeakPips, g_rExit[idx].extensionHighestPeakPips,
+               previousFloorPips, newFloorPips, requestedSL, confirmedSL);
 }
 
 bool XAU_General10MTryArm(int idx, ulong ticket, string authority)
 {
    if(idx < 0 || idx >= ArraySize(g_rExit)) return false;
    if(g_rExit[idx].ownerExitProfile != (int)OWNER_EXIT_GENERAL) return false;
-   if(g_rExit[idx].currentR <= 0.0 || g_rExit[idx].currentProfitUSD <= 0.0) return false;
+   if(g_rExit[idx].currentPips <= 0.0 || g_rExit[idx].currentProfitUSD <= 0.0) return false;
    // A netting position with addCount>1 contains pyramid exposure. The owner's
    // GENERAL extension is CORE/RE_ENTRY-only and must never govern merged
    // pyramid volume; hedging pyramid legs are already excluded by profile.
@@ -28003,38 +28186,38 @@ bool XAU_General10MTryArm(int idx, ulong ticket, string authority)
    string role = XAU_General10MExtensionRole(idx);
    PrintFormat("GENERAL_10M_EXTENSION_ELIGIBLE | position_id=%I64u | campaign_id=%s | role=%s | authority=%s | trigger_time=%s | trigger_r=%.3f | trigger_price=%.5f",
                g_rExit[idx].positionId, XAU_CampaignIdText(g_campaign[slot].campaignId), role, authority,
-               TimeToString(triggerTime, TIME_DATE|TIME_SECONDS), g_rExit[idx].currentR, triggerPrice);
+               TimeToString(triggerTime, TIME_DATE|TIME_SECONDS), g_rExit[idx].currentPips, triggerPrice);
 
    g_rExit[idx].extensionStartTime = triggerTime;
    g_rExit[idx].extensionDeadline = triggerTime + 600;
-   g_rExit[idx].extensionTriggerR = g_rExit[idx].currentR;
+   g_rExit[idx].extensionTriggerPips = g_rExit[idx].currentPips;
    g_rExit[idx].extensionTriggerPrice = triggerPrice;
    g_rExit[idx].extensionTriggerProfitUSD = g_rExit[idx].currentProfitUSD;
    g_rExit[idx].extensionTriggerAuthority = authority;
    g_rExitStateDirty = true;
 
    // v6.25.28 owner directive (2026-07-24): both extension protections are
-   // now independently input-toggleable (InpExtensionFloor015REnabled,
+   // now independently input-toggleable (InpExtensionFloor15PipsEnabled,
    // InpExtension70PctRatchetEnabled) instead of hardcoded per-build. This
    // is the SAME single code path for all four combinations -- no separate
    // compiled variant is needed to test/run any combination anymore.
    string restoreFailure = "";
-   bool armProtectionOk = InpExtensionFloor015REnabled
+   bool armProtectionOk = InpExtensionFloor15PipsEnabled
       ? XAU_General10MArmExtensionFloor(idx, ticket, restoreFailure)
       : XAU_General10MRestoreOriginalProtection(idx, ticket, restoreFailure);
    if(!armProtectionOk)
    {
       PrintFormat("GENERAL_10M_EXTENSION_FAILED | position_id=%I64u | stage=%s | reason=%s | action=EXECUTE_ORIGINAL_APPROVED_CLOSE",
-                  g_rExit[idx].positionId, InpExtensionFloor015REnabled ? "SL_015R_FLOOR_PROTECT" : "SL_RESTORE", restoreFailure);
+                  g_rExit[idx].positionId, InpExtensionFloor15PipsEnabled ? "SL_015R_FLOOR_PROTECT" : "SL_RESTORE", restoreFailure);
       g_rExit[idx].extensionStartTime = 0;
       g_rExit[idx].extensionDeadline = 0;
-      g_rExit[idx].extensionTriggerR = 0.0;
+      g_rExit[idx].extensionTriggerPips = 0.0;
       g_rExit[idx].extensionTriggerPrice = 0.0;
       g_rExit[idx].extensionTriggerProfitUSD = 0.0;
       g_rExit[idx].extensionTriggerAuthority = "";
-      g_rExit[idx].extensionHighestPeakR = 0.0;
+      g_rExit[idx].extensionHighestPeakPips = 0.0;
       g_rExit[idx].extensionRatchetActivated = false;
-      g_rExit[idx].extensionProtectedFloorR = 0.0;
+      g_rExit[idx].extensionProtectedFloorPips = 0.0;
       g_rExitStateDirty = true;
       XAU_RExit_SaveState(true);
       return false;
@@ -28047,39 +28230,39 @@ bool XAU_General10MTryArm(int idx, ulong ticket, string authority)
    g_rExit[idx].extensionDeadlineCloseSent = false;
    g_rExit[idx].extensionDeadlineCloseConfirmed = false;
    g_rExit[idx].extensionDeadlineRequestTime = 0;
-   g_rExit[idx].extensionDeadlineR = 0.0;
+   g_rExit[idx].extensionDeadlinePips = 0.0;
    g_rExit[idx].extensionDeadlineProfitUSD = 0.0;
    g_rExit[idx].extensionLastSuppressionLog = 0;
 
    // The active extension deliberately suspends the old profitable floor.
-   // v6.25.28: when InpExtensionFloor015REnabled is true, the broker
+   // v6.25.28: when InpExtensionFloor15PipsEnabled is true, the broker
    // already carries the confirmed +0.15R-or-better protection --
-   // guaranteedFloorDesiredSL/lastProtectedSL/extensionProtectedFloorR were
+   // guaranteedFloorDesiredSL/lastProtectedSL/extensionProtectedFloorPips were
    // already set correctly by XAU_General10MArmExtensionFloor() above and
    // must NOT be overwritten here. When it's false (the default), the
    // broker carries only the wide original structural SL (set by
-   // XAU_General10MRestoreOriginalProtection() above) -- extensionProtectedFloorR
+   // XAU_General10MRestoreOriginalProtection() above) -- extensionProtectedFloorPips
    // is then initialized to that stop's R-equivalent (a negative number)
    // purely so the ratchet's MathMax() comparison behaves correctly the
    // first time it activates; no SL is ever placed from this starting
    // value alone, only from a genuine ratchet update.
    g_rExit[idx].profitGuaranteeArmed = false;
-   g_rExit[idx].guaranteedFloorR = 0.0;
+   g_rExit[idx].guaranteedFloorPips = 0.0;
    g_rExit[idx].guaranteedFloorGeometryBlocked = false;
    g_rExit[idx].closeState = R_CLOSE_NONE;
    g_rExit[idx].pendingCloseReason = "";
    g_rExit[idx].closeAttemptCount = 0;
-   if(!InpExtensionFloor015REnabled)
+   if(!InpExtensionFloor15PipsEnabled)
    {
       int rSlot = XAU_CampaignSlot(g_rExit[idx].positionDirection);
       double rDist = g_campaign[rSlot].active ? g_campaign[rSlot].ownerEffectiveHardStopDistance : 0.0;
       if(rDist <= 0.0) rDist = g_rExit[idx].originalStopDistance;
       bool armIsBuy = g_rExit[idx].positionDirection == 1;
-      g_rExit[idx].extensionProtectedFloorR = rDist > 0.0
+      g_rExit[idx].extensionProtectedFloorPips = rDist > 0.0
          ? (armIsBuy ? (g_rExit[idx].originalStopLoss - g_rExit[idx].originalEntryPrice)
                      : (g_rExit[idx].originalEntryPrice - g_rExit[idx].originalStopLoss)) / rDist
          : -1.0;
-      g_rExit[idx].extensionHighestPeakR = g_rExit[idx].extensionTriggerR;
+      g_rExit[idx].extensionHighestPeakPips = g_rExit[idx].extensionTriggerPips;
       g_rExit[idx].extensionRatchetActivated = false;
    }
    g_rExitStateDirty = true;
@@ -28089,7 +28272,7 @@ bool XAU_General10MTryArm(int idx, ulong ticket, string authority)
                g_rExit[idx].positionId,
                TimeToString(g_rExit[idx].extensionStartTime, TIME_DATE|TIME_SECONDS),
                TimeToString(g_rExit[idx].extensionDeadline, TIME_DATE|TIME_SECONDS),
-               g_rExit[idx].extensionTriggerR, g_rExit[idx].originalStopLoss, g_rExit[idx].extensionProtectedFloorR);
+               g_rExit[idx].extensionTriggerPips, g_rExit[idx].originalStopLoss, g_rExit[idx].extensionProtectedFloorPips);
 
    // Covers the edge case where the trigger R that qualified this extension
    // is already >= 0.70 -- the ratchet must not wait for the next tick to
@@ -28319,21 +28502,21 @@ void XAU_RExit_SyncNettingState(int idx, bool isBuy, double liveOpenPx, double l
 void XAU_ValidateRExitConfig()
 {
    g_rExitConfigValid = true;
-   if(InpRGuaranteedFloor <= 0.0 || InpRGuaranteedFloor >= InpRProtectTrigger)
-   { Print("R_EXIT_CONFIG ERROR: InpRGuaranteedFloor must be > 0 and < InpRProtectTrigger. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
-   if(InpRAdaptiveTrailStart <= InpRProtectTrigger)
-   { Print("R_EXIT_CONFIG ERROR: InpRAdaptiveTrailStart must be > InpRProtectTrigger. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
-   if(InpRAdaptiveTrailOffset <= 0.0 || InpRAdaptiveTrailOffset >= InpRAdaptiveTrailStart)
-   { Print("R_EXIT_CONFIG ERROR: InpRAdaptiveTrailOffset must be > 0 and < InpRAdaptiveTrailStart. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
-   if(InpRFinalTarget <= InpRAdaptiveTrailStart)
-   { Print("R_EXIT_CONFIG ERROR: InpRFinalTarget must be > InpRAdaptiveTrailStart. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
+   if(InpGuaranteedFloorPips <= 0.0 || InpGuaranteedFloorPips >= InpProtectTriggerPips)
+   { Print("R_EXIT_CONFIG ERROR: InpGuaranteedFloorPips must be > 0 and < InpProtectTriggerPips. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
+   if(InpAdaptiveTrailStartPips <= InpProtectTriggerPips)
+   { Print("R_EXIT_CONFIG ERROR: InpAdaptiveTrailStartPips must be > InpProtectTriggerPips. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
+   if(InpAdaptiveTrailOffsetPips <= 0.0 || InpAdaptiveTrailOffsetPips >= InpAdaptiveTrailStartPips)
+   { Print("R_EXIT_CONFIG ERROR: InpAdaptiveTrailOffsetPips must be > 0 and < InpAdaptiveTrailStartPips. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
+   if(InpFinalTargetPips <= InpAdaptiveTrailStartPips)
+   { Print("R_EXIT_CONFIG ERROR: InpFinalTargetPips must be > InpAdaptiveTrailStartPips. R-exit manager held off until fixed."); g_rExitConfigValid = false; }
    if(InpRMaxGivebackPct <= 0.0 || InpRMaxGivebackPct >= 100.0)
    { Print("R_EXIT_CONFIG ERROR: InpRMaxGivebackPct must be in (0,100). R-exit manager held off until fixed."); g_rExitConfigValid = false; }
 
-   PrintFormat("R_EXIT_MANAGER CONFIG %s enable=%s protectTrigger=%.2fR guaranteedFloor=%.2fR adaptiveTrailStart=%.2fR adaptiveTrailOffset=%.2fR finalTarget=%.2fR maxGivebackPct=%.1f minFactors=%d/6 maxSpreadPts=%.0f",
+   PrintFormat("R_EXIT_MANAGER CONFIG %s enable=%s protectTrigger=%.2f pips-of-risk guaranteedFloor=%.2f pips-of-risk adaptiveTrailStart=%.2f pips-of-risk adaptiveTrailOffset=%.2f pips-of-risk finalTarget=%.2f pips-of-risk maxGivebackPct=%.1f minFactors=%d/6 maxSpreadPts=%.0f",
                g_rExitConfigValid ? "OK" : "INVALID", InpRExitEnable ? "true" : "false",
-               InpRProtectTrigger, InpRGuaranteedFloor, InpRAdaptiveTrailStart, InpRAdaptiveTrailOffset,
-               InpRFinalTarget, InpRMaxGivebackPct, InpRContinuationMinFactors, InpRMaxSpreadPoints);
+               InpProtectTriggerPips, InpGuaranteedFloorPips, InpAdaptiveTrailStartPips, InpAdaptiveTrailOffsetPips,
+               InpFinalTargetPips, InpRMaxGivebackPct, InpRContinuationMinFactors, InpRMaxSpreadPoints);
 }
 
 //+------------------------------------------------------------------+
@@ -28380,8 +28563,8 @@ void XAU_ReconcileRExitOnInit()
       }
       g_rExit[idx].peakProfitUSD = MathMax(0.0, profit);
       g_rExit[idx].troughProfitUSD = MathMin(0.0, profit);
-      g_rExit[idx].peakR = g_rExit[idx].cumulativeOriginalRiskUSD > 0 ? g_rExit[idx].peakProfitUSD / g_rExit[idx].cumulativeOriginalRiskUSD : 0.0;
-      g_rExit[idx].troughR = g_rExit[idx].cumulativeOriginalRiskUSD > 0 ? g_rExit[idx].troughProfitUSD / g_rExit[idx].cumulativeOriginalRiskUSD : 0.0;
+      g_rExit[idx].peakPips = g_rExit[idx].cumulativeOriginalRiskUSD > 0 ? g_rExit[idx].peakProfitUSD / g_rExit[idx].cumulativeOriginalRiskUSD : 0.0;
+      g_rExit[idx].troughPips = g_rExit[idx].cumulativeOriginalRiskUSD > 0 ? g_rExit[idx].troughProfitUSD / g_rExit[idx].cumulativeOriginalRiskUSD : 0.0;
       PrintFormat("R_EXIT_MANAGER RESTART_RECONCILE positionId=%I64u ticket=%I64u direction=%s | resumed with riskUSD=%.2f currentProfitUSD=%.2f (peak initialized from current profit -- historical peak unknown, no valid persisted state found)",
                   positionId, ticket, isBuy ? "BUY" : "SELL", g_rExit[idx].cumulativeOriginalRiskUSD, profit);
    }
@@ -28432,32 +28615,32 @@ void XAU_RExit_SaveState(bool force = false)
                  DoubleToString(g_rExit[i].originalEntryPrice, 5), DoubleToString(g_rExit[i].originalStopLoss, 5),
                  DoubleToString(g_rExit[i].originalStopDistance, 5), DoubleToString(g_rExit[i].originalRiskUSD, 2),
                  DoubleToString(g_rExit[i].cumulativeOriginalRiskUSD, 2), DoubleToString(g_rExit[i].totalOriginalVolume, 2), g_rExit[i].addCount,
-                 DoubleToString(g_rExit[i].peakProfitUSD, 2), DoubleToString(g_rExit[i].peakR, 4),
+                 DoubleToString(g_rExit[i].peakProfitUSD, 2), DoubleToString(g_rExit[i].peakPips, 4),
                  (long)g_rExit[i].timePeakReached,
-                 DoubleToString(g_rExit[i].troughProfitUSD, 2), DoubleToString(g_rExit[i].troughR, 4),
-                 g_rExit[i].stageReached, g_rExit[i].decisionMadeAt05R ? 1 : 0,
+                 DoubleToString(g_rExit[i].troughProfitUSD, 2), DoubleToString(g_rExit[i].troughPips, 4),
+                 g_rExit[i].stageReached, g_rExit[i].decisionMadeAt50Pips ? 1 : 0,
                  g_rExit[i].closeState, g_rExit[i].pendingCloseReason,
                  DoubleToString(g_rExit[i].lastProtectedSL, 5), g_rExit[i].closeAttemptCount,
                  (long)g_rExit[i].lastRunnerRecheckBarTime, g_rExit[i].finalTelemetryLogged ? 1 : 0,
                  g_rExit[i].reconciledFromRestart ? 1 : 0,
-                 g_rExit[i].profitGuaranteeArmed ? 1 : 0, DoubleToString(g_rExit[i].guaranteedFloorR, 4),
+                 g_rExit[i].profitGuaranteeArmed ? 1 : 0, DoubleToString(g_rExit[i].guaranteedFloorPips, 4),
                  DoubleToString(g_rExit[i].guaranteedFloorDesiredSL, 5), g_rExit[i].guaranteedFloorGeometryBlocked ? 1 : 0,
                  DoubleToString(g_rExit[i].effectiveInitialRiskUSD, 2), g_rExit[i].ownerExitProfile,
                  g_rExit[i].extensionArmed ? 1 : 0, g_rExit[i].extensionFullyConfirmed ? 1 : 0,
                  g_rExit[i].extensionCompleted ? 1 : 0,
                  (long)g_rExit[i].extensionStartTime, (long)g_rExit[i].extensionDeadline,
-                 DoubleToString(g_rExit[i].extensionTriggerR, 6), DoubleToString(g_rExit[i].extensionTriggerPrice, 5),
+                 DoubleToString(g_rExit[i].extensionTriggerPips, 6), DoubleToString(g_rExit[i].extensionTriggerPrice, 5),
                  DoubleToString(g_rExit[i].extensionTriggerProfitUSD, 2), g_rExit[i].extensionTriggerAuthority,
                  g_rExit[i].extensionStructuralSLRestored ? 1 : 0,
                  g_rExit[i].extensionDeadlineCloseSent ? 1 : 0,
                  g_rExit[i].extensionDeadlineCloseConfirmed ? 1 : 0,
                  (long)g_rExit[i].extensionDeadlineRequestTime,
-                 DoubleToString(g_rExit[i].extensionDeadlineR, 6),
+                 DoubleToString(g_rExit[i].extensionDeadlinePips, 6),
                  DoubleToString(g_rExit[i].extensionDeadlineProfitUSD, 2),
                  (long)g_rExit[i].extensionLastSuppressionLog,
-                 DoubleToString(g_rExit[i].extensionHighestPeakR, 6),
+                 DoubleToString(g_rExit[i].extensionHighestPeakPips, 6),
                  g_rExit[i].extensionRatchetActivated ? 1 : 0,
-                 DoubleToString(g_rExit[i].extensionProtectedFloorR, 6));
+                 DoubleToString(g_rExit[i].extensionProtectedFloorPips, 6));
    }
    FileClose(h);
    if(!FileMove(tmpPath, FILE_COMMON, path, FILE_COMMON | FILE_REWRITE))
@@ -28533,10 +28716,10 @@ void XAU_RExit_LoadPersistedState()
       double totalVol   = FileReadNumber(h);
       int addCount      = (int)FileReadNumber(h);
       double peakUSD    = FileReadNumber(h);
-      double peakR      = FileReadNumber(h);
+      double peakPips      = FileReadNumber(h);
       datetime peakTime = (datetime)FileReadNumber(h);
       double troughUSD  = FileReadNumber(h);
-      double troughR    = FileReadNumber(h);
+      double troughPips    = FileReadNumber(h);
       int stage         = (int)FileReadNumber(h);
       bool decided      = FileReadNumber(h) != 0;
       int closeState    = (int)FileReadNumber(h);
@@ -28547,7 +28730,7 @@ void XAU_RExit_LoadPersistedState()
       bool finalLogged  = FileReadNumber(h) != 0;
       bool reconciled   = FileReadNumber(h) != 0;
       bool guaranteeArmed     = FileReadNumber(h) != 0;
-      double guaranteedFloorR = FileReadNumber(h);
+      double guaranteedFloorPips = FileReadNumber(h);
       double guaranteedFloorSL = FileReadNumber(h);
       bool guaranteeGeomBlocked = FileReadNumber(h) != 0;
       double effectiveInitialRisk = schema >= 3 ? FileReadNumber(h) : origRisk;
@@ -28557,7 +28740,7 @@ void XAU_RExit_LoadPersistedState()
       bool extensionCompleted = schema >= 6 ? FileReadNumber(h) != 0 : false;
       datetime extensionStartTime = schema >= 6 ? (datetime)FileReadNumber(h) : 0;
       datetime extensionDeadline = schema >= 6 ? (datetime)FileReadNumber(h) : 0;
-      double extensionTriggerR = schema >= 6 ? FileReadNumber(h) : 0.0;
+      double extensionTriggerPips = schema >= 6 ? FileReadNumber(h) : 0.0;
       double extensionTriggerPrice = schema >= 6 ? FileReadNumber(h) : 0.0;
       double extensionTriggerProfitUSD = schema >= 6 ? FileReadNumber(h) : 0.0;
       string extensionTriggerAuthority = schema >= 6 ? FileReadString(h) : "";
@@ -28565,12 +28748,12 @@ void XAU_RExit_LoadPersistedState()
       bool extensionDeadlineCloseSent = schema >= 6 ? FileReadNumber(h) != 0 : false;
       bool extensionDeadlineCloseConfirmed = schema >= 6 ? FileReadNumber(h) != 0 : false;
       datetime extensionDeadlineRequestTime = schema >= 6 ? (datetime)FileReadNumber(h) : 0;
-      double extensionDeadlineR = schema >= 6 ? FileReadNumber(h) : 0.0;
+      double extensionDeadlinePips = schema >= 6 ? FileReadNumber(h) : 0.0;
       double extensionDeadlineProfitUSD = schema >= 6 ? FileReadNumber(h) : 0.0;
       datetime extensionLastSuppressionLog = schema >= 6 ? (datetime)FileReadNumber(h) : 0;
-      double extensionHighestPeakR = schema >= 7 ? FileReadNumber(h) : 0.0;
+      double extensionHighestPeakPips = schema >= 7 ? FileReadNumber(h) : 0.0;
       bool extensionRatchetActivated = schema >= 7 ? FileReadNumber(h) != 0 : false;
-      double extensionProtectedFloorR = schema >= 7 ? FileReadNumber(h) : 0.0;
+      double extensionProtectedFloorPips = schema >= 7 ? FileReadNumber(h) : 0.0;
       int legacyOwnerExitProfile = ownerExitProfile;
       if(schema <= 4)
       {
@@ -28630,12 +28813,12 @@ void XAU_RExit_LoadPersistedState()
       g_rExit[idx].totalOriginalVolume = totalVol > 0 ? totalVol : liveVol;
       g_rExit[idx].addCount = MathMax(1, addCount);
       g_rExit[idx].peakProfitUSD = peakUSD;
-      g_rExit[idx].peakR = peakR;
+      g_rExit[idx].peakPips = peakPips;
       g_rExit[idx].timePeakReached = peakTime;
       g_rExit[idx].troughProfitUSD = troughUSD;
-      g_rExit[idx].troughR = troughR;
+      g_rExit[idx].troughPips = troughPips;
       g_rExit[idx].stageReached = stage;
-      g_rExit[idx].decisionMadeAt05R = decided;
+      g_rExit[idx].decisionMadeAt50Pips = decided;
       g_rExit[idx].closeState = closeState;
       g_rExit[idx].pendingCloseReason = pendingReason;
       g_rExit[idx].lastProtectedSL = lastSL;
@@ -28644,7 +28827,7 @@ void XAU_RExit_LoadPersistedState()
       g_rExit[idx].finalTelemetryLogged = finalLogged;
       g_rExit[idx].reconciledFromRestart = reconciled;
       g_rExit[idx].profitGuaranteeArmed = guaranteeArmed;
-      g_rExit[idx].guaranteedFloorR = guaranteedFloorR;
+      g_rExit[idx].guaranteedFloorPips = guaranteedFloorPips;
       g_rExit[idx].guaranteedFloorDesiredSL = guaranteedFloorSL;
       g_rExit[idx].guaranteedFloorGeometryBlocked = guaranteeGeomBlocked;
       g_rExit[idx].extensionArmed = extensionArmed;
@@ -28652,7 +28835,7 @@ void XAU_RExit_LoadPersistedState()
       g_rExit[idx].extensionCompleted = extensionCompleted;
       g_rExit[idx].extensionStartTime = extensionStartTime;
       g_rExit[idx].extensionDeadline = extensionDeadline;
-      g_rExit[idx].extensionTriggerR = extensionTriggerR;
+      g_rExit[idx].extensionTriggerPips = extensionTriggerPips;
       g_rExit[idx].extensionTriggerPrice = extensionTriggerPrice;
       g_rExit[idx].extensionTriggerProfitUSD = extensionTriggerProfitUSD;
       g_rExit[idx].extensionTriggerAuthority = extensionTriggerAuthority;
@@ -28660,26 +28843,26 @@ void XAU_RExit_LoadPersistedState()
       g_rExit[idx].extensionDeadlineCloseSent = extensionDeadlineCloseSent;
       g_rExit[idx].extensionDeadlineCloseConfirmed = extensionDeadlineCloseConfirmed;
       g_rExit[idx].extensionDeadlineRequestTime = extensionDeadlineRequestTime;
-      g_rExit[idx].extensionDeadlineR = extensionDeadlineR;
+      g_rExit[idx].extensionDeadlinePips = extensionDeadlinePips;
       g_rExit[idx].extensionDeadlineProfitUSD = extensionDeadlineProfitUSD;
       g_rExit[idx].extensionLastSuppressionLog = extensionLastSuppressionLog;
-      g_rExit[idx].extensionHighestPeakR = extensionHighestPeakR;
+      g_rExit[idx].extensionHighestPeakPips = extensionHighestPeakPips;
       g_rExit[idx].extensionRatchetActivated = extensionRatchetActivated;
-      g_rExit[idx].extensionProtectedFloorR = extensionProtectedFloorR;
+      g_rExit[idx].extensionProtectedFloorPips = extensionProtectedFloorPips;
       int restoredCampaignSlot = XAU_CampaignSlot(direction);
       if(g_campaign[restoredCampaignSlot].active)
          g_campaign[restoredCampaignSlot].ownerExitProfile = ownerExitProfile;
       restored++;
-      PrintFormat("R_EXIT_STATE_RESTORED positionId=%I64u ticket=%I64u direction=%s stage=%d riskUSD=%.2f peakR=%.3f pendingClose=%s guaranteeArmed=%s guaranteedFloorR=%.2f",
-                  positionId, liveTicket, direction == 1 ? "BUY" : "SELL", stage, cumRisk, peakR,
+      PrintFormat("R_EXIT_STATE_RESTORED positionId=%I64u ticket=%I64u direction=%s stage=%d riskUSD=%.2f peakPips=%.3f pendingClose=%s guaranteeArmed=%s guaranteedFloorPips=%.2f",
+                  positionId, liveTicket, direction == 1 ? "BUY" : "SELL", stage, cumRisk, peakPips,
                   StringLen(pendingReason) > 0 ? pendingReason : "NONE",
-                  guaranteeArmed ? "true" : "false", guaranteedFloorR);
+                  guaranteeArmed ? "true" : "false", guaranteedFloorPips);
       if(extensionArmed && extensionFullyConfirmed && !extensionCompleted)
-         PrintFormat("GENERAL_10M_EXTENSION_RESTORED | position_id=%I64u | start_time=%s | deadline=%s | overdue=%s | extensionHighestPeakR=%.3f | extensionRatchetActivated=%s | extensionProtectedFloorR=%.3f",
+         PrintFormat("GENERAL_10M_EXTENSION_RESTORED | position_id=%I64u | start_time=%s | deadline=%s | overdue=%s | extensionHighestPeakPips=%.3f | extensionRatchetActivated=%s | extensionProtectedFloorPips=%.3f",
                      positionId, TimeToString(extensionStartTime, TIME_DATE|TIME_SECONDS),
                      TimeToString(extensionDeadline, TIME_DATE|TIME_SECONDS),
                      TimeCurrent() >= extensionDeadline ? "true" : "false",
-                     extensionHighestPeakR, extensionRatchetActivated ? "true" : "false", extensionProtectedFloorR);
+                     extensionHighestPeakPips, extensionRatchetActivated ? "true" : "false", extensionProtectedFloorPips);
       if(closeState == R_CLOSE_REQUESTED || closeState == R_CLOSE_PENDING_RETRY)
          PrintFormat("R_EXIT_PENDING_CLOSE_RESTORED positionId=%I64u ticket=%I64u reason=%s", positionId, liveTicket, pendingReason);
    }
@@ -28802,12 +28985,12 @@ void XAU_RExit_LogCounterfactual(int idx, string exitReason)
 {
    string cf = "";
    for(int c = 0; c < 6; c++)
-      cf += StringFormat("%.2fR=%s ", g_rCheckpointLevels[c],
+      cf += StringFormat("%.2f pips-of-risk=%s ", g_pipsCheckpointLevels[c],
                           g_rExit[idx].rCheckpointHit[c] ? DoubleToString(g_rExit[idx].rCheckpointProfitUSD[c], 2) : "n/a");
-   PrintFormat("R_EXIT_COUNTERFACTUAL positionId=%I64u ticket=%I64u exitReason=%s riskUSD=%.2f addCount=%d exitR=%.3f exitProfitUSD=%.2f MFE_peakR=%.3f MFE_peakUSD=%.2f MAE_troughR=%.3f MAE_troughUSD=%.2f checkpoints: %s",
+   PrintFormat("R_EXIT_COUNTERFACTUAL positionId=%I64u ticket=%I64u exitReason=%s riskUSD=%.2f addCount=%d exitPips=%.3f exitProfitUSD=%.2f MFE_peakR=%.3f MFE_peakUSD=%.2f MAE_troughR=%.3f MAE_troughUSD=%.2f checkpoints: %s",
                g_rExit[idx].positionId, g_rExit[idx].currentTicket, exitReason, g_rExit[idx].cumulativeOriginalRiskUSD, g_rExit[idx].addCount,
-               g_rExit[idx].currentR, g_rExit[idx].currentProfitUSD,
-               g_rExit[idx].peakR, g_rExit[idx].peakProfitUSD, g_rExit[idx].troughR, g_rExit[idx].troughProfitUSD, cf);
+               g_rExit[idx].currentPips, g_rExit[idx].currentProfitUSD,
+               g_rExit[idx].peakPips, g_rExit[idx].peakProfitUSD, g_rExit[idx].troughPips, g_rExit[idx].troughProfitUSD, cf);
 
    // v6.21.3 — owner rule 2026-07-13: every close of an armed ticket is
    // reported against the profit guarantee, regardless of which exact path
@@ -28817,12 +29000,12 @@ void XAU_RExit_LogCounterfactual(int idx, string exitReason)
    // below its guaranteed floor.
    if(g_rExit[idx].profitGuaranteeArmed)
    {
-      PrintFormat("R_PROFIT_GUARANTEE_TRIGGERED ticket=%I64u peakR=%.3f currentR=%.3f exitR=%.3f exitReason=%s guaranteedFloorR=%.2f",
-                  g_rExit[idx].currentTicket, g_rExit[idx].peakR, g_rExit[idx].currentR,
-                  g_rExit[idx].currentR, exitReason, g_rExit[idx].guaranteedFloorR);
+      PrintFormat("R_PROFIT_GUARANTEE_TRIGGERED ticket=%I64u peakPips=%.3f currentPips=%.3f exitPips=%.3f exitReason=%s guaranteedFloorPips=%.2f",
+                  g_rExit[idx].currentTicket, g_rExit[idx].peakPips, g_rExit[idx].currentPips,
+                  g_rExit[idx].currentPips, exitReason, g_rExit[idx].guaranteedFloorPips);
       double exitPriceNow = SymbolInfoDouble(Symbol(), g_rExit[idx].positionDirection == 1 ? SYMBOL_BID : SYMBOL_ASK);
       XAU_RecordProtectedExit(g_rExit[idx].positionId, g_rExit[idx].positionDirection,
-                              g_rExit[idx].originalEntryPrice, exitPriceNow, g_rExit[idx].currentR,
+                              g_rExit[idx].originalEntryPrice, exitPriceNow, g_rExit[idx].currentPips,
                               g_rExit[idx].positionDirection == 1 ? "BUY" : "SELL");
    }
 }
@@ -28864,15 +29047,16 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
       return false;
    }
 
-   double ownerFloorNow = XAU_ComputeOwnerRequiredFloorR(g_rExit[idx].peakR, profile);
+   double riskDistancePipsNow = g_rExit[idx].originalStopDistance * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+   double ownerFloorNow = XAU_ComputeOwnerRequiredFloorPips(g_rExit[idx].peakPips, riskDistancePipsNow, profile);
    if(!hardBasketClose &&
-      !XAU_OwnerRExitDecisionAllowsClose(g_rExit[idx].peakR,g_rExit[idx].currentR,
-                                         g_rExit[idx].guaranteedFloorR,profile,reason))
+      !XAU_OwnerExitDecisionAllowsClose(g_rExit[idx].peakPips,g_rExit[idx].currentPips,
+                                         g_rExit[idx].guaranteedFloorPips,riskDistancePipsNow,profile,reason))
    {
       PrintFormat("OWNER_FLOOR_OVERRIDE | attempted_exit_authority=%s | attempted_exit_r=%.3f | protected_floor_r=%.3f | action=REJECT_LOWER_EXIT",
-                  reason, g_rExit[idx].currentR, MathMax(ownerFloorNow,g_rExit[idx].guaranteedFloorR));
+                  reason, g_rExit[idx].currentPips, MathMax(ownerFloorNow,g_rExit[idx].guaranteedFloorPips));
       PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_BELOW_FLOOR | ticket=%I64u | attempted_authority=%s | attempted_exit_r=%.3f | protected_floor_r=%.3f",
-                  currentTicket, reason, g_rExit[idx].currentR, MathMax(ownerFloorNow,g_rExit[idx].guaranteedFloorR));
+                  currentTicket, reason, g_rExit[idx].currentPips, MathMax(ownerFloorNow,g_rExit[idx].guaranteedFloorPips));
       return false;
    }
 
@@ -28880,7 +29064,7 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
    // restore the original structural SL/remove broker TP, then suppress this
    // original close. Failure to confirm restoration falls through and sends
    // the original already-approved close exactly as before.
-   if(!deadlineClose && !hardBasketClose && profile == OWNER_EXIT_GENERAL && g_rExit[idx].currentR > 0.0 &&
+   if(!deadlineClose && !hardBasketClose && profile == OWNER_EXIT_GENERAL && g_rExit[idx].currentPips > 0.0 &&
       g_rExit[idx].currentProfitUSD > 0.0 && !g_rExit[idx].extensionArmed &&
       !g_rExit[idx].extensionCompleted)
    {
@@ -28901,14 +29085,14 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
       {
          g_rExit[idx].extensionDeadlineCloseSent = true;
          g_rExit[idx].extensionDeadlineRequestTime = now;
-         g_rExit[idx].extensionDeadlineR = g_rExit[idx].currentR;
+         g_rExit[idx].extensionDeadlinePips = g_rExit[idx].currentPips;
          g_rExit[idx].extensionDeadlineProfitUSD = g_rExit[idx].currentProfitUSD;
          g_rExitStateDirty = true;
          PrintFormat("GENERAL_10M_EXTENSION_DEADLINE | position_id=%I64u | deadline=%s | request_time=%s | current_r=%.3f | current_profit_usd=%.2f",
                      g_rExit[idx].positionId,
                      TimeToString(g_rExit[idx].extensionDeadline, TIME_DATE|TIME_SECONDS),
                      TimeToString(now, TIME_DATE|TIME_SECONDS),
-                     g_rExit[idx].currentR, g_rExit[idx].currentProfitUSD);
+                     g_rExit[idx].currentPips, g_rExit[idx].currentProfitUSD);
       }
    }
 
@@ -28951,15 +29135,15 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
                                 HistoryDealGetDouble(closeDeal, DEAL_COMMISSION) +
                                 HistoryDealGetDouble(closeDeal, DEAL_FEE);
          }
-         double realizedR = g_rExit[idx].cumulativeOriginalRiskUSD > 0.0
+         double realizedPips = g_rExit[idx].cumulativeOriginalRiskUSD > 0.0
                             ? realizedProfit / g_rExit[idx].cumulativeOriginalRiskUSD
-                            : g_rExit[idx].currentR;
+                            : g_rExit[idx].currentPips;
          int delaySec = (int)(now - g_rExit[idx].extensionDeadline);
          if(delaySec < 0) delaySec = 0;
          PrintFormat("GENERAL_10M_EXTENSION_CLOSE_CONFIRMED | position_id=%I64u | trigger_r=%.3f | deadline_r=%.3f | realized_r=%.3f | delta_r=%.3f | trigger_profit_usd=%.2f | realized_profit_usd=%.2f | execution_delay_seconds=%d | close_price=%.5f",
-                     g_rExit[idx].positionId, g_rExit[idx].extensionTriggerR,
-                     g_rExit[idx].extensionDeadlineR, realizedR,
-                     realizedR - g_rExit[idx].extensionTriggerR,
+                     g_rExit[idx].positionId, g_rExit[idx].extensionTriggerPips,
+                     g_rExit[idx].extensionDeadlinePips, realizedPips,
+                     realizedPips - g_rExit[idx].extensionTriggerPips,
                      g_rExit[idx].extensionTriggerProfitUSD, realizedProfit,
                      delaySec, confirmedPrice);
       }
@@ -28987,7 +29171,7 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
 // an early controlled exit requires the persisted compact reversal package.
 bool XAU_ApplyTransitionPositionAuthority(int idx, ulong ticket, bool isBuy,
                                           double curPrice, double curSL, double curTP,
-                                          double currentR, double profit, double peakR,
+                                          double currentPips, double profit, double peakPips,
                                           int digits, double buffer)
 {
    if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_OFF) return false;
@@ -28998,12 +29182,12 @@ bool XAU_ApplyTransitionPositionAuthority(int idx, ulong ticket, bool isBuy,
    if(oldDirection && d.exhaustionProbability>=60.0) action=TRANSITION_STOP_ADDS;
    if(oldDirection && d.exhaustionProbability>=70.0) action=TRANSITION_TIGHTEN_PROTECTION;
    if(oldDirection && d.oppositeEntryAllowed && profit>0.0) action=TRANSITION_EXIT_PROFITABLE;
-   else if(oldDirection && d.oppositeEntryAllowed && currentR>=-0.35) action=TRANSITION_EXIT_CONTROLLED;
+   else if(oldDirection && d.oppositeEntryAllowed && currentPips>=-0.35) action=TRANSITION_EXIT_CONTROLLED;
 
    if(TimeCurrent()-g_rExit[idx].lastTelemetryLog>=30)
    {
-      PrintFormat("[TRANSITION_POSITION_AUDIT] ticket=%I64u currentDirection=%s currentR=%.3f peakR=%.3f oldThesisHealth=%.0f opposingEvidence=%.0f recommendedAction=%s mode=%s",
-                  ticket,isBuy?"BUY":"SELL",currentR,peakR,d.trendHealth,d.reversalProbability,
+      PrintFormat("[TRANSITION_POSITION_AUDIT] ticket=%I64u currentDirection=%s currentPips=%.3f peakPips=%.3f oldThesisHealth=%.0f opposingEvidence=%.0f recommendedAction=%s mode=%s",
+                  ticket,isBuy?"BUY":"SELL",currentPips,peakPips,d.trendHealth,d.reversalProbability,
                   XAU_ATActionName(action),InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":"SHADOW");
    }
    if(InpAdaptiveTransitionMode!=ADAPTIVE_TRANSITION_ACTIVE || !InpTransitionActiveExitAuthority || !oldDirection)
@@ -29012,8 +29196,8 @@ bool XAU_ApplyTransitionPositionAuthority(int idx, ulong ticket, bool isBuy,
    // v6.24.17 URGENT FIX -- root cause of order #2970912954's premature exit
    // (5 SL tightenings, 17:56:47-17:57:25, closed at ~0.04R while gold kept
    // moving in the trade's favor toward ~3996 afterward). This branch used to
-   // call SafeModifySL directly with its own ad-hoc `peakR*0.35` floor at
-   // peakR>=0.10 -- a second, uncoordinated SL-tightening authority racing
+   // call SafeModifySL directly with its own ad-hoc `peakPips*0.35` floor at
+   // peakPips>=0.10 -- a second, uncoordinated SL-tightening authority racing
    // XAU_RExitCoreLoop's own (correct, already-persisted) profit-guarantee
    // system a few hundred lines below, and winning by firing first, every
    // tick, before that system's own Stage-0/arm logic ever runs (this
@@ -29026,8 +29210,8 @@ bool XAU_ApplyTransitionPositionAuthority(int idx, ulong ticket, bool isBuy,
    // XAU_ClassifyTradeHealth() reads via g_transitionDecision), it just no
    // longer acts on it independently.
    if(action==TRANSITION_TIGHTEN_PROTECTION && TimeCurrent()-g_rExit[idx].lastTelemetryLog>=30)
-      PrintFormat("PRIMARY_EXIT_LEGACY_TRAIL_SUPPRESSED ticket=%I64u reason=TRANSITION_TIGHTEN_PROTECTION_now_evidence_only exhaustion=%.0f peakR=%.3f (see XAU_ComputePrimaryExitFloor for the actual floor)",
-                  ticket, d.exhaustionProbability, peakR);
+      PrintFormat("PRIMARY_EXIT_LEGACY_TRAIL_SUPPRESSED ticket=%I64u reason=TRANSITION_TIGHTEN_PROTECTION_now_evidence_only exhaustion=%.0f peakPips=%.3f (see XAU_ComputePrimaryExitFloor for the actual floor)",
+                  ticket, d.exhaustionProbability, peakPips);
 
    // v6.25.9: transition actions are evidence only. They may describe a
    // deteriorating thesis but cannot close, partially close or modify a
@@ -29035,10 +29219,10 @@ bool XAU_ApplyTransitionPositionAuthority(int idx, ulong ticket, bool isBuy,
    if(action==TRANSITION_EXIT_PROFITABLE || action==TRANSITION_EXIT_CONTROLLED)
    {
       string healthWhy="";
-      ENUM_XAU_TRADE_HEALTH health=XAU_ClassifyTradeHealth(posDir,currentR,peakR,d,healthWhy);
+      ENUM_XAU_TRADE_HEALTH health=XAU_ClassifyTradeHealth(posDir,currentPips,peakPips,d,healthWhy);
       if(TimeCurrent()-g_rExit[idx].lastTelemetryLog>=30)
-         PrintFormat("OWNER_R_EXIT_LEGACY_TELEMETRY_ONLY | ticket=%I64u | legacy_authority=TRANSITION_INVALIDATION | recommendation=%s | health=%s | currentR=%.3f | peakR=%.3f | action=NO_CLOSE",
-                     ticket, XAU_ATActionName(action), XAU_TradeHealthName(health), currentR, peakR);
+         PrintFormat("OWNER_R_EXIT_LEGACY_TELEMETRY_ONLY | ticket=%I64u | legacy_authority=TRANSITION_INVALIDATION | recommendation=%s | health=%s | currentPips=%.3f | peakPips=%.3f | action=NO_CLOSE",
+                     ticket, XAU_ATActionName(action), XAU_TradeHealthName(health), currentPips, peakPips);
    }
    return false;
 }
@@ -29173,7 +29357,7 @@ bool XAU_RestoreBasketLegOriginalProtection(ulong ticket, int idx, string &failu
    bool ownerStateChanged = g_rExit[idx].extensionArmed || g_rExit[idx].extensionFullyConfirmed ||
                             g_rExit[idx].extensionStructuralSLRestored || g_rExit[idx].extensionDeadlineCloseSent ||
                             g_rExit[idx].extensionDeadlineCloseConfirmed || g_rExit[idx].profitGuaranteeArmed ||
-                            MathAbs(g_rExit[idx].guaranteedFloorR) > 0.0000001 ||
+                            MathAbs(g_rExit[idx].guaranteedFloorPips) > 0.0000001 ||
                             MathAbs(g_rExit[idx].guaranteedFloorDesiredSL - originalSL) > tolerance ||
                             g_rExit[idx].guaranteedFloorGeometryBlocked ||
                             MathAbs(g_rExit[idx].lastProtectedSL - originalSL) > tolerance;
@@ -29185,7 +29369,7 @@ bool XAU_RestoreBasketLegOriginalProtection(ulong ticket, int idx, string &failu
       g_rExit[idx].extensionDeadlineCloseSent = false;
       g_rExit[idx].extensionDeadlineCloseConfirmed = false;
       g_rExit[idx].profitGuaranteeArmed = false;
-      g_rExit[idx].guaranteedFloorR = 0.0;
+      g_rExit[idx].guaranteedFloorPips = 0.0;
       g_rExit[idx].guaranteedFloorDesiredSL = originalSL;
       g_rExit[idx].guaranteedFloorGeometryBlocked = false;
       g_rExit[idx].lastProtectedSL = originalSL;
@@ -29257,7 +29441,7 @@ void XAU_UpdateCampaignBasketState(int direction)
    // The persisted 0.50R armed state is the restart-safe close latch. Resume
    // closing even if current P/L moved after restart or only one leg remains.
    bool persistedHardCloseLatch = g_campaign[slot].basketProtectionArmed &&
-                                  g_campaign[slot].basketProtectedFloorR + 0.0000001 >= XAU_PYRAMID_BASKET_HARD_CLOSE_R;
+                                  g_campaign[slot].basketProtectedFloorPips + 0.0000001 >= XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS;
    if(g_campaign[slot].basketCloseInProgress || persistedHardCloseLatch)
    {
       g_campaign[slot].basketCloseInProgress = true;
@@ -29302,34 +29486,47 @@ void XAU_UpdateCampaignBasketState(int direction)
       return;
    }
 
-   double basketCurrentR = basketProfitMoney / g_campaign[slot].basketOneRMoney;
-   double basketTargetMoney = XAU_PYRAMID_BASKET_HARD_CLOSE_R * g_campaign[slot].basketOneRMoney;
+   // v6.26.0: a basket aggregates potentially multiple tickets/entries, so
+   // it has no single natural "price distance" the way one position does.
+   // basketCurrentPips is expressed relative to the CAMPAIGN's own real risk
+   // distance (g_campaign[slot].ownerEffectiveHardStopDistance -- the same
+   // canonical per-campaign reference the extension subsystem already uses)
+   // -- "how many pips of the campaign's own risk this basket's dollar P&L
+   // is equivalent to" -- genuinely anchored to a real price distance,
+   // never a bare multiplier of a dollar figure. XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS
+   // stays a pure fraction (0.50) for the dollar-target calc below, which
+   // needs no unit conversion; basketHardClosePips is the pips-scaled
+   // threshold used for the comparison/display further down.
+   double basketRiskDistancePips = g_campaign[slot].ownerEffectiveHardStopDistance * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+   double basketCurrentPips = (basketProfitMoney / g_campaign[slot].basketOneRMoney) * basketRiskDistancePips;
+   double basketHardClosePips = XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS * basketRiskDistancePips;
+   double basketTargetMoney = XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS * g_campaign[slot].basketOneRMoney;
 
    if(basketProfitMoney > g_campaign[slot].basketPeakProfitMoney)
    {
       g_campaign[slot].basketPeakProfitMoney = basketProfitMoney;
-      g_campaign[slot].basketPeakR = basketCurrentR;
+      g_campaign[slot].basketPeakPips = basketCurrentPips;
       g_campaignBasketStateDirty = true;
-      PrintFormat("BASKET_050R_PEAK_UPDATED | slot=%d | dir=%s | campaignId=%s | peakProfitMoney=%.2f | peakR=%.3f",
+      PrintFormat("BASKET_050R_PEAK_UPDATED | slot=%d | dir=%s | campaignId=%s | peakProfitMoney=%.2f | peakPips=%.3f",
                   slot, direction == 1 ? "BUY" : "SELL", XAU_CampaignIdText(g_campaign[slot].campaignId),
-                  g_campaign[slot].basketPeakProfitMoney, g_campaign[slot].basketPeakR);
+                  g_campaign[slot].basketPeakProfitMoney, g_campaign[slot].basketPeakPips);
    }
 
    // Hard target owns priority. Persist the latch, then send close requests
    // immediately; no indicator, confirmation, candle-close or 10-minute wait.
-   if(basketCurrentR + 0.0000001 >= XAU_PYRAMID_BASKET_HARD_CLOSE_R)
+   if(basketCurrentPips + 0.0000001 >= basketHardClosePips)
    {
       g_campaign[slot].basketProtectionArmed = true;
-      g_campaign[slot].basketProtectedFloorR = XAU_PYRAMID_BASKET_HARD_CLOSE_R;
+      g_campaign[slot].basketProtectedFloorPips = basketHardClosePips;
       g_campaign[slot].basketProtectedFloorMoney = basketTargetMoney;
       g_campaign[slot].basketCloseInProgress = true;
       g_campaignBasketStateDirty = true;
       XAU_CampaignBasketState_Save(true);
 
-      PrintFormat("BASKET_050R_TARGET_REACHED | campaignId=%s | dir=%s | brokerPositions=%d | additions=%d | basketProfitMoney=%.2f | realizedPL=%.2f | openPL=%.2f | initialCoreOneRMoney=%.2f | basketR=%.3f | targetR=%.2f | action=IMMEDIATE_CLOSE_ALL",
+      PrintFormat("BASKET_050R_TARGET_REACHED | campaignId=%s | dir=%s | brokerPositions=%d | additions=%d | basketProfitMoney=%.2f | realizedPL=%.2f | openPL=%.2f | initialCoreOneRMoney=%.2f | basketPips=%.3f | targetR=%.2f | action=IMMEDIATE_CLOSE_ALL",
                   XAU_CampaignIdText(g_campaign[slot].campaignId), direction == 1 ? "BUY" : "SELL",
                   found, g_campaign[slot].additionCount, basketProfitMoney, g_campaign[slot].realizedPL,
-                  basketOpenProfitMoney, g_campaign[slot].basketOneRMoney, basketCurrentR, XAU_PYRAMID_BASKET_HARD_CLOSE_R);
+                  basketOpenProfitMoney, g_campaign[slot].basketOneRMoney, basketCurrentPips, XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS);
       PrintFormat("BASKET_050R_CLOSE_ALL | campaignId=%s | originalCoreTicket=%I64u | targetMoney=%.2f | currentMoney=%.2f | noIndividualClose=true | noDelay=true",
                   XAU_CampaignIdText(g_campaign[slot].campaignId), g_campaign[slot].initialCoreTicket,
                   basketTargetMoney, basketProfitMoney);
@@ -29372,10 +29569,10 @@ void XAU_UpdateCampaignBasketState(int direction)
    if(TimeCurrent() - lastStateLog[slot] >= 30)
    {
       lastStateLog[slot] = TimeCurrent();
-      PrintFormat("BASKET_050R_STATE | campaignId=%s | brokerPositions=%d | cachedCampaignPositions=%d | additions=%d | basketProfitMoney=%.2f | initialCoreOneRMoney=%.2f | currentR=%.3f | hardTargetR=%.2f | hardTargetMoney=%.2f | originalProtectionConfirmed=%s | action=HOLD_AS_ONE_BASKET",
+      PrintFormat("BASKET_050R_STATE | campaignId=%s | brokerPositions=%d | cachedCampaignPositions=%d | additions=%d | basketProfitMoney=%.2f | initialCoreOneRMoney=%.2f | currentPips=%.3f | hardTargetPips=%.2f | hardTargetMoney=%.2f | originalProtectionConfirmed=%s | action=HOLD_AS_ONE_BASKET",
                   XAU_CampaignIdText(g_campaign[slot].campaignId), found, g_campaign[slot].activePositionCount,
                   g_campaign[slot].additionCount, basketProfitMoney, g_campaign[slot].basketOneRMoney,
-                  basketCurrentR, XAU_PYRAMID_BASKET_HARD_CLOSE_R, basketTargetMoney,
+                  basketCurrentPips, XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS, basketTargetMoney,
                   allOriginalProtectionConfirmed ? "true" : "false");
    }
 }
@@ -29405,21 +29602,27 @@ string XAU_CampaignBasketDisplayJson(int direction)
       if((posInfo.PositionType() == POSITION_TYPE_BUY ? 1 : -1) != direction) continue;
       basketProfitMoney += posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
    }
-   double basketCurrentR = g_campaign[slot].basketOneRMoney > 0.0 ? basketProfitMoney / g_campaign[slot].basketOneRMoney : 0.0;
-   double hardTargetMoney = g_campaign[slot].basketOneRMoney * XAU_PYRAMID_BASKET_HARD_CLOSE_R;
+   // v6.26.0: same basketRiskDistancePips conversion as
+   // XAU_CloseCampaignBasketAtProtectedFloor -- Command Center JSON now
+   // reports genuine pips/Gold-move fields, no bare R.
+   double basketRiskDistancePipsDisplay = g_campaign[slot].ownerEffectiveHardStopDistance * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+   double basketCurrentPips = g_campaign[slot].basketOneRMoney > 0.0
+      ? (basketProfitMoney / g_campaign[slot].basketOneRMoney) * basketRiskDistancePipsDisplay : 0.0;
+   double basketHardClosePipsDisplay = XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS * basketRiskDistancePipsDisplay;
+   double hardTargetMoney = g_campaign[slot].basketOneRMoney * XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS;
    string nextAction = g_campaign[slot].basketCloseInProgress
                        ? "CLOSING_ALL"
-                       : (basketCurrentR >= XAU_PYRAMID_BASKET_HARD_CLOSE_R ? "TRIGGER_CLOSE_ALL" : "HOLD_AS_ONE_BASKET");
+                       : (basketCurrentPips >= basketHardClosePipsDisplay ? "TRIGGER_CLOSE_ALL" : "HOLD_AS_ONE_BASKET");
 
    return StringFormat(
-      "{\"exit_mode\":\"HARD_BASKET_050R\",\"campaign_id\":\"%s\",\"core_ticket\":%I64u,\"position_count\":%d,"
-      "\"basket_one_r_money\":%.2f,\"basket_current_pl\":%.2f,\"basket_current_r\":%.3f,"
-      "\"basket_peak_pl\":%.2f,\"basket_peak_r\":%.3f,\"hard_close_target_r\":%.2f,"
+      "{\"exit_mode\":\"HARD_BASKET_50_PIPS\",\"campaign_id\":\"%s\",\"core_ticket\":%I64u,\"position_count\":%d,"
+      "\"basket_one_r_money\":%.2f,\"basket_current_pl\":%.2f,\"basket_current_pips\":%.3f,\"basket_current_gold_moves\":%.3f,"
+      "\"basket_peak_pl\":%.2f,\"basket_peak_pips\":%.3f,\"hard_close_target_pips\":%.2f,"
       "\"hard_close_target_money\":%.2f,\"close_latched\":%s,\"individual_profit_exits_suppressed\":true,\"next_action\":\"%s\"}",
       XAU_CampaignIdText(g_campaign[slot].campaignId), g_campaign[slot].initialCoreTicket, g_campaign[slot].activePositionCount,
-      g_campaign[slot].basketOneRMoney, basketProfitMoney, basketCurrentR,
-      g_campaign[slot].basketPeakProfitMoney, g_campaign[slot].basketPeakR,
-      XAU_PYRAMID_BASKET_HARD_CLOSE_R, hardTargetMoney,
+      g_campaign[slot].basketOneRMoney, basketProfitMoney, basketCurrentPips, basketCurrentPips / XAUCLOUD_PIPS_PER_PRICE_UNIT,
+      g_campaign[slot].basketPeakProfitMoney, g_campaign[slot].basketPeakPips,
+      basketHardClosePipsDisplay, hardTargetMoney,
       g_campaign[slot].basketCloseInProgress ? "true" : "false", nextAction);
 }
 
@@ -29533,20 +29736,29 @@ void XAU_RExitCoreLoop()
          continue;
       }
 
-      double riskUSD = g_rExit[idx].cumulativeOriginalRiskUSD; // Fix 12: netting-aware denominator (== originalRiskUSD when addCount==1)
-      double currentR = riskUSD > 0 ? profit / riskUSD : 0.0;
+      double riskUSD = g_rExit[idx].cumulativeOriginalRiskUSD; // Fix 12: netting-aware denominator (== originalRiskUSD when addCount==1) -- still the basis for $-denominated comparisons (hard stop $ equivalents, RiskPerLotForDistance-based math) elsewhere; no longer the basis for currentPips itself.
+      // v6.26.0 owner directive: currentPips is now a genuine price distance,
+      // not profit_USD/riskUSD. originalEntryPrice is XAU_RExit_SyncNettingState's
+      // own volume-weighted blended entry price (kept correct across netting
+      // pyramid adds -- same aggregation the old dollar ratio relied on, just
+      // read directly in price terms instead of re-deriving it from dollars).
+      // Deliberate, disclosed behavior note: this excludes swap/commission
+      // (profit above includes them; raw price movement cannot) -- negligible
+      // for same-session trades, a small real difference for multi-day runners.
+      double currentPips = (isBuy ? (curPrice - g_rExit[idx].originalEntryPrice)
+                                   : (g_rExit[idx].originalEntryPrice - curPrice)) * XAUCLOUD_PIPS_PER_PRICE_UNIT;
       g_rExit[idx].currentProfitUSD = profit;
-      g_rExit[idx].currentR = currentR;
+      g_rExit[idx].currentPips = currentPips;
 
       if(profit > g_rExit[idx].peakProfitUSD)
-      { g_rExit[idx].peakProfitUSD = profit; g_rExit[idx].peakR = currentR; g_rExit[idx].timePeakReached = TimeCurrent(); }
+      { g_rExit[idx].peakProfitUSD = profit; g_rExit[idx].peakPips = currentPips; g_rExit[idx].timePeakReached = TimeCurrent(); }
       if(profit < g_rExit[idx].troughProfitUSD)
-      { g_rExit[idx].troughProfitUSD = profit; g_rExit[idx].troughR = currentR; }
+      { g_rExit[idx].troughProfitUSD = profit; g_rExit[idx].troughPips = currentPips; }
 
       XAU_ForensicCaptureOpenRState(idx);
 
       for(int c = 0; c < 6; c++)
-         if(!g_rExit[idx].rCheckpointHit[c] && currentR >= g_rCheckpointLevels[c])
+         if(!g_rExit[idx].rCheckpointHit[c] && currentPips >= g_pipsCheckpointLevels[c])
          { g_rExit[idx].rCheckpointHit[c] = true; g_rExit[idx].rCheckpointProfitUSD[c] = profit; }
 
       // v6.24.15 — entry-quality telemetry (pure recorder, see
@@ -29559,7 +29771,7 @@ void XAU_RExitCoreLoop()
       XAU_RecordEntryQualityTelemetry(positionId, isBuy ? 1 : -1, posInfo.Time(), openPx,
                                       ArraySize(bufATR) >= 2 ? bufATR[1] : 0.0, profit, riskUSD, curPrice);
 
-      double peakR = g_rExit[idx].peakR;
+      double peakPips = g_rExit[idx].peakPips;
 
       // v6.25.14 Priority 1.5: an armed GENERAL extension owns this
       // position until its immutable deadline. No floor/runner/giveback/
@@ -29569,15 +29781,15 @@ void XAU_RExitCoreLoop()
          datetime extensionNow = TimeCurrent();
          if(extensionNow >= g_rExit[idx].extensionDeadline)
          {
-            PrintFormat("EXTENSION_DEADLINE_EXIT | position=%I64u | highestExtensionPeakR=%.3f | protectedFloorR=%.3f | currentR=%.3f | secondsElapsed=%d | timerExpired=true",
-                        g_rExit[idx].positionId, g_rExit[idx].extensionHighestPeakR, g_rExit[idx].extensionProtectedFloorR,
-                        currentR, (int)(extensionNow - g_rExit[idx].extensionStartTime));
+            PrintFormat("EXTENSION_DEADLINE_EXIT | position=%I64u | highestExtensionPeakPips=%.3f | protectedFloorPips=%.3f | currentPips=%.3f | secondsElapsed=%d | timerExpired=true",
+                        g_rExit[idx].positionId, g_rExit[idx].extensionHighestPeakPips, g_rExit[idx].extensionProtectedFloorPips,
+                        currentPips, (int)(extensionNow - g_rExit[idx].extensionStartTime));
             XAU_RExit_RequestClose(idx, ticket, "OWNER_R_EXIT_GENERAL_10M_DEADLINE");
          }
          else
          {
             // v6.25.28: both extension protections are independently input-
-            // toggleable now (InpExtensionFloor015REnabled,
+            // toggleable now (InpExtensionFloor15PipsEnabled,
             // InpExtension70PctRatchetEnabled) -- this is the only call site
             // for the per-tick ratchet update, gated purely on the input.
             if(InpExtension70PctRatchetEnabled)
@@ -29591,7 +29803,7 @@ void XAU_RExitCoreLoop()
       // A broker-close request returns true only after confirmed absence; a
       // pending request remains sticky and will be retried at Priority 1.
       if(XAU_ApplyTransitionPositionAuthority(idx,ticket,isBuy,curPrice,curSL,curTP,
-                                               currentR,profit,peakR,digits,buffer))
+                                               currentPips,profit,peakPips,digits,buffer))
          continue;
       if(g_rExit[idx].closeState==R_CLOSE_REQUESTED || g_rExit[idx].closeState==R_CLOSE_PENDING_RETRY)
          continue;
@@ -29599,10 +29811,16 @@ void XAU_RExitCoreLoop()
       // v6.25.11 restored canonical R-manager target. This request still
       // passes through OWNER_R_EXIT_CLOSE_ONLY and cannot violate a higher
       // already-ratcheted owner floor.
-      if(currentR >= InpRFinalTarget)
+      // v6.26.0: currentPips/peakPips are absolute pips -- InpFinalTargetPips/
+      // InpProtectTriggerPips must be scaled by this position's own risk
+      // distance in pips at the comparison, same pattern as
+      // XAU_OwnerExitDecisionAllowsClose above (this is the same rule,
+      // reimplemented inline here for the restored-rule fast path).
+      double mainLoopRiskDistancePips = g_rExit[idx].originalStopDistance * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+      if(currentPips >= (InpFinalTargetPips/100.0)*mainLoopRiskDistancePips)
       {
-         PrintFormat("OWNER_R_EXIT_RESTORED_RULE | ticket=%I64u | rule=TP_1R | direction=%s | currentR=%.3f | peakR=%.3f | action=REQUEST_GUARDED_CLOSE",
-                     ticket, dirStr, currentR, peakR);
+         PrintFormat("OWNER_R_EXIT_RESTORED_RULE | ticket=%I64u | rule=TP_1R | direction=%s | currentPips=%.3f | peakPips=%.3f | action=REQUEST_GUARDED_CLOSE",
+                     ticket, dirStr, currentPips, peakPips);
          bool targetClosed=XAU_RExit_RequestClose(idx,ticket,"OWNER_R_EXIT_TP_1R");
          int targetStateIdx=XAU_RExit_FindIdx(positionId);
          if(targetClosed || targetStateIdx<0)
@@ -29618,13 +29836,13 @@ void XAU_RExitCoreLoop()
       // before the GENERAL/TREND_UP owner-floor thresholds: once a trade has
       // reached 0.30R, bank the remaining positive profit after a 45%
       // giveback instead of allowing every sub-trigger move to reach -1R.
-      if(peakR >= InpRProtectTrigger && g_rExit[idx].peakProfitUSD > 0.0)
+      if(peakPips >= (InpProtectTriggerPips/100.0)*mainLoopRiskDistancePips && g_rExit[idx].peakProfitUSD > 0.0)
       {
          double givebackPct = (g_rExit[idx].peakProfitUSD - profit) / g_rExit[idx].peakProfitUSD * 100.0;
          if(givebackPct >= InpRMaxGivebackPct && profit > 0.0)
          {
-            PrintFormat("OWNER_R_EXIT_RESTORED_RULE | ticket=%I64u | rule=GIVEBACK_45 | direction=%s | currentR=%.3f | peakR=%.3f | givebackPct=%.1f | action=REQUEST_GUARDED_CLOSE",
-                        ticket, dirStr, currentR, peakR, givebackPct);
+            PrintFormat("OWNER_R_EXIT_RESTORED_RULE | ticket=%I64u | rule=GIVEBACK_45 | direction=%s | currentPips=%.3f | peakPips=%.3f | givebackPct=%.1f | action=REQUEST_GUARDED_CLOSE",
+                        ticket, dirStr, currentPips, peakPips, givebackPct);
             bool givebackClosed=XAU_RExit_RequestClose(idx,ticket,"OWNER_R_EXIT_GIVEBACK_45");
             int refreshedIdx=XAU_RExit_FindIdx(positionId);
             if(givebackClosed || refreshedIdx<0)
@@ -29638,40 +29856,41 @@ void XAU_RExitCoreLoop()
       }
 
       // v6.24.17 owner directive -- ONE canonical primary-exit floor authority.
-      // Replaces the old flat InpRProtectTrigger(0.30R)-for-everyone arming
+      // Replaces the old flat InpProtectTriggerPips(0.30R)-for-everyone arming
       // with a trade-health-aware policy: healthy/pausing trades get NO floor
       // at all before 0.50R (let the trade breathe); only an objectively
       // STRUGGLING trade uses the old 0.30/0.35R staged fallback early. Both
-      // converge on max(0.35, peakR*0.70) from 0.50R onward. See
+      // converge on max(0.35, peakPips*0.70) from 0.50R onward. See
       // XAU_ComputePrimaryExitFloor's own header comment for the full policy
       // and the #2970912954 incident it was written to fix.
       int primaryDir = isBuy ? 1 : -1;
       XAU_AdaptiveTransitionDecision healthTd = XAU_AdaptiveMarketTransitionEngine();
       string healthWhy = "";
-      ENUM_XAU_TRADE_HEALTH tradeHealth = XAU_ClassifyTradeHealth(primaryDir, currentR, peakR, healthTd, healthWhy);
+      ENUM_XAU_TRADE_HEALTH tradeHealth = XAU_ClassifyTradeHealth(primaryDir, currentPips, peakPips, healthTd, healthWhy);
       string floorReason = "";
       ENUM_XAU_OWNER_EXIT_PROFILE ownerProfile = (ENUM_XAU_OWNER_EXIT_PROFILE)g_rExit[idx].ownerExitProfile;
-      double ownerRequiredFloorR = 0.0;
-      double existingValidFloorR = 0.0;
-      double desiredFloorR = XAU_ComputePrimaryExitFloor(peakR, g_rExit[idx].guaranteedFloorR,
-                                                         ownerProfile, ownerRequiredFloorR,
-                                                         existingValidFloorR, floorReason);
+      double ownerRequiredFloorPips = 0.0;
+      double existingValidFloorPips = 0.0;
+      double riskDistancePipsForPrimaryFloor = g_rExit[idx].originalStopDistance * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+      double desiredFloorPips = XAU_ComputePrimaryExitFloor(peakPips, g_rExit[idx].guaranteedFloorPips, riskDistancePipsForPrimaryFloor,
+                                                         ownerProfile, ownerRequiredFloorPips,
+                                                         existingValidFloorPips, floorReason);
       string activePolicy = XAU_OwnerExitProfileName(ownerProfile);
 
       if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 60)
       {
          g_rExit[idx].lastTelemetryLog = TimeCurrent();
-         PrintFormat("PRIMARY_EXIT_STATE | ticket=%I64u family=PRIMARY currentR=%.3f peakR=%.3f tradeHealth=%s structuralSL=%.5f protectedFloorR=%.3f activePolicy=%s finalAction=%s",
-                     ticket, currentR, peakR, XAU_TradeHealthName(tradeHealth), g_rExit[idx].originalStopLoss,
-                     desiredFloorR, activePolicy, desiredFloorR <= 0.0 ? "LETTING_TRADE_BREATHE" : "PROFIT_FLOOR_RATCHETING");
+         PrintFormat("PRIMARY_EXIT_STATE | ticket=%I64u family=PRIMARY currentPips=%.3f peakPips=%.3f tradeHealth=%s structuralSL=%.5f protectedFloorPips=%.3f activePolicy=%s finalAction=%s",
+                     ticket, currentPips, peakPips, XAU_TradeHealthName(tradeHealth), g_rExit[idx].originalStopLoss,
+                     desiredFloorPips, activePolicy, desiredFloorPips <= 0.0 ? "LETTING_TRADE_BREATHE" : "PROFIT_FLOOR_RATCHETING");
       }
 
       // ---- Stage 0: no floor computed yet -- preserve the original
       //      (already 1.20x-widened) structural SL untouched. ----
-      if(desiredFloorR <= 0.0)
+      if(desiredFloorPips <= 0.0)
       {
-         PrintFormat("PRIMARY_EXIT_STRUCTURAL_SL_PRESERVED ticket=%I64u peakR=%.3f tradeHealth=%s reason=%s",
-                     ticket, peakR, XAU_TradeHealthName(tradeHealth), floorReason);
+         PrintFormat("PRIMARY_EXIT_STRUCTURAL_SL_PRESERVED ticket=%I64u peakPips=%.3f tradeHealth=%s reason=%s",
+                     ticket, peakPips, XAU_TradeHealthName(tradeHealth), floorReason);
          continue;
       }
 
@@ -29681,40 +29900,46 @@ void XAU_RExitCoreLoop()
          g_rExit[idx].profitGuaranteeArmed = true;
          g_rExit[idx].stageReached = R_STAGE_RUNNING; // keeps the RUN_TO_1R structure/momentum health check active from here on
       }
-      double priorFloorR = g_rExit[idx].guaranteedFloorR;
-      g_rExit[idx].guaranteedFloorR = MathMax(g_rExit[idx].guaranteedFloorR, desiredFloorR); // ratchet-only, never decreases
+      double priorFloorPips = g_rExit[idx].guaranteedFloorPips;
+      g_rExit[idx].guaranteedFloorPips = MathMax(g_rExit[idx].guaranteedFloorPips, desiredFloorPips); // ratchet-only, never decreases
       if(justArmed)
       {
-         PrintFormat("PRIMARY_EXIT_FLOOR_ARMED ticket=%I64u peakR=%.3f currentR=%.3f protectedFloorR=%.3f tradeHealth=%s reason=%s",
-                     ticket, peakR, currentR, g_rExit[idx].guaranteedFloorR, XAU_TradeHealthName(tradeHealth), floorReason);
+         PrintFormat("PRIMARY_EXIT_FLOOR_ARMED ticket=%I64u peakPips=%.3f currentPips=%.3f protectedFloorPips=%.3f tradeHealth=%s reason=%s",
+                     ticket, peakPips, currentPips, g_rExit[idx].guaranteedFloorPips, XAU_TradeHealthName(tradeHealth), floorReason);
          PrintFormat("OWNER_R_EXIT_FLOOR_ARMED | ticket=%I64u | profile=%s | peak_r=%.3f | floor_r=%.3f",
-                     ticket, XAU_OwnerExitProfileName(ownerProfile), peakR, g_rExit[idx].guaranteedFloorR);
+                     ticket, XAU_OwnerExitProfileName(ownerProfile), peakPips, g_rExit[idx].guaranteedFloorPips);
          if(ownerProfile == OWNER_EXIT_PYRAMID)
             PrintFormat("PYRAMID_PROTECTION_ARMED | position_id=%I64u | peak_r=%.3f | minimum_floor_r=0.20 | required_floor_r=%.3f | source=PYRAMID_0.25R_70PCT_POLICY",
-                        positionId, peakR, g_rExit[idx].guaranteedFloorR);
+                        positionId, peakPips, g_rExit[idx].guaranteedFloorPips);
       }
-      else if(g_rExit[idx].guaranteedFloorR > priorFloorR)
+      else if(g_rExit[idx].guaranteedFloorPips > priorFloorPips)
       {
-         PrintFormat("PRIMARY_EXIT_FLOOR_RATCHETED ticket=%I64u peakR=%.3f currentR=%.3f priorFloorR=%.3f newFloorR=%.3f tradeHealth=%s reason=%s",
-                     ticket, peakR, currentR, priorFloorR, g_rExit[idx].guaranteedFloorR, XAU_TradeHealthName(tradeHealth), floorReason);
+         PrintFormat("PRIMARY_EXIT_FLOOR_RATCHETED ticket=%I64u peakPips=%.3f currentPips=%.3f priorFloorPips=%.3f newFloorPips=%.3f tradeHealth=%s reason=%s",
+                     ticket, peakPips, currentPips, priorFloorPips, g_rExit[idx].guaranteedFloorPips, XAU_TradeHealthName(tradeHealth), floorReason);
          PrintFormat("OWNER_R_EXIT_FLOOR_RATCHET | ticket=%I64u | profile=%s | peak_r=%.3f | previous_floor_r=%.3f | new_floor_r=%.3f",
-                     ticket, XAU_OwnerExitProfileName(ownerProfile), peakR, priorFloorR, g_rExit[idx].guaranteedFloorR);
+                     ticket, XAU_OwnerExitProfileName(ownerProfile), peakPips, priorFloorPips, g_rExit[idx].guaranteedFloorPips);
       }
 
-      if(justArmed || g_rExit[idx].guaranteedFloorR > priorFloorR)
+      if(justArmed || g_rExit[idx].guaranteedFloorPips > priorFloorPips)
       {
          PrintFormat("OWNER_EXIT_PROFILE=%s | OWNER_EXIT_ARMED=%s | OWNER_EXIT_PEAK_R=%.3f | OWNER_EXIT_REQUIRED_LOCK_R=%.3f | OWNER_EXIT_EXISTING_LOCK_R=%.3f | OWNER_EXIT_FINAL_LOCK_R=%.3f",
-                     XAU_OwnerExitProfileName(ownerProfile), ownerRequiredFloorR > 0.0 ? "true" : "false",
-                     peakR, ownerRequiredFloorR, existingValidFloorR, g_rExit[idx].guaranteedFloorR);
+                     XAU_OwnerExitProfileName(ownerProfile), ownerRequiredFloorPips > 0.0 ? "true" : "false",
+                     peakPips, ownerRequiredFloorPips, existingValidFloorPips, g_rExit[idx].guaranteedFloorPips);
          PrintFormat("OWNER_FLOOR_UPDATE | profile=%s | peak_r=%.3f | previous_floor_r=%.3f | new_floor_r=%.3f | reason=%s",
-                     XAU_OwnerExitProfileName(ownerProfile), peakR, priorFloorR,
-                     g_rExit[idx].guaranteedFloorR, XAU_OwnerFloorUpdateReason(peakR, ownerProfile));
+                     XAU_OwnerExitProfileName(ownerProfile), peakPips, priorFloorPips,
+                     g_rExit[idx].guaranteedFloorPips, XAU_OwnerFloorUpdateReason(peakPips, riskDistancePipsForPrimaryFloor, ownerProfile));
       }
 
       if(g_rExit[idx].stageReached < R_STAGE_PROTECTED)
          g_rExit[idx].stageReached = R_STAGE_PROTECTED;
 
-      double guaranteedLockDist = g_rExit[idx].guaranteedFloorR * g_rExit[idx].originalStopDistance;
+      // v6.26.0: guaranteedFloorPips is already absolute pips -- unscale
+      // back to a raw price distance by dividing, not by multiplying by
+      // originalStopDistance again (that was correct only when
+      // guaranteedFloorPips was still a bare R fraction). This is the
+      // MAIN floor-arming broker-SL calculation -- the same class of bug
+      // already found and fixed at 3 other sites in checkpoints 2/4/5/6.
+      double guaranteedLockDist = g_rExit[idx].guaranteedFloorPips / XAUCLOUD_PIPS_PER_PRICE_UNIT;
       double guaranteedSL = isBuy ? NormalizeDouble(g_rExit[idx].originalEntryPrice + guaranteedLockDist, digits)
                                   : NormalizeDouble(g_rExit[idx].originalEntryPrice - guaranteedLockDist, digits);
       g_rExit[idx].guaranteedFloorDesiredSL = guaranteedSL;
@@ -29734,8 +29959,8 @@ void XAU_RExitCoreLoop()
       }
       else if(floorSane && floorRatchet)
       {
-         PrintFormat("OWNER_EXIT_BROKER_MODIFY_SENT | ticket=%I64u profile=%s requestedSL=%s finalLockR=%.3f",
-                     ticket, XAU_OwnerExitProfileName(ownerProfile), DoubleToString(guaranteedSL, digits), g_rExit[idx].guaranteedFloorR);
+         PrintFormat("OWNER_EXIT_BROKER_MODIFY_SENT | ticket=%I64u profile=%s requestedSL=%s finalLockPips=%.3f",
+                     ticket, XAU_OwnerExitProfileName(ownerProfile), DoubleToString(guaranteedSL, digits), g_rExit[idx].guaranteedFloorPips);
          bool ownerModifyAccepted = SafeModifySL(ticket, guaranteedSL, curTP, isBuy, curPrice, "OWNER_R_EXIT_FLOOR");
          // v6.25.1 owner directive 2026-07-17 -- SafeModifySL()==true only
          // means the broker ACCEPTED the request; it does not itself
@@ -29756,14 +29981,14 @@ void XAU_RExitCoreLoop()
             g_rExit[idx].lastProtectedSL = guaranteedSL;
             g_rExit[idx].guaranteedFloorGeometryBlocked = false;
             curSL = guaranteedSL;
-            PrintFormat("PRIMARY_EXIT_FLOOR_APPLIED ticket=%I64u direction=%s riskUSD=%.2f currentProfitUSD=%.2f currentR=%.3f peakR=%.3f guaranteedFloorR=%.2f desiredSL=%s actualBrokerSL=%s CONFIRMED",
-                        ticket, dirStr, riskUSD, profit, currentR, peakR, g_rExit[idx].guaranteedFloorR, DoubleToString(guaranteedSL, digits), DoubleToString(actualSLAfterModify, digits));
-            PrintFormat("OWNER_EXIT_BROKER_CONFIRMED | ticket=%I64u profile=%s actualBrokerSL=%s finalLockR=%.3f",
-                        ticket, XAU_OwnerExitProfileName(ownerProfile), DoubleToString(actualSLAfterModify, digits), g_rExit[idx].guaranteedFloorR);
+            PrintFormat("PRIMARY_EXIT_FLOOR_APPLIED ticket=%I64u direction=%s riskUSD=%.2f currentProfitUSD=%.2f currentPips=%.3f peakPips=%.3f guaranteedFloorPips=%.2f desiredSL=%s actualBrokerSL=%s CONFIRMED",
+                        ticket, dirStr, riskUSD, profit, currentPips, peakPips, g_rExit[idx].guaranteedFloorPips, DoubleToString(guaranteedSL, digits), DoubleToString(actualSLAfterModify, digits));
+            PrintFormat("OWNER_EXIT_BROKER_CONFIRMED | ticket=%I64u profile=%s actualBrokerSL=%s finalLockPips=%.3f",
+                        ticket, XAU_OwnerExitProfileName(ownerProfile), DoubleToString(actualSLAfterModify, digits), g_rExit[idx].guaranteedFloorPips);
             if(ownerProfile == OWNER_EXIT_PYRAMID)
                PrintFormat("PYRAMID_FLOOR_CONFIRMED | position_id=%I64u | peak_r=%.3f | previous_floor_r=%.3f | requested_floor_r=%.3f | broker_sl=%s | confirmed_floor_r=%.3f",
-                           positionId, peakR, priorFloorR, g_rExit[idx].guaranteedFloorR,
-                           DoubleToString(actualSLAfterModify, digits), g_rExit[idx].guaranteedFloorR);
+                           positionId, peakPips, priorFloorPips, g_rExit[idx].guaranteedFloorPips,
+                           DoubleToString(actualSLAfterModify, digits), g_rExit[idx].guaranteedFloorPips);
          }
          else
          {
@@ -29785,8 +30010,8 @@ void XAU_RExitCoreLoop()
          // SL yet -- do NOT abandon the guarantee. Keep the internal floor,
          // keep retrying next tick, and rely on the breach check below.
          g_rExit[idx].guaranteedFloorGeometryBlocked = true;
-         PrintFormat("PRIMARY_EXIT_MODIFY_REJECTED ticket=%I64u peakR=%.3f currentR=%.3f guaranteedFloorR=%.2f desiredSL=%s brokerSL=%s geometryBlocked=true",
-                     ticket, peakR, currentR, g_rExit[idx].guaranteedFloorR, DoubleToString(guaranteedSL, digits), DoubleToString(curSL, digits));
+         PrintFormat("PRIMARY_EXIT_MODIFY_REJECTED ticket=%I64u peakPips=%.3f currentPips=%.3f guaranteedFloorPips=%.2f desiredSL=%s brokerSL=%s geometryBlocked=true",
+                     ticket, peakPips, currentPips, g_rExit[idx].guaranteedFloorPips, DoubleToString(guaranteedSL, digits), DoubleToString(curSL, digits));
       }
 
       // If broker geometry prevents a modify, the owner chokepoint may close
@@ -29794,20 +30019,20 @@ void XAU_RExitCoreLoop()
       // Once already below, keep retrying protection and fail closed rather
       // than deliberately request a below-floor market exit.
       if(g_rExit[idx].guaranteedFloorGeometryBlocked &&
-         currentR >= g_rExit[idx].guaranteedFloorR &&
-         currentR <= g_rExit[idx].guaranteedFloorR + 0.03)
+         currentPips >= g_rExit[idx].guaranteedFloorPips &&
+         currentPips <= g_rExit[idx].guaranteedFloorPips + 0.03)
       {
-         PrintFormat("OWNER_R_EXIT_DECISION | ticket=%I64u | direction=%s | currentR=%.3f | guaranteedFloorR=%.2f | action=CLOSE_AT_OR_ABOVE_FLOOR | reason=OWNER_R_EXIT_FLOOR_BREACH",
-                     ticket, dirStr, currentR, g_rExit[idx].guaranteedFloorR);
+         PrintFormat("OWNER_R_EXIT_DECISION | ticket=%I64u | direction=%s | currentPips=%.3f | guaranteedFloorPips=%.2f | action=CLOSE_AT_OR_ABOVE_FLOOR | reason=OWNER_R_EXIT_FLOOR_BREACH",
+                     ticket, dirStr, currentPips, g_rExit[idx].guaranteedFloorPips);
          XAU_RExit_RequestClose(idx, ticket, "OWNER_R_EXIT_FLOOR_BREACH");
          continue;
       }
-      if(g_rExit[idx].guaranteedFloorGeometryBlocked && currentR < g_rExit[idx].guaranteedFloorR &&
+      if(g_rExit[idx].guaranteedFloorGeometryBlocked && currentPips < g_rExit[idx].guaranteedFloorPips &&
          TimeCurrent()-g_rExit[idx].lastBelowFloorRejectLog>=30)
       {
          g_rExit[idx].lastBelowFloorRejectLog=TimeCurrent();
          PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_BELOW_FLOOR | ticket=%I64u | attempted_authority=OWNER_R_EXIT_FLOOR_BREACH | attempted_exit_r=%.3f | protected_floor_r=%.3f | action=RETRY_BROKER_FLOOR",
-                     ticket, currentR, g_rExit[idx].guaranteedFloorR);
+                     ticket, currentPips, g_rExit[idx].guaranteedFloorPips);
       }
 
       // ---- RUN_TO_1R continuation-failure recheck: closed-bar granularity
@@ -29847,8 +30072,8 @@ void XAU_RExitCoreLoop()
 
             if(structureBrokenAgainst || hostileFactors >= InpRRunnerFailureMinHostile)
             {
-               PrintFormat("OWNER_R_EXIT_RESTORED_RULE | ticket=%I64u | rule=RUNNER_CONTINUATION_FAILED | direction=%s | currentR=%.3f | structureBroken=%s | hostileFactors=%d/5 | action=REQUEST_GUARDED_CLOSE",
-                           ticket, dirStr, currentR, structureBrokenAgainst ? "true" : "false", hostileFactors);
+               PrintFormat("OWNER_R_EXIT_RESTORED_RULE | ticket=%I64u | rule=RUNNER_CONTINUATION_FAILED | direction=%s | currentPips=%.3f | structureBroken=%s | hostileFactors=%d/5 | action=REQUEST_GUARDED_CLOSE",
+                           ticket, dirStr, currentPips, structureBrokenAgainst ? "true" : "false", hostileFactors);
                if(XAU_RExit_RequestClose(idx,ticket,"OWNER_R_EXIT_RUNNER_CONTINUATION_FAILED"))
                   continue;
                if(idx < ArraySize(g_rExit) && XAU_General10MExtensionActive(idx))
@@ -29862,8 +30087,8 @@ void XAU_RExitCoreLoop()
       {
          g_rExit[idx].lastTelemetryLog = TimeCurrent();
          double givebackNow = g_rExit[idx].peakProfitUSD > 0 ? (g_rExit[idx].peakProfitUSD - profit) / g_rExit[idx].peakProfitUSD * 100.0 : 0.0;
-         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s riskUSD=%.2f currentProfitUSD=%.2f currentR=%.3f peakR=%.3f givebackPct=%.1f stage=%s currentSL=%s",
-                     ticket, dirStr, riskUSD, profit, currentR, peakR, givebackNow,
+         PrintFormat("R_EXIT_MANAGER ticket=%I64u direction=%s riskUSD=%.2f currentProfitUSD=%.2f currentPips=%.3f peakPips=%.3f givebackPct=%.1f stage=%s currentSL=%s",
+                     ticket, dirStr, riskUSD, profit, currentPips, peakPips, givebackNow,
                      g_rExit[idx].stageReached == R_STAGE_RUNNING ? "RUN_TO_1R" : "PROTECT_0_3R",
                      DoubleToString(curSL, digits));
       }
@@ -29903,7 +30128,7 @@ void XAU_RExitCoreLoop()
 //                                          InpPreservationMode widening
 //   4. ADAPTIVE RUNNER / PROFIT RATCHET  — tick-by-tick trailing, SL-only
 //                                          (never closes outright)
-//   5. Break-even (InpARBreakEvenR)      — SL-only
+//   5. Break-even (InpARBreakEvenPips)      — SL-only
 //   6. Time-expired / stale / EMA-against-drift closes — all explicitly
 //      gated off while InpPreservationMode is true (default), which is
 //      the existing mechanism that already stops a good intraday/swing
@@ -30189,7 +30414,7 @@ void ManagePositions()
 	      if(!InpCleanExits && InpExpectancyLossArmor && InpNoPartialSmartLossArmor && InpCloudSafeDisablePartials &&
 	         rDollars > 0 && ageSec >= InpNoPartialSmartLossMinSec && profit < 0)
 	      {
-	         double smartLossUSD = rDollars * InpNoPartialSmartLossR;
+	         double smartLossUSD = rDollars * InpNoPartialSmartLossPips / 100.0;  // v6.26.0: cancels the input's own x100 rescale
 	         double smartEqCap = StrategyReferenceBalance() * InpNoPartialSmartLossPctEq / 100.0;
 	         if(smartEqCap > 0) smartLossUSD = MathMin(smartLossUSD, smartEqCap);
 	         bool confirmedFailed = (!recoveryLikelyEA &&
@@ -30201,7 +30426,7 @@ void ManagePositions()
 	         {
 	            LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
 	                    "NO_PARTIAL_SMART_LOSS",
-	                    StringFormat("Cloud-safe no-partials active. Down %.2fR ($%.2f / 1R=$%.2f) >= smart cap $%.2f after %ds, with confirmed structure+EMA+RSI failure and momentum=%d/5. Closing full position instead of waiting for disaster cap.",
+	                    StringFormat("Cloud-safe no-partials active. Down %.2f pips-of-risk ($%.2f / 1R=$%.2f) >= smart cap $%.2f after %ds, with confirmed structure+EMA+RSI failure and momentum=%d/5. Closing full position instead of waiting for disaster cap.",
 	                                 MathAbs(profit) / rDollars, profit, rDollars, smartLossUSD, ageSec,
 	                                 momentumScoreEA));
 	            if(SafePositionClose(ticket, "NO_PARTIAL_SMART_LOSS"))
@@ -30212,11 +30437,15 @@ void ManagePositions()
 
 	      if(!InpCleanExits && InpExpectancyLossArmor && rDollars > 0 && ageSec >= InpExpectancyMinAgeSec)
 	      {
-	         double maxLossR = InpExpectancyMaxLossR;
-         if(InpHardStopRBased && InpHardStopRMulti > 0)
-            maxLossR = MathMin(maxLossR, InpHardStopRMulti);
+	         double maxLossPips = InpExpectancyMaxLossPips;
+         if(InpHardStopPipsBased && InpHardStopDistanceMulti > 0)
+            maxLossPips = MathMin(maxLossPips, InpHardStopDistanceMulti);
          double equityLossCap = StrategyReferenceBalance() * InpExpectancyMaxLossPctEq / 100.0;
-         double hardLossUSD = rDollars * maxLossR;
+         // v6.26.0: maxLossPips is pips-of-this-trade's-own-risk-distance --
+         // /100.0 converts it back to a raw R-fraction before multiplying by
+         // rDollars ($-per-1R), cancelling the x100 rescale on both of its
+         // possible sources (InpExpectancyMaxLossPips, InpHardStopDistanceMulti).
+         double hardLossUSD = rDollars * maxLossPips / 100.0;
          if(equityLossCap > 0) hardLossUSD = MathMin(hardLossUSD, equityLossCap);
          if(recoveryLikelyEA && InpGoldPullbackCapBoost > 1.0)
             hardLossUSD *= InpGoldPullbackCapBoost;
@@ -30231,7 +30460,7 @@ void ManagePositions()
 	            {
 	               LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
 	                       "EXPECTANCY_MAX_LOSS",
-	                       StringFormat("Down %.2fR ($%.2f / 1R=$%.2f) >= hard cap $%.2f after %ds. recovery=%s structBars=%d/%d momentum=%d/5. Structure gate=%s. Preventing account damage.",
+	                       StringFormat("Down %.2f pips-of-risk ($%.2f / 1R=$%.2f) >= hard cap $%.2f after %ds. recovery=%s structBars=%d/%d momentum=%d/5. Structure gate=%s. Preventing account damage.",
 	                                    MathAbs(profit) / rDollars, profit, rDollars, hardLossUSD, ageSec,
 	                                    recoveryLikelyEA?"Y":"N", structureBreakBarsEA, InpGoldPullbackConfirmBars,
 	                                    momentumScoreEA, structureConfirmedEA?"broken":"emergency"));
@@ -30244,7 +30473,7 @@ void ManagePositions()
 	               static datetime lastStructHoldLog = 0;
 	               if(TimeCurrent() - lastStructHoldLog >= 60)
 	               {
-	                  PrintFormat("EXPECTANCY_HOLD_STRUCTURE #%I64u %s | down %.2fR ($%.2f) crossed cap $%.2f, but structure still intact (%d/%d). Holding for recovery/SL instead of closing red early.",
+	                  PrintFormat("EXPECTANCY_HOLD_STRUCTURE #%I64u %s | down %.2f pips-of-risk ($%.2f) crossed cap $%.2f, but structure still intact (%d/%d). Holding for recovery/SL instead of closing red early.",
 	                              ticket, dirStr, MathAbs(profit) / rDollars, profit, hardLossUSD,
 	                              structureBreakBarsEA, InpGoldPullbackConfirmBars);
 	                  lastStructHoldLog = TimeCurrent();
@@ -30257,7 +30486,7 @@ void ManagePositions()
          ageSec >= InpExpectancySoftMinAgeSec && !CleanLossReduceAlreadyTaken(ticket) &&
          profit < 0)
       {
-         double softLossUSD = rDollars * InpExpectancySoftLossR;
+         double softLossUSD = rDollars * InpExpectancySoftLossPips / 100.0;  // v6.26.0: cancels the input's own x100 rescale
          double softEqCap = StrategyReferenceBalance() * InpExpectancySoftLossPctEq / 100.0;
          if(softEqCap > 0) softLossUSD = MathMin(softLossUSD, softEqCap);
          if(recoveryLikelyEA && InpGoldPullbackCapBoost > 1.0)
@@ -30279,7 +30508,7 @@ void ManagePositions()
             if(reduceLots >= minL && remaining >= minL && SafePositionClosePartial(ticket, reduceLots, "EXPECTANCY_SOFT_DERISK"))
             {
                CleanMarkLossReduceTaken(ticket);
-               PrintFormat("EXPECTANCY_SOFT_DERISK #%I64u %s | loss $%.2f (%.2fR) >= soft cap $%.2f | recovery=%s structBars=%d/%d momentum=%d/5 | closed %.2f lots (%.0f%%), runner %.2f stays alive",
+               PrintFormat("EXPECTANCY_SOFT_DERISK #%I64u %s | loss $%.2f (%.2f pips-of-risk) >= soft cap $%.2f | recovery=%s structBars=%d/%d momentum=%d/5 | closed %.2f lots (%.0f%%), runner %.2f stays alive",
                            ticket, dirStr, profit, MathAbs(profit) / rDollars, softLossUSD,
                            recoveryLikelyEA?"Y":"N", structureBreakBarsEA, InpGoldPullbackConfirmBars,
                            momentumScoreEA,
@@ -30460,19 +30689,21 @@ void ManagePositions()
          }
       }
 
-      // ===== PATH 0: HARD LOSS PROTECTION (v4.4.5 — R-based, adaptive) =====
-      // R-BASED hard stop fires only at catastrophic loss (e.g. 3× original SL risk).
+      // ===== PATH 0: HARD LOSS PROTECTION (v4.4.5 — pips-of-risk-based, adaptive) =====
+      // Pips-of-risk-based hard stop fires only at catastrophic loss (e.g. 3.5x original SL risk).
       // This prevents the bug where a big lot + small $-cap = stopped out on 1-point noise.
-      if(InpHardStopRBased && profit <= -(rDollars * InpHardStopRMulti))
+      // v6.26.0: InpHardStopDistanceMulti is pips-of-this-trade's-own-risk-
+      // distance (was a raw R-multiple) -- /100.0 cancels its own x100 rescale.
+      if(InpHardStopPipsBased && profit <= -(rDollars * InpHardStopDistanceMulti / 100.0))
       {
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
-                 "HARD_STOP_R",
-                 StringFormat("Down %.1fR ($%.2f of %.2f) — %.1fR catastrophic cap hit. Capital preservation.",
-                              MathAbs(profit)/rDollars, profit, rDollars, InpHardStopRMulti));
-         SafePositionClose(ticket, "HARD_STOP_R"); continue;
+                 "HARD_STOP_PIPS",
+                 StringFormat("Down %.1f pips-of-risk ($%.2f of %.2f) — %.1f pips-of-risk catastrophic cap hit. Capital preservation.",
+                              (MathAbs(profit)/rDollars)*100.0, profit, rDollars, InpHardStopDistanceMulti));
+         SafePositionClose(ticket, "HARD_STOP_PIPS"); continue;
       }
       // Absolute $ cap ONLY fires if explicitly set and R-based disabled (legacy)
-      if(!InpHardStopRBased && EffHardStopUSD() > 0 && profit <= -EffHardStopUSD())
+      if(!InpHardStopPipsBased && EffHardStopUSD() > 0 && profit <= -EffHardStopUSD())
       {
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "HARD_STOP",
@@ -30481,11 +30712,11 @@ void ManagePositions()
          SafePositionClose(ticket, "HARD_STOP"); continue;
       }
       if(InpEarlyAdverseCut && minsOpen <= InpEarlyAdverseMin &&
-         profit <= -(rDollars * InpEarlyAdverseR))
+         profit <= -(rDollars * InpEarlyAdversePips))
       {
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "EARLY_ADVERSE",
-                 StringFormat("Down %.1fR ($%.2f of %.2f) within first %d min. Entry was wrong — cut fast.",
+                 StringFormat("Down %.1f pips-of-risk ($%.2f of %.2f) within first %d min. Entry was wrong — cut fast.",
                               MathAbs(profit)/rDollars, profit, rDollars, InpEarlyAdverseMin));
          if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
                                    "EARLY_ADVERSE", structureConfirmedEA, false))
@@ -30587,7 +30818,11 @@ void ManagePositions()
       //   apply that same simplicity to initial trades by default.
       if(InpMgmtMode != MGMT_SIMPLE && InpAdaptiveRunner && profit > 0 && rDollars > 0 && atr > 0)
       {
-         double profitR = profit / rDollars;
+         // v6.26.0: pips-of-this-trade's-own-risk-distance (was raw R-multiple
+         // profit/rDollars) -- the x100.0 here is a pure linear rescale, not a
+         // new calculation: every InpAR*Pips threshold below was rescaled by
+         // the same x100 factor, so every comparison outcome is unchanged.
+         double profitPips = (profit / rDollars) * 100.0;
          double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
          double minDist = InpARMinTrailPoints * point;
 
@@ -30623,17 +30858,17 @@ void ManagePositions()
 
          // v4.8.6 — Trend Hold: force wide trail regardless of stage thresholds
          //   BUT still require profit ≥ arS1MinProfit so we don't micro-trail tiny wins
-         if(trendHold && profitR >= InpARStage1ActivateR && profit >= arS1MinProfit)
+         if(trendHold && profitPips >= InpARStage1ActivatePips && profit >= arS1MinProfit)
          {
             trailMulti = InpTrendHoldTrailATR;  // wide trail, let it RUN
             // no momentum-tightening in trend-hold — we want breathing room
          }
-         else if(profitR >= InpARStage2ActivateR)
+         else if(profitPips >= InpARStage2ActivatePips)
          {
             trailMulti = InpARStage2TrailATR;
             if(strongMomentum) trailMulti *= InpARMomentumBoostMulti;
          }
-         else if(profitR >= InpARStage1ActivateR && profit >= arS1MinProfit)
+         else if(profitPips >= InpARStage1ActivatePips && profit >= arS1MinProfit)
          {
             trailMulti = InpARStage1TrailATR;
             if(strongMomentum) trailMulti *= InpARMomentumBoostMulti;
@@ -30641,9 +30876,9 @@ void ManagePositions()
 
          // Stage 0: Break-even lock at +BreakEvenR (fires even before Stage 1 trail)
          // v4.8.6 — ALSO require profit >= arBEMinProfit (scales with balance).
-         if(profitR >= InpARBreakEvenR && profit >= arBEMinProfit)
+         if(profitPips >= InpARBreakEvenPips && profit >= arBEMinProfit)
          {
-            double beProfitDist = slDist * InpARBreakEvenProfitR;
+            double beProfitDist = slDist * InpARBreakEvenProfitPips / 100.0;  // v6.26.0: same x100 rescale cancellation as BE_LOCK above
             double beSL = isBuy ? NormalizeDouble(openPx + beProfitDist, digits)
                                  : NormalizeDouble(openPx - beProfitDist, digits);
             // Respect anti-noise: ensure BE SL is at least minDist from current price
@@ -30652,8 +30887,8 @@ void ManagePositions()
             if(beSane && beRatchet)
             {
                if(SafeModifySL(ticket, beSL, curTP, isBuy, curPrice, "AR_BE"))
-                  Print("AR_BE #", ticket, " profitR=", DoubleToString(profitR,2),
-                        " — locked BE+", DoubleToString(InpARBreakEvenProfitR,2), "R at ",
+                  Print("AR_BE #", ticket, " profitPips=", DoubleToString(profitPips,1),
+                        " — locked BE+", DoubleToString(InpARBreakEvenProfitPips,1), " pips-of-risk at ",
                         DoubleToString(beSL, digits));
             }
          }
@@ -30671,13 +30906,13 @@ void ManagePositions()
             if(sane && ratchet)
             {
                string tag = trendHold ? "AR_TH" :
-                            (profitR >= InpARStage2ActivateR ? "AR_S2" : "AR_S1");
+                            (profitPips >= InpARStage2ActivatePips ? "AR_S2" : "AR_S1");
                if(SafeModifySL(ticket, newSL, curTP, isBuy, curPrice, tag))
                {
                   static datetime lastARLog = 0;
                   if(TimeCurrent() - lastARLog > 30)  // throttle 30s to keep journal clean
                   {
-                     Print(tag, " #", ticket, " profitR=", DoubleToString(profitR,2),
+                     Print(tag, " #", ticket, " profitPips=", DoubleToString(profitPips,2),
                            strongMomentum ? " [MOM+]" : "",
                            " — SL→", DoubleToString(newSL, digits),
                            " (", DoubleToString(trailMulti,2), "×ATR, min ",
@@ -30715,8 +30950,13 @@ void ManagePositions()
       //   Clean Exits has its own BE logic at +1R (ManageCleanExits) that supersedes this.
       if(!InpProfitLadder && !InpAdaptiveRunner && !InpCleanExits)
       {
-         double activateDist = slDist * InpBELockActivateR;
-         double lockProfitDist = slDist * InpBELockProfitR;
+         // v6.26.0: InpBELockActivatePips/InpBELockProfitPips are pips-of-
+         // this-trade's-own-risk-distance (slDist), not fixed absolute
+         // pips -- dividing by 100.0 here exactly cancels the x100 rescale
+         // applied to the input defaults above, so behavior is identical
+         // to the pre-migration slDist*InpBELockActivateR formula.
+         double activateDist = slDist * InpBELockActivatePips / 100.0;
+         double lockProfitDist = slDist * InpBELockProfitPips / 100.0;
          if(isBuy && curPrice > openPx + activateDist)
          {
             double beSL = NormalizeDouble(openPx + lockProfitDist, digits);
@@ -30724,8 +30964,8 @@ void ManagePositions()
             {
                if(SafeModifySL(ticket, beSL, curTP, true, curPrice, "BE_LOCK"))
                   Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
-                        " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
-                        DoubleToString(InpBELockProfitR,2), "R profit)");
+                        " (+", DoubleToString(InpBELockActivatePips,1), " pips-of-risk reached, locking +",
+                        DoubleToString(InpBELockProfitPips,1), " pips-of-risk profit)");
             }
          }
          if(!isBuy && curPrice < openPx - activateDist)
@@ -30735,8 +30975,8 @@ void ManagePositions()
             {
                if(SafeModifySL(ticket, beSL, curTP, false, curPrice, "BE_LOCK"))
                   Print("BE_LOCK #", ticket, " SL→", DoubleToString(beSL, digits),
-                        " (+", DoubleToString(InpBELockActivateR,2), "R reached, locking +",
-                        DoubleToString(InpBELockProfitR,2), "R profit)");
+                        " (+", DoubleToString(InpBELockActivatePips,1), " pips-of-risk reached, locking +",
+                        DoubleToString(InpBELockProfitPips,1), " pips-of-risk profit)");
             }
          }
       }
@@ -30914,11 +31154,15 @@ void ManagePositions()
       {
          bool skipHighConf = InpPartialSkipHighConf &&
                              currentTradeConfidence >= InpConvRunMinConf;
-         double profitR = (rDollars > 0) ? (profit / rDollars) : 0;
+         // v6.26.0: pips-of-this-trade's-own-risk-distance (was raw
+         // R-multiple profit/rDollars) -- x100.0 is a pure linear rescale
+         // matched by InpPartialTPAtPips's own x100 default rescale below,
+         // so the comparison outcome is unchanged.
+         double profitPips = (rDollars > 0) ? (profit / rDollars) * 100.0 : 0;
          // v4.6.0 — Don't fire partial within first N minutes; give the trade
          // time to develop. Premature partials cap winners on noise spikes.
          bool tooEarly = (minsOpen < InpPartialMinMinutes);
-         if(!skipHighConf && !tooEarly && profitR >= InpPartialTPAtR)
+         if(!skipHighConf && !tooEarly && profitPips >= InpPartialTPAtPips)
          {
             double curLots = posInfo.Volume();
             double minLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
@@ -30942,7 +31186,7 @@ void ManagePositions()
                   double lockedProfit = profit * (partialLots / curLots);
                   Print("PARTIAL_TP #", ticket, " closed ", DoubleToString(partialLots, lotDig),
                         " of ", DoubleToString(curLots, lotDig), " lots at +",
-                        DoubleToString(profitR, 2), "R ($", DoubleToString(lockedProfit, 2),
+                        DoubleToString(profitPips, 2), "R ($", DoubleToString(lockedProfit, 2),
                         " locked). Remainder ", DoubleToString(remaining, lotDig),
                         " rides the trail.");
                }
@@ -30968,10 +31212,10 @@ void ManagePositions()
       // NEW GATE: do NOT consider quick exits until profit >= 1R AND >= $150.
       // This lets the trade BREATHE to its first R milestone, then the fade
       // logic can take winners that are genuinely turning.
-      bool earnedFirstR = (rDollars > 0) && (profit >= rDollars);
+      bool earnedFirstPips = (rDollars > 0) && (profit >= rDollars);
       if(profit >= EffProfitTakeMin()
          && profit >= MathMax(75, EffProfitTakeMin() * 0.5)
-         && earnedFirstR)
+         && earnedFirstPips)
       {
          double close2alt = iClose(Symbol(), PERIOD_M5, 2);
          bool barReverse = isBuy ? (close1 < open1) : (close1 > open1);
@@ -31070,9 +31314,12 @@ void ManagePositions()
             else
             {
             // v4.5.2 — Trend-aware, volatility-aware trailing distance.
-            // v4.5.3 — Pass profit/R ratio so conviction-runner upgrade can fire.
-            double profitR = (rDollars > 0) ? (profit / rDollars) : 0;
-            double trailATR = GetTrailATRMulti(profitR);
+            // v4.5.3 — Pass profit pips-of-risk so conviction-runner upgrade can fire.
+            // v6.26.0: x100.0 rescale matches InpConvRunMinPips's own x100
+            // default rescale -- comparison outcome inside GetTrailATRMulti
+            // is unchanged.
+            double profitPips = (rDollars > 0) ? (profit / rDollars) * 100.0 : 0;
+            double trailATR = GetTrailATRMulti(profitPips);
             double trailDist = atr * trailATR;
 
             double lockSL;
@@ -31135,9 +31382,10 @@ void ManagePositions()
          if(timeExpired && InpMomentumGuard && momentumStrong)
          {
             // v4.5.2 — Same trend-aware trail on time-expired runners
-            // v4.5.3 — Pass profit/R ratio so conviction-runner upgrade can fire.
-            double profitR2 = (rDollars > 0) ? (profit / rDollars) : 0;
-            double trailATR2 = GetTrailATRMulti(profitR2);
+            // v4.5.3 — Pass profit pips-of-risk so conviction-runner upgrade can fire.
+            // v6.26.0: same x100.0 rescale as the CAP_RUNNER branch above.
+            double profitPips2 = (rDollars > 0) ? (profit / rDollars) * 100.0 : 0;
+            double trailATR2 = GetTrailATRMulti(profitPips2);
             double trailDist2 = atr * trailATR2;
 
             double lockSL;
@@ -31176,7 +31424,7 @@ void ManagePositions()
          {
             LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                     "SMART_CUT",
-                    StringFormat("%.2fR loss + %s (EMA-against=%s RSI-failing=%s). Stop bleeding.",
+                    StringFormat("%.2f pips-of-risk loss + %s (EMA-against=%s RSI-failing=%s). Stop bleeding.",
                                  MathAbs(profit)/rDollars, deepLoss?"deep+time":"no-recovery",
                                  emaAgainst?"Y":"N", rsiFailing?"Y":"N"));
             if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
@@ -31190,8 +31438,8 @@ void ManagePositions()
       // v4.7.2 — Preservation Mode raises stale-loss bar (-2R from -0.6R) and
       //   disables stale-DRIFT entirely (drift trades are usually winners catching breath).
       int staleCap = (currentRegime == REGIME_LOW_VOL || currentRegime == REGIME_CHOPPY) ? 35 : 90;
-      double staleR = InpPreservationMode ? 2.0 : 0.6;
-      if(minsOpen > staleCap && profit <= -(rDollars * staleR))
+      double stalePips = InpPreservationMode ? 2.0 : 0.6;
+      if(minsOpen > staleCap && profit <= -(rDollars * stalePips))
       {
          if(AIBlocksClose("STALE_LOSS", ticket, isBuy, openPx, curPrice,
                           profit, peak, rDollars, slDist, curSL, curTP,
@@ -31199,7 +31447,7 @@ void ManagePositions()
             continue;
          LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                  "STALE_LOSS",
-                 StringFormat("Open %d min > regime cap %d min at -%.2fR. Free the margin.",
+                 StringFormat("Open %d min > regime cap %d min at -%.2f pips-of-risk. Free the margin.",
                               minsOpen, staleCap, MathAbs(profit)/rDollars));
          if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
                                    "STALE_LOSS", structureConfirmedEA, false))
@@ -31268,7 +31516,7 @@ void ManagePositions()
             {
                LogExit(ticket, dirStr, openPx, curPrice, profit, peak, minsOpen, rsi, emaF, close1, open1,
                        "CLAUDE_AI",
-                       StringFormat("Claude 4.5 said CLOSE. P/L $%.2f (%.2fR). %s",
+                       StringFormat("Claude 4.5 said CLOSE. P/L $%.2f (%.2f pips-of-risk). %s",
                                     profit, profit/rDollars, v.reason));
                if(XAU_GateEarlyLossClose(ticket, isBuy, openPx, curPrice, profit, peak,
                                          "CLAUDE_AI", structureConfirmedEA, false))
@@ -31415,7 +31663,7 @@ string XAU_LocalAISnapshotJson(int signal,string setup,string provisionalGrade)
    string grade=StringLen(provisionalGrade)>0?provisionalGrade:"UNCLASSIFIED";
    string emaState=bufEMAFast[1]>bufEMASlow[1]?"FAST_ABOVE_SLOW":bufEMAFast[1]<bufEMASlow[1]?"FAST_BELOW_SLOW":"EMA_FLAT";
    double momentum=g_m10Snapshot.buyPressure-g_m10Snapshot.sellPressure;
-   double room=(preferred=="BUY")?g_m10Snapshot.buyRoomR:(preferred=="SELL"?g_m10Snapshot.sellRoomR:MathMax(g_m10Snapshot.buyRoomR,g_m10Snapshot.sellRoomR));
+   double room=(preferred=="BUY")?g_m10Snapshot.buyRoomPips:(preferred=="SELL"?g_m10Snapshot.sellRoomPips:MathMax(g_m10Snapshot.buyRoomPips,g_m10Snapshot.sellRoomPips));
    string breakout=(currentRegime==REGIME_BREAKOUT_UP || currentRegime==REGIME_BREAKOUT_DOWN ||
                     StringFind(safeSetup,"BREAKOUT")>=0)?"BREAKOUT":"NO_BREAKOUT";
    string resetState=(StringFind(g_m10Snapshot.locationState,"RESET")>=0)?g_m10Snapshot.locationState:"CLEAR";
@@ -32780,7 +33028,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    double forensicOriginalSL = 0.0;
    double forensicRiskDistance = 0.0;
    double forensicRiskUSD = 0.0;
-   double forensicPeakR = 0.0;
+   double forensicPeakPips = 0.0;
    int    forensicOwnerProfile = (int)OWNER_EXIT_GENERAL;
    bool stillOpen = false;
    if(posId > 0)
@@ -32814,7 +33062,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          forensicOriginalSL = g_rExit[rIdx].originalStopLoss;
          forensicRiskDistance = g_rExit[rIdx].originalStopDistance;
          forensicRiskUSD = g_rExit[rIdx].cumulativeOriginalRiskUSD;
-         forensicPeakR = g_rExit[rIdx].peakR;
+         forensicPeakPips = g_rExit[rIdx].peakPips;
          forensicOwnerProfile = g_rExit[rIdx].ownerExitProfile;
          ENUM_DEAL_REASON dReason = (ENUM_DEAL_REASON)HistoryDealGetInteger(dealTicket, DEAL_REASON);
          if(XAU_General10MExtensionActive(rIdx))
@@ -32826,21 +33074,21 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
             double extensionClosePrice=HistoryDealGetDouble(dealTicket,DEAL_PRICE);
             datetime extensionCloseTime=(datetime)HistoryDealGetInteger(dealTicket,DEAL_TIME);
             XAU_TradeBrainPositionNetResult(posId,extensionCloseProfit,extensionClosePrice,extensionCloseTime);
-            double extensionCloseR = g_rExit[rIdx].cumulativeOriginalRiskUSD > 0.0
+            double extensionClosePips = g_rExit[rIdx].cumulativeOriginalRiskUSD > 0.0
                                      ? extensionCloseProfit / g_rExit[rIdx].cumulativeOriginalRiskUSD : 0.0;
             if(dReason == DEAL_REASON_SL)
             {
                PrintFormat("GENERAL_10M_EXTENSION_ORIGINAL_SL_HIT | position_id=%I64u | deadline=%s | close_time=%s | realized_r=%.3f",
                            posId, TimeToString(g_rExit[rIdx].extensionDeadline, TIME_DATE|TIME_SECONDS),
-                           TimeToString(extensionCloseTime, TIME_DATE|TIME_SECONDS), extensionCloseR);
+                           TimeToString(extensionCloseTime, TIME_DATE|TIME_SECONDS), extensionClosePips);
                // v6.25.26: the broker-side SL fill IS the protected-floor exit
                // this owner rule expects when price reverses to the ratcheted
                // (or minimum +0.15R) level before the 600s deadline -- no
                // separate EA-side close action is needed or taken here, only
                // the required telemetry record of what protection was in
                // effect when it happened.
-               PrintFormat("EXTENSION_PROTECTED_EXIT | position=%I64u | highestExtensionPeakR=%.3f | protectedFloorR=%.3f | secondsElapsed=%d | timerExpired=false",
-                           posId, g_rExit[rIdx].extensionHighestPeakR, g_rExit[rIdx].extensionProtectedFloorR,
+               PrintFormat("EXTENSION_PROTECTED_EXIT | position=%I64u | highestExtensionPeakPips=%.3f | protectedFloorPips=%.3f | secondsElapsed=%d | timerExpired=false",
+                           posId, g_rExit[rIdx].extensionHighestPeakPips, g_rExit[rIdx].extensionProtectedFloorPips,
                            (int)(extensionCloseTime - g_rExit[rIdx].extensionStartTime));
             }
             else if(extensionCloseTime < g_rExit[rIdx].extensionDeadline &&
@@ -32848,7 +33096,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                PrintFormat("GENERAL_10M_EXTENSION_FAILED | position_id=%I64u | stage=UNINTENDED_EARLY_CLOSE | reason=%s | close_time=%s | deadline=%s | realized_r=%.3f",
                            posId, XAU_DealReasonName(dReason),
                            TimeToString(extensionCloseTime, TIME_DATE|TIME_SECONDS),
-                           TimeToString(g_rExit[rIdx].extensionDeadline, TIME_DATE|TIME_SECONDS), extensionCloseR);
+                           TimeToString(g_rExit[rIdx].extensionDeadline, TIME_DATE|TIME_SECONDS), extensionClosePips);
          }
          if(!g_rExit[rIdx].finalTelemetryLogged)
          {
@@ -32869,7 +33117,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
             forensicOriginalSL = g_forensicOpenSnapshot[forensicOpenIdx].originalSL;
             forensicRiskDistance = g_forensicOpenSnapshot[forensicOpenIdx].riskDistance;
             forensicRiskUSD = g_forensicOpenSnapshot[forensicOpenIdx].riskUSD;
-            forensicPeakR = g_forensicOpenSnapshot[forensicOpenIdx].peakR;
+            forensicPeakPips = g_forensicOpenSnapshot[forensicOpenIdx].peakPips;
             forensicOwnerProfile = g_forensicOpenSnapshot[forensicOpenIdx].ownerExitProfile;
          }
       }
@@ -32941,7 +33189,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          g_entryQuality[eqIdx].finalized = true;
          PrintFormat("ENTRY_QUALITY | posId=%I64u dir=%s classification=%s finalProfit=%.2f maxAdverseATR=%.2f maeR_5m=%.2f mfeR_5m=%.2f timeToFirstProfit=%s",
                      posId, closedDirection == 1 ? "BUY" : "SELL", g_entryQuality[eqIdx].classification,
-                     profit, g_entryQuality[eqIdx].maxAdverseATR, g_entryQuality[eqIdx].maeR[3], g_entryQuality[eqIdx].mfeR[3],
+                     profit, g_entryQuality[eqIdx].maxAdverseATR, g_entryQuality[eqIdx].maePips[3], g_entryQuality[eqIdx].mfePips[3],
                      g_entryQuality[eqIdx].timeToFirstProfit > 0 ? TimeToString(g_entryQuality[eqIdx].timeToFirstProfit, TIME_SECONDS) : "NEVER");
       }
    }
@@ -32962,7 +33210,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                                   forensicEntryRegime, forensicOwnerProfile,
                                   forensicEntryPrice, forensicOriginalSL,
                                   forensicRiskDistance, forensicRiskUSD,
-                                  dPrice, profit, forensicPeakR,
+                                  dPrice, profit, forensicPeakPips,
                                   resolvedExitReason);
          XAU_ForensicOpenSnapshotRemove(posId);
       }
@@ -33125,8 +33373,13 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       }
       if(StringLen(memPattern) > 0)
       {
-         double rMult = (autoHardStopUSD > 0.01) ? profit / autoHardStopUSD
-                       : (profit > 0 ? 1.0 : profit < 0 ? -1.0 : 0.0);
+         // v6.26.0: pips-of-this-trade's-own-risk-distance (was raw
+         // R-multiple) -- x100.0 is a pure linear rescale; the backend
+         // /api/ai/feedback endpoint (server.py) stores r_multiple as an
+         // opaque pass-through value (verified: never reads it back for any
+         // threshold/decision), so this rescale needs no backend change.
+         double rMult = (autoHardStopUSD > 0.01) ? (profit / autoHardStopUSD) * 100.0
+                       : (profit > 0 ? 100.0 : profit < 0 ? -100.0 : 0.0);
          // v6.3.8: pass extended fields for ATR-norm matching + AI feedback
          int    memDir      = (dType == DEAL_TYPE_SELL) ? 1 : -1; // closing SELL = was BUY
          string memSession  = SessionTag();
@@ -33206,13 +33459,13 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       {
          g_pendingBrainDD_MaeGold = ddTrack.maeGoldPrice;
          g_pendingBrainDD_MfeGold = ddTrack.mfeGoldPrice;
-         g_pendingBrainDD_InternalR = ddTrack.internalRDistanceAtEntry;
+         g_pendingBrainDD_InternalPips = ddTrack.internalRDistanceAtEntry;
          g_pendingBrainDD_SecondsToMAE = ddTrack.timeOfMAE > 0 ? (int)(ddTrack.timeOfMAE - ddTrack.entryTime) : -1;
          g_pendingBrainDD_SecondsNegativeTotal = ddTrack.everNegative ? (int)(ddTrack.lastNegativeAt - ddTrack.firstNegativeAt) : 0;
          g_pendingBrainDD_Time01R = ddTrack.hit01R ? (int)(ddTrack.time01R - ddTrack.entryTime) : -1;
-         g_pendingBrainDD_Time02R = ddTrack.hit02R ? (int)(ddTrack.time02R - ddTrack.entryTime) : -1;
+         g_pendingBrainDD_Time02R = ddTrack.hit20Pips ? (int)(ddTrack.time02R - ddTrack.entryTime) : -1;
          g_pendingBrainDD_Time04R = ddTrack.hit04R ? (int)(ddTrack.time04R - ddTrack.entryTime) : -1;
-         g_pendingBrainDD_Time05R = ddTrack.hit05R ? (int)(ddTrack.time05R - ddTrack.entryTime) : -1;
+         g_pendingBrainDD_Time05R = ddTrack.hit50Pips ? (int)(ddTrack.time05R - ddTrack.entryTime) : -1;
          // "Recovered after meaningful drawdown": went negative by at least
          // 0.2R at some point, but closed net positive.
          bool wentMeaningfullyNegative = ddTrack.internalRDistanceAtEntry > 0.0 &&
@@ -33222,7 +33475,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       }
       else
       {
-         g_pendingBrainDD_MaeGold = 0.0; g_pendingBrainDD_MfeGold = 0.0; g_pendingBrainDD_InternalR = 0.0;
+         g_pendingBrainDD_MaeGold = 0.0; g_pendingBrainDD_MfeGold = 0.0; g_pendingBrainDD_InternalPips = 0.0;
          g_pendingBrainDD_SecondsToMAE = -1; g_pendingBrainDD_SecondsNegativeTotal = -1;
          g_pendingBrainDD_Time01R = -1; g_pendingBrainDD_Time02R = -1; g_pendingBrainDD_Time04R = -1; g_pendingBrainDD_Time05R = -1;
          g_pendingBrainDD_RecoveredAfterDrawdown = false;
@@ -33432,8 +33685,8 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       if(eqIdxForLog >= 0)
       {
          riskUSDForLog = g_entryQuality[eqIdxForLog].riskUSD;
-         maeRForLog    = g_entryQuality[eqIdxForLog].maeR[3];
-         mfeRForLog    = g_entryQuality[eqIdxForLog].mfeR[3];
+         maeRForLog    = g_entryQuality[eqIdxForLog].maePips[3];
+         mfeRForLog    = g_entryQuality[eqIdxForLog].mfePips[3];
       }
       long dealMagicForLog = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
       string familyForLog = (dealMagicForLog == InpCounterExcursionMagicNumber) ? "COUNTER_EXCURSION" :
@@ -35781,7 +36034,7 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
       XAU_CsvAppendField(header, "netProfitIncludingFees");
       XAU_CsvAppendField(header, "executionAnomalyQuarantine");
       // v6.25.25 TradeBrain learning system (Phase 1 baseline telemetry).
-      // maeR/mfeR are Gold-price-distance / internalRDistanceAtEntry --
+      // maePips/mfePips are Gold-price-distance / internalRDistanceAtEntry --
       // internalRDistanceAtEntry is frozen from the SAME
       // g_campaign[slot].ownerEffectiveHardStopDistance reference the SL-
       // independence fix already established elsewhere in this file; NEVER
@@ -35794,8 +36047,8 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
       XAU_CsvAppendField(header, "maeGoldPrice");
       XAU_CsvAppendField(header, "mfeGoldPrice");
       XAU_CsvAppendField(header, "internalRDistanceAtEntry");
-      XAU_CsvAppendField(header, "maeR");
-      XAU_CsvAppendField(header, "mfeR");
+      XAU_CsvAppendField(header, "maePips");
+      XAU_CsvAppendField(header, "mfePips");
       XAU_CsvAppendField(header, "secondsToMAE");
       XAU_CsvAppendField(header, "secondsNegativeTotal");
       XAU_CsvAppendField(header, "secondsTo01R");
@@ -35932,10 +36185,10 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
    // is called with eventName=="CLOSE" -- see the call site). Blank on
    // every other event type so a partially-populated OPEN/CHECKPOINT row
    // can never be mistaken for real close-time evidence.
-   double maeR = (eventName=="CLOSE" && g_pendingBrainDD_Found && g_pendingBrainDD_InternalR > 0.0)
-                 ? g_pendingBrainDD_MaeGold / g_pendingBrainDD_InternalR : 0.0;
-   double mfeR = (eventName=="CLOSE" && g_pendingBrainDD_Found && g_pendingBrainDD_InternalR > 0.0)
-                 ? g_pendingBrainDD_MfeGold / g_pendingBrainDD_InternalR : 0.0;
+   double maePips = (eventName=="CLOSE" && g_pendingBrainDD_Found && g_pendingBrainDD_InternalPips > 0.0)
+                 ? g_pendingBrainDD_MaeGold / g_pendingBrainDD_InternalPips : 0.0;
+   double mfePips = (eventName=="CLOSE" && g_pendingBrainDD_Found && g_pendingBrainDD_InternalPips > 0.0)
+                 ? g_pendingBrainDD_MfeGold / g_pendingBrainDD_InternalPips : 0.0;
    string outcomeLabel = "";
    if(eventName=="CLOSE")
    {
@@ -35967,9 +36220,9 @@ void XAU_AppendTradeBrain(string eventName, TradeBrainOpen &r,
    }
    XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(g_pendingBrainDD_MaeGold,5):"");
    XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(g_pendingBrainDD_MfeGold,5):"");
-   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(g_pendingBrainDD_InternalR,5):"");
-   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(maeR,3):"");
-   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(mfeR,3):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(g_pendingBrainDD_InternalPips,5):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(maePips,3):"");
+   XAU_CsvAppendField(row, eventName=="CLOSE"?DoubleToString(mfePips,3):"");
    XAU_CsvAppendField(row, eventName=="CLOSE"?(string)g_pendingBrainDD_SecondsToMAE:"");
    XAU_CsvAppendField(row, eventName=="CLOSE"?(string)g_pendingBrainDD_SecondsNegativeTotal:"");
    XAU_CsvAppendField(row, eventName=="CLOSE"?(string)g_pendingBrainDD_Time01R:"");
@@ -36033,7 +36286,7 @@ void XAU_ForensicCaptureOpenRState(int rExitIdx)
    g_forensicOpenSnapshot[idx].originalSL = g_rExit[rExitIdx].originalStopLoss;
    g_forensicOpenSnapshot[idx].riskDistance = g_rExit[rExitIdx].originalStopDistance;
    g_forensicOpenSnapshot[idx].riskUSD = g_rExit[rExitIdx].cumulativeOriginalRiskUSD;
-   g_forensicOpenSnapshot[idx].peakR = g_rExit[rExitIdx].peakR;
+   g_forensicOpenSnapshot[idx].peakPips = g_rExit[rExitIdx].peakPips;
    g_forensicOpenSnapshot[idx].ownerExitProfile = g_rExit[rExitIdx].ownerExitProfile;
 }
 
@@ -36061,9 +36314,9 @@ void XAU_ForensicPostExitEmitCheckpoint(int idx, int checkpointMin, datetime cut
 {
    if(idx < 0 || idx >= ArraySize(g_forensicPostExitWatch)) return;
    XAU_ForensicPostExitWatch w = g_forensicPostExitWatch[idx];
-   double missedR = w.riskDistance > 0.0 ? w.maxFavorableMove / w.riskDistance : 0.0;
-   double adverseR = w.riskDistance > 0.0 ? w.maxAdverseMove / w.riskDistance : 0.0;
-   double totalFavorableR = w.realizedR + missedR;
+   double missedPips = w.riskDistance > 0.0 ? w.maxFavorableMove / w.riskDistance : 0.0;
+   double adversePips = w.riskDistance > 0.0 ? w.maxAdverseMove / w.riskDistance : 0.0;
+   double totalFavorablePips = w.realizedPips + missedPips;
    string observedThrough = w.lastObservedAt > 0
                             ? TimeToString(w.lastObservedAt, TIME_DATE | TIME_SECONDS)
                             : "NO_POST_EXIT_TICK";
@@ -36071,10 +36324,10 @@ void XAU_ForensicPostExitEmitCheckpoint(int idx, int checkpointMin, datetime cut
                      ? TimeToString(w.firstFavorable010RAt, TIME_DATE | TIME_SECONDS) : "NONE";
    string firstAdv = w.firstAdverse010RAt > 0
                      ? TimeToString(w.firstAdverse010RAt, TIME_DATE | TIME_SECONDS) : "NONE";
-   PrintFormat("FORENSIC_POST_EXIT_CHECKPOINT | positionId=%I64u | checkpointMin=%d | cutoffTime=%s | observedThrough=%s | totalFavorableR=%.6f | missedR=%.6f | maximumAdverseRAfterExit=%.6f | returnedToEntry=%s | crossedOriginalSL=%s | firstFavorable010RAt=%s | firstAdverse010RAt=%s | classification=%s",
+   PrintFormat("FORENSIC_POST_EXIT_CHECKPOINT | positionId=%I64u | checkpointMin=%d | cutoffTime=%s | observedThrough=%s | totalFavorablePips=%.6f | missedPips=%.6f | maximumAdverseRAfterExit=%.6f | returnedToEntry=%s | crossedOriginalSL=%s | firstFavorable010RAt=%s | firstAdverse010RAt=%s | classification=%s",
                w.positionId, checkpointMin,
                TimeToString(cutoffTime, TIME_DATE | TIME_SECONDS), observedThrough,
-               totalFavorableR, missedR, adverseR,
+               totalFavorablePips, missedPips, adversePips,
                w.returnedToEntry ? "true" : "false",
                w.crossedOriginalSL ? "true" : "false",
                firstFav, firstAdv, XAU_ForensicPostExitClassification(w));
@@ -36118,12 +36371,12 @@ void XAU_ForensicPostExitStart(ulong positionId, datetime closeTime, int directi
    g_forensicPostExitWatch[n].riskUSD = riskUSD;
    g_forensicPostExitWatch[n].exitPrice = exitPrice;
    g_forensicPostExitWatch[n].realizedProfitUSD = realizedProfitUSD;
-   g_forensicPostExitWatch[n].realizedR = realizedProfitUSD / riskUSD;
+   g_forensicPostExitWatch[n].realizedPips = realizedProfitUSD / riskUSD;
    g_forensicPostExitWatch[n].peakRWhileOpen = peakRWhileOpen;
    g_forensicPostExitWatch[n].exitAuthority = exitAuthority;
    g_forensicPostExitWatch[n].nextCheckpointIndex = 0;
 
-   PrintFormat("FORENSIC_POST_EXIT_START | positionId=%I64u | closeTime=%s | direction=%s | campaignId=CAMP-%I64d | legRole=%s | entryRegime=%d | ownerExitProfile=%s | entryPrice=%.5f | originalSL=%.5f | riskDistance=%.5f | riskUSD=%.2f | exitPrice=%.5f | realizedProfitUSD=%.2f | realizedR=%.6f | peakRWhileOpen=%.6f | exitAuthority=%s",
+   PrintFormat("FORENSIC_POST_EXIT_START | positionId=%I64u | closeTime=%s | direction=%s | campaignId=CAMP-%I64d | legRole=%s | entryRegime=%d | ownerExitProfile=%s | entryPrice=%.5f | originalSL=%.5f | riskDistance=%.5f | riskUSD=%.2f | exitPrice=%.5f | realizedProfitUSD=%.2f | realizedPips=%.6f | peakRWhileOpen=%.6f | exitAuthority=%s",
                positionId, TimeToString(closeTime, TIME_DATE | TIME_SECONDS),
                direction > 0 ? "BUY" : "SELL", campaignId, legRole, entryRegime,
                XAU_OwnerExitProfileName((ENUM_XAU_OWNER_EXIT_PROFILE)ownerExitProfile),
@@ -36996,7 +37249,7 @@ bool XAU_TradeBrainStats(string setupName, int signal, string grade, string sign
       string worstTxt = FileReadString(h);
       string negTxt = FileReadString(h);
       string outcome = FileReadString(h);
-      string exitR = FileReadString(h);
+      string exitPips = FileReadString(h);
       string entryR = FileReadString(h);
       string setupScoreTxt = FileReadString(h);
       string combinedTxt = FileReadString(h);
@@ -37602,10 +37855,10 @@ struct CounterExcursionState
    double   slPrice;
    double   slDist;                    // price distance = 1R for this trade
    datetime openTime;
-   double   peakR;
-   double   maeR;
-   double   mfeR;
-   double   protectedFloorR;           // -999 = none yet (broker SL from open still governs)
+   double   peakPips;
+   double   maePips;
+   double   mfePips;
+   double   protectedFloorPips;           // -999 = none yet (broker SL from open still governs)
    int      opportunityScore;          // bounded bridge input captured at candidate evaluation
    bool     transitionEvidenceRecorded;
    int      closeState;                // requested/pending is retained until broker absence is confirmed
@@ -37615,14 +37868,14 @@ struct CounterExcursionState
 };
 CounterExcursionState g_counterEx;
 datetime g_counterExCooldownUntil = 0;
-double   g_counterExLastR = 0.0; // cached each tick by XAU_ManageCounterExcursionPosition for Command Center display
+double   g_counterExLastPips = 0.0; // cached each tick by XAU_ManageCounterExcursionPosition for Command Center display
 
 #define COUNTER_CLOSE_NONE          0
 #define COUNTER_CLOSE_REQUESTED     1
 #define COUNTER_CLOSE_PENDING_RETRY 2
 #define COUNTER_CLOSE_CONFIRMED     3
 
-void XAU_FinalizeCounterTransitionEvidence(double realizedR)
+void XAU_FinalizeCounterTransitionEvidence(double realizedPips)
 {
    if(g_counterEx.transitionEvidenceRecorded) return;
    g_counterEx.transitionEvidenceRecorded=true;
@@ -37632,8 +37885,8 @@ void XAU_FinalizeCounterTransitionEvidence(double realizedR)
                           StringFind(g_counterEx.originalBlockReason,"EXHAUST")>=0);
    XAU_RecordCounterTransitionEvidence(g_counterEx.counterExecutedDirection,
                                        (double)g_counterEx.opportunityScore,
-                                       g_counterEx.mfeR,g_counterEx.maeR,
-                                       realizedR,structureAligned);
+                                       g_counterEx.mfePips,g_counterEx.maePips,
+                                       realizedPips,structureAligned);
 }
 
 // Broker state is authoritative. This deliberately searches by the isolated
@@ -37663,7 +37916,7 @@ bool XAU_RequestCounterExcursionClose(string reason)
    {
       PrintFormat("COUNTER_EXCURSION_CLOSE_CONFIRMED | ticket=%I64u | reason=%s | attempts=%d | brokerPositionAbsent=true",
                   g_counterEx.ticket, g_counterEx.pendingCloseReason, g_counterEx.closeAttemptCount);
-      XAU_FinalizeCounterTransitionEvidence(g_counterExLastR);
+      XAU_FinalizeCounterTransitionEvidence(g_counterExLastPips);
       g_counterEx.closeState = COUNTER_CLOSE_CONFIRMED;
       g_counterEx.active = false;
       g_counterExCooldownUntil = TimeCurrent() + 60;
@@ -37685,7 +37938,7 @@ bool XAU_RequestCounterExcursionClose(string reason)
    {
       PrintFormat("COUNTER_EXCURSION_CLOSE_CONFIRMED | ticket=%I64u | reason=%s | attempts=%d | requestAccepted=%s | brokerPositionAbsent=true",
                   liveTicket, g_counterEx.pendingCloseReason, g_counterEx.closeAttemptCount, accepted ? "true" : "false");
-      XAU_FinalizeCounterTransitionEvidence(g_counterExLastR);
+      XAU_FinalizeCounterTransitionEvidence(g_counterExLastPips);
       g_counterEx.closeState = COUNTER_CLOSE_CONFIRMED;
       g_counterEx.active = false;
       g_counterExCooldownUntil = TimeCurrent() + 60;
@@ -37717,11 +37970,11 @@ struct XAU_CounterShadowTrack
    double   slDist;
    int      score;
    datetime startTime;
-   double   peakR;
-   double   troughR;
-   bool     hit02R;
+   double   peakPips;
+   double   troughPips;
+   bool     hit20Pips;
    bool     hit03R;
-   bool     hit05R;
+   bool     hit50Pips;
    bool     slHitFirst;
    double   r30s, r60s, r120s, r300s;
    bool     r30sSet, r60sSet, r120sSet, r300sSet;
@@ -37752,8 +38005,8 @@ void XAU_RegisterCounterShadowTrack(string candidateId, int direction, double en
    g_counterShadow[slot].slDist = slDist;
    g_counterShadow[slot].score = score;
    g_counterShadow[slot].startTime = TimeCurrent();
-   g_counterShadow[slot].peakR = -999.0;
-   g_counterShadow[slot].troughR = 999.0;
+   g_counterShadow[slot].peakPips = -999.0;
+   g_counterShadow[slot].troughPips = 999.0;
 }
 
 void XAU_FinalizeCounterShadowTrack(int i)
@@ -37764,10 +38017,10 @@ void XAU_FinalizeCounterShadowTrack(int i)
                g_counterShadow[i].r60sSet  ? DoubleToString(g_counterShadow[i].r60s, 3)  : "n/a",
                g_counterShadow[i].r120sSet ? DoubleToString(g_counterShadow[i].r120s, 3) : "n/a",
                g_counterShadow[i].r300sSet ? DoubleToString(g_counterShadow[i].r300s, 3) : "n/a",
-               g_counterShadow[i].peakR, g_counterShadow[i].troughR,
-               g_counterShadow[i].hit02R ? "true" : "false",
+               g_counterShadow[i].peakPips, g_counterShadow[i].troughPips,
+               g_counterShadow[i].hit20Pips ? "true" : "false",
                g_counterShadow[i].hit03R ? "true" : "false",
-               g_counterShadow[i].hit05R ? "true" : "false");
+               g_counterShadow[i].hit50Pips ? "true" : "false");
    g_counterShadow[i].active = false;
 }
 
@@ -37783,12 +38036,12 @@ void XAU_ManageCounterShadowTracks()
       double r = isBuy ? (price - g_counterShadow[i].entryPrice) / g_counterShadow[i].slDist
                        : (g_counterShadow[i].entryPrice - price) / g_counterShadow[i].slDist;
 
-      if(r > g_counterShadow[i].peakR) g_counterShadow[i].peakR = r;
-      if(r < g_counterShadow[i].troughR) g_counterShadow[i].troughR = r;
+      if(r > g_counterShadow[i].peakPips) g_counterShadow[i].peakPips = r;
+      if(r < g_counterShadow[i].troughPips) g_counterShadow[i].troughPips = r;
       if(!g_counterShadow[i].slHitFirst && r <= -1.0) g_counterShadow[i].slHitFirst = true;
-      if(!g_counterShadow[i].hit02R && r >= 0.20 && !g_counterShadow[i].slHitFirst) g_counterShadow[i].hit02R = true;
+      if(!g_counterShadow[i].hit20Pips && r >= 0.20 && !g_counterShadow[i].slHitFirst) g_counterShadow[i].hit20Pips = true;
       if(!g_counterShadow[i].hit03R && r >= 0.30 && !g_counterShadow[i].slHitFirst) g_counterShadow[i].hit03R = true;
-      if(!g_counterShadow[i].hit05R && r >= 0.50 && !g_counterShadow[i].slHitFirst) g_counterShadow[i].hit05R = true;
+      if(!g_counterShadow[i].hit50Pips && r >= 0.50 && !g_counterShadow[i].slHitFirst) g_counterShadow[i].hit50Pips = true;
 
       double elapsed = (double)(TimeCurrent() - g_counterShadow[i].startTime);
       if(!g_counterShadow[i].r30sSet  && elapsed >= 30)  { g_counterShadow[i].r30s  = r; g_counterShadow[i].r30sSet  = true; }
@@ -38042,10 +38295,10 @@ void XAU_ReconcileCounterExcursionOnInit()
       g_counterEx.slPrice                 = sl;
       g_counterEx.slDist                  = slDist;
       g_counterEx.openTime                = (datetime)PositionGetInteger(POSITION_TIME);
-      g_counterEx.peakR                   = 0.0; // conservatively re-armed -- pre-restart peak is not recoverable, so the profit floor starts fresh rather than assuming a peak that can't be proven
-      g_counterEx.maeR                    = 0.0;
-      g_counterEx.mfeR                    = 0.0;
-      g_counterEx.protectedFloorR         = -999.0;
+      g_counterEx.peakPips                   = 0.0; // conservatively re-armed -- pre-restart peak is not recoverable, so the profit floor starts fresh rather than assuming a peak that can't be proven
+      g_counterEx.maePips                    = 0.0;
+      g_counterEx.mfePips                    = 0.0;
+      g_counterEx.protectedFloorPips         = -999.0;
       g_counterEx.opportunityScore        = 0;
       g_counterEx.transitionEvidenceRecorded = false;
       g_counterEx.closeState              = COUNTER_CLOSE_NONE;
@@ -38198,9 +38451,9 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
                                           entryPrice<g_reversalOpportunity.latestAcceptablePrice;
       bool counterLocationAllows=counterTransition.reversalLocationGood && !counterLiveChase &&
                                  !g_reversalOpportunity.impulseConsumedByEntry;
-      PrintFormat("COUNTER_REVERSAL_LOCATION_AUDIT id=%s direction=%s price=%.2f latestAcceptable=%.2f locationQuality=%.0f consumed=%.0f%% reward=%.2fR decision=%s mode=%s",
+      PrintFormat("COUNTER_REVERSAL_LOCATION_AUDIT id=%s direction=%s price=%.2f latestAcceptable=%.2f locationQuality=%.0f consumed=%.0f%% reward=%.2f pips-of-risk decision=%s mode=%s",
                   XAU_ATReversalOpportunityId(),counterDir==1?"BUY":"SELL",entryPrice,g_reversalOpportunity.latestAcceptablePrice,
-                  counterTransition.entryLocationQuality,counterTransition.moveAlreadyConsumedPct,counterTransition.oppositeRemainingRewardR,
+                  counterTransition.entryLocationQuality,counterTransition.moveAlreadyConsumedPct,counterTransition.oppositeRemainingRewardPips,
                   counterLocationAllows?"WOULD_ALLOW":"WOULD_WAIT_FOR_PULLBACK",
                   InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE?"ACTIVE":InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_SHADOW?"SHADOW":"OFF");
       if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && !counterLocationAllows)
@@ -38297,12 +38550,15 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
       return;
    }
 
-   double target03R = (counterDir == 1) ? entryPrice + slDist * InpCounterExcursionDefaultExitR : entryPrice - slDist * InpCounterExcursionDefaultExitR;
-   double target05R = (counterDir == 1) ? entryPrice + slDist * InpCounterExcursionPreferredCloseR : entryPrice - slDist * InpCounterExcursionPreferredCloseR;
-   // OWNER SPEC (2026-07-10): targetMaxR IS the 0.5R hard cap (InpCounterExcursionMaxTargetR),
+   // v6.26.0: InpCounterExcursion*Pips defaults are now pips-scale (x100) --
+   // dividing by 100 here restores the same price-distance fraction these
+   // multiplications always intended (slDist * fraction-of-slDist).
+   double target30Pips = (counterDir == 1) ? entryPrice + slDist * (InpCounterExcursionDefaultExitPips/100.0) : entryPrice - slDist * (InpCounterExcursionDefaultExitPips/100.0);
+   double target05R = (counterDir == 1) ? entryPrice + slDist * (InpCounterExcursionPreferredClosePips/100.0) : entryPrice - slDist * (InpCounterExcursionPreferredClosePips/100.0);
+   // OWNER SPEC (2026-07-10): targetMaxPips IS the 0.5R hard cap (InpCounterExcursionMaxTargetPips),
    // not the old 1.0R -- renamed from target10R for accuracy; the broker TP is set here.
-   double targetMaxR = (counterDir == 1) ? entryPrice + slDist * InpCounterExcursionMaxTargetR : entryPrice - slDist * InpCounterExcursionMaxTargetR;
-   double tpPrice = targetMaxR;
+   double targetMaxPips = (counterDir == 1) ? entryPrice + slDist * (InpCounterExcursionMaxTargetPips/100.0) : entryPrice - slDist * (InpCounterExcursionMaxTargetPips/100.0);
+   double tpPrice = targetMaxPips;
    string comment = "XAU-COUNTER-EXC|ORIGINAL_" + (originalSignal == 1 ? "BUY" : "SELL") + "|EXECUTED_" + (counterDir == 1 ? "BUY" : "SELL");
 
    // Every check this module runs (grade, opposite-pressure eligibility,
@@ -38329,10 +38585,10 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
 
    if(InpCounterExcursionMode == COUNTER_SHADOW)
    {
-      PrintFormat("COUNTER_EXCURSION_OPEN (SHADOW -- no order sent) | strategyOwner=COUNTER_EXCURSION_CAPTURE originalDirection=%s originalGrade=%s originalBlockReason=%s counterDirection=%s counterEligibility=%s fastValidationResult=PASS executionDirection=%s entry=%.2f SL=%.2f target03R=%.2f target05R=%.2f targetMaxR=%.2f riskUSD=%.2f lot=%.2f entryConfirmation=PASSED",
+      PrintFormat("COUNTER_EXCURSION_OPEN (SHADOW -- no order sent) | strategyOwner=COUNTER_EXCURSION_CAPTURE originalDirection=%s originalGrade=%s originalBlockReason=%s counterDirection=%s counterEligibility=%s fastValidationResult=PASS executionDirection=%s entry=%.2f SL=%.2f target30Pips=%.2f target05R=%.2f targetMaxPips=%.2f riskUSD=%.2f lot=%.2f entryConfirmation=PASSED",
                   originalSignal == 1 ? "BUY" : "SELL", originalFinalGrade, blockReason, counterDir == 1 ? "BUY" : "SELL", category,
                   counterDir == 1 ? "BUY" : "SELL",
-                  entryPrice, slPrice, target03R, target05R, targetMaxR, riskUSD, lots);
+                  entryPrice, slPrice, target30Pips, target05R, targetMaxPips, riskUSD, lots);
       return;
    }
 
@@ -38357,11 +38613,11 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    XAU_ProductionActiveFinalEntryAssertion(counterDir,"COUNTER",setupName,finalCounterAllowed);
    if(InpAdaptiveTransitionMode==ADAPTIVE_TRANSITION_ACTIVE && !finalCounterAllowed)
    {
-      PrintFormat("COUNTER_EXCURSION_FINAL_PRE_SEND_BLOCK id=%s direction=%s livePrice=%.2f latestAcceptable=%.2f locationQuality=%.0f consumed=%.0f%% remainingRewardR=%.2f reason=%s",
+      PrintFormat("COUNTER_EXCURSION_FINAL_PRE_SEND_BLOCK id=%s direction=%s livePrice=%.2f latestAcceptable=%.2f locationQuality=%.0f consumed=%.0f%% remainingRewardPips=%.2f reason=%s",
                   XAU_ATReversalOpportunityId(),counterDir==1?"BUY":"SELL",finalCounterPrice,
                   g_reversalOpportunity.latestAcceptablePrice,finalCounterTransition.entryLocationQuality,
                   finalCounterTransition.moveAlreadyConsumedPct,
-                  finalCounterOldDirection?finalCounterTransition.remainingRewardR:finalCounterTransition.oppositeRemainingRewardR,
+                  finalCounterOldDirection?finalCounterTransition.remainingRewardPips:finalCounterTransition.oppositeRemainingRewardPips,
                   finalCounterReason);
       return;
    }
@@ -38467,10 +38723,10 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    g_counterEx.slPrice = slPrice;
    g_counterEx.slDist = slDist;
    g_counterEx.openTime = TimeCurrent();
-   g_counterEx.peakR = 0.0;
-   g_counterEx.maeR = 0.0;
-   g_counterEx.mfeR = 0.0;
-   g_counterEx.protectedFloorR = -999.0;
+   g_counterEx.peakPips = 0.0;
+   g_counterEx.maePips = 0.0;
+   g_counterEx.mfePips = 0.0;
+   g_counterEx.protectedFloorPips = -999.0;
    g_counterEx.opportunityScore = opportunityScore;
    g_counterEx.transitionEvidenceRecorded = false;
    g_counterEx.closeState = COUNTER_CLOSE_NONE;
@@ -38478,10 +38734,10 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
    g_counterEx.lastCloseAttemptTime = 0;
    g_counterEx.closeAttemptCount = 0;
 
-   PrintFormat("COUNTER_EXCURSION_OPEN | strategyOwner=COUNTER_EXCURSION_CAPTURE originalDirection=%s originalGrade=%s originalBlockReason=%s counterDirection=%s counterEligibility=%s fastValidationResult=PASS executionDirection=%s ticket=%I64u entry=%.2f SL=%.2f target03R=%.2f target05R=%.2f targetMaxR=%.2f riskUSD=%.2f lot=%.2f entryConfirmation=PASSED",
+   PrintFormat("COUNTER_EXCURSION_OPEN | strategyOwner=COUNTER_EXCURSION_CAPTURE originalDirection=%s originalGrade=%s originalBlockReason=%s counterDirection=%s counterEligibility=%s fastValidationResult=PASS executionDirection=%s ticket=%I64u entry=%.2f SL=%.2f target30Pips=%.2f target05R=%.2f targetMaxPips=%.2f riskUSD=%.2f lot=%.2f entryConfirmation=PASSED",
                originalSignal == 1 ? "BUY" : "SELL", originalFinalGrade, blockReason, counterDir == 1 ? "BUY" : "SELL", category,
                counterDir == 1 ? "BUY" : "SELL", ticket,
-               g_counterEx.entryPrice, slPrice, target03R, target05R, targetMaxR, riskUSD, lots);
+               g_counterEx.entryPrice, slPrice, target30Pips, target05R, targetMaxPips, riskUSD, lots);
 }
 
 // COUNTER_EXCURSION_MANAGER -- sole exit owner for the counter-excursion
@@ -38503,7 +38759,7 @@ bool XAU_ManageCounterExcursionPosition()
    {
       Print("COUNTER_EXCURSION_CLOSE | ticket=", g_counterEx.ticket,
             " exitReason=CLOSED_EXTERNALLY_OR_BY_BROKER_SLTP brokerPositionAbsent=true originalCandidateOutcome=NOT_AUTO_EXECUTED");
-      XAU_FinalizeCounterTransitionEvidence(g_counterExLastR);
+      XAU_FinalizeCounterTransitionEvidence(g_counterExLastPips);
       g_counterEx.closeState = COUNTER_CLOSE_CONFIRMED;
       g_counterEx.active = false;
       g_counterExCooldownUntil = TimeCurrent() + 60;
@@ -38530,13 +38786,17 @@ bool XAU_ManageCounterExcursionPosition()
 
    double slDist = g_counterEx.slDist > 0 ? g_counterEx.slDist : MathAbs(openPx - curSL);
    if(slDist <= 0) return true;
-
+   // v6.26.0: R is now a genuine absolute pips distance, not priceMove/slDist.
+   // Counter-Excursion is a single-fill tactical trade (never netted/pyramided),
+   // so slDist alone (this trade's own risk distance) is the scaling reference
+   // for every threshold below -- riskDistancePips = slDist * XAUCLOUD_PIPS_PER_PRICE_UNIT.
+   double riskDistancePips = slDist * XAUCLOUD_PIPS_PER_PRICE_UNIT;
    double priceMove = isBuy ? (curPrice - openPx) : (openPx - curPrice);
-   double R = priceMove / slDist;
-   if(R > g_counterEx.peakR) g_counterEx.peakR = R;
-   if(R > g_counterEx.mfeR) g_counterEx.mfeR = R;
-   if(-R > g_counterEx.maeR) g_counterEx.maeR = -R;
-   g_counterExLastR = R;
+   double R = priceMove * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+   if(R > g_counterEx.peakPips) g_counterEx.peakPips = R;
+   if(R > g_counterEx.mfePips) g_counterEx.mfePips = R;
+   if(-R > g_counterEx.maePips) g_counterEx.maePips = -R;
+   g_counterExLastPips = R;
 
    bool momentumFailed = false, structureReclaimed = false;
    int momentumScore = 0;
@@ -38567,19 +38827,23 @@ bool XAU_ManageCounterExcursionPosition()
    // (the floor threshold is deliberately BELOW the zone-entry threshold it
    // locks in for, or every candidate would floor-close itself the same
    // tick it first reaches 0.3R).
-   double floorR = g_counterEx.protectedFloorR;
-   if(g_counterEx.peakR >= InpCounterExcursionDefaultExitR) floorR = MathMax(floorR, InpCounterExcursionProtectAtR);
-   else if(g_counterEx.peakR >= InpCounterExcursionProtectAtR) floorR = MathMax(floorR, 0.0); // breakeven
-   g_counterEx.protectedFloorR = floorR;
+   double floorPips = g_counterEx.protectedFloorPips;
+   if(g_counterEx.peakPips >= (InpCounterExcursionDefaultExitPips/100.0)*riskDistancePips)
+      floorPips = MathMax(floorPips, (InpCounterExcursionProtectAtPips/100.0)*riskDistancePips);
+   else if(g_counterEx.peakPips >= (InpCounterExcursionProtectAtPips/100.0)*riskDistancePips)
+      floorPips = MathMax(floorPips, 0.0); // breakeven
+   g_counterEx.protectedFloorPips = floorPips;
 
-   // OWNER SPEC (2026-07-10): +0.5R (InpCounterExcursionMaxTargetR) is an
+   // OWNER SPEC (2026-07-10): +0.5R (InpCounterExcursionMaxTargetPips) is an
    // UNCONDITIONAL hard cap -- no "exceptionally strong momentum" exception,
    // never held beyond it. Between 0.3R and 0.5R, continuation is allowed
    // only while momentum remains strong (COUNTER_03R_MOMENTUM_NOT_SUSTAINED
    // below closes early the moment it isn't); the floor ratchet above
    // protects the downside the whole way.
+   double maxTargetPips = (InpCounterExcursionMaxTargetPips/100.0)*riskDistancePips;
+   double defaultExitPips = (InpCounterExcursionDefaultExitPips/100.0)*riskDistancePips;
    string exitReason = "";
-   if(R >= InpCounterExcursionMaxTargetR)
+   if(R >= maxTargetPips)
       exitReason = "COUNTER_TARGET_MAXR_HARD_CAP";
    else if(spreadUnsafe)
       exitReason = "COUNTER_SPREAD_UNSAFE";
@@ -38589,31 +38853,34 @@ bool XAU_ManageCounterExcursionPosition()
       exitReason = "COUNTER_ORIGINAL_STRUCTURE_RECLAIMED";
    else if(holdSeconds >= InpCounterExcursionMaxHoldMinutes * 60)
       exitReason = "COUNTER_MAX_HOLD_TIME";
-   else if(floorR > -999.0 && R <= floorR)
+   else if(floorPips > -999.0 && R <= floorPips)
       exitReason = "COUNTER_PROFIT_FLOOR_HIT";
-   else if(g_counterEx.peakR >= InpCounterExcursionDefaultExitR && R >= InpCounterExcursionDefaultExitR && momentumScore <= 1)
+   else if(g_counterEx.peakPips >= defaultExitPips && R >= defaultExitPips && momentumScore <= 1)
       exitReason = "COUNTER_03R_MOMENTUM_NOT_SUSTAINED";
 
    if(StringLen(exitReason) > 0)
    {
-      PrintFormat("COUNTER_EXCURSION_CLOSE | ticket=%I64u realizedR=%.3f realizedUSD=%.2f holdSeconds=%d exitReason=%s originalCandidateOutcome=NOT_AUTO_EXECUTED_MUST_REVALIDATE",
+      PrintFormat("COUNTER_EXCURSION_CLOSE | ticket=%I64u realizedPips=%.3f realizedUSD=%.2f holdSeconds=%d exitReason=%s originalCandidateOutcome=NOT_AUTO_EXECUTED_MUST_REVALIDATE",
                   g_counterEx.ticket, R, profit, holdSeconds, exitReason);
       XAU_RequestCounterExcursionClose(exitReason);
       return true;
    }
 
-   if(floorR > -999.0)
+   if(floorPips > -999.0)
    {
-      double targetSL = isBuy ? NormalizeDouble(openPx + floorR * slDist, digits) : NormalizeDouble(openPx - floorR * slDist, digits);
+      // v6.26.0: floorPips is now an absolute pips distance -- unscale back
+      // to a raw price distance by dividing, not by multiplying by slDist
+      // again (that was correct only when floorPips was a bare R fraction).
+      double targetSL = isBuy ? NormalizeDouble(openPx + floorPips / XAUCLOUD_PIPS_PER_PRICE_UNIT, digits) : NormalizeDouble(openPx - floorPips / XAUCLOUD_PIPS_PER_PRICE_UNIT, digits);
       bool improves = isBuy ? (targetSL > curSL + SymbolInfoDouble(Symbol(), SYMBOL_POINT))
                              : (targetSL < curSL - SymbolInfoDouble(Symbol(), SYMBOL_POINT));
       if(improves)
          SafeModifySL(g_counterEx.ticket, targetSL, curTP, isBuy, curPrice, "COUNTER_PROFIT_FLOOR");
    }
 
-   PrintFormat("COUNTER_EXCURSION_STATUS | ticket=%I64u currentR=%.3f peakR=%.3f MAE_R=%.3f MFE_R=%.3f holdSeconds=%d momentumState=%d structureState=%s protectedFloor=%s",
-               g_counterEx.ticket, R, g_counterEx.peakR, g_counterEx.maeR, g_counterEx.mfeR, holdSeconds,
-               momentumScore, structureReclaimed ? "AGAINST" : "OK", floorR > -999.0 ? DoubleToString(floorR, 2) : "none");
+   PrintFormat("COUNTER_EXCURSION_STATUS | ticket=%I64u currentPips=%.3f peakPips=%.3f MAE_R=%.3f MFE_R=%.3f holdSeconds=%d momentumState=%d structureState=%s protectedFloor=%s",
+               g_counterEx.ticket, R, g_counterEx.peakPips, g_counterEx.maePips, g_counterEx.mfePips, holdSeconds,
+               momentumScore, structureReclaimed ? "AGAINST" : "OK", floorPips > -999.0 ? DoubleToString(floorPips, 2) : "none");
    return true;
 }
 
@@ -38671,11 +38938,13 @@ input double InpExhaustionCounterRiskFraction           = 0.15;   // UNUSED_LEGA
 input int    InpExhaustionCounterMagicNumber            = 90207001; // still used to identify/manage any pre-v6.25.0 legacy position to closure
 input double InpExhaustionCounterMinExhaustionPct       = 80.0;   // UNUSED_LEGACY -- see comment above
 input double InpExhaustionCounterMaxExhaustionPct       = 100.0;  // UNUSED_LEGACY -- see comment above
-input double InpExhaustionCounterMinRoomR               = 0.50;   // UNUSED_LEGACY -- see comment above
+input double InpExhaustionCounterMinRoomPips               = 0.50;   // UNUSED_LEGACY -- see comment above
 input double InpExhaustionCounterSLATRMult              = 1.0;    // still used by XAU_ManageExhaustionCounterPosition for any legacy position's own structural SL geometry
-input double InpExhaustionCounterArmFloorAtR            = 0.30;   // legacy-position exit floor arming -- still used by XAU_ManageExhaustionCounterPosition
-input double InpExhaustionCounterFloorR                 = 0.20;   // legacy-position protected floor -- still used by XAU_ManageExhaustionCounterPosition
-input double InpExhaustionCounterTargetR                = 0.50;   // legacy-position forced target -- still used by XAU_ManageExhaustionCounterPosition
+// v6.26.0: defaults now pips-of-this-trade's-own-risk-distance (x100 of the
+// old R default), consumer scales by riskDistancePips/100.0 same as elsewhere.
+input double InpExhaustionCounterArmFloorAtPips         = 30.0;   // legacy-position exit floor arming -- still used by XAU_ManageExhaustionCounterPosition (was 0.30R)
+input double InpExhaustionCounterFloorPips                 = 20.0;   // legacy-position protected floor -- still used by XAU_ManageExhaustionCounterPosition (was 0.20R)
+input double InpExhaustionCounterTargetPips                = 50.0;   // legacy-position forced target -- still used by XAU_ManageExhaustionCounterPosition (was 0.50R)
 input int    InpExhaustionCounterMaxHoldMinutes         = 45;     // legacy-position max hold -- still used by XAU_ManageExhaustionCounterPosition
 
 struct XAU_ExhaustionCounterState
@@ -38690,17 +38959,17 @@ struct XAU_ExhaustionCounterState
    double   slPrice;
    double   slDist;
    datetime openTime;
-   double   peakR;
-   double   maeR;
-   double   mfeR;
-   double   protectedFloorR;      // -999.0 == not armed yet
+   double   peakPips;
+   double   maePips;
+   double   mfePips;
+   double   protectedFloorPips;      // -999.0 == not armed yet
    int      closeState;
    string   pendingCloseReason;
    datetime lastCloseAttemptTime;
    int      closeAttemptCount;
 };
 XAU_ExhaustionCounterState g_exhaustionCounter;
-double   g_exhaustionCounterLastR = 0.0;
+double   g_exhaustionCounterLastPips = 0.0;
 datetime g_exhaustionCounterCooldownUntil = 0;
 
 // RESTART/STATE SAFETY: same pattern as XAU_ReconcileCounterExcursionOnInit --
@@ -38735,10 +39004,10 @@ void XAU_ReconcileExhaustionCounterOnInit()
       g_exhaustionCounter.slPrice               = sl;
       g_exhaustionCounter.slDist                = slDist;
       g_exhaustionCounter.openTime              = (datetime)PositionGetInteger(POSITION_TIME);
-      g_exhaustionCounter.peakR                 = 0.0; // pre-restart peak not recoverable -- re-armed conservatively, same as Counter-Excursion's own reconciliation
-      g_exhaustionCounter.maeR                  = 0.0;
-      g_exhaustionCounter.mfeR                   = 0.0;
-      g_exhaustionCounter.protectedFloorR       = -999.0;
+      g_exhaustionCounter.peakPips                 = 0.0; // pre-restart peak not recoverable -- re-armed conservatively, same as Counter-Excursion's own reconciliation
+      g_exhaustionCounter.maePips                  = 0.0;
+      g_exhaustionCounter.mfePips                   = 0.0;
+      g_exhaustionCounter.protectedFloorPips       = -999.0;
       g_exhaustionCounter.closeState            = COUNTER_CLOSE_NONE;
       g_exhaustionCounter.pendingCloseReason    = "";
       g_exhaustionCounter.lastCloseAttemptTime  = 0;
@@ -38874,9 +39143,9 @@ bool XAU_RequestExhaustionCounterClose(string reason)
 // Owner's exact exit formula for this family (deliberately NOT the primary
 // 0.50R/70%-of-peak policy, and NOT Counter-Excursion's own 0.2/0.3/0.5R
 // staged policy -- this family gets its own distinct rule):
-//   peakR < 0.30  -> no floor at all, original structural SL preserved
-//   peakR >= 0.30 -> permanently protect 0.20R (fixed, ratchet-only)
-//   currentR >= 0.50 -> close at target
+//   peakPips < 0.30  -> no floor at all, original structural SL preserved
+//   peakPips >= 0.30 -> permanently protect 0.20R (fixed, ratchet-only)
+//   currentPips >= 0.50 -> close at target
 bool XAU_ManageExhaustionCounterPosition()
 {
    if(!g_exhaustionCounter.active) return false;
@@ -38913,59 +39182,68 @@ bool XAU_ManageExhaustionCounterPosition()
 
    double slDist = g_exhaustionCounter.slDist > 0 ? g_exhaustionCounter.slDist : MathAbs(openPx - curSL);
    if(slDist <= 0) return true;
-
+   // v6.26.0: same conversion as Counter-Excursion above -- single-fill
+   // trade, riskDistancePips is the sole scaling reference for every
+   // threshold below.
+   double riskDistancePips = slDist * XAUCLOUD_PIPS_PER_PRICE_UNIT;
    double priceMove = isBuy ? (curPrice - openPx) : (openPx - curPrice);
-   double R = priceMove / slDist;
-   if(R > g_exhaustionCounter.peakR) g_exhaustionCounter.peakR = R;
-   if(R > g_exhaustionCounter.mfeR) g_exhaustionCounter.mfeR = R;
-   if(-R > g_exhaustionCounter.maeR) g_exhaustionCounter.maeR = -R;
-   g_exhaustionCounterLastR = R;
+   double R = priceMove * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+   if(R > g_exhaustionCounter.peakPips) g_exhaustionCounter.peakPips = R;
+   if(R > g_exhaustionCounter.mfePips) g_exhaustionCounter.mfePips = R;
+   if(-R > g_exhaustionCounter.maePips) g_exhaustionCounter.maePips = -R;
+   g_exhaustionCounterLastPips = R;
+
+   double targetPips = (InpExhaustionCounterTargetPips/100.0)*riskDistancePips;
+   double armFloorAtPips = (InpExhaustionCounterArmFloorAtPips/100.0)*riskDistancePips;
+   double floorPipsAbs = (InpExhaustionCounterFloorPips/100.0)*riskDistancePips;
 
    string exitReason = "";
-   if(R >= InpExhaustionCounterTargetR)
+   if(R >= targetPips)
       exitReason = "EXHAUSTION_COUNTER_TARGET_050_HIT";
    else if(holdSeconds >= InpExhaustionCounterMaxHoldMinutes * 60)
       exitReason = "EXHAUSTION_COUNTER_MAX_HOLD_TIME";
 
    // This condition can only ever be true once per trade lifetime: arming
-   // sets protectedFloorR := InpExhaustionCounterFloorR exactly, which makes
+   // sets protectedFloorPips := floorPipsAbs exactly, which makes
    // the guard permanently false afterward (ratchet-only, matches the owner's
    // "0.30R peak -> permanently protect 0.20R" rule -- not re-armed/reset on
    // subsequent ticks).
-   if(g_exhaustionCounter.peakR >= InpExhaustionCounterArmFloorAtR && g_exhaustionCounter.protectedFloorR < InpExhaustionCounterFloorR - 0.0001)
+   if(g_exhaustionCounter.peakPips >= armFloorAtPips && g_exhaustionCounter.protectedFloorPips < floorPipsAbs - 0.0001)
    {
-      g_exhaustionCounter.protectedFloorR = InpExhaustionCounterFloorR;
-      PrintFormat("EXHAUSTION_COUNTER_030_REACHED ticket=%I64u peakR=%.3f", g_exhaustionCounter.ticket, g_exhaustionCounter.peakR);
-      PrintFormat("EXHAUSTION_COUNTER_FLOOR_020_ARMED ticket=%I64u peakR=%.3f floorR=%.2f",
-                  g_exhaustionCounter.ticket, g_exhaustionCounter.peakR, g_exhaustionCounter.protectedFloorR);
+      g_exhaustionCounter.protectedFloorPips = floorPipsAbs;
+      PrintFormat("EXHAUSTION_COUNTER_030_REACHED ticket=%I64u peakPips=%.3f", g_exhaustionCounter.ticket, g_exhaustionCounter.peakPips);
+      PrintFormat("EXHAUSTION_COUNTER_FLOOR_020_ARMED ticket=%I64u peakPips=%.3f floorPips=%.2f",
+                  g_exhaustionCounter.ticket, g_exhaustionCounter.peakPips, g_exhaustionCounter.protectedFloorPips);
    }
-   if(StringLen(exitReason) == 0 && g_exhaustionCounter.protectedFloorR > -999.0 && R <= g_exhaustionCounter.protectedFloorR)
+   if(StringLen(exitReason) == 0 && g_exhaustionCounter.protectedFloorPips > -999.0 && R <= g_exhaustionCounter.protectedFloorPips)
       exitReason = "EXHAUSTION_COUNTER_PROTECTED_STOP_HIT";
 
    if(StringLen(exitReason) > 0)
    {
-      PrintFormat("EXHAUSTION_COUNTER_CLOSE | ticket=%I64u realizedR=%.3f realizedUSD=%.2f holdSeconds=%d exitReason=%s",
+      PrintFormat("EXHAUSTION_COUNTER_CLOSE | ticket=%I64u realizedPips=%.3f realizedUSD=%.2f holdSeconds=%d exitReason=%s",
                   g_exhaustionCounter.ticket, R, profit, holdSeconds, exitReason);
       XAU_RequestExhaustionCounterClose(exitReason);
       return true;
    }
 
-   // peakR < 0.30R: original structural SL is preserved untouched -- no
+   // peakPips < 0.30R: original structural SL is preserved untouched -- no
    // floor modification is sent at all, matching the owner's "let it
    // breathe below the arm threshold" rule for this family.
-   if(g_exhaustionCounter.protectedFloorR > -999.0)
+   if(g_exhaustionCounter.protectedFloorPips > -999.0)
    {
-      double targetSL = isBuy ? NormalizeDouble(openPx + g_exhaustionCounter.protectedFloorR * slDist, digits)
-                               : NormalizeDouble(openPx - g_exhaustionCounter.protectedFloorR * slDist, digits);
+      // v6.26.0: unscale absolute pips back to a raw price distance by
+      // dividing, not by multiplying by slDist again.
+      double targetSL = isBuy ? NormalizeDouble(openPx + g_exhaustionCounter.protectedFloorPips / XAUCLOUD_PIPS_PER_PRICE_UNIT, digits)
+                               : NormalizeDouble(openPx - g_exhaustionCounter.protectedFloorPips / XAUCLOUD_PIPS_PER_PRICE_UNIT, digits);
       bool improves = isBuy ? (targetSL > curSL + SymbolInfoDouble(Symbol(), SYMBOL_POINT))
                              : (targetSL < curSL - SymbolInfoDouble(Symbol(), SYMBOL_POINT));
       if(improves)
          SafeModifySL(g_exhaustionCounter.ticket, targetSL, curTP, isBuy, curPrice, "EXHAUSTION_COUNTER_FLOOR");
    }
 
-   PrintFormat("EXHAUSTION_COUNTER_STATUS | ticket=%I64u currentR=%.3f peakR=%.3f MAE_R=%.3f MFE_R=%.3f holdSeconds=%d protectedFloor=%s",
-               g_exhaustionCounter.ticket, R, g_exhaustionCounter.peakR, g_exhaustionCounter.maeR, g_exhaustionCounter.mfeR,
-               holdSeconds, g_exhaustionCounter.protectedFloorR > -999.0 ? DoubleToString(g_exhaustionCounter.protectedFloorR, 2) : "none");
+   PrintFormat("EXHAUSTION_COUNTER_STATUS | ticket=%I64u currentPips=%.3f peakPips=%.3f MAE_R=%.3f MFE_R=%.3f holdSeconds=%d protectedFloor=%s",
+               g_exhaustionCounter.ticket, R, g_exhaustionCounter.peakPips, g_exhaustionCounter.maePips, g_exhaustionCounter.mfePips,
+               holdSeconds, g_exhaustionCounter.protectedFloorPips > -999.0 ? DoubleToString(g_exhaustionCounter.protectedFloorPips, 2) : "none");
    return true;
 }
 
@@ -39903,7 +40181,7 @@ bool XAU_TimingAuthorityAllows(int signal, string setupName, double atr, string 
       string expiredId = XAU_EntryCandidateId(signal, setupName, g_alignedCandidates[lane].candidateGeneration);
       why = StringFormat("ENTRY_TIMER_EXPIRED: candidateId=%s elapsed=%.0fs maximum=%.0fs",
                          expiredId, elapsed, XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC);
-      PrintFormat("ENTRY_REVALIDATED | candidateId=%s signalValid=false moveR=NA result=CANCEL_TIMER_EXPIRED elapsedSeconds=%.0f maximumSeconds=%.0f",
+      PrintFormat("ENTRY_REVALIDATED | candidateId=%s signalValid=false movePips=NA result=CANCEL_TIMER_EXPIRED elapsedSeconds=%.0f maximumSeconds=%.0f",
                   expiredId, elapsed, XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC);
       if(lane==0)
          XAU_RecordExactPrimaryOutcome(signal,setupName,"CANCEL_TIMER_EXPIRED",false);
@@ -40747,8 +41025,8 @@ bool XAU_FinalEntryArbiter(string source, int signal, bool signalOK, bool struct
                            bool stateOK, string &why)
 {
    XAU_AdaptiveTransitionDecision td = g_transitionDecision;
-   double roomR = (signal == td.dominantDirection) ? td.remainingRewardR : td.oppositeRemainingRewardR;
-   bool rewardRoomCollapsed = (signal != 0 && roomR < 0.30);
+   double roomPips = (signal == td.dominantDirection) ? td.remainingRewardPips : td.oppositeRemainingRewardPips;
+   bool rewardRoomCollapsed = (signal != 0 && roomPips < 0.30);
    bool operationalHalted = (!XAU_NoLimitTradingModeActive() && g_remoteStopTrading);
 
    // v6.25.0 owner directive 2026-07-17 -- M10 Intelligent Signal Engine
@@ -40777,7 +41055,7 @@ bool XAU_FinalEntryArbiter(string source, int signal, bool signalOK, bool struct
    if(!aligned)
    {
       if(rewardRoomCollapsed)
-         why = StringFormat("FINAL_ENTRY_ARBITER_BLOCK: reward room objectively collapsed (roomR=%.2f < 0.30)", roomR);
+         why = StringFormat("FINAL_ENTRY_ARBITER_BLOCK: reward room objectively collapsed (roomPips=%.2f < 0.30)", roomPips);
       else if(operationalHalted)
          why = "FINAL_ENTRY_ARBITER_BLOCK: remote STOP_TRADING active";
       else if(m10Contradicts)
@@ -40788,18 +41066,18 @@ bool XAU_FinalEntryArbiter(string source, int signal, bool signalOK, bool struct
          why = "FINAL_ENTRY_ARBITER_BLOCK: an upstream named authority failed";
    }
    else
-      why = StringFormat("FINAL_ENTRY_ARBITER_ALLOW: direction=%s structure=PASS location=%s pressure=%s exhaustion=%.0f%% oppositePressure(%s)=%.0f%% rewardRoomR=%.2f news=PASS operational=PASS m10Decision=%s",
+      why = StringFormat("FINAL_ENTRY_ARBITER_ALLOW: direction=%s structure=PASS location=%s pressure=%s exhaustion=%.0f%% oppositePressure(%s)=%.0f%% rewardRoomPips=%.2f news=PASS operational=PASS m10Decision=%s",
                          signal==1?"BUY":signal==-1?"SELL":"NONE", locationName, pressureName,
-                         td.exhaustionProbability, oppositeDirName, oppositePressure, roomR, XAU_M10DecisionName(g_m10Decision.decisionType));
+                         td.exhaustionProbability, oppositeDirName, oppositePressure, roomPips, XAU_M10DecisionName(g_m10Decision.decisionType));
 
    PrintFormat("FINAL_ENTRY_ARBITER source=%s signal=%s structure=%s timing=%s freshness=%s news=%s state=%s "
-               "direction=%s location=%s pressure=%s exhaustion=%.0f%% oppositePressure(%s)=%.0f%% rewardRoomR=%.2f "
+               "direction=%s location=%s pressure=%s exhaustion=%.0f%% oppositePressure(%s)=%.0f%% rewardRoomPips=%.2f "
                "rewardRoomCollapsed=%s operationalHalted=%s m10Decision=%s m10Contradicts=%s decision=%s",
                source,signalOK?"PASS":"FAIL",structureOK?"PASS":"FAIL",
                timingOK?"PASS":"FAIL",freshnessOK?"PASS":"FAIL",
                newsOK?"PASS":"FAIL",stateOK?"PASS":"FAIL",
                signal==1?"BUY":signal==-1?"SELL":"NONE", locationName, pressureName,
-               td.exhaustionProbability, oppositeDirName, oppositePressure, roomR,
+               td.exhaustionProbability, oppositeDirName, oppositePressure, roomPips,
                rewardRoomCollapsed?"Y":"N", operationalHalted?"Y":"N",
                XAU_M10DecisionName(g_m10Decision.decisionType), m10Contradicts?"Y":"N",
                aligned?"ALLOW":"BLOCK");
@@ -40837,7 +41115,7 @@ void XAU_EnsureEntryTimerStarted(int signal, string setupName, double originPric
    g_alignedCandidates[lane].barsElapsed = 0;
    g_alignedCandidates[lane].atrTravelled = 0.0;
    g_alignedCandidates[lane].bestAvailableEntry = originPrice;
-   g_alignedCandidates[lane].remainingRewardR = 99.0;
+   g_alignedCandidates[lane].remainingRewardPips = 99.0;
    g_alignedCandidates[lane].objectiveReached = false;
    g_alignedCandidates[lane].marketReset = false;
    g_alignedCandidates[lane].confirmationAfterExtension = false;
@@ -40912,7 +41190,7 @@ bool XAU_FreshnessExtensionAuthority(int signal, string setupName, double setupS
                                : MathMax(0.0, price - roomLow) / atr;
    // v6.24.17: 1R = final widened SL distance (InpSLMultiplier * XAU_SL_WIDENING_FACTOR),
    // matching the real distance OpenTrade() now sends -- not the raw pre-widening ATR multiple.
-   g_alignedCandidates[lane].remainingRewardR = roomATR / MathMax(0.50, InpSLMultiplier * XAU_SL_WIDENING_FACTOR);
+   g_alignedCandidates[lane].remainingRewardPips = roomATR / MathMax(0.50, InpSLMultiplier * XAU_SL_WIDENING_FACTOR);
    g_alignedCandidates[lane].objectiveReached =
       (g_alignedCandidates[lane].atrTravelled >= MathMax(InpXAU_MaxMissedMoveATR, 1.50) ||
        driveATR >= MathMax(InpXAU_MaxExtensionDriveATR, 1.50));
@@ -40926,17 +41204,17 @@ bool XAU_FreshnessExtensionAuthority(int signal, string setupName, double setupS
    bool trueConsumedExtension =
       (g_alignedCandidates[lane].objectiveReached &&
        g_alignedCandidates[lane].atrTravelled >= MathMax(InpXAU_MaxMissedMoveATR, 1.50) &&
-       g_alignedCandidates[lane].remainingRewardR < 1.00 &&
+       g_alignedCandidates[lane].remainingRewardPips < 1.00 &&
        !g_alignedCandidates[lane].marketReset &&
        HasExhaustionDivergence(signal));
 
    reason = StringFormat(
-      "ALIGNED_FRESHNESS: generation=%I64d firstTime=%s firstPrice=%.2f current=%.2f bars=%d travelled=%.2fATR drive=%.2fATR reset=%.2fATR remainingReward=%.2fR objectiveReached=%s marketReset=%s confirmationAfterExtension=%s",
+      "ALIGNED_FRESHNESS: generation=%I64d firstTime=%s firstPrice=%.2f current=%.2f bars=%d travelled=%.2fATR drive=%.2fATR reset=%.2fATR remainingReward=%.2f pips-of-risk objectiveReached=%s marketReset=%s confirmationAfterExtension=%s",
       g_alignedCandidates[lane].candidateGeneration,
       TimeToString(g_alignedCandidates[lane].firstCandidateTime, TIME_DATE|TIME_MINUTES),
       g_alignedCandidates[lane].firstCandidatePrice, price, g_alignedCandidates[lane].barsElapsed,
       g_alignedCandidates[lane].atrTravelled, driveATR, resetATR,
-      g_alignedCandidates[lane].remainingRewardR,
+      g_alignedCandidates[lane].remainingRewardPips,
       g_alignedCandidates[lane].objectiveReached ? "Y" : "N",
       g_alignedCandidates[lane].marketReset ? "Y" : "N",
       g_alignedCandidates[lane].confirmationAfterExtension ? "Y" : "N");
@@ -41221,7 +41499,7 @@ ENUM_XAU_SMART_ENTRY_CAUTION_DECISION XAU_SmartEntryCautionGate(
    string revalidationResult = result.decision==XAU_SMART_ENTRY_CAUTION_ALLOW ? "EXECUTE" :
                                result.decision==XAU_SMART_ENTRY_CAUTION_WAIT ? "WAIT_BOUNDED_READINESS" :
                                priceGenuinelyMissed ? "CANCEL_MISSED_MOVE" : "CANCEL_INVALIDATED";
-   PrintFormat("ENTRY_REVALIDATED | candidateId=%s signalValid=%s moveR=%.3f result=%s",
+   PrintFormat("ENTRY_REVALIDATED | candidateId=%s signalValid=%s movePips=%.3f result=%s",
                result.candidateId,
                result.decision==XAU_SMART_ENTRY_CAUTION_ALLOW?"true":"false",
                moveFromIntendedEntryR, revalidationResult);
@@ -42097,7 +42375,7 @@ CommitteeVote HumanReasoning_Assess(int signal, string setupName, string grade)
 double TradeMemory_LotAdjust(string pattern)
 {
    int    samples = 0, loc_wins = 0;
-   double totalR  = 0.0;
+   double totalPips  = 0.0;
    datetime cutoff = TimeCurrent() - 30 * 24 * 3600;
    for(int i = 0; i < 500; i++)
    {
@@ -42105,7 +42383,7 @@ double TradeMemory_LotAdjust(string pattern)
       if(g_tradeMemory[i].closedAt < cutoff) continue;
       samples++;
       if(g_tradeMemory[i].rMultiple > 0.0) loc_wins++;
-      totalR += g_tradeMemory[i].rMultiple;
+      totalPips += g_tradeMemory[i].rMultiple;
    }
 
    // v6.0.4: Grade-based prior warm start. Before we have 8 real samples, use a grade-informed
@@ -42123,18 +42401,22 @@ double TradeMemory_LotAdjust(string pattern)
       double dataWeight  = 1.0 - priorWeight;
       if(samples == 0) return priorAdj;
       // Blend: prior × priorWeight + real_data_adj × dataWeight
+      // v6.26.0: totalPips/realAvgR/avgPips below are pips-of-risk (g_tradeMemory[].rMultiple
+      // is now fed the x100-rescaled rMult from TradeMemory_Record) -- the
+      // 0.5/-0.30 literal cutoffs are rescaled x100 to match, so every
+      // lot-adjustment decision below is unchanged.
       double realWR  = (double)loc_wins / samples;
-      double realAvgR = totalR / samples;
-      double realAdj = (realWR >= 0.65 && realAvgR >= 0.5) ? MathMin(1.20, 1.0 + (realWR - 0.60) * 0.80)
-                     : (realWR <  0.38 || realAvgR < -0.30) ? MathMax(0.65, 1.0 - (0.45 - realWR) * 0.80)
+      double realAvgR = totalPips / samples;
+      double realAdj = (realWR >= 0.65 && realAvgR >= 50.0) ? MathMin(1.20, 1.0 + (realWR - 0.60) * 0.80)
+                     : (realWR <  0.38 || realAvgR < -30.0) ? MathMax(0.65, 1.0 - (0.45 - realWR) * 0.80)
                      : 1.0;
       return priorAdj * priorWeight + realAdj * dataWeight;
    }
 
    double wr   = (double)loc_wins / samples;
-   double avgR = totalR / samples;
-   if(wr >= 0.65 && avgR >= 0.5)  return MathMin(1.20, 1.0 + (wr - 0.60) * 0.80);
-   if(wr <  0.38 || avgR < -0.30) return MathMax(0.65, 1.0 - (0.45 - wr) * 0.80);
+   double avgPips = totalPips / samples;
+   if(wr >= 0.65 && avgPips >= 50.0)  return MathMin(1.20, 1.0 + (wr - 0.60) * 0.80);
+   if(wr <  0.38 || avgPips < -30.0) return MathMax(0.65, 1.0 - (0.45 - wr) * 0.80);
    return 1.0;
 }
 
@@ -42181,17 +42463,25 @@ void TradeMemory_Record(string pattern, string dirLabel, int conf, double rMult,
          bool wasWinner = (rMult > 0.0);
          if(wasWinner) g_stratWins[sidx]++;
          else          g_stratLosses[sidx]++;
-         g_stratTotalR[sidx] += rMult;
+         g_stratTotalPips[sidx] += rMult;
          g_stratCount[sidx]++;
          // Recompute weight when we have enough data (min 8 trades per strategy)
          if(g_stratCount[sidx] >= 8)
          {
             double wr  = (double)g_stratWins[sidx] / g_stratCount[sidx];
-            double avgR = g_stratTotalR[sidx] / g_stratCount[sidx];
-            double expectancy = wr * avgR - (1.0 - wr);
+            // v6.26.0: avgPips is now genuinely pips-of-risk (rMult rescaled
+            // x100 at its source above). The old formula implicitly assumed
+            // losers average a full -1.0R loss ("-(1.0-wr)"); rescaled x100
+            // that assumption becomes "-(1.0-wr)*100.0" (a full loss = -100
+            // pips-of-risk), and the expectancy thresholds below are the
+            // same x100 rescale of the old 0.5/0.2/0.0 R-scale cutoffs --
+            // this is a pure linear rescale of the whole formula, so every
+            // weight-tier decision is unchanged.
+            double avgPips = g_stratTotalPips[sidx] / g_stratCount[sidx];
+            double expectancy = wr * avgPips - (1.0 - wr) * 100.0;
             double newWeight;
-            if      (expectancy >= 0.5)  newWeight = 1.15;
-            else if (expectancy >= 0.2)  newWeight = 1.0;
+            if      (expectancy >= 50.0)  newWeight = 1.15;
+            else if (expectancy >= 20.0)  newWeight = 1.0;
             else if (expectancy >= 0.0)  newWeight = 0.90;
             else                         newWeight = 0.75;
             // Clamp target
@@ -42217,7 +42507,12 @@ void TradeMemory_Record(string pattern, string dirLabel, int conf, double rMult,
 // v6.3.8 UPGRADE 1 — TradeBrain disk persistence
 // File: MQL5/Files/XAUAI_TradeBrain_v1.csv (common files folder)
 // ============================================================
-#define TRADEBBRAIN_HEADER "#XAUAI_TradeBrain_v2"
+// v6.26.0: v3 -- rMultiple is now genuinely pips-of-risk (x100 of the old
+// raw R-multiple). v1/v2 files are deliberately never loaded (full discard
+// below), since their rMultiple column is the incompatible old R-scale and
+// mixing it with new pips-scale data would corrupt TradeMemory_LotAdjust's
+// live lot-sizing decision.
+#define TRADEBBRAIN_HEADER "#XAUAI_TradeBrain_v3"
 #define TRADEBBRAIN_HEADER_V1 "#XAUAI_TradeBrain_v1"
 string XAU_LegacyTradeBrainFile() { return "XAUAI_TradeBrain_v1_" + XAU_ProductionStateScope() + ".csv"; }
 
@@ -42279,10 +42574,14 @@ void LoadTradeBrainMemory()
 
    // First line must be the version header
    string hdr = FileReadString(h);
-   bool legacyV1=(hdr == TRADEBBRAIN_HEADER_V1);
-   if(hdr != TRADEBBRAIN_HEADER && !legacyV1)
+   // v6.26.0: the pre-v3 legacyV1 partial-load compat path (column-count
+   // only) is deliberately retired here -- a v1 (or v2) file's rMultiple
+   // column is old-R-scale, and there is no safe way to partial-load it
+   // without silently mixing scales. Only an exact v3 header loads.
+   bool legacyV1 = false;
+   if(hdr != TRADEBBRAIN_HEADER)
    {
-      Print("TRADEBRAIN LOAD: header mismatch ('", hdr, "') — skipping file (version mismatch)");
+      Print("TRADEBRAIN LOAD: header mismatch ('", hdr, "') — skipping file (version mismatch, pre-v3 R-scale data cannot be safely mixed with pips-scale data)");
       FileClose(h); return;
    }
    // Skip column name row
@@ -43438,7 +43737,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
                     ? pressureTd.dominantDirection : 1;
    int tSlot = XAU_CampaignSlot(thesisDir);
    bool campaignActive = g_campaign[tSlot].active;
-   double roomR = (thesisDir == pressureTd.dominantDirection) ? pressureTd.remainingRewardR : pressureTd.oppositeRemainingRewardR;
+   double roomPips = (thesisDir == pressureTd.dominantDirection) ? pressureTd.remainingRewardPips : pressureTd.oppositeRemainingRewardPips;
    // v6.24.17 CRITICAL FIX: AI Market Outlook was computing its entry/SL/TP
    // from a THIRD-PARTY scraped gold price (backend fetch_live_gold_price(),
    // Google Finance GCW00:COMEX futures quote) with a hardcoded stale-price
@@ -43467,7 +43766,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       structSl  = thesisDir == 1 ? structEntry - structSlDist          : structEntry + structSlDist;
       structTp1 = thesisDir == 1 ? structEntry + structSlDist * 1.0    : structEntry - structSlDist * 1.0;
       structTp2 = thesisDir == 1 ? structEntry + structSlDist * 2.0    : structEntry - structSlDist * 2.0;
-      structTp3 = thesisDir == 1 ? structEntry + structSlDist * MathMax(1.0, roomR) : structEntry - structSlDist * MathMax(1.0, roomR);
+      structTp3 = thesisDir == 1 ? structEntry + structSlDist * MathMax(1.0, roomPips) : structEntry - structSlDist * MathMax(1.0, roomPips);
    }
    string campaignIdStr = campaignActive ? XAU_CampaignIdText(g_campaign[tSlot].campaignId) : "NONE";
    string thesisDirStr = thesisDir == 1 ? "BUY" : "SELL";
@@ -43495,7 +43794,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       BotMonitorBool(campaignActive ? g_campaign[tSlot].invalidated : false),
       campaignActive ? g_campaign[tSlot].exhaustionPct : pressureTd.exhaustionProbability,
       campaignActive ? g_campaign[tSlot].movementConsumedPct : pressureTd.moveAlreadyConsumedPct,
-      campaignActive ? g_campaign[tSlot].remainingRoomR : roomR,
+      campaignActive ? g_campaign[tSlot].remainingRoomPips : roomPips,
       campaignActive ? g_campaign[tSlot].trendHealth : pressureTd.trendHealth,
       campaignActive ? g_campaign[tSlot].locationQuality : pressureTd.entryLocationQuality,
       pressureTd.buyConfidence, pressureTd.sellConfidence,
@@ -43582,7 +43881,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
          r.buyPressure, r.sellPressure, BotMonitorJsonSafe(r.locationState, 30),
          BotMonitorJsonSafe(r.exhaustionState, 30), BotMonitorJsonSafe(r.structureState, 30),
          BotMonitorBool(r.pullbackComplete), BotMonitorBool(r.reclaimConfirmed), BotMonitorBool(r.retestHeld),
-         r.remainingRoomR, BotMonitorJsonSafe(XAU_ReadinessStateName(g_readiness[rSlot].state), 30),
+         r.remainingRoomPips, BotMonitorJsonSafe(XAU_ReadinessStateName(g_readiness[rSlot].state), 30),
          BotMonitorBool(r.snapshotFresh), BotMonitorBool(r.entryReady),
          BotMonitorJsonSafe(r.finalAction, 20), BotMonitorJsonSafe(r.reason, 160));
    }
@@ -43608,7 +43907,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       g_m10Snapshot.buyPressure, g_m10Snapshot.buyPressureSlope, g_m10Snapshot.sellPressure, g_m10Snapshot.sellPressureSlope,
       g_m10Decision.buyCaseScore, g_m10Decision.sellCaseScore, g_m10Snapshot.continuationScore, g_m10Snapshot.exhaustionScore,
       BotMonitorJsonSafe(g_m10Snapshot.structureState, 30), BotMonitorJsonSafe(g_m10Snapshot.locationState, 30),
-      g_m10Snapshot.buyRoomR, g_m10Snapshot.sellRoomR,
+      g_m10Snapshot.buyRoomPips, g_m10Snapshot.sellRoomPips,
       g_m10Decision.preferredDirection == 1 ? "BUY" : (g_m10Decision.preferredDirection == -1 ? "SELL" : "NONE"),
       BotMonitorJsonSafe(XAU_M10DecisionName(g_m10Decision.decisionType), 40), g_m10Decision.confidence,
       BotMonitorBool(g_m10Decision.retracementRequired), BotMonitorJsonSafe(g_m10Decision.exactReason, 220),
@@ -43788,18 +44087,18 @@ void BotMonitorHeartbeat()
       BotMonitorJsonSafe(g_counterEx.active ? (g_counterEx.originalSignalDirection == 1 ? "BUY" : "SELL") : "NONE", 8),
       BotMonitorJsonSafe(g_counterEx.active ? (g_counterEx.counterExecutedDirection == 1 ? "BUY" : "SELL") : "NONE", 8),
       BotMonitorJsonSafe(g_counterEx.active ? g_counterEx.originalBlockReason : "no active counter-excursion trade", 200),
-      g_counterEx.active ? g_counterExLastR : 0.0,
-      g_counterEx.active ? g_counterEx.peakR : 0.0,
-      (g_counterEx.active && g_counterEx.protectedFloorR > -999.0) ? DoubleToString(g_counterEx.protectedFloorR, 2) : "null",
+      g_counterEx.active ? g_counterExLastPips : 0.0,
+      g_counterEx.active ? g_counterEx.peakPips : 0.0,
+      (g_counterEx.active && g_counterEx.protectedFloorPips > -999.0) ? DoubleToString(g_counterEx.protectedFloorPips, 2) : "null",
       buyBasketJson, sellBasketJson,
       InpExhaustionCounterMode == COUNTER_OFF ? "COUNTER_OFF" : (InpExhaustionCounterMode == COUNTER_SHADOW ? "COUNTER_SHADOW" : "COUNTER_EXECUTE"),
       BotMonitorBool(g_exhaustionCounter.active),
       BotMonitorJsonSafe(g_exhaustionCounter.active ? (g_exhaustionCounter.exhaustedDirection == 1 ? "BUY" : "SELL") : "NONE", 8),
       BotMonitorJsonSafe(g_exhaustionCounter.active ? (g_exhaustionCounter.counterDirection == 1 ? "BUY" : "SELL") : "NONE", 8),
-      g_exhaustionCounter.active ? g_exhaustionCounterLastR : 0.0,
-      g_exhaustionCounter.active ? g_exhaustionCounter.peakR : 0.0,
-      (g_exhaustionCounter.active && g_exhaustionCounter.protectedFloorR > -999.0) ? DoubleToString(g_exhaustionCounter.protectedFloorR, 2) : "null",
-      InpExhaustionCounterTargetR);
+      g_exhaustionCounter.active ? g_exhaustionCounterLastPips : 0.0,
+      g_exhaustionCounter.active ? g_exhaustionCounter.peakPips : 0.0,
+      (g_exhaustionCounter.active && g_exhaustionCounter.protectedFloorPips > -999.0) ? DoubleToString(g_exhaustionCounter.protectedFloorPips, 2) : "null",
+      InpExhaustionCounterTargetPips);
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
@@ -44023,6 +44322,43 @@ void BotMonitorPollCommands()
              ? StringFormat("MANUAL_OPEN_NOW filled: %s ticket=%I64u price=%.5f sl=%.5f tp=%.5f lots=%.2f",
                             mDirRaw, mTicket, mPrice, mSL, mTP, mLots)
              : ("MANUAL_OPEN_NOW_REJECTED_" + mReject);
+   }
+   else if(action == "OUTLOOK_SIGNAL_OPEN")
+   {
+      // v6.26.0 Phase 2: Market Outlook execution. The backend has already
+      // run this exact signal through evaluate_owner_policy() (the same
+      // blocker codes as XAU_IsPermanentM10CategoryBlocked/
+      // XAU_OwnerEntryPermission -- see market_outlook.py) before ever
+      // enqueueing this command, and the cloud_bot_commands row is unique
+      // on (account, signal_id, source, direction) backend-side, so this
+      // is never a second, independent policy engine or a second dedup
+      // mechanism -- it deliberately reuses XAU_TryManualOpenNow verbatim
+      // (same hard broker/margin/spread/position-limit checks inside
+      // OpenTrade, same isManualOverride=true bypass of soft timing/
+      // readiness gates, same one-execution-per-commandId idempotency),
+      // just under a distinctly observable action name so Command Center/
+      // signals-produced-vs-executed reporting can tell the two sources
+      // apart. The command body's own "signal_id" (not the transport-level
+      // commandId) is what XAU_TryManualOpenNow keys idempotency on here,
+      // since a single Outlook signal could in principle be redelivered
+      // under a different transport commandId after a backend retry.
+      string oDirRaw = JsonStringField(body, "direction");
+      string oSignalId = JsonStringField(body, "signal_id");
+      StringToUpper(oDirRaw);
+      int oDir = (StringFind(oDirRaw, "BUY") >= 0) ? 1 : (StringFind(oDirRaw, "SELL") >= 0) ? -1 : 0;
+
+      string oReject = "";
+      ulong  oTicket = 0;
+      double oPrice = 0.0, oSL = 0.0, oTP = 0.0, oLots = 0.0;
+      string oIdempotencyKey = StringLen(oSignalId) > 0 ? ("OUTLOOK_" + oSignalId) : commandId;
+      bool oOpened = XAU_TryManualOpenNow(oDir, oIdempotencyKey, oReject, oTicket, oPrice, oSL, oTP, oLots);
+      status = oOpened ? "EXECUTED" : "FAILED";
+      result = oOpened
+             ? StringFormat("OUTLOOK_SIGNAL_OPEN filled: %s signalId=%s ticket=%I64u price=%.5f sl=%.5f tp=%.5f lots=%.2f",
+                            oDirRaw, oSignalId, oTicket, oPrice, oSL, oTP, oLots)
+             : ("OUTLOOK_SIGNAL_OPEN_REJECTED_" + oReject);
+      if(oOpened)
+         CloudMapAdd(oTicket, oSignalId); // links this position back to its originating Outlook signal, same map TRADE_OPENED/notifications already read
    }
 
    g_lastRemoteCommandState = action + ": " + result;
@@ -44434,13 +44770,13 @@ string CloudExtractGrade(string reason)
 // cutover.
 void LogTradeToServer(string result2, double price, double profit, double lots, string dir,
                        ulong ticket, double entryPrice, datetime openedAt, double commission, double swap,
-                       double riskUSD, double maeR, double mfeR, long campaignId,
+                       double riskUSD, double maePips, double mfePips, long campaignId,
                        string exitReason, string exitOwner, string family)
 {
    if(InpBacktestMode) return;                    // Tester: no network
    if(StringLen(InpServerURL) < 10) return;
    MqlDateTime dt; TimeCurrent(dt);
-   double finalR = (riskUSD > 0.0) ? (profit / riskUSD) : 0.0;
+   double finalPips = (riskUSD > 0.0) ? (profit / riskUSD) : 0.0;
    string body = StringFormat(
       "{\"pin\":\"%s\",\"symbol\":\"%s\",\"direction\":\"%s\",\"result\":\"%s\",\"price\":%.2f,\"profit\":%.2f,\"lots\":%.2f,"
       "\"hour\":%d,\"day_of_week\":%d,\"total_trades\":%d,\"wins\":%d,\"losses\":%d,\"balance\":%.2f,"
@@ -44452,7 +44788,7 @@ void LogTradeToServer(string result2, double price, double profit, double lots, 
       InpLicensePIN, Symbol(), dir, result2, price, profit, lots, dt.hour, dt.day_of_week, totalTrades, wins, losses, accInfo.Balance(),
       lastSignalSignature, lastSignalSetup, RegimeName(),
       ticket, entryPrice, (long)openedAt, (long)TimeCurrent(),
-      commission, swap, riskUSD, finalR, maeR, mfeR,
+      commission, swap, riskUSD, finalPips, maePips, mfePips,
       campaignId, XAUAI_EA_VERSION, AccountInfoInteger(ACCOUNT_LOGIN),
       BotMonitorJsonSafe(exitReason, 220), BotMonitorJsonSafe(exitOwner, 40), family);
    char pd[], res[]; string rh;
@@ -44527,8 +44863,8 @@ string XAUAI_InputHash()
    s += StringFormat("basket=%d,%.2f,%.2f,%.2f,%.2f,%d|clean=%d,%.2f,%.2f,%d,%.2f|",
                      InpBasketMode ? 1 : 0, EffBasketArmPct(), InpBasketArmFloor,
                      EffBasketLockMinPct(), EffBasketBEPct(), InpCloudSafeDisablePartials ? 1 : 0,
-                     InpCleanExits ? 1 : 0, EffCleanBEActivateR(), EffCleanChandelierATR1(),
-                     InpEarlyConvictionCut ? 1 : 0, InpEarlyConvictionCutR);
+                     InpCleanExits ? 1 : 0, EffCleanBEActivatePips(), EffCleanChandelierATR1(),
+                     InpEarlyConvictionCut ? 1 : 0, InpEarlyConvictionCutPips);
    s += StringFormat("ampl=%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f|volcap=%d,%.2f|ai=%d,%d,%d,%d,%d,%s|cloud=%d|",
                      InpAMPL_Enable ? 1 : 0, InpAMPL_MinUSD, InpAMPL_GivebackPct,
                      InpAMPL_GivebackMinUSD, InpAMPL_MinRetainUSD,
@@ -44609,7 +44945,7 @@ string XAUAI_InputHash()
                      InpCancelIfPriceMovedTooFarATR,
                      InpCrossInstanceEntryLockEnable ? 1 : 0,
                      InpCrossInstanceEntryLockSec,
-                     InpExitArmMinOwnR);
+                     InpExitArmMinOwnPips);
    s += StringFormat("symbol=%s|tf=M5|digits=%d|point=%s",
                      Symbol(), (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
                      DoubleToString(SymbolInfoDouble(Symbol(), SYMBOL_POINT), 8));
@@ -44758,7 +45094,7 @@ string XAU_MarketThesisDisplayBlock(int direction)
    d += StringFormat("Trade horizon: %s\n", XAU_TradeHorizonName(g_campaign[slot].thesisTimeframeHorizon));
    d += StringFormat("Move consumed: %.0f%%\n", g_campaign[slot].movementConsumedPct);
    d += StringFormat("Exhaustion: %.0f%%\n", g_campaign[slot].exhaustionPct);
-   d += StringFormat("Remaining room: %.1f R\n", g_campaign[slot].remainingRoomR);
+   d += StringFormat("Remaining room: %.1f R\n", g_campaign[slot].remainingRoomPips);
    // v6.24.12 — fresh pressure read (same convention as the pyramid cross-
    // check: call the engine directly rather than trust a global was
    // refreshed this bar by someone else).
@@ -44840,7 +45176,7 @@ string XAU_EntryReadinessDisplayBlock()
                      r.pullbackComplete ? "COMPLETE" : "PENDING",
                      r.reclaimConfirmed ? "CONFIRMED" : "PENDING",
                      r.retestHeld ? "HELD" : "PENDING");
-   d += StringFormat("Remaining room: %.2fR\n", r.remainingRoomR);
+   d += StringFormat("Remaining room: %.2f pips-of-risk\n", r.remainingRoomPips);
    d += StringFormat("Timing: %s\n", XAU_ReadinessStateName(g_readiness[slot].state));
    d += StringFormat("Candidate age: %ds | Stable for: %ds\n",
                      g_readiness[slot].originTime > 0 ? (int)(TimeCurrent()-g_readiness[slot].originTime) : 0,

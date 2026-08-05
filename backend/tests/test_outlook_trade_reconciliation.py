@@ -419,8 +419,14 @@ class TestAutomatedTradePayload:
     def test_tp_hit_payload(self):
         doc = _outlook_doc()
         doc["automated_trade_result"] = {
+            # v6.26.0: result_pips/result_gold_moves are what
+            # market_outlook._build_automated_trade_result's own
+            # build_result_conversion(r=..., price_move=...) call always
+            # spreads into this dict in real production data -- 9.5 price
+            # move (2660.0-2650.5) = 95.0 pips / 9.5 Gold moves.
             "status": "matched", "result": "TP_HIT", "direction": "BUY", "symbol": "XAUUSD",
             "realized_profit": 150.0, "realized_r": 2.0, "entry_price": 2650.5, "exit_price": 2660.0,
+            "result_pips": 95.0, "result_gold_moves": 9.5, "result_r": 2.0,
             "close_reason": "TAKE_PROFIT_1R", "ticket": 1001,
         }
         from notifications import _build_automated_trade_payload
@@ -428,7 +434,10 @@ class TestAutomatedTradePayload:
         assert "hit take-profit" in payload["title"]
         assert "BUY" in payload["title"] and "XAUUSD" in payload["title"]
         assert "P/L +$150.00" in payload["body"]
-        assert "2.00R" in payload["body"]
+        # v6.26.0 R-to-pips migration: customer notifications show pips,
+        # never a bare "R" label (was "2.00R" in this exact assertion).
+        assert "95.0 pips" in payload["body"]
+        assert "2.00R" not in payload["body"]
         assert payload["outlook_id"] == doc["id"]
         assert payload["event"] == "AUTOMATED_TRADE_RESULT"
 

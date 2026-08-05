@@ -18,7 +18,7 @@ describe("Daily Trading Results section contract", () => {
   });
 
   test("every rendered stat/day field maps to a real API field", () => {
-    expect(section).toContain("totals.net_r");
+    expect(section).toContain("totals.net_usd");
     expect(section).toContain("totals.net_gold_moves");
     expect(section).toContain("totals.net_pips");
     expect(section).toContain("totals.trades");
@@ -39,5 +39,15 @@ describe("Daily Trading Results section contract", () => {
 
   test("first-party disclaimer is present, matching the rest of the site's real-performance pages", () => {
     expect(section).toContain("First-party trading records, not independently verified");
+  });
+
+  // v6.26.0 R-to-pips/Gold-moves migration -- this section must never show a
+  // bare "R" unit label again (was "Net R (30d)" ... + "R", replaced with a
+  // Net P/L $ card since Gold Moves and Pips already cover the same number
+  // in the correct units).
+  test("no bare R-multiple label anywhere in this section", () => {
+    expect(section).not.toContain("Net R");
+    expect(section).not.toMatch(/\+"R"/);
+    expect(section).not.toMatch(/totals\.net_r\b/);
   });
 });
