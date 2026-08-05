@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -899,6 +899,15 @@ export default function AIMarketOutlookPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState(false);
   const [currentError, setCurrentError] = useState(false);
+  // Owner directive (2026-08-05) test case 8: a duplicate/out-of-order
+  // stale /outlook/current response arriving after a newer one must never
+  // restore old signal data. setInterval fires a new request every 15s
+  // regardless of whether the previous one has resolved yet, so a slow
+  // request can otherwise resolve AFTER a faster, more recent one and
+  // silently overwrite fresher state with stale state. This sequence
+  // guard makes only the most-recently-ISSUED response ever allowed to
+  // apply, discarding any response for a request that's no longer latest.
+  const currentRequestSeq = useRef(0);
 
   const loadCurrent = useCallback(async () => {
     if (previewMode) {
@@ -906,13 +915,16 @@ export default function AIMarketOutlookPage() {
       setDiagnostics({ evidence_status: "OK", evidence_age_seconds: 8, evidence_symbol: "XAUUSD" });
       return;
     }
+    const requestId = ++currentRequestSeq.current;
     try {
       const { data } = await outlookAxios.get("/outlook/current");
+      if (requestId !== currentRequestSeq.current) return; // a newer request already superseded this one
       setContract(data?.contract || null);
       setCurrentOutlook(data?.outlook || null);
       setDiagnostics(data?.diagnostics || null);
       setCurrentError(false);
     } catch (_) {
+      if (requestId !== currentRequestSeq.current) return;
       setCurrentError(true);
     }
   }, [previewMode]);

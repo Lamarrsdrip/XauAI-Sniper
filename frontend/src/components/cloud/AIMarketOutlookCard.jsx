@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { Link } from "react-router-dom";
 import { Bell, BellOff, Compass, ArrowUpRight, ArrowDownRight, Minus, Radar, WifiOff, CloudOff } from "lucide-react";
@@ -35,9 +35,14 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
   const [verifiedStatus, setVerifiedStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [requestFailed, setRequestFailed] = useState(false);
+  // Owner directive (2026-08-05) test case 8: a duplicate/out-of-order
+  // stale /outlook/current response must never restore old signal data
+  // over a newer one -- see AIMarketOutlookPage.jsx's identical guard.
+  const requestSeq = useRef(0);
 
   const load = useCallback(async () => {
     if (!linked) {
+      requestSeq.current += 1;
       setOutlook(null);
       setLoading(false);
       setRequestFailed(false);
@@ -45,12 +50,14 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
       onStatusChange?.({ loading:false, requestFailed:false });
       return;
     }
+    const requestId = ++requestSeq.current;
     try {
       const [{ data: cur }, { data: pr }, statusResult] = await Promise.all([
         outlookAxios.get("/outlook/current"),
         outlookAxios.get("/outlook/notifications/prefs"),
         outlookAxios.get("/outlook/notifications/status").catch(() => ({ data: { final_status: "UNKNOWN" } })),
       ]);
+      if (requestId !== requestSeq.current) return; // a newer request already superseded this one
       const nextOutlook = cur?.outlook || null;
       setOutlook(nextOutlook);
       setFreshness(cur?.freshness || null);
@@ -60,10 +67,11 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
       onOutlookChange?.(nextOutlook);
       onStatusChange?.({ loading:false, requestFailed:false });
     } catch (_) {
+      if (requestId !== requestSeq.current) return;
       setRequestFailed(true);
       onStatusChange?.({ loading:false, requestFailed:true });
     }
-    setLoading(false);
+    if (requestId === requestSeq.current) setLoading(false);
   }, [linked, onOutlookChange, onStatusChange]);
 
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [load]);

@@ -280,7 +280,7 @@ def build_router() -> APIRouter:
             )
         contract = mo.build_authoritative_outlook_contract(
             evidence, evidence_reason, hourly_doc=hourly_doc, signal_doc=signal_doc,
-            notification=latest_notification, now=now,
+            notification=latest_notification, now=now, latest_doc=doc,
         )
         # The single authoritative "what counts as current" determination --
         # see compute_outlook_freshness's own docstring for the exact bug

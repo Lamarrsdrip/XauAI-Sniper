@@ -20,6 +20,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
@@ -946,16 +948,52 @@ def test_root_bug_fixed_old_directional_signal_never_outranks_newer_non_directio
     assert result["outlook_id"] == "fresh-neutral"
 
 
-def test_still_live_signal_shown_as_current_even_if_a_newer_neutral_doc_exists():
-    """The other half of the fix: an unresolved, still-live signal must
-    stay "current" for as long as it's genuinely live, even though a
-    newer (non-directional) hourly slot has since published."""
+def test_still_live_signal_stays_current_within_its_own_hourly_window():
+    """A live signal stays current for as long as no NEWER hourly
+    publication has happened yet -- i.e. this is still genuinely the
+    account's latest publication of any kind."""
     live_signal = _outlook(id="live-buy", primary_direction="BUY", analytics_outcome=None, monitoring_closed=False)
-    newer_neutral = _outlook(id="newer-neutral", primary_direction="NEUTRAL", generated_at=_NOW.isoformat())
-    result = mo.compute_outlook_freshness(newer_neutral, live_signal, "OK", now=_NOW)
+    result = mo.compute_outlook_freshness(live_signal, live_signal, "OK", now=_NOW)
     assert result["state"] == "ACTIVE_SIGNAL"
     assert result["outlook_id"] == "live-buy"
     assert result["direction"] == "BUY"
+
+
+def test_owner_directive_2026_08_05_a_newer_hourly_doc_retires_a_still_live_signal_from_current():
+    """Owner directive (2026-08-05): being monitored/still-live is no
+    longer sufficient by itself to stay "current" -- once a NEWER hourly
+    publication exists (even a non-directional NEUTRAL/NO_VALID_OUTLOOK
+    one), the old signal must stop being shown as current immediately,
+    even though it keeps being tracked internally for its own final
+    TP/SL result. This replaces the previous behavior (a live signal used
+    to keep outranking newer hourly publications for its entire multi-hour
+    expiry window) -- that is the exact bug: a 3pm SELL signal still
+    showing "Execution-ready"/"Tracking" during the 4pm/5pm window even
+    though the Home page had already moved on."""
+    live_signal = _outlook(id="live-buy", primary_direction="BUY", analytics_outcome=None, monitoring_closed=False)
+    newer_neutral = _outlook(id="newer-neutral", primary_direction="NEUTRAL", generated_at=_NOW.isoformat())
+    result = mo.compute_outlook_freshness(newer_neutral, live_signal, "OK", now=_NOW)
+    assert result["state"] == "SIGNAL_FORMING"
+    assert result["outlook_id"] == "newer-neutral"
+    assert result["direction"] is None
+
+    contract = mo.build_authoritative_outlook_contract(
+        _no_candidate_evidence(), "OK", signal_doc=live_signal, now=_NOW, latest_doc=newer_neutral,
+    )
+    assert contract["state"] != mo.OUTLOOK_ACTIONABLE
+    assert contract["executionStatus"] != "TRACKING"
+    assert contract["lastValidOutlook"] is None
+
+
+def test_owner_directive_new_valid_signal_in_the_next_hour_replaces_the_old_one_immediately():
+    """Owner scenario 7: a genuinely new valid signal in the next hour
+    replaces the old one immediately -- signal_doc IS the newest
+    publication, so it stays/becomes current."""
+    new_signal = _outlook(id="new-sell", primary_direction="SELL", generated_at=_NOW.isoformat())
+    result = mo.compute_outlook_freshness(new_signal, new_signal, "OK", now=_NOW)
+    assert result["state"] == "ACTIVE_SIGNAL"
+    assert result["direction"] == "SELL"
+    assert result["outlook_id"] == "new-sell"
 
 
 def test_blocked_signal_shows_as_no_fresh_signal_not_a_visible_direction():
@@ -995,4 +1033,95 @@ def test_current_outlook_route_returns_freshness_and_never_the_stale_selection()
     fn = fn[:fn.index('@r.get("/outlook/history")')]
     assert "compute_outlook_freshness(" in fn
     assert '"outlook": signal_doc or doc' not in fn
-    assert '"freshness": freshness' in fn
+
+
+# ---------------------------------------------------------------------------
+# build_authoritative_outlook_contract's stored_active -- root-cause fix
+# (2026-08-05): this used to be a SECOND, looser, independently-hand-rolled
+# staleness check (never looked at analytics_outcome; treated a MISSING
+# expiry_at as still-active) living alongside the correct one
+# (_outlook_still_live, already used by compute_outlook_freshness/the Home
+# page card) -- so the full Outlook page (which reads `contract`) could
+# disagree with the Home page (which reads `freshness`) from the exact same
+# API response. contract.state must now always agree with freshness.state
+# for the same signal_doc.
+# ---------------------------------------------------------------------------
+
+def _no_candidate_evidence():
+    """Fresh, healthy EA evidence with no qualifying M10 candidate --
+    isolates the `elif stored_active and not canonical.get("candidate")`
+    branch from every other state in the if/elif chain."""
+    evidence = _m10_evidence(ready=False, decision="NO_VALID_SIGNAL")
+    evidence["m10_signal"]["preferred_direction"] = ""
+    evidence["ts"] = _NOW.isoformat()
+    evidence["event_time"] = _NOW.isoformat()
+    return evidence
+
+
+def test_contract_never_shows_a_resolved_signal_as_actionable():
+    """The exact bug: a WIN/LOSS/PARTIAL_PROFIT/BREAK_EVEN signal_doc used
+    to still read as ACTIVE_M10_SIGNAL_PRESERVED because stored_active never
+    checked analytics_outcome."""
+    for outcome in (mo.ANALYTICS_WIN, mo.ANALYTICS_LOSS, mo.ANALYTICS_PARTIAL, mo.ANALYTICS_BREAKEVEN):
+        resolved = _outlook(analytics_outcome=outcome, monitoring_closed=True)
+        contract = mo.build_authoritative_outlook_contract(
+            _no_candidate_evidence(), "OK", signal_doc=resolved, now=_NOW,
+        )
+        assert contract["state"] != mo.OUTLOOK_ACTIONABLE, f"outcome={outcome}"
+        assert contract["executionStatus"] != "TRACKING"
+        assert contract["executionReady"] is False
+        assert contract["lastValidOutlook"] is None
+
+
+def test_contract_never_shows_a_signal_with_a_missing_expiry_as_active():
+    """The other half of the bug: stored_active treated an ABSENT expiry_at
+    as still-active (`not stored_expiry` was True) instead of not-fresh."""
+    no_expiry = _outlook(expiry_at=None)
+    contract = mo.build_authoritative_outlook_contract(
+        _no_candidate_evidence(), "OK", signal_doc=no_expiry, now=_NOW,
+    )
+    assert contract["state"] != mo.OUTLOOK_ACTIONABLE
+    assert contract["lastValidOutlook"] is None
+
+
+def test_contract_still_shows_a_genuinely_live_signal_as_active():
+    """The fix must not be overzealous -- an unresolved, unexpired,
+    unclosed signal_doc still reads as the active current signal."""
+    live = _outlook()
+    contract = mo.build_authoritative_outlook_contract(
+        _no_candidate_evidence(), "OK", signal_doc=live, now=_NOW,
+    )
+    assert contract["state"] == mo.OUTLOOK_ACTIONABLE
+    assert contract["stateReason"] == "ACTIVE_M10_SIGNAL_PRESERVED"
+    assert contract["executionStatus"] == "TRACKING"
+    assert contract["executionReady"] is True
+    assert contract["direction"] == "BUY"
+    assert contract["lastValidOutlook"] == live
+
+
+@pytest.mark.parametrize("outcome", [
+    mo.ANALYTICS_WIN, mo.ANALYTICS_LOSS, mo.ANALYTICS_PARTIAL, mo.ANALYTICS_BREAKEVEN,
+])
+def test_contract_and_freshness_never_disagree_on_a_resolved_signal(outcome):
+    """Direct regression for the Home-page-vs-full-page divergence bug:
+    build_authoritative_outlook_contract's notion of "is this signal
+    active" and compute_outlook_freshness's must be the same fact for a
+    genuinely resolved signal_doc, since they're rendered by two different
+    pages from the same /outlook/current response."""
+    doc = _outlook(analytics_outcome=outcome, monitoring_closed=True)
+    contract = mo.build_authoritative_outlook_contract(
+        _no_candidate_evidence(), "OK", signal_doc=doc, now=_NOW,
+    )
+    freshness = mo.compute_outlook_freshness(doc, doc, "OK", now=_NOW)
+    assert contract["state"] != mo.OUTLOOK_ACTIONABLE
+    assert freshness["state"] != "ACTIVE_SIGNAL"
+
+
+def test_contract_and_freshness_agree_a_genuinely_live_signal_is_active():
+    live = _outlook()
+    contract = mo.build_authoritative_outlook_contract(
+        _no_candidate_evidence(), "OK", signal_doc=live, now=_NOW,
+    )
+    freshness = mo.compute_outlook_freshness(live, live, "OK", now=_NOW)
+    assert contract["state"] == mo.OUTLOOK_ACTIONABLE
+    assert freshness["state"] == "ACTIVE_SIGNAL"

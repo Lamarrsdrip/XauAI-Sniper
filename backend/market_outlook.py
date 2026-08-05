@@ -543,11 +543,42 @@ def _outlook_within_freshness_window(doc: Optional[Dict], now: datetime) -> bool
 def _outlook_still_live(doc: Optional[Dict], now: datetime) -> bool:
     """A signal is still genuinely "happening right now" if it hasn't been
     classified yet, monitoring hasn't closed, and it's within its own
-    expiry window -- independent of whether a newer (possibly
-    non-directional) hourly slot has published since."""
+    expiry window. Whether it still belongs to the CURRENT hourly window is
+    a separate question -- see _signal_belongs_to_current_hourly_window
+    below; this function alone answers only "is this signal's own
+    tracking/expiry still open," not "is this the signal customers should
+    see as current right now."
+    """
     if not doc or doc.get("analytics_outcome") is not None or doc.get("monitoring_closed"):
         return False
     return _outlook_within_freshness_window(doc, now)
+
+
+def _signal_belongs_to_current_hourly_window(signal_doc: Optional[Dict], doc: Optional[Dict]) -> bool:
+    """Owner directive (2026-08-05): "current Outlook signal" and "signal
+    still being monitored for final performance" are separate concepts. A
+    signal may keep tracking TP/SL internally for accurate history long
+    after its own hourly window has passed (see advance_persisted_signal --
+    completely untouched by this function), but it must stop being shown as
+    the CURRENT signal the moment a newer hourly slot has published
+    anything at all, even a non-directional NO_VALID_OUTLOOK/NEUTRAL update
+    -- previously, a still-unresolved signal_doc could keep outranking
+    several newer hourly publications for as long as its own multi-hour
+    expiry_at hadn't elapsed, which is exactly how a 3pm SELL signal could
+    still show as "Execution-ready"/"Tracking" during the 4pm or 5pm
+    window. `doc` is the account's actual latest publication (any
+    direction); `signal_doc` is the latest BUY/SELL ever published. If
+    `doc` is strictly newer than `signal_doc`, a newer hourly slot has
+    already published and signal_doc no longer belongs to the current
+    window -- regardless of whether it's still being monitored.
+    """
+    if not doc or not signal_doc:
+        return True
+    doc_generated = _as_utc(doc.get("generated_at"))
+    signal_generated = _as_utc(signal_doc.get("generated_at"))
+    if not doc_generated or not signal_generated:
+        return True
+    return signal_generated >= doc_generated
 
 
 def compute_outlook_freshness(doc: Optional[Dict], signal_doc: Optional[Dict],
@@ -570,6 +601,14 @@ def compute_outlook_freshness(doc: Optional[Dict], signal_doc: Optional[Dict],
     to `doc`, the account's actual latest publication, whatever state that
     is.
 
+    Owner directive extension (2026-08-05): being "still live" (unresolved,
+    unexpired) is no longer sufficient by itself -- signal_doc must ALSO
+    still belong to the current hourly window (see
+    _signal_belongs_to_current_hourly_window). A signal can keep being
+    monitored for TP/SL long past its own hourly slot; that must never keep
+    it showing as the CURRENT customer-facing signal once a newer hourly
+    publication (of any kind, including a non-directional one) exists.
+
     Returns {state, message, direction, result, outlook_id, last_checked_at,
     next_expected_update_at}. `state` is one of OUTLOOK_FRESHNESS_STATES.
     """
@@ -585,7 +624,11 @@ def compute_outlook_freshness(doc: Optional[Dict], signal_doc: Optional[Dict],
         return {**base, "state": "EA_OFFLINE",
                 "message": "Your EA isn't connected right now. No live outlook until a fresh heartbeat arrives."}
 
-    effective = signal_doc if _outlook_still_live(signal_doc, now) else doc
+    signal_current = (
+        _outlook_still_live(signal_doc, now)
+        and _signal_belongs_to_current_hourly_window(signal_doc, doc)
+    )
+    effective = signal_doc if signal_current else doc
     if not effective or not _outlook_within_freshness_window(effective, now):
         return {**base, "state": "NO_FRESH_SIGNAL",
                 "message": "XauCloud is waiting for new Gold market data. A new outlook will appear automatically when a valid signal is ready."}
@@ -617,8 +660,19 @@ def build_authoritative_outlook_contract(evidence: Optional[Dict], evidence_reas
                                          hourly_doc: Optional[Dict] = None,
                                          signal_doc: Optional[Dict] = None,
                                          notification: Optional[Dict] = None,
-                                         now: Optional[datetime] = None) -> Dict[str, Any]:
-    """Single deterministic M10-first API contract consumed by the Outlook UI."""
+                                         now: Optional[datetime] = None,
+                                         latest_doc: Optional[Dict] = None) -> Dict[str, Any]:
+    """Single deterministic M10-first API contract consumed by the Outlook UI.
+
+    `latest_doc` is the same "account's actual latest publication, any
+    direction/mode" document compute_outlook_freshness calls `doc` -- passed
+    through here too (owner directive, 2026-08-05) so this function's
+    stored_active/current-window determination can never diverge from
+    compute_outlook_freshness's, even though this function historically
+    only received `hourly_doc` (hourly-mode-only). Falls back to
+    `hourly_doc` when not supplied so existing callers/tests that only ever
+    cared about the hourly-only comparison keep working.
+    """
     wall_now = _as_utc(now) or datetime.now(timezone.utc)
     evidence = evidence or {}
     canonical = _canonical_m10_signal(evidence)
@@ -633,12 +687,27 @@ def build_authoritative_outlook_contract(evidence: Optional[Dict], evidence_reas
     if evidence and not quote.get("ask"):
         missing_fields.append("BROKER_ASK")
 
-    stored_expiry = _as_utc((signal_doc or {}).get("expiry_at"))
+    # Root-cause fix (2026-08-05): this used to hand-roll its own staleness
+    # check (never looked at analytics_outcome, and treated a MISSING
+    # expiry_at as still-active) -- a second, looser freshness algorithm
+    # living alongside the correct one (_outlook_still_live, used by
+    # compute_outlook_freshness/the Home page card). That divergence is
+    # exactly what let the full Outlook page show a resolved/expired prior-
+    # hour signal as "Execution-ready"/"Tracking" while the Home page
+    # correctly showed no active signal from the very same API response.
+    # Both surfaces must derive "is this signal still genuinely live" from
+    # the one shared function -- never two independent computations of the
+    # same fact. Owner directive extension (2026-08-05): also require the
+    # signal still belongs to the current hourly window (see
+    # _signal_belongs_to_current_hourly_window) -- being unresolved/
+    # unexpired is not enough by itself once a newer hourly publication
+    # exists, even a non-directional one.
+    reference_doc = latest_doc if latest_doc is not None else hourly_doc
     stored_active = bool(
         signal_doc
         and (signal_doc or {}).get("primary_direction") in ("BUY", "SELL")
-        and not (signal_doc or {}).get("monitoring_closed")
-        and (not stored_expiry or stored_expiry > wall_now)
+        and _outlook_still_live(signal_doc, wall_now)
+        and _signal_belongs_to_current_hourly_window(signal_doc, reference_doc)
     )
     direction = canonical.get("direction") or ((signal_doc or {}).get("primary_direction") if stored_active else None)
     confidence = (canonical.get("confidence") if canonical.get("candidate")
@@ -720,7 +789,13 @@ def build_authoritative_outlook_contract(evidence: Optional[Dict], evidence_reas
         "notificationEligibility": {"eligible": eligible, "reason": notification_reason},
         "notificationSent": bool(notification.get("delivery_status") == "SENT"),
         "notificationEventId": notification.get("id"),
-        "lastValidOutlook": source_doc or None,
+        # Owner directive (2026-08-05): never expose a resolved/expired
+        # signal's entry/SL/TP/confidence here just because it was the most
+        # recent BUY/SELL ever published -- this must agree with `stored_active`
+        # the same way `state`/`executionStatus` above do, or a future
+        # consumer of this field reintroduces the exact stale-signal leak
+        # this fix closes elsewhere in the contract.
+        "lastValidOutlook": source_doc if stored_active else None,
         "nextEvaluationTime": (wall_now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)).isoformat(),
     }
 
