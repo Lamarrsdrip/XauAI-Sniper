@@ -1000,7 +1000,13 @@ function M30ConsensusCard({ events, heartbeat }) {
               <div><div className="text-white/35">Timer</div><div className="mt-0.5 font-mono text-white/80">{Math.round(c.timer_elapsed_seconds ?? 0)}s / {Math.round(c.timer_duration_seconds ?? 0)}s</div></div>
               <div><div className="text-white/35">Remaining</div><div className="mt-0.5 font-mono text-white/80">{Math.round(c.timer_remaining_seconds ?? 0)}s</div></div>
               <div><div className="text-white/35">Origin price</div><div className="mt-0.5 font-mono text-white/80">{c.origin_price != null ? Number(c.origin_price).toFixed(2) : "—"}</div></div>
-              <div><div className="text-white/35">Move since origin</div><div className="mt-0.5 font-mono text-white/80">{c.move_r_since_origin != null ? `${Number(c.move_r_since_origin).toFixed(2)}R` : "—"}</div></div>
+              {/* v6.26.0: move_r_since_origin arrives from the EA's own raw
+                  telemetry JSON as a risk-scaled multiple (representation-
+                  only migration, same x100 R-to-pips convention as every
+                  other threshold) -- converted at display time since this
+                  is a pass-through activity field, never re-picked-apart
+                  server-side. */}
+              <div><div className="text-white/35">Move since origin</div><div className="mt-0.5 font-mono text-white/80">{c.move_r_since_origin != null ? `${(Number(c.move_r_since_origin) * 100).toFixed(1)} pips` : "—"}</div></div>
             </div>
             <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-white/35">
               <span className={pill("neutral")}>Structural SL: {(c.structural_sl_status || "").replace(/_/g, " ").toLowerCase() || "unavailable"}</span>
@@ -1328,7 +1334,7 @@ function AnalyticsPage({ heartbeat, events, equityPoints, analytics }) {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Metric label="Win rate"      value={sufficient?pct(analytics.win_rate):"—"}         detail={sufficient?`${analytics.verified_trade_count} verified trades`:"Not enough data"} icon={TrendingUp}       tone={sufficient&&analytics.win_rate>=50?"green":"amber"} />
         <Metric label="Profit factor" value={sufficient?analytics.profit_factor.toFixed(2):"—"} detail="Gross profit / gross loss"                                                       icon={CircleDollarSign} tone={sufficient&&analytics.profit_factor>=1?"green":"red"} />
-        <Metric label="Avg R"         value={sufficient&&analytics.avg_r!=null?`${analytics.avg_r.toFixed(2)}R`:"—"} detail="Average realized R-multiple"                                icon={Gauge}            tone="neutral" />
+        <Metric label="Avg pips"      value={sufficient&&analytics.avg_pips!=null?`${analytics.avg_pips.toFixed(1)} pips`:"—"} detail="Average realized result"                          icon={Gauge}            tone="neutral" />
         <Metric label="Max drawdown"  value={sufficient?money(analytics.max_drawdown):"—"}    detail="Peak-to-trough, verified history"                                                icon={Shield}           tone={sufficient&&analytics.max_drawdown>0?"amber":"neutral"} />
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

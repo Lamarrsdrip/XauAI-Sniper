@@ -6163,6 +6163,37 @@ async def cloud_performance_analytics(user: dict = Depends(get_cloud_user)):
     r_values = [float(t.get("final_r") or 0) for t in trades if float(t.get("original_risk_usd") or 0) > 0]
     mae_values = [float(t.get("mae_r") or 0) for t in trades if t.get("mae_r")]
     mfe_values = [float(t.get("mfe_r") or 0) for t in trades if t.get("mfe_r")]
+    # v6.26.0 Phase 1/4/6 owner directive -- no bare customer-facing R.
+    # Derives each trade's own real risk distance from its own real entry/
+    # exit prices and final_r (same method as migrations/0003_backfill_
+    # pips_gold_moves.py), then converts through the single authoritative
+    # build_result_conversion(), never a fabricated/assumed distance.
+    import market_outlook as _mo_analytics
+    pips_values, mae_pips_values, mfe_pips_values = [], [], []
+    for t in trades:
+        entry = float(t.get("entry_price") or 0)
+        exit_px = float(t.get("price") or 0)
+        final_r = float(t.get("final_r") or 0)
+        direction = str(t.get("direction") or "").upper()
+        if entry <= 0 or exit_px <= 0 or final_r == 0 or direction not in ("BUY", "SELL"):
+            continue
+        price_move = (exit_px - entry) if direction == "BUY" else (entry - exit_px)
+        risk_distance = price_move / final_r
+        if risk_distance <= 0:
+            continue
+        conv = _mo_analytics.build_result_conversion(r=final_r, risk_distance=risk_distance)
+        if conv["result_pips"] is not None:
+            pips_values.append(conv["result_pips"])
+        mae_r_val = t.get("mae_r")
+        if mae_r_val:
+            mae_conv = _mo_analytics.build_result_conversion(r=float(mae_r_val), risk_distance=risk_distance)
+            if mae_conv["result_pips"] is not None:
+                mae_pips_values.append(mae_conv["result_pips"])
+        mfe_r_val = t.get("mfe_r")
+        if mfe_r_val:
+            mfe_conv = _mo_analytics.build_result_conversion(r=float(mfe_r_val), risk_distance=risk_distance)
+            if mfe_conv["result_pips"] is not None:
+                mfe_pips_values.append(mfe_conv["result_pips"])
 
     def _breakdown(key: str) -> dict:
         buckets: Dict[str, Dict[str, float]] = {}
@@ -6204,9 +6235,15 @@ async def cloud_performance_analytics(user: dict = Depends(get_cloud_user)):
         "realized_pnl": round(sum(profits), 2),
         "win_rate": round(len(closed_wins) / total * 100, 1),
         "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else (round(gross_profit, 2) if gross_profit > 0 else 0),
+        # v6.26.0: *_r kept for forensic/internal use only (archived, never
+        # deleted, per the migration's non-destructive rule) -- the *_pips
+        # fields are what the customer-facing Command Center must display.
         "avg_r": round(sum(r_values) / len(r_values), 3) if r_values else None,
         "avg_mae_r": round(sum(mae_values) / len(mae_values), 3) if mae_values else None,
         "avg_mfe_r": round(sum(mfe_values) / len(mfe_values), 3) if mfe_values else None,
+        "avg_pips": round(sum(pips_values) / len(pips_values), 1) if pips_values else None,
+        "avg_mae_pips": round(sum(mae_pips_values) / len(mae_pips_values), 1) if mae_pips_values else None,
+        "avg_mfe_pips": round(sum(mfe_pips_values) / len(mfe_pips_values), 1) if mfe_pips_values else None,
         "max_drawdown": round(max_drawdown, 2),
         "avg_win": round(sum(winning_profits) / len(winning_profits), 2) if winning_profits else 0,
         "avg_loss": round(sum(losing_profits) / len(losing_profits), 2) if losing_profits else 0,
