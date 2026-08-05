@@ -81,6 +81,29 @@ ROOM_COLLAPSE_R = 0.3      # same threshold the EA's readiness engine uses -- in
 # calculation -- see build_result_conversion() below.
 XAUCLOUD_PIPS_PER_GOLD_MOVE = 10
 
+# Owner-approved fixed XauCloud TP grid (root-cause audit + fix, 2026-08-05):
+# TP1/TP2 are always the signal's own entry price +/- these fixed Gold-move
+# distances -- never ATR/thesis/remaining-room-derived -- so "+0.50R (TP1)"
+# above is an exact fact about the stored tp1_price, not an approximation
+# that can silently drift from what the R value implies. risk_distance is
+# pinned to this same fixed 10.00 Gold-move unit for every Outlook-tracked
+# BUY/SELL signal, so current_r/mfe_r/mae_r/analytics_r are always expressed
+# in this one fixed unit too (real SL price/geometry is untouched -- see
+# original_sl -- risk_distance here is only the R<->price conversion unit,
+# never used for stop-loss touch detection, which always compares raw
+# executable prices directly).
+XAUCLOUD_R_UNIT_GOLD_MOVES = 10.0
+XAUCLOUD_TP1_GOLD_MOVES = 5.0
+XAUCLOUD_TP2_GOLD_MOVES = 10.0
+
+# A signal that ends its 60-minute evaluation window within this many R of
+# its own entry counts as BREAK_EVEN rather than a genuine LOSS. The owner's
+# classification policy names BREAK_EVEN as "finished around entry within
+# the defined tolerance" without giving a specific number -- this is that
+# tolerance, named explicitly so it is a single visible knob, not a magic
+# number buried in a comparison.
+BREAK_EVEN_R_TOLERANCE = 0.05
+
 
 def build_result_conversion(
     r: Optional[float] = None, price_move: Optional[float] = None, risk_distance: Optional[float] = None,
@@ -111,7 +134,8 @@ PRIMARY_DIRECTIONS = ("BUY", "SELL", "NEUTRAL", "RANGE", "TRANSITION", "NO_VALID
 EXPECTED_PATHS = ("PULLBACK_FIRST_THEN_BUY", "RALLY_FIRST_THEN_SELL", "DIRECT_CONTINUATION",
                   "RANGE_ROTATION", "REVERSAL_FORMING", "NO_CLEAR_PATH")
 LIFECYCLE_STATES = ("INFORMATIONAL", "TRACKING_AMBER", "WIN_GREEN_0_5R",
-                    "WIN_GREEN_TP1", "LOSS_RED_SL", "LOSS_RED_TIMEOUT")
+                    "WIN_GREEN_TP1", "LOSS_RED_SL", "LOSS_RED_TIMEOUT",
+                    "PARTIAL_PROFIT", "BREAK_EVEN")
 
 # ---------------------------------------------------------------------------
 # Owner-approved permanent M10 category policy -- the single shared engine
@@ -173,7 +197,8 @@ def evaluate_owner_policy(canonical_m10: Dict) -> Dict:
         "grade": (canonical_m10 or {}).get("grade"),
     }
 FINAL_RESULTS = ("WIN_GREEN_0_5R", "WIN_GREEN_TP1", "LOSS_RED_SL",
-                 "LOSS_RED_TIMEOUT", "HISTORICAL_DATA_UNAVAILABLE")
+                 "LOSS_RED_TIMEOUT", "PARTIAL_PROFIT", "BREAK_EVEN",
+                 "HISTORICAL_DATA_UNAVAILABLE")
 NOTIFICATION_TIERS = ("OFF", "HOURLY_ONLY", "HOURLY_PLUS_RESULTS", "ALL_UPDATES")
 MILESTONES = ("TRACKING_STARTED", "HALF_R_REACHED", "TP1_HIT", "TP2_HIT",
               "TP3_HIT", "SL_HIT", "TIMEOUT_60M")
@@ -184,9 +209,28 @@ SIGNAL_WIN_HALF_R = "WIN_GREEN_0_5R"
 SIGNAL_WIN_TP1 = "WIN_GREEN_TP1"
 SIGNAL_LOSS_SL = "LOSS_RED_SL"
 SIGNAL_LOSS_TIMEOUT = "LOSS_RED_TIMEOUT"
+# Root-cause fix (2026-08-05): the 60-minute deadline used to force EVERY
+# signal that hadn't touched a TP into LOSS_RED_TIMEOUT, even one that was
+# genuinely positive (e.g. +0.15R / +2.56 Gold moves) -- that is the exact
+# "profitable signal marked as a loss" defect. These two states let the
+# deadline branch tell the truth: a signal that closed positive-but-short-
+# of-TP1 is PARTIAL_PROFIT, one that closed within BREAK_EVEN_R_TOLERANCE of
+# entry is BREAK_EVEN, and only a genuinely negative close is still LOSS.
+SIGNAL_PARTIAL_PROFIT = "PARTIAL_PROFIT"
+SIGNAL_BREAK_EVEN = "BREAK_EVEN"
+# Every terminal state a 60-minute-deadline classification can produce --
+# used to recognize "already timed out, only path metadata can still change"
+# without re-listing all three at every call site.
+TIMEOUT_TERMINAL_STATES = (SIGNAL_LOSS_TIMEOUT, SIGNAL_PARTIAL_PROFIT, SIGNAL_BREAK_EVEN)
 ANALYTICS_WIN = "WIN"
 ANALYTICS_LOSS = "LOSS"
+ANALYTICS_PARTIAL = "PARTIAL_PROFIT"
+ANALYTICS_BREAKEVEN = "BREAK_EVEN"
 ANALYTICS_UNAVAILABLE = "HISTORICAL_DATA_UNAVAILABLE"
+# Every outcome a signal's 60-minute window can resolve to, including the
+# two new non-binary ones -- used wherever "genuinely completed" needs to
+# mean more than just WIN/LOSS (public stats, history stats, revision audit).
+ANALYTICS_TERMINAL_OUTCOMES = (ANALYTICS_WIN, ANALYTICS_LOSS, ANALYTICS_PARTIAL, ANALYTICS_BREAKEVEN)
 
 OUTLOOK_ACTIONABLE = "ACTIONABLE_SIGNAL"
 OUTLOOK_WATCHING = "WATCHING"
@@ -898,6 +942,17 @@ def _build_tracking_anchor(direction: str, bid: Any, ask: Any, original_sl: Any)
     BUY opens at Ask and is immediately valued at Bid. SELL opens at Bid and
     is immediately valued at Ask. Directionally invalid SL geometry is
     rejected rather than hidden behind ``abs()``.
+
+    ``risk_distance`` is stored as the fixed XAUCLOUD_R_UNIT_GOLD_MOVES unit
+    (owner-approved fixed TP grid, 2026-08-05), not the real SL distance --
+    it exists purely as the R<->price conversion unit every consumer
+    (build_result_conversion, public stats, notifications, the frontend's
+    own mirrored conversion) already reads, so current_r/mfe_r/mae_r and TP1
+    (+0.50R) / TP2 (+1.00R) always agree by construction. The real SL
+    distance is still checked here as a geometry sanity gate (an SL sitting
+    on top of/past entry is rejected), and the real SL *price* is preserved
+    unchanged in original_sl for genuine stop-loss touch detection -- only
+    this numeric risk_distance figure stops being SL-derived.
     """
     try:
         direction = str(direction or "").upper()
@@ -912,15 +967,15 @@ def _build_tracking_anchor(direction: str, bid: Any, ask: Any, original_sl: Any)
     geometry_valid = sl < entry if direction == "BUY" else sl > entry
     if not geometry_valid:
         return None
-    risk = abs(entry - sl)
-    if risk <= 0.0:
+    if abs(entry - sl) <= 0.0:
         return None
     close_price = bid if direction == "BUY" else ask
-    current_r = ((close_price - entry) / risk) if direction == "BUY" else ((entry - close_price) / risk)
+    current_r = ((close_price - entry) / XAUCLOUD_R_UNIT_GOLD_MOVES) if direction == "BUY" \
+        else ((entry - close_price) / XAUCLOUD_R_UNIT_GOLD_MOVES)
     return {
         "tracking_entry_price": entry,
         "original_sl": sl,
-        "risk_distance": risk,
+        "risk_distance": XAUCLOUD_R_UNIT_GOLD_MOVES,
         "current_r": round(current_r, 6),
         "mfe_r": round(max(0.0, current_r), 6),
         "mae_r": round(min(0.0, current_r), 6),
@@ -930,6 +985,23 @@ def _build_tracking_anchor(direction: str, bid: Any, ask: Any, original_sl: Any)
         "last_ask": ask,
         "last_tracked_price": close_price,
     }
+
+
+def _fixed_tp_prices(direction: str, entry: float) -> tuple:
+    """The owner-approved fixed XauCloud TP grid, calculated from the
+    signal's own official entry price -- never ATR/thesis/remaining-room-
+    derived. TP1 = +0.50R (+5.00 Gold moves), TP2 = +1.00R (+10.00 Gold
+    moves). TP3 is not part of the owner's TP1/TP2 grid (no dedicated WIN
+    tier of its own) -- it stays a further informational upside marker,
+    pinned at double TP2's distance so the TP1<=TP2<=TP3 ladder this
+    module's geometry validation requires is always monotonic.
+    """
+    sign = 1.0 if str(direction or "").upper() == "BUY" else -1.0
+    entry = float(entry or 0.0)
+    tp1 = round(entry + sign * XAUCLOUD_TP1_GOLD_MOVES, 2)
+    tp2 = round(entry + sign * XAUCLOUD_TP2_GOLD_MOVES, 2)
+    tp3 = round(entry + sign * (XAUCLOUD_TP2_GOLD_MOVES * 2.0), 2)
+    return tp1, tp2, tp3
 
 
 def _targets_have_valid_geometry(direction: str, entry: Any, tp1: Any, tp2: Any, tp3: Any) -> bool:
@@ -1319,6 +1391,22 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
     actionable = direction_label in ("BUY", "SELL")
     original_sl = zone.get("suggested_sl")
     tracking_anchor = _build_tracking_anchor(direction_label, published_bid, published_ask, original_sl) if actionable else None
+    if actionable and tracking_anchor:
+        # Owner-approved fixed TP grid (root-cause audit, 2026-08-05):
+        # overrides whatever ATR/thesis-derived tp1_price/tp2_price/tp3_price
+        # `zone` computed above with the fixed +5.00/+10.00 Gold-move ladder,
+        # calculated from the real executable tracking entry -- never the
+        # EA's own structural TP fields or the preview zone's ATR math. This
+        # is what actually gets persisted and is therefore what
+        # advance_persisted_signal checks for a genuine TP touch; leaving the
+        # old per-signal-variable ladder in place is what let a signal sit
+        # well into real profit without ever reaching a TP that could be
+        # 1-2R away, so the 60-minute deadline always found "no TP touched".
+        fixed_tp1, fixed_tp2, fixed_tp3 = _fixed_tp_prices(direction_label, tracking_anchor["tracking_entry_price"])
+        zone = {**zone,
+                "tp1_price": fixed_tp1, "tp1_r": HALF_R_WIN_THRESHOLD,
+                "tp2_price": fixed_tp2, "tp2_r": 1.0,
+                "tp3_price": fixed_tp3, "tp3_r": 2.0}
     quote_age_seconds = (now - published_quote_dt).total_seconds() if published_quote_dt else None
     quote_fresh = (quote_age_seconds is not None
                    and -MAX_PUBLICATION_QUOTE_FUTURE_SKEW_SECONDS <= quote_age_seconds <= MAX_PUBLICATION_QUOTE_AGE_SECONDS)
@@ -1766,7 +1854,7 @@ def _signal_events_present(doc: Dict) -> list:
                          ("sl_hit_at", "SL_HIT")):
         if doc.get(field):
             events.append(event)
-    if doc.get("signal_state") == SIGNAL_LOSS_TIMEOUT:
+    if doc.get("signal_state") in TIMEOUT_TERMINAL_STATES:
         events.append("TIMEOUT_60M")
     return events
 
@@ -1925,9 +2013,24 @@ def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[floa
             # use the executable tracking anchor, never the suggested-zone R.
             analytics_r = round(current_r, 6)
         elif deadline and observed_at >= deadline:
-            outcome, new_state, latest_path = ANALYTICS_LOSS, SIGNAL_LOSS_TIMEOUT, "NO_TP_WITHIN_60M"
+            # Root-cause fix (2026-08-05): this branch used to assign
+            # ANALYTICS_LOSS unconditionally just because no TP had been
+            # touched -- the exact bug that labeled a genuinely +0.15R/
+            # +2.56-Gold-move signal a LOSS. "No TP touched" and "the signal
+            # lost money" are different facts; only the achieved R at the
+            # deadline itself can tell them apart. A signal that is
+            # meaningfully positive but short of TP1 is PARTIAL_PROFIT, one
+            # that is within BREAK_EVEN_R_TOLERANCE of entry is BREAK_EVEN,
+            # and only a genuinely negative close is still LOSS.
+            deadline_r = round(current_r if observed_at <= deadline else prior_current_r, 6)
+            if deadline_r > BREAK_EVEN_R_TOLERANCE:
+                outcome, new_state, latest_path = ANALYTICS_PARTIAL, SIGNAL_PARTIAL_PROFIT, "PARTIAL_PROFIT_BELOW_TP1"
+            elif deadline_r < -BREAK_EVEN_R_TOLERANCE:
+                outcome, new_state, latest_path = ANALYTICS_LOSS, SIGNAL_LOSS_TIMEOUT, "NO_TP_WITHIN_60M"
+            else:
+                outcome, new_state, latest_path = ANALYTICS_BREAKEVEN, SIGNAL_BREAK_EVEN, "BREAK_EVEN_AT_60M"
             classification_at = deadline.isoformat()
-            analytics_r = round(current_r if observed_at <= deadline else prior_current_r, 6)
+            analytics_r = deadline_r
             timeout_classified_now = True
             if "TIMEOUT_60M" not in milestones:
                 milestones.append("TIMEOUT_60M")
@@ -1961,7 +2064,11 @@ def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[floa
             analytics_r = round(current_r, 6)
         elif sl_hit:
             latest_path = "LATER_SL_AFTER_WIN"
-    elif outcome == ANALYTICS_LOSS and doc.get("signal_state") == SIGNAL_LOSS_TIMEOUT:
+    elif outcome in (ANALYTICS_LOSS, ANALYTICS_PARTIAL, ANALYTICS_BREAKEVEN) and doc.get("signal_state") in TIMEOUT_TERMINAL_STATES:
+        # Already classified at the 60-minute deadline (LOSS, PARTIAL_PROFIT,
+        # or BREAK_EVEN). A TP touch after that point is recorded as path
+        # metadata only, same as it always was for LOSS_RED_TIMEOUT -- the
+        # frozen outcome/R from the deadline itself is never reopened.
         if tp3_hit and not doc.get("tp3_hit_at"):
             latest_path = "LATE_TP3_AFTER_60M"
         elif tp2_hit and not doc.get("tp2_hit_at"):
@@ -1993,7 +2100,13 @@ def advance_persisted_signal(doc: Dict, bid: Optional[float], ask: Optional[floa
         "resolved_at": classification_at,
         "latest_path_event": latest_path,
         "status": "TRACKING" if outcome is None else latest_path,
-        "color_state": "GREEN" if outcome == ANALYTICS_WIN else "RED" if outcome == ANALYTICS_LOSS else "AMBER",
+        "color_state": (
+            "GREEN" if outcome == ANALYTICS_WIN else
+            "RED" if outcome == ANALYTICS_LOSS else
+            "BLUE" if outcome == ANALYTICS_PARTIAL else
+            "TEAL" if outcome == ANALYTICS_BREAKEVEN else
+            "AMBER"
+        ),
         "milestones_hit": milestones,
     })
     if snapshots_changed:
@@ -2121,7 +2234,7 @@ async def track_outlook_lifecycle_tick(account: str = "", bid: Optional[float] =
                         doc["id"], "analytics_outcome", doc.get("analytics_outcome"),
                         merged.get("analytics_outcome"), merged.get("latest_path_event", "signal classified"),
                     )
-                if merged.get("analytics_outcome") in (ANALYTICS_WIN, ANALYTICS_LOSS):
+                if merged.get("analytics_outcome") in ANALYTICS_TERMINAL_OUTCOMES:
                     await _persist_signal_outcome(merged)
                 updated_count += 1
                 committed = (merged, list(dict.fromkeys(events)))
@@ -2167,7 +2280,7 @@ async def _record_revision(outlook_id: str, field: str, previous_value: Any, new
 
 
 async def _persist_signal_outcome(doc: Dict) -> None:
-    if doc.get("analytics_outcome") not in (ANALYTICS_WIN, ANALYTICS_LOSS):
+    if doc.get("analytics_outcome") not in ANALYTICS_TERMINAL_OUTCOMES:
         return
     outcome_doc = {
         "outlook_id": doc["id"], "account": doc.get("account"),
@@ -2232,7 +2345,7 @@ async def dispatch_pending_signal_notifications() -> int:
         {"tp2_hit_at": {"$ne": None}, "notification_flags.TP2_HIT": {"$exists": False}},
         {"tp3_hit_at": {"$ne": None}, "notification_flags.TP3_HIT": {"$exists": False}},
         {"sl_hit_at": {"$ne": None}, "notification_flags.SL_HIT": {"$exists": False}},
-        {"signal_state": SIGNAL_LOSS_TIMEOUT, "notification_flags.TIMEOUT_60M": {"$exists": False}},
+        {"signal_state": {"$in": list(TIMEOUT_TERMINAL_STATES)}, "notification_flags.TIMEOUT_60M": {"$exists": False}},
     ]
     rows = db.cloud_market_outlooks.find({
         "tracking_entry_price": {"$gt": 0}, "$or": pending_event_conditions,
@@ -2269,7 +2382,7 @@ async def backfill_signal_outlook_history(limit: int = 500) -> Dict[str, int]:
         "signal_tracking_version": {"$ne": 2},
     }, {"_id": 0}).sort("generated_at", 1).to_list(limit)
     report = {"examined": len(legacy), "reconstructed": 0, "wins": 0, "losses": 0,
-              "active": 0, "unavailable": 0}
+              "partial_profits": 0, "breakevens": 0, "active": 0, "unavailable": 0}
     for old in legacy:
         published = _as_utc(old.get("published_at") or old.get("generated_at"))
         sl = float(old.get("original_sl", old.get("suggested_sl", 0.0)) or 0.0)
@@ -2310,20 +2423,27 @@ async def backfill_signal_outlook_history(limit: int = 500) -> Dict[str, int]:
             await _mark_history_unavailable(old, "publication quote and original SL have invalid directional geometry")
             report["unavailable"] += 1
             continue
-        if not _targets_have_valid_geometry(
-            direction, tracking_anchor["tracking_entry_price"],
-            old.get("tp1_price"), old.get("tp2_price"), old.get("tp3_price"),
-        ):
-            await _mark_history_unavailable(old, "published TP ladder has invalid directional geometry")
-            report["unavailable"] += 1
-            continue
         entry = tracking_anchor["tracking_entry_price"]
         risk = tracking_anchor["risk_distance"]
+        # Root-cause fix (2026-08-05): reconstructed history must be judged
+        # against the owner-approved fixed TP1(+0.50R)/TP2(+1.00R) grid
+        # calculated from this record's own entry price, never the stale
+        # ATR/thesis-derived tp1_price/tp2_price it happened to publish with
+        # -- otherwise a legacy signal could still get judged against a TP
+        # that was actually 1-2R away and wrongly time out.
+        fixed_tp1, fixed_tp2, fixed_tp3 = _fixed_tp_prices(direction, entry)
+        if not _targets_have_valid_geometry(direction, entry, fixed_tp1, fixed_tp2, fixed_tp3):
+            await _mark_history_unavailable(old, "reconstructed entry price and fixed TP grid have invalid directional geometry")
+            report["unavailable"] += 1
+            continue
 
         working = {**old,
             "published_at": published.isoformat(), "published_bid": anchor_bid, "published_ask": anchor_ask,
             "published_spread": anchor_ask - anchor_bid, "published_quote_at": anchor_at.isoformat(),
             "tracking_entry_price": entry, "original_sl": sl, "risk_distance": risk,
+            "tp1_price": fixed_tp1, "tp2_price": fixed_tp2, "tp3_price": fixed_tp3,
+            "legacy_tp1_price_before_repair": old.get("tp1_price"),
+            "legacy_tp2_price_before_repair": old.get("tp2_price"),
             "evaluation_deadline": deadline.isoformat(), "signal_tracking_version": 2,
             "signal_state": SIGNAL_TRACKING, "analytics_outcome": None, "analytics_r": None,
             "current_r": tracking_anchor["current_r"],
@@ -2374,7 +2494,7 @@ async def backfill_signal_outlook_history(limit: int = 500) -> Dict[str, int]:
             q_bid, q_ask = _quote_from_activity(row)
             update, _ = advance_persisted_signal(working, q_bid, q_ask, ts)
             working.update(update)
-            if working.get("signal_state") == SIGNAL_LOSS_TIMEOUT and not coverage_reliable:
+            if working.get("signal_state") in TIMEOUT_TERMINAL_STATES and not coverage_reliable:
                 await _mark_history_unavailable(old, "stored quotes do not reliably cover the full 60-minute window")
                 report["unavailable"] += 1
                 repair_unavailable = True
@@ -2402,6 +2522,8 @@ async def backfill_signal_outlook_history(limit: int = 500) -> Dict[str, int]:
         report["reconstructed"] += 1
         if working.get("analytics_outcome") == ANALYTICS_WIN: report["wins"] += 1
         elif working.get("analytics_outcome") == ANALYTICS_LOSS: report["losses"] += 1
+        elif working.get("analytics_outcome") == ANALYTICS_PARTIAL: report["partial_profits"] += 1
+        elif working.get("analytics_outcome") == ANALYTICS_BREAKEVEN: report["breakevens"] += 1
         else: report["active"] += 1
     await db.cloud_market_outlook_repair_runs.insert_one({
         "id": repair_run_id,
@@ -2414,27 +2536,43 @@ async def backfill_signal_outlook_history(limit: int = 500) -> Dict[str, int]:
 
 
 async def audit_v2_signal_classifications(limit: int = 500, apply: bool = False) -> Dict[str, Any]:
-    """Re-derives the WIN/LOSS classification of already-resolved
+    """Re-derives the classification of already-resolved
     signal_tracking_version=2 signals from their OWN stored broker quote
     history, using today's advance_persisted_signal rules, and reports any
     disagreement with what is currently stored.
 
-    Why this exists (owner audit, 2026-08-04): before the TP/SL priority
-    fix documented in advance_persisted_signal's own docstring, touching SL
-    immediately locked a signal in as LOSS and stopped monitoring, even if
-    price went on to hit TP1/TP2/TP3 later in the same evaluation window.
-    That fix only changed live/future classification --
-    backfill_signal_outlook_history() only reconstructs pre-v2-schema
-    records, never records that were already signal_tracking_version=2 when
-    the fix landed. This is the missing piece: replay each resolved v2
-    signal's own stored quotes through today's rules and check whether the
-    stored result still holds.
+    Why this exists (owner audit, 2026-08-04, extended 2026-08-05): before
+    the TP/SL priority fix documented in advance_persisted_signal's own
+    docstring, touching SL immediately locked a signal in as LOSS and
+    stopped monitoring, even if price went on to hit TP1/TP2/TP3 later in
+    the same evaluation window. That fix only changed live/future
+    classification -- backfill_signal_outlook_history() only reconstructs
+    pre-v2-schema records, never records that were already
+    signal_tracking_version=2 when the fix landed. This is the missing
+    piece: replay each resolved v2 signal's own stored quotes through
+    today's rules and check whether the stored result still holds.
+
+    2026-08-05 extension (root-cause audit: profitable signals marked
+    LOSS): a second, independent bug compounds with the first -- every
+    pre-fix record was also classified against its OWN ATR/thesis-derived
+    tp1_price/tp2_price and SL-distance-based risk_distance, not the
+    owner-approved fixed +5.00/+10.00-Gold-move grid. Re-deriving a fair
+    result for these records means replaying under BOTH the corrected
+    TP/SL priority rule AND the corrected fixed TP grid/R unit --
+    `working` below is seeded with a fixed-grid tp1/tp2/tp3 (computed from
+    the record's own immutable tracking_entry_price, never its stale stored
+    TP prices) and risk_distance forced to XAUCLOUD_R_UNIT_GOLD_MOVES, so a
+    signal that only ever reached +0.15R under the old ATR-derived ladder
+    is judged against the real, owner-approved TP1/TP2 prices instead.
 
     Dry-run by default (apply=False): never writes anything, only reports.
     A record whose stored quote history isn't dense/complete enough to
     trust a re-derivation (same coverage bar backfill already enforces) is
     reported as insufficient_evidence and left untouched either way --
-    never guessed in either direction.
+    never guessed in either direction. This is this system's AMBIGUOUS
+    case (tick order/coverage cannot be trusted): excluded from
+    corrections and therefore from public win/loss statistics, never
+    silently guessed toward either outcome.
     """
     db = _db()
     now = datetime.now(timezone.utc)
@@ -2442,7 +2580,7 @@ async def audit_v2_signal_classifications(limit: int = 500, apply: bool = False)
     resolved = await db.cloud_market_outlooks.find({
         "signal_tracking_version": 2,
         "primary_direction": {"$in": ["BUY", "SELL"]},
-        "analytics_outcome": {"$in": [ANALYTICS_WIN, ANALYTICS_LOSS]},
+        "analytics_outcome": {"$in": list(ANALYTICS_TERMINAL_OUTCOMES)},
     }, {"_id": 0}).sort("published_at", 1).to_list(limit)
 
     report: Dict[str, Any] = {
@@ -2488,10 +2626,11 @@ async def audit_v2_signal_classifications(limit: int = 500, apply: bool = False)
             report["insufficient_evidence"] += 1
             continue
 
+        fixed_tp1, fixed_tp2, fixed_tp3 = _fixed_tp_prices(direction, entry)
         working: Dict[str, Any] = {
             "primary_direction": direction, "tracking_entry_price": entry, "original_sl": sl,
-            "risk_distance": risk, "evaluation_deadline": deadline.isoformat(),
-            "tp1_price": old.get("tp1_price"), "tp2_price": old.get("tp2_price"), "tp3_price": old.get("tp3_price"),
+            "risk_distance": XAUCLOUD_R_UNIT_GOLD_MOVES, "evaluation_deadline": deadline.isoformat(),
+            "tp1_price": fixed_tp1, "tp2_price": fixed_tp2, "tp3_price": fixed_tp3,
             "signal_state": SIGNAL_TRACKING, "analytics_outcome": None, "analytics_r": None,
             "current_r": 0.0, "mfe_r": 0.0, "mae_r": 0.0,
             "highest_tracked_price": entry, "lowest_tracked_price": entry,
@@ -2527,7 +2666,10 @@ async def audit_v2_signal_classifications(limit: int = 500, apply: bool = False)
             "stored_highest_tp_reached": old.get("highest_tp_reached"),
             "replayed_outcome": replayed_outcome, "replayed_r": replayed_r,
             "replayed_highest_tp_reached": working.get("highest_tp_reached"),
-            "reason": "stored classification disagrees with a re-derivation from the same stored quotes under the current (post-fix) TP/SL priority rule",
+            "replayed_tp1_price": fixed_tp1, "replayed_tp2_price": fixed_tp2,
+            "reason": ("stored classification disagrees with a re-derivation from the same stored quotes under "
+                       "the current (post-fix) TP/SL priority rule and the owner-approved fixed TP1(+0.50R)/"
+                       "TP2(+1.00R) grid, calculated from this record's own entry price"),
         }
         report["corrections_found"] += 1
         report["corrections"].append(correction)
@@ -2544,6 +2686,15 @@ async def audit_v2_signal_classifications(limit: int = 500, apply: bool = False)
                 "monitoring_closed": working.get("monitoring_closed"),
                 "event_snapshots": working.get("event_snapshots"), "milestones_hit": working.get("milestones_hit"),
                 "signal_state": working.get("signal_state"),
+                # The record's displayed TP ladder/R unit must match what it
+                # was actually just judged against -- otherwise the card
+                # would show a corrected result next to a stale ATR-derived
+                # TP1/TP2 price that never explains it.
+                "tp1_price": fixed_tp1, "tp2_price": fixed_tp2, "tp3_price": fixed_tp3,
+                "risk_distance": XAUCLOUD_R_UNIT_GOLD_MOVES,
+                "legacy_tp1_price_before_reclassification_audit": old.get("tp1_price"),
+                "legacy_tp2_price_before_reclassification_audit": old.get("tp2_price"),
+                "legacy_risk_distance_before_reclassification_audit": old.get("risk_distance"),
                 "reclassification_audit_run_id": audit_run_id,
                 "legacy_classification_before_reclassification_audit": stored_outcome,
                 "legacy_r_before_reclassification_audit": old.get("analytics_r"),

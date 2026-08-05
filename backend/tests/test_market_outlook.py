@@ -189,7 +189,13 @@ def test_publication_anchor_uses_buy_ask_and_sell_bid_never_zone_midpoint():
 def test_original_risk_uses_exact_anchor_and_original_published_sl():
     src = _outlook_gen_body()
     helper = MO_SRC[MO_SRC.index("def _build_tracking_anchor"):MO_SRC.index("async def _insert_outlook_atomically")]
-    assert "risk = abs(entry - sl)" in helper
+    # Root-cause fix (2026-08-05): risk_distance is now the fixed
+    # XAUCLOUD_R_UNIT_GOLD_MOVES conversion unit, not abs(entry - sl) -- the
+    # real SL distance is still validated as a geometry sanity gate here
+    # (an SL sitting on/past entry is rejected), just no longer assigned to
+    # a numeric "risk" used for R math.
+    assert "abs(entry - sl) <= 0.0" in helper
+    assert '"risk_distance": XAUCLOUD_R_UNIT_GOLD_MOVES' in helper
     assert 'geometry_valid = sl < entry if direction == "BUY" else sl > entry' in helper
     assert '"original_sl": original_sl if actionable else None' in src
     assert '"published_bid": published_bid if published_bid > 0 else None' in src
@@ -297,10 +303,16 @@ def test_historical_unavailable_is_explicit_and_excluded():
     assert mo.ANALYTICS_UNAVAILABLE == "HISTORICAL_DATA_UNAVAILABLE"
 
 
-def test_exact_60_minute_timeout_is_a_loss_for_actionable_signal():
+def test_exact_60_minute_timeout_can_still_be_a_loss_for_actionable_signal():
+    # Root-cause fix (2026-08-05): SIGNAL_LOSS_TIMEOUT is still a real,
+    # reachable outcome (a genuinely negative close at the deadline) -- it
+    # is just no longer the ONLY outcome the deadline branch can produce
+    # (see PARTIAL_PROFIT/BREAK_EVEN in the same branch).
     fn = MO_SRC[MO_SRC.index("def advance_persisted_signal"):]
     assert "observed_at >= deadline" in fn
     assert "SIGNAL_LOSS_TIMEOUT" in fn
+    assert "SIGNAL_PARTIAL_PROFIT" in fn
+    assert "SIGNAL_BREAK_EVEN" in fn
 
 
 # ---------------------------------------------------------------------------

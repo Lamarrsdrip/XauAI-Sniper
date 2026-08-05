@@ -131,6 +131,11 @@ def _idempotency_key(outlook_id: str, event: str, user_id: str) -> str:
 
 
 def _build_payload(doc: Dict, event: str) -> Dict:
+    # Lazy import: market_outlook.py itself imports this module (for
+    # send_outlook_notification), so a top-level import here would be
+    # circular -- same pattern this module's other market_outlook call
+    # sites already use.
+    import market_outlook as mo
     direction = doc.get("primary_direction", "NO_VALID_OUTLOOK")
     confidence = doc.get("confidence_pct", 0)
     deep_link = f"/ai-market-outlook?outlook_id={doc.get('id')}"
@@ -145,7 +150,13 @@ def _build_payload(doc: Dict, event: str) -> Dict:
     }.get(event) or signal_time
     hit_price = event_snapshot.get("hit_price") if "hit_price" in event_snapshot else doc.get("last_tracked_price")
     achieved_r = event_snapshot.get("achieved_r") if "achieved_r" in event_snapshot else doc.get("current_r")
-    timed_out = doc.get("analytics_outcome") == "LOSS" and doc.get("signal_state") == "LOSS_RED_TIMEOUT"
+    # "timed_out" here means "this event is being reported after the
+    # 60-minute deadline already classified the signal" -- true for all
+    # three deadline outcomes (LOSS/PARTIAL_PROFIT/BREAK_EVEN), not just
+    # LOSS, since a late TP/SL touch after any of them is still late path
+    # metadata, never a reclassification (see advance_persisted_signal).
+    timed_out = (doc.get("analytics_outcome") in ("LOSS", "PARTIAL_PROFIT", "BREAK_EVEN")
+                 and doc.get("signal_state") in ("LOSS_RED_TIMEOUT", "PARTIAL_PROFIT", "BREAK_EVEN"))
 
     if event == "TRACKING_STARTED":
         title = f"{direction} outlook tracking started"
@@ -155,8 +166,24 @@ def _build_payload(doc: Dict, event: str) -> Dict:
         late_text = " after its 60-minute deadline" if timed_out else ""
         body = f"Signal {signal_time} reached +0.50R{late_text} at {event_at} · entry {entry} · hit {hit_price} · R {achieved_r}"
     elif event == "TIMEOUT_60M":
-        title = f"{direction} outlook missed the 60-minute target"
-        body = f"Signal {signal_time} failed to reach +0.50R within 60 minutes · entry {entry} · last {hit_price} · R {achieved_r}"
+        # Root-cause fix (2026-08-05): this used to always read as a miss
+        # ("failed to reach +0.50R") even when the signal closed genuinely
+        # positive -- the same LOSS-mislabeling bug, just in the
+        # notification copy. The three deadline outcomes now get their own
+        # honest wording.
+        outcome = doc.get("analytics_outcome")
+        conversion = mo.build_result_conversion(r=achieved_r, risk_distance=doc.get("risk_distance"))
+        result_text = f"{achieved_r}R" if conversion.get("result_pips") is None else (
+            f"{conversion['result_pips']} pips / {conversion['result_gold_moves']} Gold moves / {conversion['result_r']}R")
+        if outcome == "PARTIAL_PROFIT":
+            title = f"{direction} outlook closed PARTIAL PROFIT"
+            body = f"Signal {signal_time} closed positive but below TP1 at {event_at} · entry {entry} · last {hit_price} · {result_text}"
+        elif outcome == "BREAK_EVEN":
+            title = f"{direction} outlook closed BREAK-EVEN"
+            body = f"Signal {signal_time} closed near entry at {event_at} · entry {entry} · last {hit_price} · {result_text}"
+        else:
+            title = f"{direction} outlook missed the 60-minute target"
+            body = f"Signal {signal_time} closed negative within 60 minutes · entry {entry} · last {hit_price} · {result_text}"
     elif event == "OUTLOOK_PUBLISHED":
         if direction in ("NO_VALID_OUTLOOK", "NEUTRAL", "RANGE", "TRANSITION"):
             title = "XAU AI Sniper — Hourly Outlook"
@@ -166,12 +193,35 @@ def _build_payload(doc: Dict, event: str) -> Dict:
             body = (f"{direction} outlook · {confidence}% confidence\n"
                    f"Entry: {doc.get('preferred_entry_zone_low')}–{doc.get('preferred_entry_zone_high')}\n"
                    f"SL: {doc.get('suggested_sl')} | TP1: {doc.get('tp1_price')} TP2: {doc.get('tp2_price')} TP3: {doc.get('tp3_price')}")
-    elif event in ("TP1_HIT", "TP2_HIT", "TP3_HIT"):
-        r_field = {"TP1_HIT": "tp1_r", "TP2_HIT": "tp2_r", "TP3_HIT": "tp3_r"}[event]
+    elif event in ("TP1_HIT", "TP2_HIT") and timed_out:
+        # A late TP touch after the deadline already froze a different
+        # result (LOSS/PARTIAL_PROFIT/BREAK_EVEN) is path metadata only --
+        # it must never be announced as if it were the genuine, on-time
+        # owner-format TP result below (that would misrepresent what the
+        # signal's card actually, permanently shows).
+        title = "XAU Outlook Late Path Event"
+        body = (f"Signal {signal_time} hit {event.replace('_HIT', '')} after its 60-minute deadline at "
+                f"{event_at} · entry {entry} · hit {hit_price} · R {achieved_r}")
+    elif event in ("TP1_HIT", "TP2_HIT"):
+        # Owner-approved exact notification content (2026-08-05): direction,
+        # entry, the fixed TP price, and the fixed canonical result
+        # (+50 pips/+5.00 Gold moves/+0.50R for TP1, +100/+10.00/+1.00R for
+        # TP2) -- never the live achieved_r at the moment of touch, since
+        # the owner's TP grid is fixed and this is what it means by
+        # definition, not an approximation of the tick that crossed it.
+        tp_number = "1" if event == "TP1_HIT" else "2"
+        tp_price = doc.get(f"tp{tp_number}_price")
+        fixed_pips = 50 if tp_number == "1" else 100
+        fixed_gold = 5.0 if tp_number == "1" else 10.0
+        fixed_r = 0.5 if tp_number == "1" else 1.0
+        title = f"XauCloud Outlook TP{tp_number} reached"
+        body = (f"{direction} · entry {entry} · TP{tp_number} {tp_price} · "
+                f"+{fixed_pips} pips · +{fixed_gold:.2f} Gold moves · +{fixed_r:.2f}R · touched at {event_at}")
+    elif event == "TP3_HIT":
         title = "XAU Outlook Late Path Event" if timed_out else "XAU Outlook Result"
         late_text = " after its 60-minute deadline" if timed_out else ""
-        body = (f"Signal {signal_time} hit {event.replace('_HIT', '')}{late_text} at {event_at} · "
-                f"entry {entry} · hit {hit_price} · R {achieved_r if achieved_r is not None else doc.get(r_field)}")
+        body = (f"Signal {signal_time} hit TP3{late_text} at {event_at} · "
+                f"entry {entry} · hit {hit_price} · R {achieved_r if achieved_r is not None else doc.get('tp3_r')}")
     elif event == "SL_HIT":
         title = "XAU Outlook Late Path Event" if timed_out else "XAU Outlook Result"
         late_text = " after its 60-minute deadline" if timed_out else ""

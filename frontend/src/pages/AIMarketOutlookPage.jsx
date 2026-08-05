@@ -21,6 +21,11 @@ const COLOR_STYLE = {
   RED: { border: "border-l-rose-400", text: "text-rose-300", bg: "bg-rose-300/[0.04]" },
   GRAY: { border: "border-l-white/25", text: "text-white/45", bg: "bg-white/[0.02]" },
   AMBER: { border: "border-l-amber-300", text: "text-amber-200", bg: "bg-amber-300/[0.04]" },
+  // PARTIAL_PROFIT / BREAK_EVEN (root-cause fix, 2026-08-05): distinct from
+  // GREEN/RED so a genuinely-positive-but-below-TP1 or near-entry close is
+  // never visually indistinguishable from a clean win or a real loss.
+  BLUE: { border: "border-l-sky-400", text: "text-sky-300", bg: "bg-sky-400/[0.04]" },
+  TEAL: { border: "border-l-teal-400", text: "text-teal-300", bg: "bg-teal-400/[0.04]" },
 };
 
 const DIRECTION_ICON = { BUY: ArrowUpRight, SELL: ArrowDownRight, NEUTRAL: Minus, RANGE: Minus, TRANSITION: Compass, NO_VALID_OUTLOOK: Minus };
@@ -79,11 +84,23 @@ function resultLabel(o) {
   if (o.primary_direction && !["BUY", "SELL"].includes(o.primary_direction)) {
     return "INFORMATIONAL UPDATE";
   }
-  if (o.signal_state === "TRACKING_AMBER") return "TRACKING · AWAITING +0.50R";
+  if (o.signal_state === "TRACKING_AMBER") return "TRACKING · AWAITING TP1";
   if (o.signal_state === "WIN_GREEN_0_5R") return "WIN · +0.50R HIT";
-  if (o.signal_state === "WIN_GREEN_TP1") return `WIN · TP${o.highest_tp_reached || 1} HIT`;
+  // Root-cause fix (2026-08-05): "TP{n} WIN" per the owner's exact
+  // classification naming -- highest_tp_reached already distinguishes
+  // TP1 from TP2/TP3, this only fixes the label text itself (was
+  // "WIN · TP{n} HIT").
+  if (o.signal_state === "WIN_GREEN_TP1") return `TP${o.highest_tp_reached || 1} WIN`;
   if (o.signal_state === "LOSS_RED_SL") return "LOSS · SL HIT";
-  if (o.signal_state === "LOSS_RED_TIMEOUT") return "LOSS · BELOW +0.50R AFTER 60 MIN";
+  // Root-cause fix (2026-08-05): LOSS_RED_TIMEOUT now only fires when the
+  // signal's own achieved R at the 60-minute deadline was genuinely
+  // negative -- a positive-but-below-TP1 close is PARTIAL_PROFIT below,
+  // never this branch, so this label no longer needs "BELOW +0.50R"
+  // framing (that was the actual mislabeling bug: it fired regardless of
+  // sign).
+  if (o.signal_state === "LOSS_RED_TIMEOUT") return "LOSS · NO TP REACHED";
+  if (o.signal_state === "PARTIAL_PROFIT") return "PARTIAL PROFIT";
+  if (o.signal_state === "BREAK_EVEN") return "BREAK-EVEN";
   if (o.signal_state === "HISTORICAL_DATA_UNAVAILABLE") return "HISTORICAL DATA UNAVAILABLE";
   if (!o.final_result) return o.status?.replace(/_/g, " ") || "TRACKING";
   return o.final_result.replace(/_/g, " ");

@@ -17,10 +17,16 @@ import {
 const RESULT_STYLE = {
   WIN:  { card: "border-emerald-400/25 bg-gradient-to-br from-emerald-950/40 to-[#0a1410]", text: "text-emerald-300", badge: "bg-emerald-400/15 text-emerald-300 border-emerald-400/30", accent: "#34d399" },
   LOSS: { card: "border-rose-400/25 bg-gradient-to-br from-rose-950/40 to-[#160a0d]", text: "text-rose-300", badge: "bg-rose-400/15 text-rose-300 border-rose-400/30", accent: "#fb7185" },
+  // Root-cause fix (2026-08-05): signal.result can now genuinely be
+  // PARTIAL_PROFIT/BREAK_EVEN (see market_outlook_routes.py's
+  // _outlook_to_signal_card) -- these must never fall back to the LOSS
+  // (red) style just because they aren't a clean WIN.
+  PARTIAL_PROFIT: { card: "border-sky-400/25 bg-gradient-to-br from-sky-950/40 to-[#0a0f16]", text: "text-sky-300", badge: "bg-sky-400/15 text-sky-300 border-sky-400/30", accent: "#38bdf8" },
+  BREAK_EVEN: { card: "border-teal-400/25 bg-gradient-to-br from-teal-950/40 to-[#0a1614]", text: "text-teal-300", badge: "bg-teal-400/15 text-teal-300 border-teal-400/30", accent: "#2dd4bf" },
 };
 
 const DIRECTION_FILTERS = ["All", "BUY", "SELL"];
-const RESULT_FILTERS = ["All", "WIN", "LOSS"];
+const RESULT_FILTERS = ["All", "WIN", "LOSS", "PARTIAL_PROFIT", "BREAK_EVEN"];
 const DATE_FILTERS = ["All time", "Today", "Last 7 days", "Last 30 days"];
 
 function Chip({ active, onClick, children }) {
@@ -115,7 +121,7 @@ const signed = (v, digits = 1) => (v == null ? "--" : `${Number(v) >= 0 ? "+" : 
 // fields, same real data, just denser -- this is a performance page users
 // scan quickly, not a single hero card.
 function SignalCard({ signal, index }) {
-  const style = RESULT_STYLE[signal.result] || RESULT_STYLE.LOSS;
+  const style = RESULT_STYLE[signal.result] || RESULT_STYLE.BREAK_EVEN;
   const DirIcon = signal.direction === "BUY" ? ArrowUp : ArrowDown;
   const tpDetail = signal.result === "WIN" && signal.highest_tp_reached
     ? ` · TP${signal.highest_tp_reached}` : "";

@@ -198,6 +198,11 @@ def test_eight_legacy_records_reconstruct_four_and_exclude_four_without_data():
         # a timeout-LOSS verdict built from coverage sparser than
         # MAX_HISTORICAL_QUOTE_GAP_SECONDS. Near-tick (5-second) density is
         # required for every account here now, not just BACKFILL-3.
+        # Root-cause fix (2026-08-05): backfill now replays under the
+        # owner-approved fixed TP grid (entry +/- 5.00/10.00), never this
+        # legacy record's stale stored tp1_price/tp2_price -- BACKFILL-0's
+        # anchor entry resolves to 100.1 (BUY), so a genuine TP1/TP2 touch
+        # means reaching 105.1/110.1, not the old 101.1/102.1.
         activity = []
         for i in range(3):
             for seconds in range(0, 60 * 60 + 1, 5):
@@ -205,15 +210,18 @@ def test_eight_legacy_records_reconstruct_four_and_exclude_four_without_data():
                 bid, ask = 100.0, 100.1
                 if i == 0 and minute >= 40:       # later SL after a recorded win
                     bid, ask = 99.1, 99.2
-                elif i == 0 and minute >= 30:     # genuine TP1 + TP2 touch
-                    bid, ask = 102.1, 102.2
-                elif i == 0 and minute >= 17:     # +0.50R only -- no longer wins alone
+                elif i == 0 and minute >= 30:     # genuine TP1 + TP2 touch (fixed grid: entry 100.1 + 10.00)
+                    bid, ask = 110.1, 110.2
+                elif i == 0 and minute >= 17:     # positive but nowhere near TP1 -- no longer wins alone
                     bid, ask = 100.6, 100.7
-                elif i == 1 and minute >= 17:     # SELL +0.50R only, checked on Ask -- never reaches tp1_price=99.0
-                    bid, ask = 99.4, 99.5
+                elif i == 1 and minute >= 17:     # SELL closes genuinely negative (-0.06R), never reaches fixed TP1 (entry - 5.00)
+                    bid, ask = 100.5, 100.6
                 elif i == 2 and minute >= 12:     # BUY SL touched, but never any TP -- resolves LOSS only at the 60m timeout
                     bid, ask = 99.1, 99.2
                 activity.append(_activity(f"BACKFILL-{i}", published + timedelta(seconds=seconds), bid, ask))
+        # BACKFILL-3 stays flat within a few cents of its own entry for the
+        # whole window -- genuinely BREAK_EVEN under the new trichotomy, not
+        # an automatic LOSS just because no TP was touched.
         for seconds in range(0, 60 * 60 + 1, 5):
             activity.append(_activity("BACKFILL-3", published + timedelta(seconds=seconds), 100.2, 100.3))
         await h.db.cloud_bot_activity.insert_many(activity)
@@ -224,10 +232,11 @@ def test_eight_legacy_records_reconstruct_four_and_exclude_four_without_data():
         rows = await h.db.cloud_market_outlooks.find({}, {"_id": 0}).sort("id", 1).to_list(20)
         reconstructed = [row for row in rows if row.get("historical_repair_status") == "RECONSTRUCTED"]
         unavailable = [row for row in rows if row.get("historical_repair_status") == mo.ANALYTICS_UNAVAILABLE]
-        assert report == {"examined": 8, "reconstructed": 4, "wins": 1, "losses": 3, "active": 0, "unavailable": 4}
+        assert report == {"examined": 8, "reconstructed": 4, "wins": 1, "losses": 2,
+                           "partial_profits": 0, "breakevens": 1, "active": 0, "unavailable": 4}
         assert len(reconstructed) == 4
         assert len(unavailable) == 4
-        assert {row["analytics_outcome"] for row in reconstructed} == {mo.ANALYTICS_WIN, mo.ANALYTICS_LOSS}
+        assert {row["analytics_outcome"] for row in reconstructed} == {mo.ANALYTICS_WIN, mo.ANALYTICS_LOSS, mo.ANALYTICS_BREAKEVEN}
         assert all(row["excluded_from_signal_analytics"] for row in unavailable)
         assert all(row["final_result"] != "GRAY_EXPIRED_NO_ENTRY" for row in rows)
         assert all(row.get("tracking_entry_price") for row in reconstructed)

@@ -95,39 +95,64 @@ def test_sl_then_tp1_within_the_window_is_still_a_win():
     assert "TP1_HIT" in events
 
 
-def test_exact_60_minute_deadline_is_red_timeout():
-    lost, events = advance(signal(), 100.20, 100.25, 60)
-    assert lost["signal_state"] == mo.SIGNAL_LOSS_TIMEOUT
-    assert lost["analytics_outcome"] == mo.ANALYTICS_LOSS
+def test_exact_60_minute_deadline_with_positive_r_is_partial_profit_not_loss():
+    """Root-cause fix (2026-08-05): a signal that reaches its 60-minute
+    deadline still positive but short of TP1 must never be forced into
+    LOSS just because no TP was touched -- this is the exact bug that
+    marked a genuine +0.15R/+2.56-Gold-move signal a LOSS in production."""
+    resolved, events = advance(signal(), 100.20, 100.25, 60)
+    assert resolved["signal_state"] == mo.SIGNAL_PARTIAL_PROFIT
+    assert resolved["analytics_outcome"] == mo.ANALYTICS_PARTIAL
+    assert resolved["analytics_r"] == 0.2
     assert "TIMEOUT_60M" in events
 
 
-def test_half_r_without_genuine_tp1_touch_at_deadline_is_a_loss():
+def test_exact_60_minute_deadline_with_negative_r_is_still_a_loss():
+    """A genuinely negative close at the deadline (beyond
+    BREAK_EVEN_R_TOLERANCE) remains a real LOSS -- this fix narrows the old
+    blanket rule, it does not remove LOSS as an outcome."""
+    lost, events = advance(signal(), 99.70, 99.75, 60)
+    assert lost["signal_state"] == mo.SIGNAL_LOSS_TIMEOUT
+    assert lost["analytics_outcome"] == mo.ANALYTICS_LOSS
+    assert lost["analytics_r"] == -0.3
+    assert "TIMEOUT_60M" in events
+
+
+def test_exact_60_minute_deadline_near_entry_is_break_even():
+    resolved, events = advance(signal(), 100.02, 100.05, 60)
+    assert resolved["signal_state"] == mo.SIGNAL_BREAK_EVEN
+    assert resolved["analytics_outcome"] == mo.ANALYTICS_BREAKEVEN
+    assert resolved["analytics_r"] == 0.02
+    assert "TIMEOUT_60M" in events
+
+
+def test_half_r_without_genuine_tp1_touch_at_deadline_is_partial_profit():
     """+0.50R alone (entry 100, tp1_price=101.0, price only reached 100.50)
     is not a genuine TP1 touch -- with no TP ever touched by the deadline,
-    this must resolve LOSS, not WIN."""
-    lost, events = advance(signal(), 100.50, 100.55, 60)
-    assert lost["analytics_outcome"] == mo.ANALYTICS_LOSS
-    assert lost["signal_state"] == mo.SIGNAL_LOSS_TIMEOUT
+    this resolves against its own achieved R: +0.50R here is a positive
+    close below TP1, so PARTIAL_PROFIT, not an automatic LOSS or WIN."""
+    resolved, events = advance(signal(), 100.50, 100.55, 60)
+    assert resolved["analytics_outcome"] == mo.ANALYTICS_PARTIAL
+    assert resolved["signal_state"] == mo.SIGNAL_PARTIAL_PROFIT
     assert "TIMEOUT_60M" in events
 
 
-def test_sl_first_observed_after_deadline_is_timeout_not_sl_loss():
-    lost, events = advance(signal(current_r=0.2, last_tracked_price=100.2), 99.0, 99.05, 61)
-    assert lost["analytics_outcome"] == mo.ANALYTICS_LOSS
-    assert lost["signal_state"] == mo.SIGNAL_LOSS_TIMEOUT
-    assert lost["analytics_r"] == 0.2
-    assert lost["latest_path_event"] == "LATE_SL_AFTER_60M"
+def test_sl_first_observed_after_deadline_is_timeout_partial_profit_not_sl_loss():
+    resolved, events = advance(signal(current_r=0.2, last_tracked_price=100.2), 99.0, 99.05, 61)
+    assert resolved["analytics_outcome"] == mo.ANALYTICS_PARTIAL
+    assert resolved["signal_state"] == mo.SIGNAL_PARTIAL_PROFIT
+    assert resolved["analytics_r"] == 0.2
+    assert resolved["latest_path_event"] == "LATE_SL_AFTER_60M"
     assert {"TIMEOUT_60M", "SL_HIT"}.issubset(events)
-    assert lost["event_snapshots"]["TIMEOUT_60M"]["hit_price"] == 100.2
-    assert lost["event_snapshots"]["SL_HIT"]["hit_price"] == 99.0
+    assert resolved["event_snapshots"]["TIMEOUT_60M"]["hit_price"] == 100.2
+    assert resolved["event_snapshots"]["SL_HIT"]["hit_price"] == 99.0
 
 
-def test_half_r_after_deadline_remains_timeout_loss():
+def test_half_r_after_deadline_remains_partial_profit_not_loss():
     timed_out, _ = advance(signal(), 100.20, 100.25, 60)
     late, _ = advance(timed_out, 100.60, 100.65, 61)
-    assert late["analytics_outcome"] == mo.ANALYTICS_LOSS
-    assert late["signal_state"] == mo.SIGNAL_LOSS_TIMEOUT
+    assert late["analytics_outcome"] == mo.ANALYTICS_PARTIAL
+    assert late["signal_state"] == mo.SIGNAL_PARTIAL_PROFIT
     assert late["latest_path_event"] == "LATE_HALF_R_AFTER_60M"
 
 
@@ -199,12 +224,16 @@ def test_buy_uses_bid_not_ask():
 
 
 def test_publication_anchor_includes_initial_spread_in_mae():
+    # Root-cause fix (2026-08-05): current_r/mae_r are now the initial
+    # spread's price move divided by the fixed XAUCLOUD_R_UNIT_GOLD_MOVES
+    # (10.0), not the real SL distance -- -0.1 price move / 10.0 = -0.01R.
     buy = mo._build_tracking_anchor("BUY", 100.0, 100.1, 99.1)
     sell = mo._build_tracking_anchor("SELL", 100.0, 100.1, 101.0)
     assert buy["tracking_entry_price"] == 100.1
     assert sell["tracking_entry_price"] == 100.0
-    assert buy["current_r"] == -0.1 and buy["mae_r"] == -0.1
-    assert sell["current_r"] == -0.1 and sell["mae_r"] == -0.1
+    assert buy["risk_distance"] == mo.XAUCLOUD_R_UNIT_GOLD_MOVES
+    assert buy["current_r"] == -0.01 and buy["mae_r"] == -0.01
+    assert sell["current_r"] == -0.01 and sell["mae_r"] == -0.01
     assert mo._build_tracking_anchor("BUY", 100.0, 100.1, 101.0) is None
     assert mo._build_tracking_anchor("SELL", 100.0, 100.1, 99.0) is None
 
@@ -227,9 +256,9 @@ def test_corrupt_target_ladder_never_creates_false_tp_win():
 
 
 def test_actionable_state_machine_never_emits_no_entry():
-    lost, _ = advance(signal(), 100.1, 100.2, 60)
-    assert "NO_ENTRY" not in str(lost)
-    assert lost["signal_state"] == mo.SIGNAL_LOSS_TIMEOUT
+    resolved, _ = advance(signal(), 100.1, 100.2, 60)
+    assert "NO_ENTRY" not in str(resolved)
+    assert resolved["signal_state"] == mo.SIGNAL_PARTIAL_PROFIT
 
 
 def test_unavailable_history_constant_is_not_win_or_loss():

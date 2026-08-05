@@ -5,15 +5,22 @@ const read = (relative) => fs.readFileSync(path.join(__dirname, relative), "utf8
 const page = read("pages/AIMarketOutlookPage.jsx");
 
 describe("persisted Signal Outlook lifecycle UI contract", () => {
-  test("authoritative persisted states map to amber, green, red, and unavailable labels", () => {
+  test("authoritative persisted states map to amber, green, red, blue, teal, and unavailable labels", () => {
     for (const state of [
       "TRACKING_AMBER", "WIN_GREEN_0_5R", "WIN_GREEN_TP1",
-      "LOSS_RED_SL", "LOSS_RED_TIMEOUT", "HISTORICAL_DATA_UNAVAILABLE",
+      "LOSS_RED_SL", "LOSS_RED_TIMEOUT", "PARTIAL_PROFIT", "BREAK_EVEN",
+      "HISTORICAL_DATA_UNAVAILABLE",
     ]) {
       expect(page).toContain(state);
     }
-    expect(page).toContain("TRACKING · AWAITING +0.50R");
-    expect(page).toContain("LOSS · BELOW +0.50R AFTER 60 MIN");
+    expect(page).toContain("TRACKING · AWAITING TP1");
+    // Root-cause fix (2026-08-05): a signal below TP1 at the 60-minute
+    // deadline is no longer automatically a LOSS -- LOSS_RED_TIMEOUT now
+    // only fires on a genuinely negative close, so its label dropped the
+    // "BELOW +0.50R" framing that used to fire regardless of sign.
+    expect(page).toContain("LOSS · NO TP REACHED");
+    expect(page).toContain("PARTIAL PROFIT");
+    expect(page).toContain("BREAK-EVEN");
   });
 
   test("cards display exact anchor and persisted journey fields", () => {

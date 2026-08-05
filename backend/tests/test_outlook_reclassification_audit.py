@@ -105,9 +105,12 @@ def test_signal_wrongly_locked_as_loss_by_old_sl_bug_is_found_and_corrected():
         account = "RECLASS-WRONGLOSS"
         doc = _resolved_doc("wrongloss-1", account, published, mo.ANALYTICS_LOSS, stored_r=-1.0)
         await h.db.cloud_market_outlooks.insert_one(doc)
+        # Entry 100.1 -- the audit replays under the owner-approved fixed TP
+        # grid (entry +/- 5.00/10.00), not this record's stale stored
+        # tp1_price, so a genuine TP1 touch here means reaching 105.1+.
         activity = _dense_quotes(account, published, [
             (10, 99.1, 99.2),    # SL touched -- old bug would have finalized LOSS here
-            (30, 101.1, 101.2),  # genuine TP1 touch afterward -- current rule: this is a WIN
+            (30, 105.1, 105.2),  # genuine TP1 touch afterward -- current rule: this is a WIN
         ])
         await h.db.cloud_bot_activity.insert_many(activity)
 
@@ -140,7 +143,7 @@ def test_apply_true_persists_the_correction_with_full_audit_trail():
         await h.db.cloud_market_outlooks.insert_one(doc)
         activity = _dense_quotes(account, published, [
             (10, 99.1, 99.2),
-            (30, 101.1, 101.2),
+            (30, 105.1, 105.2),  # genuine fixed-grid TP1 touch (entry 100.1 + 5.00)
         ])
         await h.db.cloud_bot_activity.insert_many(activity)
 
@@ -204,7 +207,7 @@ def test_correctly_classified_win_is_confirmed_not_corrected():
         doc["highest_tp_reached"] = 1
         await h.db.cloud_market_outlooks.insert_one(doc)
         activity = _dense_quotes(account, published, [
-            (15, 101.1, 101.2),  # genuine TP1 touch, no earlier SL
+            (15, 105.1, 105.2),  # genuine fixed-grid TP1 touch, no earlier SL
         ])
         await h.db.cloud_bot_activity.insert_many(activity)
 

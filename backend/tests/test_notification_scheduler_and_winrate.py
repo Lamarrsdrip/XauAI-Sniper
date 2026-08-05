@@ -189,10 +189,21 @@ def test_win_rate_formula_is_wins_over_wins_plus_losses():
 
 
 def test_only_authoritative_completed_outcomes_count_as_win_or_loss():
+    # Root-cause fix (2026-08-05): "completed" now means any of the four
+    # genuine terminal outcomes (WIN/LOSS/PARTIAL_PROFIT/BREAK_EVEN), via
+    # the single named ANALYTICS_TERMINAL_OUTCOMES tuple -- never
+    # HISTORICAL_DATA_UNAVAILABLE, and win_rate itself still only counts
+    # WIN/LOSS (checked separately below).
     idx = ROUTES_SRC.index("completed = [o for o in actionable")
     window = ROUTES_SRC[idx: idx + 250]
-    assert "ANALYTICS_WIN" in window and "ANALYTICS_LOSS" in window
+    assert "ANALYTICS_TERMINAL_OUTCOMES" in window
     assert "HISTORICAL_DATA_UNAVAILABLE" not in window
+    import market_outlook as mo
+    assert mo.ANALYTICS_UNAVAILABLE not in mo.ANALYTICS_TERMINAL_OUTCOMES
+    win_rate_idx = ROUTES_SRC.index("win_rate = round(len(wins)")
+    win_rate_window = ROUTES_SRC[win_rate_idx: win_rate_idx + 100]
+    assert "ANALYTICS_WIN" not in win_rate_window and "ANALYTICS_LOSS" not in win_rate_window
+    assert "len(wins) / len(wins + losses)" in win_rate_window
 
 
 def test_zero_resolved_signals_yields_none_not_zero_percent():

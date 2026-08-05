@@ -47,7 +47,18 @@ def group_meaningful_history(rows: list) -> list:
 
 
 def compute_outlook_stats(rows: list) -> dict:
-    """Derive performance only from persisted authoritative outcomes."""
+    """Derive performance only from persisted authoritative outcomes.
+
+    Root-cause fix (2026-08-05): `completed` used to mean "WIN or LOSS"
+    only, which is fine now that a signal below TP1 can genuinely resolve
+    PARTIAL_PROFIT/BREAK_EVEN instead of being forced into one of those two
+    -- those two new outcomes are real, finished results with a genuine R
+    figure and belong in tp-hit-rate/average-R/total-R the same as any
+    other completed signal. win_rate stays strictly wins/(wins+losses):
+    PARTIAL_PROFIT and BREAK_EVEN are deliberately neither a clean win nor
+    a loss (see the owner's classification policy), so they don't move
+    that ratio in either direction.
+    """
     stats_rows = [o for o in rows if not o.get("excluded_from_stats")]
     unavailable = [o for o in stats_rows if o.get("historical_repair_status") == mo.ANALYTICS_UNAVAILABLE
                    or o.get("analytics_outcome") == mo.ANALYTICS_UNAVAILABLE]
@@ -55,9 +66,11 @@ def compute_outlook_stats(rows: list) -> dict:
                   if o.get("primary_direction") in ("BUY", "SELL")
                   and not o.get("excluded_from_signal_analytics")
                   and o not in unavailable]
-    completed = [o for o in actionable if o.get("analytics_outcome") in (mo.ANALYTICS_WIN, mo.ANALYTICS_LOSS)]
+    completed = [o for o in actionable if o.get("analytics_outcome") in mo.ANALYTICS_TERMINAL_OUTCOMES]
     wins = [o for o in completed if o.get("analytics_outcome") == mo.ANALYTICS_WIN]
     losses = [o for o in completed if o.get("analytics_outcome") == mo.ANALYTICS_LOSS]
+    partial_profits = [o for o in completed if o.get("analytics_outcome") == mo.ANALYTICS_PARTIAL]
+    breakevens = [o for o in completed if o.get("analytics_outcome") == mo.ANALYTICS_BREAKEVEN]
     active_unresolved = [o for o in actionable if o.get("analytics_outcome") is None]
     informational = [o for o in stats_rows if o.get("primary_direction") not in ("BUY", "SELL")]
     tp1_count = sum(1 for o in completed if int(o.get("highest_tp_reached") or 0) >= 1)
@@ -79,7 +92,8 @@ def compute_outlook_stats(rows: list) -> dict:
         "average_r": round(sum(resolved_rs) / len(resolved_rs), 3) if resolved_rs else None,
         "average_mfe": round(sum(float(o.get("mfe_r", 0) or 0) for o in actionable) / len(actionable), 3) if actionable else None,
         "average_mae": round(sum(float(o.get("mae_r", 0) or 0) for o in actionable) / len(actionable), 3) if actionable else None,
-        "resolved_count": len(completed), "wins": len(wins), "losses": len(losses), "breakeven": 0,
+        "resolved_count": len(completed), "wins": len(wins), "losses": len(losses),
+        "partial_profits": len(partial_profits), "breakeven": len(breakevens),
         "no_entry_count": 0, "active_unresolved_count": len(active_unresolved),
         "unavailable_historical_count": len(unavailable), "win_rate": win_rate,
         "total_r": round(sum(resolved_rs), 3) if resolved_rs else 0.0,
@@ -96,7 +110,12 @@ def compute_outlook_stats(rows: list) -> dict:
 
 def _outlook_to_signal_card(row: dict) -> dict:
     conversion = mo.build_result_conversion(r=row.get("analytics_r"), risk_distance=row.get("risk_distance"))
-    outcome = "WIN" if row.get("analytics_outcome") == mo.ANALYTICS_WIN else "LOSS"
+    # Root-cause fix (2026-08-05): this used to collapse EVERY non-WIN
+    # outcome into "LOSS" for display -- the same binary bug pattern as the
+    # backend classifier itself, just recurring here in the card builder.
+    # The real stored outcome (WIN/LOSS/PARTIAL_PROFIT/BREAK_EVEN) is always
+    # passed through unchanged now.
+    outcome = row.get("analytics_outcome") or "LOSS"
     return {
         "id": row.get("id"),
         "direction": row.get("primary_direction"),
@@ -138,7 +157,7 @@ async def build_public_outlook_performance(db, limit: int = 10) -> dict:
     """
     query = {
         "primary_direction": {"$in": ["BUY", "SELL"]},
-        "analytics_outcome": {"$in": [mo.ANALYTICS_WIN, mo.ANALYTICS_LOSS]},
+        "analytics_outcome": {"$in": list(mo.ANALYTICS_TERMINAL_OUTCOMES)},
         "excluded_from_stats": {"$ne": True},
         "excluded_from_signal_analytics": {"$ne": True},
     }
@@ -147,18 +166,30 @@ async def build_public_outlook_performance(db, limit: int = 10) -> dict:
     ).sort("classification_at", -1).to_list(None)
 
     total_pips, total_gold_moves = 0.0, 0.0
-    wins = losses = 0
+    wins = losses = partial_profits = breakevens = 0
     rs, win_rs, loss_rs = [], [], []
     for row in all_rows:
         conversion = mo.build_result_conversion(r=row.get("analytics_r"), risk_distance=row.get("risk_distance"))
-        is_win = row.get("analytics_outcome") == mo.ANALYTICS_WIN
+        outcome = row.get("analytics_outcome")
+        is_win = outcome == mo.ANALYTICS_WIN
+        # Root-cause fix (2026-08-05): this loop used to treat "not a WIN"
+        # as "is a LOSS" -- the exact bug pattern being fixed everywhere
+        # else. PARTIAL_PROFIT/BREAK_EVEN are real, positive-or-neutral
+        # completed results and must not be folded into the loss bucket.
         if is_win:
             wins += 1
-        else:
+        elif outcome == mo.ANALYTICS_LOSS:
             losses += 1
+        elif outcome == mo.ANALYTICS_PARTIAL:
+            partial_profits += 1
+        elif outcome == mo.ANALYTICS_BREAKEVEN:
+            breakevens += 1
         if conversion["result_r"] is not None:
             rs.append(conversion["result_r"])
-            (win_rs if is_win else loss_rs).append(conversion["result_r"])
+            if is_win:
+                win_rs.append(conversion["result_r"])
+            elif outcome == mo.ANALYTICS_LOSS:
+                loss_rs.append(conversion["result_r"])
         if conversion["result_pips"] is not None:
             total_pips += conversion["result_pips"]
         if conversion["result_gold_moves"] is not None:
@@ -180,18 +211,21 @@ async def build_public_outlook_performance(db, limit: int = 10) -> dict:
         cumulative_r_curve.append({"closed_at": row.get("classification_at"), "cumulative_r": running})
 
     win_rate = round(wins / (wins + losses), 3) if (wins + losses) else None
+    total_count = wins + losses + partial_profits + breakevens
     return {
         "signals": signals,
         "cumulative_r_curve": cumulative_r_curve,
         "stats": {
-            "count": wins + losses,
+            "count": total_count,
             "wins": wins,
             "losses": losses,
+            "partial_profits": partial_profits,
+            "breakevens": breakevens,
             "win_rate": win_rate,
             "total_r": round(sum(rs), 2) if rs else None,
             "average_r": round(sum(rs) / len(rs), 2) if rs else None,
-            "total_pips": round(total_pips, 1) if (wins + losses) else None,
-            "total_gold_moves": round(total_gold_moves, 2) if (wins + losses) else None,
+            "total_pips": round(total_pips, 1) if total_count else None,
+            "total_gold_moves": round(total_gold_moves, 2) if total_count else None,
             "average_win_r": round(sum(win_rs) / len(win_rs), 2) if win_rs else None,
             "average_loss_r": round(sum(loss_rs) / len(loss_rs), 2) if loss_rs else None,
             "best_trade_r": max(rs) if rs else None,
