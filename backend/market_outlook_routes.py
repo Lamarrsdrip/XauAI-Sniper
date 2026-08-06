@@ -348,6 +348,26 @@ def build_router() -> APIRouter:
             "next_outlook_at": next_slot.isoformat(),
             "generation_status": "OK" if evidence else evidence_reason,
         }
+        # v6.26.0 Phase 4 owner directive -- one shared conversion engine.
+        # Pre-compute pips/Gold-moves for the advisory tracking fields here,
+        # the same way real automated trade results already arrive with
+        # result_pips/result_gold_moves computed server-side, so the
+        # frontend never needs its own copy of the conversion formula.
+        if current_outlook is not None:
+            risk_distance = current_outlook.get("risk_distance")
+            for r_field, pips_field, gold_field in (
+                ("current_r", "current_pips", "current_gold_moves"),
+                ("mfe_r", "mfe_pips", "mfe_gold_moves"),
+                ("mae_r", "mae_pips", "mae_gold_moves"),
+            ):
+                r_val = current_outlook.get(r_field)
+                if r_val is not None and risk_distance:
+                    conv = mo.build_result_conversion(r=float(r_val), risk_distance=risk_distance)
+                    current_outlook[pips_field] = conv["result_pips"]
+                    current_outlook[gold_field] = conv["result_gold_moves"]
+                else:
+                    current_outlook[pips_field] = None
+                    current_outlook[gold_field] = None
         return {
             "contract": contract,
             "freshness": freshness,

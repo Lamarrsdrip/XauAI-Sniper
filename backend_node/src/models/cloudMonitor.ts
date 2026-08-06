@@ -1,0 +1,41 @@
+import { z } from "zod";
+
+/** Port of server.py `class BotHeartbeatReq(BaseModel)` (line 6681). */
+export const BotHeartbeatReqSchema = z.object({
+  pin: z.string().optional().default(""),
+  license_key: z.string().optional().default(""),
+  bot_online: z.boolean().optional().default(true),
+  ea_version: z.string().optional().default(""),
+  account_number: z.string().optional().default(""),
+  broker_server: z.string().optional().default(""),
+  symbol: z.string().optional().default(""),
+  timeframe: z.string().optional().default(""),
+  market_mode: z.string().optional().default("GOLD_MODE"),
+  index_profile: z.string().optional().default(""),
+  spread: z.number().optional().default(0),
+  equity: z.number().optional().default(0),
+  balance: z.number().optional().default(0),
+  daily_pnl: z.number().optional().default(0),
+  drawdown: z.number().optional().default(0),
+  open_positions: z.number().optional().default(0),
+  algo_trading: z.boolean().optional().default(false),
+  trading_allowed: z.boolean().optional().default(false),
+  mt5_connected: z.boolean().optional().default(false),
+  account_connected: z.boolean().optional().default(false),
+  ea_active: z.boolean().optional().default(true),
+  bot_state: z.string().optional().default("UNKNOWN"),
+  last_action: z.string().optional().default(""),
+  last_tick_time: z.string().optional().default(""),
+  last_decision_time: z.string().optional().default(""),
+  last_error: z.string().optional().default(""),
+  epf_state: z.string().optional().default(""),
+  sync_state: z.string().optional().default(""),
+  prop_firm_mode: z.boolean().optional().default(false),
+  prop_daily_loss_pct: z.number().optional().default(0),
+  prop_max_loss_pct: z.number().optional().default(0),
+  prop_safety_buffer_pct: z.number().optional().default(0),
+  prop_risk_per_trade_pct: z.number().optional().default(0),
+  prop_max_basket_risk_pct: z.number().optional().default(0),
+});
+
+export type BotHeartbeatReq = z.infer<typeof BotHeartbeatReqSchema>;

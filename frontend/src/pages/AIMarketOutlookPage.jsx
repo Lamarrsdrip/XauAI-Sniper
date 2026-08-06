@@ -51,15 +51,26 @@ const HISTORY_PAGE_SIZE = 12;
 // carries R + risk_distance client-side; real automated trade results
 // already arrive with result_pips/result_gold_moves computed server-side
 // by that same function and must never be recomputed here.
+// v6.26.0 Phase 4 owner directive -- one shared conversion engine. The
+// backend (market_outlook_routes.get_current_outlook) now pre-computes
+// pips/Gold moves for current_r/mfe_r/mae_r via the same
+// build_result_conversion() every other server-side consumer already uses
+// (current_pips/current_gold_moves, mfe_pips/mfe_gold_moves,
+// mae_pips/mae_gold_moves on the outlook object) -- this page must display
+// those values, never recompute them client-side. The fallback path below
+// only exists for a still-loading/older cached response where the
+// precomputed fields haven't arrived yet; it is not a second source of
+// truth, just a graceful "—" until the real value lands.
 const XAUCLOUD_PIPS_PER_GOLD_MOVE = 10;
-function goldMoveConversion(r, riskDistance) {
-  if (r == null || !riskDistance) return { r, goldMoves: null, pips: null };
+function resultText(r, riskDistance, precomputedPips, precomputedGoldMoves) {
+  if (precomputedPips != null && precomputedGoldMoves != null) {
+    const sign = r >= 0 ? "+" : "";
+    return `${sign}${precomputedPips} pips · ${sign}${precomputedGoldMoves} Gold moves · ${rText(r)}`;
+  }
+  if (r == null || !riskDistance) return rText(r);
   const priceMove = r * riskDistance;
-  return { r, goldMoves: Math.round(priceMove * 100) / 100, pips: Math.round(priceMove * XAUCLOUD_PIPS_PER_GOLD_MOVE * 10) / 10 };
-}
-function resultText(r, riskDistance) {
-  const { goldMoves, pips } = goldMoveConversion(r, riskDistance);
-  if (goldMoves == null || pips == null) return rText(r);
+  const goldMoves = Math.round(priceMove * 100) / 100;
+  const pips = Math.round(priceMove * XAUCLOUD_PIPS_PER_GOLD_MOVE * 10) / 10;
   const sign = r >= 0 ? "+" : "";
   return `${sign}${pips}${" pips · "}${sign}${goldMoves} Gold moves · ${rText(r)}`;
 }
@@ -197,8 +208,8 @@ function OutlookHero({ outlook, advanced, setAdvanced }) {
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Metric label="Signal entry" value={outlook.tracking_entry_price} />
-            <Metric label="Current result" value={resultText(outlook.current_r, outlook.risk_distance)} />
-            <Metric label="MFE / MAE" value={`${resultText(outlook.mfe_r, outlook.risk_distance)} / ${resultText(outlook.mae_r, outlook.risk_distance)}`} />
+            <Metric label="Current result" value={resultText(outlook.current_r, outlook.risk_distance, outlook.current_pips, outlook.current_gold_moves)} />
+            <Metric label="MFE / MAE" value={`${resultText(outlook.mfe_r, outlook.risk_distance, outlook.mfe_pips, outlook.mfe_gold_moves)} / ${resultText(outlook.mae_r, outlook.risk_distance, outlook.mae_pips, outlook.mae_gold_moves)}`} />
             <Metric label="Elapsed / deadline" value={`${elapsedText(outlook.published_at, outlook.classification_at)} / ${timeText(outlook.evaluation_deadline)}`} />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -553,7 +564,7 @@ function HistoryCard({ outlook }) {
             <div className="mt-2 space-y-1 border-t border-white/[0.05] pt-2 text-[11px] text-white/45">
               <div>Suggested zone {outlook.preferred_entry_zone_low}–{outlook.preferred_entry_zone_high}</div>
               <div>TP2 {outlook.tp2_price} · TP3 {outlook.tp3_price}</div>
-              <div>Current {resultText(outlook.current_r, outlook.risk_distance)} · MFE {resultText(outlook.mfe_r, outlook.risk_distance)} · MAE {resultText(outlook.mae_r, outlook.risk_distance)}</div>
+              <div>Current {resultText(outlook.current_r, outlook.risk_distance, outlook.current_pips, outlook.current_gold_moves)} · MFE {resultText(outlook.mfe_r, outlook.risk_distance, outlook.mfe_pips, outlook.mfe_gold_moves)} · MAE {resultText(outlook.mae_r, outlook.risk_distance, outlook.mae_pips, outlook.mae_gold_moves)}</div>
               <div>Elapsed {elapsedText(signalTime, outlook.classification_at)} · Deadline {timeText(outlook.evaluation_deadline)} · Last monitored {timeText(outlook.last_monitored_at)}</div>
               {(outlook.first_half_r_at || outlook.tp1_hit_at || outlook.tp2_hit_at || outlook.tp3_hit_at || outlook.sl_hit_at) && (
                 <div className="text-[10px] text-white/35">
