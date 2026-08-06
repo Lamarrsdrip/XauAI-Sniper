@@ -3,6 +3,7 @@ import { getDb } from "../db.js";
 import { env } from "../env.js";
 import { getSettings } from "./settings.js";
 import { NAMESPACE_URL, uuidV5 } from "./uuidV5.js";
+import { buildResultConversion } from "./marketOutlookCore.js";
 
 /** Port of backend/notifications.py -- push notification dispatch via OneSignal. */
 
@@ -67,14 +68,7 @@ function idempotencyKey(outlookId: string, event: string, userId: string): strin
   return `${event}:${outlookId}:${userId}`;
 }
 
-/**
- * Port of notifications.py:133 `_build_payload`. NOTE: the TIMEOUT_60M
- * branch calls market_outlook.build_result_conversion (not yet ported --
- * see NODE_MIGRATION_AUDIT.md); it falls back to a bare "{r}R" string
- * until that engine is ported, exactly matching what Python would show if
- * risk_distance were unavailable (build_result_conversion's own
- * result_pips=None fallback path).
- */
+/** Port of notifications.py:133 `_build_payload`. */
 function buildPayload(doc: Record<string, unknown>, event: string): Record<string, unknown> {
   const direction = doc["primary_direction"] ?? "NO_VALID_OUTLOOK";
   const confidence = doc["confidence_pct"] ?? 0;
@@ -111,7 +105,11 @@ function buildPayload(doc: Record<string, unknown>, event: string): Record<strin
     body = `Signal ${signalTime} reached +0.50R${lateText} at ${eventAt} · entry ${entry} · hit ${hitPrice} · R ${achievedR}`;
   } else if (event === "TIMEOUT_60M") {
     const outcome = doc["analytics_outcome"];
-    const resultText = `${achievedR}R`; // TODO(Phase 3-4): use market_outlook.build_result_conversion once ported
+    const conversion = buildResultConversion({ r: achievedR as number | null, risk_distance: doc["risk_distance"] as number | null | undefined });
+    const resultText =
+      conversion.result_pips === null
+        ? `${achievedR}R`
+        : `${conversion.result_pips} pips / ${conversion.result_gold_moves} Gold moves / ${conversion.result_r}R`;
     if (outcome === "PARTIAL_PROFIT") {
       title = `${direction} outlook closed PARTIAL PROFIT`;
       body = `Signal ${signalTime} closed positive but below TP1 at ${eventAt} · entry ${entry} · last ${hitPrice} · ${resultText}`;
@@ -622,12 +620,7 @@ export function classifyTradeActivity(activity: Record<string, unknown>): string
   return null;
 }
 
-/**
- * Port of notifications.py:821 `build_trade_notification_payload`. NOTE:
- * final_pips depends on market_outlook.build_result_conversion (not yet
- * ported) -- falls back to null exactly like Python's own TypeError/
- * ValueError fallback path when that computation isn't available.
- */
+/** Port of notifications.py:821 `build_trade_notification_payload`. */
 export function buildTradeNotificationPayload(activity: Record<string, unknown>, event: string): Record<string, unknown> {
   const symbol = cleanText(activity["symbol"] ?? activityValue(activity, "symbol") ?? "XAUUSD", 32);
   const direction = cleanText(activityValue(activity, "position_direction", "direction", "signal_direction"), 12).toUpperCase();
@@ -640,7 +633,34 @@ export function buildTradeNotificationPayload(activity: Record<string, unknown>,
   const setup = cleanText(activityValue(activity, "setup", "setup_type", "family"), 80);
   const campaign = cleanText(activityValue(activity, "campaign_id", "campaign"), 80);
   const reason = cleanText(activityValue(activity, "close_reason_exact", "close_reason", "reason"), 140);
-  const finalPips: string | null = null; // TODO(Phase 3-4): wire up market_outlook.build_result_conversion once ported
+
+  // v6.26.0: customer notifications must show pips/Gold moves, never a bare
+  // "R" label -- buildResultConversion derives result_pips from real
+  // entry/exit prices when available, falling back to the raw final_r/
+  // r_multiple activity field only when prices aren't posted.
+  let finalPips: string | null = null;
+  const rawEntry = activityValue(activity, "entry_price", "open_price");
+  // Deliberately NOT "price" for the entry side: on a TRADE_CLOSED activity
+  // record, this event's own "price" field is the CLOSE price -- if
+  // entry_price/open_price isn't separately posted, there is no reliable
+  // entry price here at all.
+  const rawExit = activityValue(activity, "close_price", "price");
+  const rawR = activityValue(activity, "final_r", "r_multiple");
+  let priceMove: number | null = null;
+  if (rawEntry !== null && rawEntry !== undefined && rawExit !== null && rawExit !== undefined && (direction === "BUY" || direction === "SELL")) {
+    const entryF = Number(rawEntry);
+    const exitF = Number(rawExit);
+    if (Number.isFinite(entryF) && Number.isFinite(exitF)) {
+      priceMove = direction === "BUY" ? exitF - entryF : entryF - exitF;
+    }
+  }
+  if (priceMove !== null || (rawR !== null && rawR !== undefined)) {
+    const rNum = rawR !== null && rawR !== undefined ? Number(rawR) : null;
+    if (rNum === null || Number.isFinite(rNum)) {
+      const conversion = buildResultConversion({ r: rNum, price_move: priceMove });
+      finalPips = fmtNumber(conversion.result_pips, 1);
+    }
+  }
   const duration = cleanText(activityValue(activity, "duration", "duration_text", "trade_duration"), 60);
   const balance = fmtNumber(activityValue(activity, "balance", "account_balance"));
   const profitRaw = activityValue(activity, "profit", "net_profit", "realized_profit");

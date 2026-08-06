@@ -4,6 +4,7 @@ import { getDb } from "../db.js";
 import { normalizeLicenseKey, resolveMonitorLicense } from "../services/license.js";
 import { rateLimit } from "../auth.js";
 import { TradeJournalEntrySchema, WeeklyReportEntrySchema } from "../models/journal.js";
+import { reconcileTradeJournalEntry } from "../services/automatedTradeReconciliation.js";
 
 /** Port of Python's `datetime.now(timezone.utc).strftime("%Y-W%W")` -- Monday-first week number, week 0 = days before the year's first Monday. */
 function pythonYearWeek(date: Date): string {
@@ -60,15 +61,15 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
         }
       }
 
-      // NOTE: Python calls market_outlook.reconcile_trade_journal_entry(doc)
-      // here for real-time Outlook signal reconciliation when
-      // has_rich_ledger_data && closed_at > 0. Deferred until the Market
-      // Outlook engine itself is ported (NODE_MIGRATION_AUDIT.md Phase 3-4)
-      // -- Python treats this as strictly best-effort and never lets it
-      // affect this endpoint's own success response, so omitting it for now
-      // does not change /journal/log's own behavior, only defers when
-      // Outlook signals get reconciled (the existing hourly Outlook job
-      // still catches it later once that engine is live here).
+      // Real-time Outlook signal reconciliation -- matches this closed trade
+      // against any awaiting outlook signal for the same account/symbol/
+      // direction, so the customer sees the confirmed automated result
+      // within seconds of MT5 reporting the close (rather than waiting for
+      // the hourly Outlook job). Strictly best-effort: never affects this
+      // endpoint's own success response.
+      if (doc["has_rich_ledger_data"] && Number(doc["closed_at"] ?? 0) > 0) {
+        await reconcileTradeJournalEntry(doc);
+      }
 
       return { status: "ok" };
     } catch {

@@ -255,9 +255,12 @@ export async function trackOutlookLifecycleTick(opts: {
     } catch {
       /* best-effort, matches Python's logged-and-swallowed retry failure */
     }
-    // TODO(Phase 3-4): dispatchPendingAutomatedTradeNotifications() once the
-    // automated-trade-result reconciliation subsystem (reconcile_automated_trade_result
-    // and friends) is ported -- best-effort in Python too, wrapped in try/except.
+    try {
+      const { dispatchPendingAutomatedTradeNotifications } = await import("./automatedTradeReconciliation.js");
+      await dispatchPendingAutomatedTradeNotifications();
+    } catch {
+      /* best-effort, matches Python's logged-and-swallowed retry failure */
+    }
   }
 
   return updatedCount;
