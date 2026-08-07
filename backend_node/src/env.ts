@@ -63,4 +63,5 @@ export const env = {
   XAU_LOCAL_AI_MAX_ATTEMPTS: Number(process.env["XAU_LOCAL_AI_MAX_ATTEMPTS"] ?? "3"),
   XAU_LOCAL_AI_GLOBAL_QUEUE_LIMIT: Number(process.env["XAU_LOCAL_AI_GLOBAL_QUEUE_LIMIT"] ?? "100"),
   XAU_LOCAL_AI_CONFIDENCE_THRESHOLD: Number(process.env["XAU_LOCAL_AI_CONFIDENCE_THRESHOLD"] ?? "70"),
+  PUBLIC_MARKET_FEED_API_KEY: (process.env["PUBLIC_MARKET_FEED_API_KEY"] ?? "").trim(),
 };

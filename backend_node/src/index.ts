@@ -32,6 +32,7 @@ import { registerOutlookCurrentRoutes } from "./routes/outlookCurrent.js";
 import { registerOutlookHistoryRoutes } from "./routes/outlookHistory.js";
 import { registerPurchaseRoutes } from "./routes/purchase.js";
 import { registerMiscRoutes } from "./routes/misc.js";
+import { registerPublicMarketFeedRoutes } from "./routes/publicMarketFeed.js";
 import { registerAdminSettingsRoutes } from "./routes/admin/settings.js";
 import { registerAdminBankTransferRoutes } from "./routes/admin/bankTransfers.js";
 import { registerAdminDashboardRoutes } from "./routes/admin/dashboard.js";
@@ -168,6 +169,7 @@ async function main(): Promise<void> {
       await registerOutlookHistoryRoutes(api);
       await registerPurchaseRoutes(api);
       await registerMiscRoutes(api);
+      await registerPublicMarketFeedRoutes(api);
       await registerAdminSettingsRoutes(api);
       await registerAdminBankTransferRoutes(api);
       await registerAdminDashboardRoutes(api);
