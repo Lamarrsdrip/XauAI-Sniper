@@ -7,7 +7,6 @@ import {
   AlertTriangle, CheckCircle2, Clock3, Database, Radio, ShieldCheck, Wallet,
 } from "lucide-react";
 import { API } from "@/lib/api";
-import M10VsOutlookCard from "@/components/cloud/M10VsOutlookCard";
 import Seo from "@/components/Seo";
 
 const outlookAxios = axios.create({ baseURL: API, withCredentials: true });
@@ -809,12 +808,6 @@ export default function AIMarketOutlookPage() {
             <M10ExecutionCard contract={contract} />
             <div className="grid gap-4"><HourlyContextCard context={contract?.hourlyContext} /><WaitingCard contract={contract} /></div>
           </div>
-          <M10VsOutlookCard
-            m10={comparisonM10}
-            outlook={comparisonHourly}
-            online={contract?.dataHealth === "HEALTHY"}
-            loading={!contract}
-          />
           <AutomatedTradeResultCard result={currentOutlook?.automated_trade_result} />
           <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
             <section className={`${CARD} p-5 sm:p-6`}>
