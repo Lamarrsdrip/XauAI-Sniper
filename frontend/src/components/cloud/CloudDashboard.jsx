@@ -6,7 +6,7 @@ import {
   Clock3, Copy, Flame, Gauge, History, Home, KeyRound, LineChart, Loader2,
   Lock, LogOut, Menu, Pause, Play, RefreshCw, Settings, Shield,
   SlidersHorizontal, Square, TerminalSquare, TrendingUp, TrendingDown, Wifi, XCircle, AlertTriangle, Search, Zap,
-  Bell, GraduationCap, HelpCircle, Download, User, BookOpen, MessageCircle, ShieldCheck, Rocket, ArrowLeft,
+  Bell, GraduationCap, HelpCircle, Download, User, BookOpen, MessageCircle, ShieldCheck, Rocket, ArrowLeft, ChevronRight,
 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
@@ -715,7 +715,7 @@ export default function CloudDashboard() {
 
   return (
     <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online} eaVersion={eaVersion} notifOpen={notifOpen} setNotifOpen={setNotifOpen}>
-      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} openCommand={setModalCommand} commands={commands} />}
+      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} openCommand={setModalCommand} commands={commands} analytics={analytics} />}
       {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} tradingOk={tradingOk} linked={Boolean(license?.linked||status?.license?.linked)} openCommand={setModalCommand} />}
       {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} analytics={analytics} />}
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
@@ -1024,42 +1024,139 @@ function M30ConsensusCard({ events, heartbeat }) {
 // genuine /cloud/monitor/current-opinion evidence -- no new data source --
 // but renders only symbol/direction/P&L/protected status, never the removed
 // fields, and never a Force Close control.
-function HomeOpenPositionSummary({ linked, online, setActive }) {
+// Exchange-style open-position module (Bybit/Binance-tier): symbol · side ·
+// running, big floating P&L, entry/current/stop row, protected-floor line,
+// tap to full trade detail. Only renders when a trade is genuinely open.
+function PositionModule({ linked, online, setActive }) {
   const [opinion, setOpinion] = useState(null);
-
   const fetchOpinion = useCallback(async () => {
     if (!linked || !online) return;
-    try {
-      const r = await commandAxios.get("/cloud/monitor/current-opinion", { params: { _t: Date.now() } });
-      setOpinion(r.data);
-    } catch { /* keep last-known state on transient failure */ }
+    try { const r = await commandAxios.get("/cloud/monitor/current-opinion", { params: { _t: Date.now() } }); setOpinion(r.data); }
+    catch { /* keep last-known state */ }
   }, [linked, online]);
-
   useEffect(() => { fetchOpinion(); const id = setInterval(fetchOpinion, 8000); return () => clearInterval(id); }, [fetchOpinion]);
-
   if (!linked || !online || !opinion?.open) return null;
-  const direction = String(opinion.direction || "").toUpperCase();
+
+  const dir = String(opinion.direction || "").toUpperCase();
+  const isBuy = dir === "BUY";
   const pnl = Number(opinion.floating_pl || 0);
-  const isProtected = Number(opinion.protected_profit || 0) > 0;
+  const prot = Number(opinion.protected_profit || 0);
+  const entry = opinion.entry_price ?? opinion.entry;
+  const current = opinion.current_price ?? opinion.price ?? opinion.current_bid ?? opinion.current;
+  const sl = opinion.sl ?? opinion.stop_loss ?? opinion.sl_price;
+  const px = (v) => (v == null || v === "" ? "—" : Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+  const hasLevels = [entry, current, sl].some((v) => v != null && v !== "");
 
   return (
-    <div className={`${CARD} p-4`} data-testid="home-open-position-summary">
-      <div className="flex items-center justify-between">
-        <span className={MONO_LABEL}>Open Position</span>
-        {isProtected && (
-          <span className="rounded-full border border-emerald-400/25 bg-emerald-300/[0.08] px-2 py-0.5 text-[10px] font-bold text-emerald-300">Protected</span>
+    <div className="overflow-hidden rounded-2xl bg-panel" data-testid="home-open-position-summary">
+      <div className="flex items-center gap-2 px-4 pt-3.5">
+        <span className="text-[15px] font-bold">{opinion.symbol || "XAUUSD"}</span>
+        <span className={AK.cx("rounded-md px-1.5 py-0.5 text-[11px] font-bold", isBuy ? "bg-profit/14 text-profit" : "bg-loss/14 text-loss")}>{dir || "—"}</span>
+        <span className="ml-auto text-[11px] font-semibold uppercase tracking-wider text-gold-300">Running</span>
+      </div>
+      <div className={AK.cx("nums px-4 pt-1.5 text-[28px] font-black tracking-tight", pnl >= 0 ? "text-profit" : "text-loss")}>{money(pnl)}</div>
+      {hasLevels && (
+        <div className="flex px-4 pt-2.5">
+          <div className="flex-1"><div className="text-[10px] uppercase tracking-wider text-white/40">Entry</div><div className="nums mt-0.5 text-[13.5px] font-semibold">{px(entry)}</div></div>
+          <div className="flex-1"><div className="text-[10px] uppercase tracking-wider text-white/40">Current</div><div className="nums mt-0.5 text-[13.5px] font-semibold">{px(current)}</div></div>
+          <div className="flex-1 text-right"><div className="text-[10px] uppercase tracking-wider text-white/40">Stop</div><div className="nums mt-0.5 text-[13.5px] font-semibold">{px(sl)}</div></div>
+        </div>
+      )}
+      <div className="mt-2.5 flex items-center justify-between px-4 py-3">
+        {prot > 0
+          ? <span className="text-[11.5px] text-white/55"><span className="text-gold-300">◆</span> Protected {money(prot)}</span>
+          : <span className="text-[11.5px] text-white/40">Managing position</span>}
+        <button onClick={() => setActive("trading")} className="no-select inline-flex items-center text-[12px] font-semibold text-white/50 active:text-white">Details <ChevronRight className="h-4 w-4" /></button>
+      </div>
+    </div>
+  );
+}
+
+// ── New-Home modules (exchange-class, approved concept) ─────────────────────
+function AccountStrip({ heartbeat, status, online, onClick }) {
+  const tf = status?.production_status?.display_timeframe || "M10";
+  return (
+    <button onClick={onClick} className="no-select flex w-full items-center gap-2.5 rounded-xl border border-white/[0.07] bg-panel px-3 py-2.5 text-left active:bg-white/[0.03]">
+      <span className={AK.cx("h-[7px] w-[7px] flex-none rounded-full", online ? "bg-profit" : "bg-white/30")} style={online ? { boxShadow: "0 0 0 3px rgba(47,211,160,.14)" } : undefined} />
+      <span className="min-w-0 flex-1 truncate text-[12.5px] text-white/50">
+        {online
+          ? <>Live · <b className="font-semibold text-white/80">Acct {heartbeat.account_number || "—"}</b> · {heartbeat.broker_server || "Broker"} · {heartbeat.symbol || "XAUUSD"} · {tf}</>
+          : <>Offline · <b className="font-semibold text-white/70">Waiting for EA heartbeat</b></>}
+      </span>
+      <ChevronRight className="h-4 w-4 flex-none text-white/25" />
+    </button>
+  );
+}
+
+function EquityHero({ online, equity, balance, pnl, pnlPos, points, linked }) {
+  const parts = online ? money(equity).replace(/^[-$]*/, "").split(".") : ["—", ""];
+  const pctTxt = online && pnl && balance ? `${((pnl / Number(balance)) * 100).toFixed(2)}%` : "";
+  return (
+    <div className="px-1 pt-1">
+      <div className="text-[11px] uppercase tracking-[0.14em] text-white/40">Equity</div>
+      <div className="mt-1.5 flex items-end justify-between gap-4">
+        <div className="nums text-[34px] font-extrabold leading-none tracking-tight">
+          {online ? <>${parts[0]}<span className="text-[24px] text-white/45">.{parts[1] || "00"}</span></> : "—"}
+        </div>
+        {online && <div className="w-[104px] flex-none"><Sparkline points={points} tone={pnlPos ? "#2FD3A0" : "#F0616D"} height="h-[44px]" /></div>}
+      </div>
+      <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-[12.5px]">
+        {online ? <>
+          <span className={AK.cx("inline-flex items-center gap-1 rounded-lg px-2 py-0.5 font-semibold", pnlPos ? "bg-profit/12 text-profit" : "bg-loss/12 text-loss")}>{pnlPos ? "▲" : "▼"} {money(pnl)}</span>
+          <span className="text-white/45">{pctTxt ? `${pnlPos ? "+" : ""}${pctTxt} today · ` : ""}Bal {money(balance)}</span>
+        </> : <span className="text-white/40">{linked ? "Waiting for EA heartbeat" : "Link your license to go live"}</span>}
+      </div>
+    </div>
+  );
+}
+
+function OutlookModule({ outlook, online, onOpen }) {
+  const dir = String(outlook?.primary_direction || "NO_VALID_OUTLOOK").toUpperCase();
+  const actionable = dir === "BUY" || dir === "SELL";
+  const conf = Number(outlook?.confidence_pct || 0);
+  const entryLo = outlook?.preferred_entry_zone_low, entryHi = outlook?.preferred_entry_zone_high;
+  return (
+    <div className="overflow-hidden rounded-2xl bg-panel">
+      <div className="flex items-center justify-between px-4 pb-2 pt-3">
+        <div className="flex items-center gap-2 text-[13.5px] font-semibold"><LineChart className="h-4 w-4 text-gold-300" /> AI Market Outlook</div>
+        <button onClick={onOpen} className="no-select inline-flex items-center text-[12px] text-white/40 active:text-white/70">View <ChevronRight className="h-4 w-4" /></button>
+      </div>
+      <div className="px-4 pb-4">
+        {actionable ? <>
+          <div className="flex items-center gap-2.5">
+            <span className={AK.cx("rounded-lg px-2.5 py-1 text-[15px] font-bold", dir === "BUY" ? "bg-profit/14 text-profit" : "bg-loss/14 text-loss")}>{dir}</span>
+            <span className="text-[12px] text-white/45">XAUUSD · {conf >= 55 ? "execution ready" : "forming"}</span>
+            <div className="ml-auto text-right"><div className="nums text-[17px] font-bold">{conf}%</div><div className="text-[10px] uppercase tracking-wider text-white/40">Confidence</div></div>
+          </div>
+          <div className="mt-3 h-[5px] overflow-hidden rounded bg-[#20242e]"><div className="h-full rounded" style={{ width: `${Math.max(4, Math.min(100, conf))}%`, background: "linear-gradient(90deg,#C9962E,#F3C969)" }} /></div>
+          <div className="mt-3 flex gap-6">
+            <div><div className="text-[10px] uppercase tracking-wider text-white/40">Entry</div><div className="nums mt-0.5 text-[13.5px] font-semibold">{entryLo ?? "—"}{entryHi ? `–${entryHi}` : ""}</div></div>
+            <div><div className="text-[10px] uppercase tracking-wider text-white/40">Stop</div><div className="nums mt-0.5 text-[13.5px] font-semibold">{outlook?.suggested_sl ?? "—"}</div></div>
+            <div><div className="text-[10px] uppercase tracking-wider text-white/40">Target</div><div className="nums mt-0.5 text-[13.5px] font-semibold">{outlook?.tp1_price ?? "—"}</div></div>
+          </div>
+        </> : (
+          <div className="flex items-center gap-2 py-1 text-[12.5px] text-white/45"><span className="h-[7px] w-[7px] rounded-full bg-gold-300/70" /> No valid setup right now — XauCloud is watching the market.</div>
         )}
       </div>
-      <div className="mt-2 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className={`font-mono text-[13px] font-bold ${direction === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{direction || "—"}</span>
-          <span className="truncate text-[13px] text-white/70">{opinion.symbol || "XAUUSD"}</span>
+    </div>
+  );
+}
+
+function StatChips({ online, ddNum, winRate, spread, openTrades }) {
+  const items = [
+    ["Open risk", online ? `${Number(ddNum || 0).toFixed(1)}%` : "—"],
+    ["Win rate", winRate != null ? `${Number(winRate).toFixed(0)}%` : "—"],
+    ["Spread", online ? `${spread ?? "-"}pts` : "—"],
+    ["Open", online ? openTrades : "—"],
+  ];
+  return (
+    <div className="native-scroll flex gap-2.5 overflow-x-auto">
+      {items.map(([l, v]) => (
+        <div key={l} className="min-w-[86px] flex-1 rounded-xl border border-white/[0.07] bg-panel px-3 py-2.5">
+          <div className="text-[10px] uppercase tracking-wider text-white/40">{l}</div>
+          <div className="nums mt-1 text-[15px] font-bold">{v}</div>
         </div>
-        <span className={`flex-none font-mono text-[13px] font-bold ${pnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{money(pnl)}</span>
-      </div>
-      <button onClick={() => setActive("trading")} className="mt-3 w-full rounded-xl border border-white/[0.08] bg-white/[0.03] py-2 text-[11px] font-semibold text-white/70 transition hover:border-gold-300/25 hover:text-gold-200">
-        View Trade
-      </button>
+      ))}
     </div>
   );
 }
@@ -1163,101 +1260,69 @@ function BotControlCard({ heartbeat, online, linked, openTrades, openCommand, co
 
   const disabled = !online || !linked || Boolean(turningTo);
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-3.5">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <AK.Dot tone={running ? "profit" : online ? "gold" : "neutral"} pulse={Boolean(turningTo)} />
-          <span className="text-[15px] font-bold leading-none">Bot {stateLabel}</span>
+    <div className="flex items-center gap-3 px-4 py-3.5">
+      <span className={AK.cx("flex h-9 w-9 flex-none items-center justify-center rounded-xl", running ? "bg-profit/12 text-profit" : online ? "bg-gold-300/12 text-gold-300" : "bg-white/[0.06] text-white/40")}>
+        <Bot className="h-[18px] w-[18px]" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="text-[14.5px] font-semibold leading-tight">Trading Bot · {stateLabel}</div>
+        <div className="mt-0.5 text-[11.5px] leading-4 text-white/45">
+          {running ? "Opening valid trades automatically" : online ? "New entries paused — open trades protected" : "Waiting for EA heartbeat"}
         </div>
-        <p className="mt-1.5 text-[11.5px] leading-4 text-white/45">
-          {running ? "Opening valid trades automatically." : online ? "New entries paused — open trades stay protected." : "Waiting for your EA heartbeat."}
-        </p>
       </div>
-      <AK.Button variant={running ? "dark" : "primary"} onClick={running ? turnOff : turnOn} disabled={disabled} className="flex-none">
-        {turningTo ? "Working…" : running ? "Turn Off" : "Turn On"}
-      </AK.Button>
+      <button type="button" role="switch" aria-checked={running} aria-label="Toggle trading bot" disabled={disabled}
+        onClick={() => (running ? turnOff() : turnOn())}
+        className={AK.cx("relative h-[29px] w-[50px] flex-none rounded-full transition-colors disabled:opacity-40", running ? "bg-gold-300" : "bg-white/[0.14]")}>
+        <span className={AK.cx("absolute top-[3px] h-[23px] w-[23px] rounded-full bg-black shadow transition-all", running ? "left-[24px]" : "left-[3px]")} />
+      </button>
     </div>
   );
 }
 
-function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, hasSufficientAnalytics, events, setActive, refresh, openCommand, commands }) {
+function HomePage({ status, heartbeat, licenseInfo, online, equityPoints, events, setActive, openCommand, commands, analytics }) {
   const [homeOutlook, setHomeOutlook] = useState(null);
-  const [outlookStatus, setOutlookStatus] = useState({ loading:true, requestFailed:false });
-  const openTrades = online ? Number(status?.open_trades||heartbeat.open_positions||0) : 0;
-  const ddNum      = Number(heartbeat.drawdown||0);
-  const riskTone   = ddNum>5?"red":ddNum>2?"amber":"green";
-  const pnlNum     = Number(heartbeat.daily_pnl||0);
-  const pnlPos     = pnlNum >= 0;
-  const aiEvent    = latestAiFieldsEvent(events);
-  const conf       = Number(getEventField(aiEvent, "ai_confidence", 0)) || 0;
-  const bias       = getMarketBias(aiEvent, heartbeat);
-  const botState   = humanBotState(heartbeat.bot_state, openTrades, tradingOk, online);
-  const m10Signal  = latestM10Signal(events, heartbeat);
+  const openTrades = online ? Number(status?.open_trades || heartbeat.open_positions || 0) : 0;
+  const pnlNum = Number(heartbeat.daily_pnl || 0);
+  const pnlPos = pnlNum >= 0;
+  const linked = Boolean(licenseInfo.activation_key);
+  const winRate = analytics?.sufficient_data ? analytics.win_rate : null;
+  const ddNum = Number(heartbeat.drawdown || 0);
 
   return (
-    <AK.Screen>
-      {/* Account header — dense, prominent inline numbers (not two boxes) */}
-      <AK.Panel className="p-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <AK.Dot tone={online ? (openTrades > 0 ? "gold" : tradingOk ? "profit" : "neutral") : "neutral"} pulse={online} />
-            <span className="truncate text-[13px] font-bold">{botState}</span>
-            <span className="truncate text-[11px] text-white/35">{online ? `${heartbeat.symbol || "XAUUSD"} · ${status?.production_status?.display_timeframe || "M10"}` : "Offline"}</span>
-          </div>
-          <button onClick={refresh} aria-label="Refresh" className="no-select flex-none rounded-full p-1.5 text-white/40 active:scale-90"><RefreshCw className="h-4 w-4" /></button>
-        </div>
-        <div className="mt-3 flex items-end justify-between gap-4">
-          <AK.BigStat label="Equity" value={online ? money(heartbeat.equity) : "—"} sub={online ? `Bal ${money(heartbeat.balance)}` : (licenseInfo?.activation_key ? "Waiting for EA" : "No license linked")} />
-          <div className="min-w-0 text-right">
-            <div className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-white/35">Today</div>
-            <div className={AK.cx("nums mt-1 text-[1.55rem] font-black leading-none tracking-tight", online ? (pnlPos ? "text-profit" : "text-loss") : "text-white")}>{online ? money(pnlNum) : "—"}</div>
-            <div className="mt-1 truncate text-[11px] text-white/40">{online && pnlNum && heartbeat.balance ? `${((pnlNum / Number(heartbeat.balance)) * 100).toFixed(2)}%` : "P&L"}</div>
-          </div>
-        </div>
-        <div className="mt-3">
-          <Sparkline points={equityPoints} tone={online ? (openTrades > 0 ? "#F3C969" : "#34D399") : "#C9962E"} height="h-[52px]" />
-          {online && !hasSufficientAnalytics && <p className="mt-1 text-[10px] text-white/30">Curve fills in as the EA reports closed trades.</p>}
-        </div>
-      </AK.Panel>
+    <div className="space-y-3 pt-1">
+      {/* Account/connection strip — tap for account & license */}
+      <AccountStrip heartbeat={heartbeat} status={status} online={online} onClick={() => setActive("license")} />
 
-      {/* Prominent push-enable prompt */}
+      {/* Equity hero — inline P&L + sparkline (portfolio-value pattern) */}
+      <EquityHero online={online} equity={heartbeat.equity} balance={heartbeat.balance} pnl={pnlNum} pnlPos={pnlPos} points={equityPoints} linked={linked} />
+
+      {/* Bot toggle */}
+      <AK.Panel><BotControlCard heartbeat={heartbeat} online={online} linked={linked} openTrades={openTrades} openCommand={openCommand} commands={commands} /></AK.Panel>
+
       <NotificationPrompt />
 
-      {/* Bot control — a control row */}
-      <AK.Panel>
-        <BotControlCard heartbeat={heartbeat} online={online} linked={Boolean(licenseInfo.activation_key)} openTrades={openTrades} openCommand={openCommand} commands={commands} />
-      </AK.Panel>
+      {/* One market-intelligence module — full evidence/history on tap */}
+      <OutlookModule outlook={homeOutlook} online={online} onOpen={() => { window.location.href = "/ai-market-outlook"; }} />
 
-      {/* Market intelligence + position — existing functional modules (restyle pass queued) */}
-      <AIMarketOutlookCard linked={Boolean(licenseInfo.activation_key)} online={online} onOutlookChange={setHomeOutlook} onStatusChange={setOutlookStatus} />
-      {online && <M10SignalCard events={events} heartbeat={heartbeat} />}
-      <M10VsOutlookCard m10={m10Signal} outlook={homeOutlook} online={online} loading={outlookStatus.loading} requestFailed={outlookStatus.requestFailed} />
-      <HomeOpenPositionSummary linked={Boolean(licenseInfo.activation_key)} online={online} setActive={setActive} />
+      {/* Focused open-position module (only when a trade is live) */}
+      <PositionModule linked={linked} online={online} setActive={setActive} />
 
-      {/* Recent activity — timeline feed */}
+      {/* Dense stat chip row — not a box grid */}
+      <StatChips online={online} ddNum={ddNum} winRate={winRate} spread={heartbeat.spread} openTrades={openTrades} />
+
+      {/* 2–3 most important events — full timeline on tap */}
       <HomeRecentActivity events={events} onOpenFull={() => setActive("activity")} />
 
-      {/* Snapshot — one panel of inline stats, not six boxes */}
-      {online && (
+      {!linked && (
         <AK.Panel>
-          <AK.PanelHead title="Snapshot" />
-          <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-4 pb-4 pt-1">
-            <AK.Stat label="Open trades" value={openTrades} tone={openTrades > 0 ? "gold" : undefined} />
-            <AK.Stat label="Open risk" value={pct(ddNum)} tone={dsTone(riskTone)} />
-            <AK.Stat label="Market bias" value={bias.label} tone={dsTone(bias.tone)} />
-            <AK.Stat label="AI confidence" value={conf > 0 ? `${conf}%` : "—"} tone={conf >= 70 ? "profit" : undefined} />
-          </div>
+          <AK.Empty icon={KeyRound} title="Connect your license" body="Link your license key once and live MT5 data streams here." action={<AK.Button size="sm" onClick={() => setActive("license")}>Go to License</AK.Button>} />
         </AK.Panel>
       )}
 
-      {online && <M30ConsensusCard events={events} heartbeat={heartbeat} />}
-
-      {!licenseInfo.activation_key && (
-        <AK.Panel>
-          <AK.Empty icon={KeyRound} title="Connect your license" body="Link your license key once and live MT5 data streams here automatically." action={<AK.Button size="sm" onClick={() => setActive("license")}>Go to License</AK.Button>} />
-        </AK.Panel>
-      )}
-    </AK.Screen>
+      {/* Hidden fetcher — keeps /outlook/current flowing into OutlookModule
+          without rendering the old full card. Detail lives on the Outlook screen. */}
+      <div className="hidden"><AIMarketOutlookCard linked={linked} online={online} onOutlookChange={setHomeOutlook} onStatusChange={() => {}} /></div>
+    </div>
   );
 }
 
