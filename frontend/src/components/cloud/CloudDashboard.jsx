@@ -154,8 +154,10 @@ function pill(tone) {
   return `border rounded-full px-2.5 py-0.5 text-[10px] font-bold ${m[tone]||m.neutral}`;
 }
 function cardTone(tone) {
-  const m = { green:"border-emerald-400/18 bg-emerald-300/[0.06]", red:"border-red-400/18 bg-red-500/[0.06]", amber:"border-gold-300/18 bg-gold-300/[0.06]", blue:"border-sky-300/18 bg-sky-300/[0.06]", violet:"border-violet-300/18 bg-violet-300/[0.06]" };
-  return `border rounded-2xl ${m[tone]||"border-white/[0.07] bg-[#0d0e13]"}`;
+  // Borderless flush tints — match the exchange-style panels (no floating
+  // bordered tiles). Default is the plain panel surface.
+  const m = { green:"bg-emerald-300/[0.07]", red:"bg-red-500/[0.07]", amber:"bg-gold-300/[0.07]", blue:"bg-sky-300/[0.07]", violet:"bg-violet-300/[0.07]" };
+  return `rounded-2xl ${m[tone]||"bg-[#0C0D12]"}`;
 }
 
 // ─── Shared components ────────────────────────────────────────────────────────
@@ -1371,7 +1373,7 @@ function IntelligencePage({ heartbeat, events, status }) {
   return (
     <div className="space-y-4">
       {/* AI Director */}
-      <div className="rounded-3xl border border-violet-400/20 bg-violet-300/[0.06] p-5">
+      <div className="rounded-2xl bg-violet-300/[0.07] p-4">
         <div className={`mb-3 flex items-center gap-2 ${MONO_LABEL} text-violet-300`}>
           <Brain className="h-3.5 w-3.5" /> AI Director · Claude Sonnet + GPT
         </div>
@@ -1390,7 +1392,7 @@ function IntelligencePage({ heartbeat, events, status }) {
       </div>
 
       {/* ML */}
-      <div className="rounded-3xl border border-sky-400/18 bg-sky-300/[0.05] p-5">
+      <div className="rounded-2xl bg-sky-300/[0.07] p-4">
         <div className={`mb-3 flex items-center gap-2 ${MONO_LABEL} text-sky-300`}>
           <Activity className="h-3.5 w-3.5" /> ML Warm-Start · Local patterns + Hive
         </div>
@@ -1769,7 +1771,7 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
   return (
     <div className="space-y-4">
       {/* Key card */}
-      <div className="rounded-3xl border border-gold-300/20 bg-gold-300/[0.06] p-5">
+      <div className="rounded-2xl bg-gold-300/[0.07] p-4">
         <div className={`mb-2 ${MONO_LABEL} text-gold-300`}>Activation key</div>
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0 break-words font-mono text-xl font-black">{info?.activation_key||"No license linked"}</div>
