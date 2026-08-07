@@ -1268,18 +1268,19 @@ function SetupHealth({ checks=[] }) {
 function TradingPage({ heartbeat, events, online, tradingOk, linked, openCommand }) {
   const openTrades = online ? Number(heartbeat.open_positions||0) : 0;
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Open trades" value={openTrades} detail="EA-reported" icon={History} tone="amber" />
-        <Metric label="Symbol"      value={online?heartbeat.symbol||"XAUUSD":"—"} detail={heartbeat.timeframe||"UNKNOWN"} icon={TerminalSquare} tone="blue" />
-        <Metric label="Spread"      value={online?`${heartbeat.spread??"-"}pts`:"—"} detail="Current quote" icon={Activity} tone="amber" />
-        <Metric label="Bot state"   value={humanBotState(heartbeat.bot_state, openTrades, tradingOk, online)} detail={heartbeat.last_action||"No action yet"} icon={Bot} tone={online?"green":"neutral"} />
-      </div>
-      {/* AI Trading Assistant — the conversational feed lives here now,
-          not under Activity. Activity tab still has the raw log for anyone
-          who wants it; this is the default, human-readable experience. */}
+    <AK.Screen>
+      <AK.ScreenHeader title="Trading" sub={online ? `${heartbeat.symbol || "XAUUSD"} · ${heartbeat.timeframe || "M10"}` : "Terminal offline"} />
+      {/* Compact market strip — dense inline stats, not a metric-card grid */}
+      <AK.Panel>
+        <div className="grid grid-cols-3 gap-x-3 px-4 py-3.5">
+          <AK.Stat label="Open" value={online ? openTrades : "—"} tone={openTrades > 0 ? "gold" : undefined} />
+          <AK.Stat label="Spread" value={online ? `${heartbeat.spread ?? "-"}pts` : "—"} />
+          <AK.Stat label="Bot" value={humanBotState(heartbeat.bot_state, openTrades, tradingOk, online)} tone={online ? (tradingOk ? "profit" : "gold") : undefined} />
+        </div>
+      </AK.Panel>
+      {/* Focused position module + human-readable execution feed (flush panels) */}
       <AIThoughtFeed linked={linked} onForceClose={openCommand} />
-    </div>
+    </AK.Screen>
   );
 }
 
@@ -1289,59 +1290,58 @@ function AnalyticsPage({ heartbeat, events, equityPoints, analytics }) {
   const blocks = weightedEventCount(events.filter(e=>eventCategory(e)==="blocks"));
   const errors = weightedEventCount(events.filter(e=>eventCategory(e)==="errors"));
   const sufficient = Boolean(analytics?.sufficient_data);
+  const modules = Object.entries(events.reduce((acc, e) => {
+    const mod = getEventField(e, "module", "Unspecified") || "Unspecified";
+    acc[mod] = (acc[mod] || 0) + Number(e.repeat_count || 1);
+    return acc;
+  }, {})).sort((a, b) => b[1] - a[1]).slice(0, 8);
   return (
-    <div className="space-y-4">
-      {/* v6.25.3 owner directive 2026-07-17 (Phase 7A P0) -- this curve and
-          the metrics below it are now built from real closed-trade records
-          the EA reports at close (GET /cloud/performance/analytics), not a
-          made-up interpolation of the current balance/equity/daily_pnl. */}
-      <Card title="Equity curve">
-        <div className="mb-2 flex items-center justify-between">
-          <span className={MONO_LABEL}>Realized P&L (verified trades)</span>
-          <span className="font-mono text-[13px] font-bold text-gold-200">
-            {sufficient ? money(analytics.realized_pnl) : "—"}
-          </span>
-        </div>
-        <Sparkline points={equityPoints} tone="#d4af37" height="h-28" />
+    <AK.Screen>
+      <AK.ScreenHeader title="Analytics" sub="Verified performance from EA-reported closed trades" />
+      {/* Equity — realized P&L headline + curve */}
+      <AK.Panel className="p-4">
+        <AK.BigStat label="Realized P&L" value={sufficient ? money(analytics.realized_pnl) : "—"}
+          tone={sufficient ? (Number(analytics.realized_pnl) >= 0 ? "profit" : "loss") : undefined}
+          sub={sufficient ? `${analytics.verified_trade_count} verified trades` : "Not enough verified data yet"} />
+        <div className="mt-3"><Sparkline points={equityPoints} tone="#F3C969" height="h-28" /></div>
         {!sufficient && (
           <p className="mt-2 text-[11px] leading-4 text-white/40">
-            Not enough verified data yet ({analytics?.verified_trade_count ?? 0} of {analytics?.minimum_required ?? 5} closed trades reported by the EA). This fills in automatically as your EA reports real trade closes.
+            {analytics?.verified_trade_count ?? 0} of {analytics?.minimum_required ?? 5} closed trades reported. Fills in automatically as your EA reports real closes.
           </p>
         )}
-      </Card>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Win rate"      value={sufficient?pct(analytics.win_rate):"—"}         detail={sufficient?`${analytics.verified_trade_count} verified trades`:"Not enough data"} icon={TrendingUp}       tone={sufficient&&analytics.win_rate>=50?"green":"amber"} />
-        <Metric label="Profit factor" value={sufficient?analytics.profit_factor.toFixed(2):"—"} detail="Gross profit / gross loss"                                                       icon={CircleDollarSign} tone={sufficient&&analytics.profit_factor>=1?"green":"red"} />
-        <Metric label="Avg pips"      value={sufficient&&analytics.avg_pips!=null?`${analytics.avg_pips.toFixed(1)} pips`:"—"} detail="Average realized result"                          icon={Gauge}            tone="neutral" />
-        <Metric label="Max drawdown"  value={sufficient?money(analytics.max_drawdown):"—"}    detail="Peak-to-trough, verified history"                                                icon={Shield}           tone={sufficient&&analytics.max_drawdown>0?"amber":"neutral"} />
-      </div>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Live P&L"      value={money(heartbeat.daily_pnl)} detail="EA heartbeat (today, unverified)" icon={CircleDollarSign} tone={Number(heartbeat.daily_pnl||0)>=0?"green":"red"} />
-        <Metric label="Floating DD"   value={pct(heartbeat.drawdown)}    detail="Current live floating"            icon={Gauge}            tone={Number(heartbeat.drawdown||0)>5?"red":"amber"} />
-        <Metric label="Trade events"  value={trades}                     detail="Recent feed"         icon={TrendingUp}       tone="green" />
-        <Metric label="Blocks/errors" value={`${blocks}/${errors}`}      detail="Protection vs faults" icon={Shield}          tone={errors?"red":"amber"} />
-      </div>
-      <Card title="Decision breakdown" subtitle="Counts include deduplicated repeats so repeated blocks are visible without flooding the feed.">
-        <DecisionStats events={events} />
-      </Card>
-      <Card title="Module breakdown" subtitle="Which EA modules are making the recent decisions.">
-        <div className="grid gap-2 sm:grid-cols-2">
-          {Object.entries(events.reduce((acc,e)=>{
-            const mod = getEventField(e,"module","Unspecified") || "Unspecified";
-            acc[mod] = (acc[mod] || 0) + Number(e.repeat_count||1);
-            return acc;
-          }, {})).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([module,count])=>(
-            <div key={module} className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-              <div className="min-w-0">
-                <div className="truncate text-[13px] font-semibold">{module}</div>
-                <p className="mt-1 text-[11px] text-white/35">Recent decisions</p>
-              </div>
-              <span className="font-mono text-lg font-black text-gold-200">{count}</span>
-            </div>
-          ))}
+      </AK.Panel>
+      {/* Trade quality — dense inline stats, not KPI boxes */}
+      <AK.Panel>
+        <AK.PanelHead title="Trade quality" />
+        <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-4 pb-4 pt-1">
+          <AK.Stat label="Win rate" value={sufficient ? pct(analytics.win_rate) : "—"} tone={sufficient && analytics.win_rate >= 50 ? "profit" : undefined} />
+          <AK.Stat label="Profit factor" value={sufficient ? analytics.profit_factor.toFixed(2) : "—"} tone={sufficient ? (analytics.profit_factor >= 1 ? "profit" : "loss") : undefined} />
+          <AK.Stat label="Avg result" value={sufficient && analytics.avg_pips != null ? `${analytics.avg_pips.toFixed(1)} pips` : "—"} />
+          <AK.Stat label="Max drawdown" value={sufficient ? money(analytics.max_drawdown) : "—"} tone={sufficient && analytics.max_drawdown > 0 ? "gold" : undefined} />
         </div>
-      </Card>
-    </div>
+      </AK.Panel>
+      {/* Live today (unverified heartbeat) */}
+      <AK.Panel>
+        <AK.PanelHead title="Live · today" />
+        <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-4 pb-4 pt-1">
+          <AK.Stat label="Live P&L" value={money(heartbeat.daily_pnl)} tone={Number(heartbeat.daily_pnl || 0) >= 0 ? "profit" : "loss"} />
+          <AK.Stat label="Floating DD" value={pct(heartbeat.drawdown)} tone={Number(heartbeat.drawdown || 0) > 5 ? "loss" : "gold"} />
+          <AK.Stat label="Trade events" value={trades} />
+          <AK.Stat label="Blocks / errors" value={`${blocks}/${errors}`} tone={errors ? "loss" : undefined} />
+        </div>
+      </AK.Panel>
+      {/* Module breakdown — rows, not tiles */}
+      {modules.length > 0 && (
+        <AK.Panel>
+          <AK.PanelHead title="Recent decisions by module" />
+          <div>
+            {modules.map(([module, count], i) => (
+              <AK.Row key={module} label={module} value={count} valueTone="gold" last={i === modules.length - 1} />
+            ))}
+          </div>
+        </AK.Panel>
+      )}
+    </AK.Screen>
   );
 }
 
@@ -1431,40 +1431,65 @@ function IntelligencePage({ heartbeat, events, status }) {
 }
 
 // ─── Activity ─────────────────────────────────────────────────────────────────
+// Plain-English event feed. Human headline + short detail per event; the full
+// technical row (facts, raw reason, Force Open) opens in a detail sheet on tap.
+const activityHeadline = (e) => ({ entries: "Trade opened", exits: "Trade closed", blocks: "Signal skipped", risk: "Risk update", ai: "AI decision", errors: "Error", overrides: "Manual override" }[eventCategory(e)] || "Event");
+const activityFeedTone = (e) => {
+  const c = eventCategory(e);
+  if (c === "entries" || c === "risk" || c === "overrides") return "gold";
+  if (c === "errors") return "loss";
+  if (c === "ai") return "info";
+  if (c === "exits") { const raw = getEventField(e, "profit", ""); return raw === "" ? "white" : (Number(raw) >= 0 ? "profit" : "loss"); }
+  return "white";
+};
+const activityDetail = (e) => {
+  const c = eventCategory(e);
+  const sym = e.symbol || getEventField(e, "symbol", "XAUUSD");
+  const dir = getEventField(e, "signal_direction", "") || getEventField(e, "position_direction", "");
+  const raw = getEventField(e, "profit", "");
+  if (c === "entries") return `${dir ? dir + " " : ""}${sym}`;
+  if (c === "exits") return `${sym}${raw !== "" ? ` · ${money(Number(raw))}` : ""}`;
+  return getEventReason(e) || getEventDecision(e) || "";
+};
 function ActivityPage({ events, filter, setFilter, onForceOpen }) {
   const [search, setSearch] = useState("");
-  const visibleEvents = useMemo(()=>events.filter(e=>eventMatchesSearch(e, search)), [events, search]);
+  const [sel, setSel] = useState(null);
+  const visibleEvents = useMemo(() => events.filter((e) => eventMatchesSearch(e, search)), [events, search]);
   return (
-    <div className="space-y-4">
-      {/* Filter chips */}
-      <div className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          {FILTERS.map(([id,label])=>(
-            <button key={id} onClick={()=>setFilter(id)}
-              data-testid={id==="entries"?"activity-filter-trade":undefined}
-              className={`rounded-full px-3.5 py-1.5 text-[12px] font-semibold transition ${filter===id?"bg-gold-300 text-black":"border border-white/[0.07] text-white/45 hover:text-white hover:border-white/15"}`}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <label className="flex items-center gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.035] px-3 py-2.5">
-          <Search className="h-4 w-4 text-white/30" />
-          <input
-            value={search}
-            onChange={e=>setSearch(e.target.value)}
-            placeholder="Search ticket, reason, module, symbol, time"
-            className="min-w-0 flex-1 bg-transparent text-[13px] text-white outline-none placeholder:text-white/25"
-          />
-        </label>
+    <AK.Screen>
+      <AK.ScreenHeader title="Activity" sub="Entries, exits, blocks, AI decisions and errors" />
+      {/* Filter chips — horizontal scroll */}
+      <div className="native-scroll -mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5">
+        {FILTERS.map(([id, label]) => (
+          <button key={id} onClick={() => setFilter(id)} data-testid={id === "entries" ? "activity-filter-trade" : undefined}
+            className={AK.cx("no-select flex-none rounded-lg px-3 py-1.5 text-[12px] font-semibold", filter === id ? "bg-gold-300 text-black" : "bg-white/[0.05] text-white/50 active:text-white")}>
+            {label}
+          </button>
+        ))}
       </div>
-      <DecisionStats events={visibleEvents} />
-      <Card title="Bot Decision Feed" subtitle="Clean M10/M30 decision timeline: evidence, candidates, entries, cancellations, exits, risk, AI telemetry, errors, and overrides. Repeated noise is compressed.">
-        {visibleEvents.length
-          ? <div className="space-y-2">{visibleEvents.map((e,i)=><EventRow key={e.id||i} event={e} onForceOpen={onForceOpen} />)}</div>
-          : <Empty title="No matching activity yet" body="Only meaningful decisions from your linked license and MT5 account will appear here. Old cloud records are hidden." icon={Activity} />}
-      </Card>
-      <DecisionHistory events={visibleEvents} />
-    </div>
+      {/* Search */}
+      <div className="flex items-center gap-2 rounded-xl bg-white/[0.05] px-3 py-2.5">
+        <Search className="h-4 w-4 flex-none text-white/30" />
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search ticket, reason, symbol, time"
+          className="min-w-0 flex-1 bg-transparent text-[13px] text-white outline-none placeholder:text-white/25" />
+      </div>
+      {/* Timeline feed */}
+      <AK.Panel>
+        {visibleEvents.length ? (
+          <div className="py-1.5">
+            {visibleEvents.map((e, i) => (
+              <AK.FeedItem key={e.id || i} time={clockTime(e.ts)} title={activityHeadline(e)} tone={activityFeedTone(e)} detail={activityDetail(e)} onClick={() => setSel(e)} last={i === visibleEvents.length - 1} />
+            ))}
+          </div>
+        ) : (
+          <AK.Empty icon={Activity} title="No matching activity yet" body="Only meaningful decisions from your linked license and MT5 account appear here." />
+        )}
+      </AK.Panel>
+      {/* Full technical detail + Force Open, on tap */}
+      <AK.Sheet open={Boolean(sel)} onClose={() => setSel(null)} title="Event details">
+        {sel && <EventRow event={sel} onForceOpen={(cmd) => { setSel(null); onForceOpen(cmd); }} />}
+      </AK.Sheet>
+    </AK.Screen>
   );
 }
 
