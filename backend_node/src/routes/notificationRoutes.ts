@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getDb } from "../db.js";
 import { rateLimit, requireCloudUser } from "../auth.js";
 import { getUserLicense } from "../services/commandLicense.js";
+import { getVapidPublicKey, saveSubscription, removeSubscription, sendWebPushToUser } from "../services/webPush.js";
 import {
   NOTIFICATION_CATEGORIES,
   completeActiveDevices,
@@ -98,6 +99,27 @@ export async function registerNotificationRoutes(app: FastifyInstance): Promise<
   app.get("/outlook/notifications/onesignal-app-id", async () => getOnesignalStatus());
 
   app.get("/outlook/notifications/my-user-id", { preHandler: requireCloudUser }, async (request) => ({ user_id: cloudUser(request)["id"] }));
+
+  // ── First-party Web Push (VAPID) — additive, OneSignal stays as fallback ──
+  // Public: the browser needs the VAPID public key to create a subscription.
+  app.get("/notifications/web-push/key", async () => ({ public_key: await getVapidPublicKey() }));
+  app.post("/notifications/web-push/subscribe", { preHandler: requireCloudUser }, async (request, reply) => {
+    const user = cloudUser(request);
+    const body = (request.body ?? {}) as { subscription?: Record<string, unknown> };
+    const ok = await saveSubscription(String(user["id"]), body.subscription, (request.headers["user-agent"] as string) ?? "");
+    if (!ok) return reply.code(400).send({ detail: "Invalid push subscription." });
+    return { ok: true };
+  });
+  app.post("/notifications/web-push/unsubscribe", { preHandler: requireCloudUser }, async (request) => {
+    const body = (request.body ?? {}) as { endpoint?: string };
+    await removeSubscription(String(body.endpoint ?? ""));
+    return { ok: true };
+  });
+  app.post("/notifications/web-push/test", { preHandler: requireCloudUser }, async (request) => {
+    const user = cloudUser(request);
+    const sent = await sendWebPushToUser(String(user["id"]), { title: "XauCloud", body: "Push notifications are working on this device.", deep_link: "/command/dashboard", category: "SYSTEM" });
+    return { ok: true, sent };
+  });
 
   app.post("/outlook/notifications/subscribe", { preHandler: requireCloudUser }, async (request, reply) => {
     const body = PushSubscriptionInSchema.parse(request.body);

@@ -18,6 +18,7 @@ import { API } from "@/lib/api";
 import { logoutOneSignalUser } from "@/lib/onesignal";
 import * as UI from "@/lib/ui";
 import * as AK from "@/lib/appkit";
+import { webPushSupported, webPushStatus, enableWebPush, disableWebPush, testWebPush } from "@/lib/webpush";
 
 // Map the legacy tone vocabulary used by helpers below (green/red/amber/blue/
 // violet) onto the XauCloud design-system tones so screens read consistently.
@@ -1815,6 +1816,34 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
   );
 }
 
+// First-party Web Push opt-in (per device). Additive to OneSignal.
+function PushSettings() {
+  const [state, setState] = useState({ supported: true, permission: "default", subscribed: false });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const refresh = useCallback(async () => { try { setState(await webPushStatus()); } catch { /* ignore */ } }, []);
+  useEffect(() => { refresh(); }, [refresh]);
+  if (!webPushSupported()) return null;
+  const enable = async () => { setBusy(true); setMsg(""); try { await enableWebPush(commandAxios); setMsg("Push enabled on this device."); await refresh(); } catch (e) { setMsg(e?.message || "Could not enable push."); } finally { setBusy(false); } };
+  const disable = async () => { setBusy(true); setMsg(""); try { await disableWebPush(commandAxios); setMsg("Push turned off on this device."); await refresh(); } catch (e) { setMsg(e?.message || "Could not turn off push."); } finally { setBusy(false); } };
+  const test = async () => { setBusy(true); setMsg(""); try { const r = await testWebPush(commandAxios); setMsg(r?.sent ? "Test sent — check your notifications." : "No active subscription on this device yet."); } catch { setMsg("Could not send test."); } finally { setBusy(false); } };
+  return (
+    <AK.Panel>
+      <AK.PanelHead title="Push notifications" />
+      <div className="px-4 pb-4 pt-1">
+        <p className="text-[12px] leading-5 text-white/50">First-party XauCloud push — trade, outlook, license and system alerts on this device. No third-party account.</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {state.subscribed
+            ? <AK.Button variant="dark" size="sm" onClick={disable} disabled={busy}>Turn off on this device</AK.Button>
+            : <AK.Button variant="primary" size="sm" onClick={enable} disabled={busy}>{busy ? "Working…" : "Enable push"}</AK.Button>}
+          {state.subscribed && <AK.Button variant="outline" size="sm" onClick={test} disabled={busy}>Send test</AK.Button>}
+        </div>
+        {msg && <div className="mt-3 rounded-lg bg-white/[0.05] px-3 py-2 text-[12px] text-white/60">{msg}</div>}
+      </div>
+    </AK.Panel>
+  );
+}
+
 // ─── Settings ─────────────────────────────────────────────────────────────────
 function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
   const [diagOpen, setDiagOpen] = useState(false);
@@ -1855,6 +1884,8 @@ function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
           </button>
         </div>
       </Card>
+
+      <PushSettings />
 
       {/* ── Hidden diagnostics ── tap to expand, invisible to normal users */}
       <div className="rounded-2xl border border-white/[0.05] bg-white/[0.01]">
