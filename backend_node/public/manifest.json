@@ -1,0 +1,17 @@
+{
+  "name": "XauCloud Command Center",
+  "short_name": "XauCloud",
+  "description": "Monitor and control your licensed XauCloud MT5 bot from a mobile-first Command Center.",
+  "start_url": "/command/dashboard?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "fullscreen", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#050505",
+  "theme_color": "#07090d",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "categories": ["finance", "business", "productivity"]
+}

@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
+import fastifyStatic from "@fastify/static";
 import { ZodError } from "zod";
 import { env, IS_PRODUCTION } from "./env.js";
 import { connectDb, closeDb } from "./db.js";
@@ -46,6 +50,20 @@ import { hourlyGenerationTick } from "./services/marketOutlookHourlyTick.js";
 import { trackOutlookLifecycleTick } from "./services/marketOutlookTick.js";
 import { enqueueIfActionable } from "./services/outlookExecution.js";
 import { runStartupTasks } from "./services/startup.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Read once at startup rather than via reply.sendFile() -- @fastify/static's
+// sendFile treats "index.html" served for the "/" URL as a directory-index
+// case and attempts an internal redirect, which throws ForbiddenError with
+// index:false. Reading the bytes directly sidesteps that entirely. Missing
+// in local dev when the frontend hasn't been built into ./public.
+let indexHtml: Buffer | null = null;
+try {
+  indexHtml = readFileSync(path.join(__dirname, "../public/index.html"));
+} catch {
+  indexHtml = null;
+}
 
 const app = Fastify({
   logger: {
@@ -101,7 +119,26 @@ async function main(): Promise<void> {
   });
   await app.register(cookie);
 
+  // Serves the CRA-built frontend (copied into ./public at deploy time).
+  // `index: false` -- index.html is served exclusively via the
+  // notFoundHandler below so every non-API, non-file path (client-side
+  // SPA routes like /dashboard) falls back to it too, not just "/".
+  await app.register(fastifyStatic, {
+    root: path.join(__dirname, "../public"),
+    index: false,
+  });
+
   await registerRootHealthRoute(app);
+
+  // Exact route, not the notFoundHandler fallback below -- @fastify/static
+  // registers its own wildcard GET route that intercepts "/" first and
+  // throws (its internal directory-redirect logic misfires with
+  // index:false); Fastify's router always prefers an exact match over a
+  // wildcard, so this takes priority and serves the SPA shell directly.
+  app.get("/", async (_request, reply) => {
+    if (indexHtml) return reply.type("text/html").send(indexHtml);
+    return reply.callNotFound();
+  });
 
   // Port of server.py's `api_router = APIRouter(prefix="/api")` +
   // `app.include_router(api_router)` -- every /api/* route is registered
@@ -151,6 +188,21 @@ async function main(): Promise<void> {
     },
     { prefix: "/api" },
   );
+
+  // SPA fallback -- any unmatched GET outside /api and /health serves the
+  // frontend's index.html so client-side routing (e.g. /dashboard, /admin)
+  // works on a hard refresh. Unmatched /api/* and non-GET requests keep the
+  // normal JSON 404 shape.
+  app.setNotFoundHandler((request, reply) => {
+    if (request.method === "GET" && !request.url.startsWith("/api/") && request.url !== "/health" && indexHtml) {
+      return reply.type("text/html").send(indexHtml);
+    }
+    return reply.code(404).send({
+      message: `Route ${request.method}:${request.url} not found`,
+      error: "Not Found",
+      statusCode: 404,
+    });
+  });
 
   // Port of server.py:4309 `_outlook_hourly_loop` -- sleeps until the next
   // real UTC hour boundary (not a flat 3600s from server-start time), so it
