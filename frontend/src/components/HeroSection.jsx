@@ -16,12 +16,12 @@ function LiveVisual({ goldPrice }) {
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
           <span className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-white/40">XauCloud · Live</span>
         </div>
-        <span className="rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-amber-200">Gold Mode</span>
+        <span className="rounded-full border border-gold-300/20 bg-gold-300/[0.08] px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-gold-200">Gold Mode</span>
       </div>
 
       <div className="mt-5 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Crosshair size={16} weight="bold" className="text-amber-300" />
+          <Crosshair size={16} weight="bold" className="text-gold-300" />
           <span className="font-mono text-lg font-black text-white">XAUUSD</span>
         </div>
         {quoteAvailable ? (
@@ -41,7 +41,7 @@ function LiveVisual({ goldPrice }) {
         {PIPELINE.map((stage, i) => (
           <React.Fragment key={stage}>
             <div className="flex flex-col items-center gap-1.5">
-              <Circle size={7} weight="fill" className="text-amber-300/70" />
+              <Circle size={7} weight="fill" className="text-gold-300/70" />
               <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-white/35">{stage}</span>
             </div>
             {i < PIPELINE.length - 1 && <span className="h-px flex-1 bg-white/[0.08]" />}
@@ -68,9 +68,9 @@ export default function HeroSection({ goldPrice }) {
         <div className="grid items-center gap-10 lg:grid-cols-[1.15fr_0.85fr] lg:gap-12">
           <div className="text-center lg:text-left">
             <div className="flex flex-wrap items-center justify-center gap-2 lg:justify-start">
-              <div className="inline-flex items-center gap-2 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3.5 py-1.5">
+              <div className="inline-flex items-center gap-2 rounded-full border border-gold-300/20 bg-gold-300/[0.08] px-3.5 py-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">Gold-Only MT5 Expert Advisor</span>
+                <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-gold-200">Gold-Only MT5 Expert Advisor</span>
               </div>
               <a href="https://www.mql5.com/en/market/product/188838" target="_blank" rel="noopener noreferrer"
                 data-testid="hero-mql5-badge"
@@ -89,7 +89,7 @@ export default function HeroSection({ goldPrice }) {
 
             <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row lg:justify-start">
               <a href="#purchase" data-testid="hero-buy-btn"
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-8 py-3.5 text-[14px] font-extrabold text-black transition hover:bg-amber-200">
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-gold-300 px-8 py-3.5 text-[14px] font-extrabold text-black transition hover:bg-gold-200">
                 Get XauCloud
               </a>
               <a href="#performance" data-testid="hero-perf-btn"

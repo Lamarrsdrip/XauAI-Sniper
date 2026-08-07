@@ -97,7 +97,7 @@ export function PaymentMethodModal({ api, priceDisplay, buyerName, buyerEmail, o
                     !m.available
                       ? "border-white/[0.06] bg-white/[0.02] opacity-50 cursor-not-allowed"
                       : isSelected
-                      ? "border-amber-300/40 bg-amber-300/[0.1]"
+                      ? "border-gold-300/40 bg-gold-300/[0.1]"
                       : "border-white/[0.1] bg-white/[0.04] hover:bg-white/[0.08]"
                   }`}
                 >
@@ -128,7 +128,7 @@ export function PaymentMethodModal({ api, priceDisplay, buyerName, buyerEmail, o
           data-testid="payment-method-continue"
           onClick={proceed}
           disabled={!selected}
-          className="mt-5 w-full rounded-full bg-amber-300 px-5 py-3.5 text-[13px] font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-40"
+          className="mt-5 w-full rounded-full bg-gold-300 px-5 py-3.5 text-[13px] font-extrabold text-black transition hover:bg-gold-200 disabled:opacity-40"
         >
           Continue
         </button>
@@ -233,7 +233,7 @@ function BankTransferPanel({ api, buyerName, buyerEmail, onBack, onClose }) {
           <CheckCircle size={40} weight="fill" className="mx-auto text-emerald-400" />
           <h3 className="mt-3 font-heading text-lg font-bold text-white">Payment approved!</h3>
           <p className="mt-1 text-[13px] text-white/50">Check your email for your license PIN and download link.</p>
-          <button onClick={onClose} className="mt-5 w-full rounded-xl bg-amber-300 px-4 py-3 text-[13px] font-bold text-black">Done</button>
+          <button onClick={onClose} className="mt-5 w-full rounded-xl bg-gold-300 px-4 py-3 text-[13px] font-bold text-black">Done</button>
         </div>
       </div>
     );
@@ -267,7 +267,7 @@ function BankTransferPanel({ api, buyerName, buyerEmail, onBack, onClose }) {
 
         <div className="flex items-center justify-between">
           <h3 className="font-heading text-lg font-bold text-white">Nigeria Bank Transfer</h3>
-          <div className="flex items-center gap-1.5 rounded-full bg-amber-300/10 px-2.5 py-1 font-mono text-[11px] font-bold text-amber-300" data-testid="bank-transfer-countdown">
+          <div className="flex items-center gap-1.5 rounded-full bg-gold-300/10 px-2.5 py-1 font-mono text-[11px] font-bold text-gold-300" data-testid="bank-transfer-countdown">
             <Clock size={12} /> {formatCountdown(remaining)}
           </div>
         </div>
@@ -315,7 +315,7 @@ function BankTransferPanel({ api, buyerName, buyerEmail, onBack, onClose }) {
           data-testid="bank-transfer-submitted-btn"
           onClick={markSubmitted}
           disabled={submitting || status !== "BANK_TRANSFER_PENDING"}
-          className="mt-4 w-full rounded-xl bg-amber-300 px-5 py-3.5 text-[13px] font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-50"
+          className="mt-4 w-full rounded-xl bg-gold-300 px-5 py-3.5 text-[13px] font-extrabold text-black transition hover:bg-gold-200 disabled:opacity-50"
         >
           {status === "BANK_TRANSFER_SUBMITTED"
             ? "Submitted — awaiting review"

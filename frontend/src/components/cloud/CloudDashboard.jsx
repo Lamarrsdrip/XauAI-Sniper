@@ -6,6 +6,7 @@ import {
   Clock3, Copy, Flame, Gauge, History, Home, KeyRound, LineChart, Loader2,
   Lock, LogOut, Menu, Pause, Play, RefreshCw, Settings, Shield,
   SlidersHorizontal, Square, TerminalSquare, TrendingUp, TrendingDown, Wifi, XCircle, AlertTriangle, Search, Zap,
+  Bell, GraduationCap, HelpCircle, Download, User, BookOpen, MessageCircle, ShieldCheck, Rocket, ArrowLeft,
 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
@@ -15,6 +16,12 @@ import M10VsOutlookCard, { M10_DECISION_LABELS, M30_LIFECYCLE_LABELS, FRESHNESS_
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
 import { API } from "@/lib/api";
 import { logoutOneSignalUser } from "@/lib/onesignal";
+import * as UI from "@/lib/ui";
+
+// Map the legacy tone vocabulary used by helpers below (green/red/amber/blue/
+// violet) onto the XauCloud design-system tones so screens read consistently.
+const DS_TONE = { green: "profit", red: "loss", amber: "warn", blue: "info", violet: "gold", neutral: "neutral" };
+const dsTone = (t) => DS_TONE[t] || "neutral";
 
 // ─── Axios ───────────────────────────────────────────────────────────────────
 const commandAxios = axios.create({ baseURL: API, withCredentials: true });
@@ -140,11 +147,11 @@ const CARD = "rounded-2xl border border-white/[0.07] bg-[#0d0e13]";
 const MONO_LABEL = "font-mono text-[10px] uppercase tracking-[0.2em] text-white/35";
 
 function pill(tone) {
-  const m = { green:"bg-emerald-400/12 text-emerald-300 border-emerald-400/20", red:"bg-red-500/12 text-red-300 border-red-400/20", amber:"bg-amber-300/12 text-amber-200 border-amber-300/20", blue:"bg-sky-300/12 text-sky-200 border-sky-300/20", neutral:"bg-white/[0.06] text-white/50 border-white/[0.08]", violet:"bg-violet-300/12 text-violet-200 border-violet-300/20" };
+  const m = { green:"bg-emerald-400/12 text-emerald-300 border-emerald-400/20", red:"bg-red-500/12 text-red-300 border-red-400/20", amber:"bg-gold-300/12 text-gold-200 border-gold-300/20", blue:"bg-sky-300/12 text-sky-200 border-sky-300/20", neutral:"bg-white/[0.06] text-white/50 border-white/[0.08]", violet:"bg-violet-300/12 text-violet-200 border-violet-300/20" };
   return `border rounded-full px-2.5 py-0.5 text-[10px] font-bold ${m[tone]||m.neutral}`;
 }
 function cardTone(tone) {
-  const m = { green:"border-emerald-400/18 bg-emerald-300/[0.06]", red:"border-red-400/18 bg-red-500/[0.06]", amber:"border-amber-300/18 bg-amber-300/[0.06]", blue:"border-sky-300/18 bg-sky-300/[0.06]", violet:"border-violet-300/18 bg-violet-300/[0.06]" };
+  const m = { green:"border-emerald-400/18 bg-emerald-300/[0.06]", red:"border-red-400/18 bg-red-500/[0.06]", amber:"border-gold-300/18 bg-gold-300/[0.06]", blue:"border-sky-300/18 bg-sky-300/[0.06]", violet:"border-violet-300/18 bg-violet-300/[0.06]" };
   return `border rounded-2xl ${m[tone]||"border-white/[0.07] bg-[#0d0e13]"}`;
 }
 
@@ -182,7 +189,7 @@ function Card({ title, subtitle, children, action, className="" }) {
 function Empty({ title, body, icon:Icon=Bot }) {
   return (
     <div className="rounded-2xl border border-white/[0.06] bg-black/20 p-8 text-center">
-      <Icon className="mx-auto mb-3 h-6 w-6 text-amber-300/60" />
+      <Icon className="mx-auto mb-3 h-6 w-6 text-gold-300/60" />
       <div className="text-[14px] font-semibold">{title}</div>
       <p className="mx-auto mt-2 max-w-sm text-[12px] leading-5 text-white/38">{body}</p>
     </div>
@@ -214,7 +221,7 @@ function Sparkline({ points=[], tone="#d4af37", height="h-20" }) {
 function EventRow({ event, onForceOpen }) {
   const tone = severityTone(event.severity);
   const d = eventDetails(event);
-  const dotColor = { red:"bg-red-400", amber:"bg-amber-300", green:"bg-emerald-400", blue:"bg-sky-300", violet:"bg-violet-300", neutral:"bg-white/30" }[tone]||"bg-white/30";
+  const dotColor = { red:"bg-red-400", amber:"bg-gold-300", green:"bg-emerald-400", blue:"bg-sky-300", violet:"bg-violet-300", neutral:"bg-white/30" }[tone]||"bg-white/30";
   const module = getEventField(event, "module", "");
   const decision = getEventDecision(event);
   const reason = getEventReason(event);
@@ -295,7 +302,7 @@ function EventRow({ event, onForceOpen }) {
         </div>
         <div className="mt-1 break-words text-[13px] leading-5 text-white/78">{decision}</div>
         {reason && reason !== decision && <div className="mt-1 break-words text-[12px] leading-5 text-white/45">{reason}</div>}
-        {getEventField(event, "blocked_by", "") && <div className="mt-1 text-[12px] text-amber-200/80">Blocked by: {getEventField(event, "blocked_by", "")}</div>}
+        {getEventField(event, "blocked_by", "") && <div className="mt-1 text-[12px] text-gold-200/80">Blocked by: {getEventField(event, "blocked_by", "")}</div>}
         {facts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {facts.slice(0,10).map(([k,v])=>(
@@ -306,7 +313,7 @@ function EventRow({ event, onForceOpen }) {
         {repeat && <div className="mt-2 text-[11px] font-semibold text-violet-200">{repeat}</div>}
         {canForceOpen && (
           <button onClick={forceOpenClick} data-testid="force-open-trade-button"
-            className="mt-2.5 inline-flex items-center gap-1.5 rounded-full border border-amber-300/25 bg-amber-300/10 px-3 py-1.5 text-[11px] font-bold text-amber-200 transition hover:bg-amber-300/20">
+            className="mt-2.5 inline-flex items-center gap-1.5 rounded-full border border-gold-300/25 bg-gold-300/10 px-3 py-1.5 text-[11px] font-bold text-gold-200 transition hover:bg-gold-300/20">
             <Zap className="h-3 w-3" /> Force Open Trade
           </button>
         )}
@@ -399,7 +406,7 @@ function DecisionHistory({ events=[] }) {
               <div className="space-y-2">
                 {items.slice(-8).map((e,i)=>(
                   <div key={e.id||i} className="flex gap-2 text-[12px] leading-5">
-                    <span className="mt-1.5 h-1.5 w-1.5 flex-none rounded-full bg-amber-300/70" />
+                    <span className="mt-1.5 h-1.5 w-1.5 flex-none rounded-full bg-gold-300/70" />
                     <div className="min-w-0">
                       <span className="text-white/75">{getEventDecision(e)}</span>
                       {getEventReason(e) && getEventReason(e)!==getEventDecision(e) && <span className="text-white/35"> · {getEventReason(e)}</span>}
@@ -444,7 +451,7 @@ function NumField({ label, value, onChange, suffix="%", min=0, max, step="0.01",
   return (
     <label className="block">
       <span className="block text-[12px] font-medium text-white/55 mb-1.5">{label}</span>
-      <div className="flex items-center rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 focus-within:border-amber-300/40 transition">
+      <div className="flex items-center rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 focus-within:border-gold-300/40 transition">
         <input type="number" inputMode="decimal" min={min} max={max} step={step} value={value}
           onChange={e=>onChange(Number(e.target.value))}
           className="min-w-0 flex-1 bg-transparent py-2.5 text-[13px] font-semibold text-white outline-none" />
@@ -477,13 +484,13 @@ function CommandModal({ command, onCancel, onSubmit, busy, message, licenseKey }
         <div className="mt-4">
           <label className={`block mb-1.5 ${MONO_LABEL}`}>License key</label>
           <input value={key} onChange={e=>setKey(e.target.value.toUpperCase())} placeholder="ASE-XXXX-XXXX"
-            className="w-full rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 font-mono text-[13px] text-white outline-none focus:border-amber-300/40" />
+            className="w-full rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 font-mono text-[13px] text-white outline-none focus:border-gold-300/40" />
         </div>
-        {message && <div className="mt-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.07] p-3 text-[12px] text-amber-200">{message}</div>}
+        {message && <div className="mt-3 rounded-xl border border-gold-300/20 bg-gold-300/[0.07] p-3 text-[12px] text-gold-200">{message}</div>}
         <div className="mt-5 grid grid-cols-2 gap-2.5">
           <button onClick={onCancel} className="rounded-xl border border-white/[0.08] bg-white/[0.04] py-3 text-[13px] font-semibold text-white/60 hover:text-white transition">Cancel</button>
           <button onClick={()=>onSubmit(key)} disabled={busy}
-            className={`rounded-xl py-3 text-[13px] font-bold disabled:opacity-50 ${command.tone==="red"?"bg-red-400 text-black":"bg-amber-300 text-black"}`}>
+            className={`rounded-xl py-3 text-[13px] font-bold disabled:opacity-50 ${command.tone==="red"?"bg-red-400 text-black":"bg-gold-300 text-black"}`}>
             {busy?"Queueing…":"Confirm"}
           </button>
         </div>
@@ -498,11 +505,8 @@ function useAuthGuard() {
   // in fetchAll. No script-readable bearer token is used.
 }
 
-function AppShell({ active, setActive, children, logout, statusText, online, eaVersion }) {
-  const [moreOpen, setMoreOpen] = useState(false);
-  const [notifOpen, setNotifOpen] = useState(false);
-  const moreActive = MORE_NAV.some(([id])=>id===active);
-  const go = (id)=>{ setActive(id); setMoreOpen(false); };
+function AppShell({ active, setActive, children, logout, statusText, online, eaVersion, notifOpen, setNotifOpen }) {
+  const moreActive = ["more", "education", "intelligence", "control", "license", "settings"].includes(active);
 
   return (
     <div className="min-h-screen bg-[#050507] pb-[calc(5.5rem+env(safe-area-inset-bottom))] text-white" data-testid="bot-monitor-dashboard">
@@ -518,7 +522,7 @@ function AppShell({ active, setActive, children, logout, statusText, online, eaV
             <XauAiLogo size={30} className="flex-none" />
             <div className="min-w-0">
               <div className="truncate text-[14px] font-bold leading-none">XauCloud</div>
-              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-amber-300/55">Command · {eaVersion || "Waiting"}</div>
+              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.22em] text-gold-300/55">Command · {eaVersion || "Waiting"}</div>
             </div>
           </Link>
           <div className="flex items-center gap-2">
@@ -541,30 +545,6 @@ function AppShell({ active, setActive, children, logout, statusText, online, eaV
         {children}
       </main>
 
-      {/* More drawer */}
-      {moreOpen && (
-        <div className="fixed inset-0 z-[70] flex items-end bg-black/60 backdrop-blur-sm" onClick={()=>setMoreOpen(false)}>
-          <div className="w-full rounded-t-[32px] border-t border-white/[0.08] bg-[#080809] p-4 pb-[calc(6rem+env(safe-area-inset-bottom))] shadow-2xl" onClick={e=>e.stopPropagation()}>
-            <div className="mx-auto mb-5 h-1 w-10 rounded-full bg-white/15" />
-            <div className={`mb-4 ${MONO_LABEL}`}>More tools</div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {MORE_NAV.map(([id,label,Icon,detail])=>(
-                <button key={id} onClick={()=>go(id)}
-                  className={`flex items-center gap-3 rounded-2xl border p-4 text-left transition ${active===id?"border-amber-300/25 bg-amber-300/[0.08]":"border-white/[0.07] bg-white/[0.02] hover:bg-white/[0.05]"}`}>
-                  <span className={`rounded-xl border p-2.5 ${active===id?"border-amber-300/20 bg-amber-300/10":"border-white/[0.07] bg-white/[0.03]"}`}>
-                    <Icon className={`h-4 w-4 ${active===id?"text-amber-300":"text-white/50"}`} />
-                  </span>
-                  <span className="min-w-0">
-                    <span className={`block text-[14px] font-semibold ${active===id?"text-amber-200":""}`}>{label}</span>
-                    <span className="mt-0.5 block truncate text-[11px] text-white/38">{detail||"Open page"}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Bottom nav */}
       <nav className="fixed bottom-0 left-0 right-0 z-[60] border-t border-white/[0.07] bg-[#050507]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-2xl">
         <div className="mx-auto flex max-w-sm items-center justify-around px-3 py-2">
@@ -572,14 +552,14 @@ function AppShell({ active, setActive, children, logout, statusText, online, eaV
             const a = active===id;
             return (
               <button key={id} onClick={()=>setActive(id)}
-                className={`flex min-w-0 flex-col items-center gap-1 rounded-2xl px-5 py-2 transition-all ${a?"bg-amber-300 text-black":"text-white/38 hover:text-white/70"}`}>
+                className={`flex min-w-0 flex-col items-center gap-1 rounded-2xl px-5 py-2 transition-all ${a?"bg-gold-300 text-black":"text-white/38 hover:text-white/70"}`}>
                 <Icon className="h-[18px] w-[18px]" />
                 <span className="text-[10px] font-semibold tracking-tight">{label}</span>
               </button>
             );
           })}
-          <button onClick={()=>setMoreOpen(true)}
-            className={`flex min-w-0 flex-col items-center gap-1 rounded-2xl px-5 py-2 transition-all ${moreActive?"bg-amber-300 text-black":"text-white/38 hover:text-white/70"}`}>
+          <button onClick={()=>setActive("more")}
+            className={`no-select flex min-w-0 flex-col items-center gap-1 rounded-2xl px-5 py-2 transition-all ${moreActive?"bg-gold-300 text-black":"text-white/38 hover:text-white/70"}`}>
             <Menu className="h-[18px] w-[18px]" />
             <span className="text-[10px] font-semibold tracking-tight">More</span>
           </button>
@@ -594,6 +574,7 @@ export default function CloudDashboard() {
   useAuthGuard();
   const navigate = useNavigate();
   const [active, setActive] = useState("home");
+  const [notifOpen, setNotifOpen] = useState(false);
   const [me, setMe] = useState(null);
   const [status, setStatus] = useState(null);
   const [license, setLicense] = useState(null);
@@ -722,15 +703,15 @@ export default function CloudDashboard() {
   if (loading||!me) return (
     <div className="flex min-h-screen items-center justify-center bg-[#050507] text-white">
       <div className="text-center">
-        <Loader2 className="mx-auto h-6 w-6 animate-spin text-amber-300" />
+        <Loader2 className="mx-auto h-6 w-6 animate-spin text-gold-300" />
         <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.22em] text-white/30">Loading</div>
       </div>
     </div>
   );
 
   return (
-    <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online} eaVersion={eaVersion}>
-      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} />}
+    <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online} eaVersion={eaVersion} notifOpen={notifOpen} setNotifOpen={setNotifOpen}>
+      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} openCommand={setModalCommand} commands={commands} />}
       {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} tradingOk={tradingOk} linked={Boolean(license?.linked||status?.license?.linked)} openCommand={setModalCommand} />}
       {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} analytics={analytics} />}
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
@@ -738,6 +719,8 @@ export default function CloudDashboard() {
       {active==="control"      && <ControlPage commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true; propFirmIdempotencyKey.current=null;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} />}
       {active==="license"      && <LicensePage license={license} licenseInput={licenseInput} setLicenseInput={setLicenseInput} linkLicense={linkLicense} commandMsg={commandMsg} heartbeat={heartbeat} me={me} status={status} />}
       {active==="settings"     && <SettingsPage me={me} heartbeat={heartbeat} licenseInfo={licenseInfo} logout={logout} status={status} />}
+      {active==="more"         && <MorePage setActive={setActive} me={me} status={status} openNotifications={()=>setNotifOpen(true)} logout={logout} />}
+      {active==="education"    && <EducationPage setActive={setActive} />}
       <CommandModal command={modalCommand} onCancel={()=>setModalCommand(null)} onSubmit={queueCommand} busy={commandBusy} message={commandMsg} licenseKey={licenseInfo.activation_key} />
     </AppShell>
   );
@@ -1070,7 +1053,7 @@ function HomeOpenPositionSummary({ linked, online, setActive }) {
         </div>
         <span className={`flex-none font-mono text-[13px] font-bold ${pnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{money(pnl)}</span>
       </div>
-      <button onClick={() => setActive("trading")} className="mt-3 w-full rounded-xl border border-white/[0.08] bg-white/[0.03] py-2 text-[11px] font-semibold text-white/70 transition hover:border-amber-300/25 hover:text-amber-200">
+      <button onClick={() => setActive("trading")} className="mt-3 w-full rounded-xl border border-white/[0.08] bg-white/[0.03] py-2 text-[11px] font-semibold text-white/70 transition hover:border-gold-300/25 hover:text-gold-200">
         View Trade
       </button>
     </div>
@@ -1090,7 +1073,7 @@ function HomeRecentActivity({ events = [], onOpenFull }) {
     <div className={`${CARD} p-4`} data-testid="home-recent-activity">
       <div className="flex items-center justify-between">
         <span className={MONO_LABEL}>Recent Activity</span>
-        <button onClick={onOpenFull} className="text-[10px] font-semibold text-amber-300/70 transition hover:text-amber-300">View all</button>
+        <button onClick={onOpenFull} className="text-[10px] font-semibold text-gold-300/70 transition hover:text-gold-300">View all</button>
       </div>
       <div className="mt-3 space-y-2">
         {meaningful.map((e, i) => {
@@ -1108,7 +1091,68 @@ function HomeRecentActivity({ events = [], onOpenFull }) {
   );
 }
 
-function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, hasSufficientAnalytics, events, setActive, refresh }) {
+// ── Bot ON/OFF — real control, not decorative ───────────────────────────────
+// Wired to the existing safe remote-command infra: RESUME_TRADING (on) /
+// PAUSE_NEW_TRADES (off). OFF stops NEW automatic entries only — the EA keeps
+// its heartbeat and keeps managing any already-open position (SL, profit
+// floor, runner, emergency protection). We never show "Off" until the EA
+// acknowledges: a queued-but-unacked command renders as Pausing…/Resuming…,
+// read back from the recent-commands ack status.
+function BotControlCard({ heartbeat, online, linked, openTrades, openCommand, commands }) {
+  const raw = String(heartbeat.bot_state || "").toUpperCase();
+  const paused = raw.includes("PAUSE") || raw.includes("STOP");
+  const pending = (commands || []).find(
+    (c) => ["PAUSE_NEW_TRADES", "RESUME_TRADING", "STOP_TRADING"].includes(c.action) &&
+      ["PENDING", "ACKED"].includes(String(c.status || "").toUpperCase()),
+  );
+  const turningTo = pending ? (pending.action === "RESUME_TRADING" ? "on" : "off") : null;
+
+  let stateLabel, stateTone, running;
+  if (!online) { stateLabel = "EA offline"; stateTone = "neutral"; running = false; }
+  else if (turningTo === "off") { stateLabel = "Pausing…"; stateTone = "warn"; running = false; }
+  else if (turningTo === "on") { stateLabel = "Resuming…"; stateTone = "profit"; running = true; }
+  else if (paused) { stateLabel = "Paused"; stateTone = "warn"; running = false; }
+  else { stateLabel = "Running"; stateTone = "profit"; running = true; }
+
+  const turnOff = () => openCommand({
+    action: "PAUSE_NEW_TRADES", label: "Turn Bot Off", icon: Pause, tone: "amber", dangerous: false,
+    detail: openTrades > 0
+      ? `New automatic entries will stop. Your ${openTrades} open position${openTrades > 1 ? "s" : ""} stay protected and managed — stop-loss, profit floor and runner logic keep running until they close naturally.`
+      : "New automatic entries will stop. The EA keeps its heartbeat and will still manage any position that opens before it acknowledges.",
+  });
+  const turnOn = () => openCommand({
+    action: "RESUME_TRADING", label: "Turn Bot On", icon: Play, tone: "green", dangerous: false,
+    detail: "New valid trades may open again using the normal evidence engine, owner blockers and risk rules. Turning on never forces an immediate trade.",
+  });
+
+  const disabled = !online || !linked || Boolean(turningTo);
+  return (
+    <UI.Card tone={online ? (running ? "profit" : "warn") : "neutral"}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className={UI.T.label}>Trading Bot</div>
+          <div className="mt-1.5 flex items-center gap-2">
+            <UI.StatusDot tone={stateTone} pulse={Boolean(turningTo)} />
+            <span className="text-[17px] font-black leading-none">{stateLabel}</span>
+          </div>
+          <p className="mt-1.5 text-[11.5px] leading-4 text-white/45">
+            {running ? "Opening new valid trades automatically." : online ? "New entries paused. Open trades stay protected." : "Waiting for your EA heartbeat."}
+          </p>
+        </div>
+        <UI.Button
+          variant={running ? "secondary" : "primary"}
+          onClick={running ? turnOff : turnOn}
+          disabled={disabled}
+          className="flex-none"
+        >
+          {turningTo ? "Working…" : running ? "Turn Off" : "Turn On"}
+        </UI.Button>
+      </div>
+    </UI.Card>
+  );
+}
+
+function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoints, hasSufficientAnalytics, events, setActive, refresh, openCommand, commands }) {
   const [homeOutlook, setHomeOutlook] = useState(null);
   const [outlookStatus, setOutlookStatus] = useState({ loading:true, requestFailed:false });
   const openTrades = online ? Number(status?.open_trades||heartbeat.open_positions||0) : 0;
@@ -1130,49 +1174,50 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
 
   return (
     <div className="space-y-4">
-      {/* Hero status */}
-      <div className={`rounded-3xl border p-5 ${online?(openTrades>0?"border-amber-300/20 bg-amber-300/[0.05]":tradingOk?"border-emerald-400/18 bg-emerald-300/[0.05]":"border-white/[0.07] bg-white/[0.02]"):"border-white/[0.07] bg-white/[0.02]"}`} data-testid="bot-status-card">
-        <div className="flex items-start justify-between gap-4">
+      {/* Hero status — compact, answers "is my bot online / trading?" in a glance */}
+      <UI.Card tone={online ? (openTrades > 0 ? "gold" : tradingOk ? "profit" : "neutral") : "neutral"} data-testid="bot-status-card">
+        <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className={`mb-2 flex items-center gap-2 ${MONO_LABEL}`}>
+            <div className="mb-1.5 flex items-center gap-2">
               {online
-                ? <><span className={`h-1.5 w-1.5 rounded-full animate-pulse ${openTrades>0?"bg-amber-300":"bg-emerald-400"}`} />{heartbeat.symbol||"XAUUSD"} · {status?.production_status?.display_timeframe||"M10"} · {heartbeat.market_mode==="INDEX_MODE"?`Index Mode (${heartbeat.index_profile||"GENERIC_INDEX"})`:"Gold Mode"} · Live</>
-                : <><Wifi className="h-3 w-3" />No connection</>}
+                ? <UI.StatusDot tone={openTrades > 0 ? "gold" : "profit"} pulse />
+                : <Wifi className="h-3 w-3 text-white/40" />}
+              <span className={UI.T.label}>
+                {online
+                  ? `${heartbeat.symbol || "XAUUSD"} · ${status?.production_status?.display_timeframe || "M10"} · ${heartbeat.market_mode === "INDEX_MODE" ? `Index (${heartbeat.index_profile || "GENERIC"})` : "Gold"}`
+                  : "No connection"}
+              </span>
             </div>
-            <h1 className="text-[2rem] font-black tracking-tight leading-none">{botState}</h1>
-            <p className="mt-2 text-[13px] leading-5 text-white/45 truncate">
-              {online
-                ? `${heartbeat.broker_server||"Broker"} · Account ${heartbeat.account_number||"—"}`
-                : offlineCopy}
+            <h1 className="text-[1.6rem] font-black leading-none tracking-tight">{botState}</h1>
+            <p className="mt-1.5 truncate text-[12.5px] leading-5 text-white/45">
+              {online ? `${heartbeat.broker_server || "Broker"} · Account ${heartbeat.account_number || "—"}` : offlineCopy}
             </p>
           </div>
-          <button onClick={refresh} className="rounded-full border border-white/[0.07] bg-white/[0.04] p-2.5 text-white/45 hover:text-white transition flex-none">
+          <button onClick={refresh} aria-label="Refresh" className="no-select flex-none rounded-full border border-white/[0.07] bg-white/[0.04] p-2.5 text-white/45 transition hover:text-white active:scale-95">
             <RefreshCw className="h-4 w-4" />
           </button>
         </div>
-        <div className="mt-4">
-          <Sparkline points={equityPoints} tone={online?(openTrades>0?"#fbbf24":"#34d399"):"#d4af37"} height="h-[72px]" />
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <UI.Pill tone={online ? "profit" : "loss"}>{online ? "Connected" : "Offline"}</UI.Pill>
+          {online && <UI.Pill tone={tradingOk ? "profit" : "warn"}>{tradingOk ? "Trading on" : "New entries paused"}</UI.Pill>}
+          {online && openTrades > 0 && <UI.Pill tone="gold">{openTrades} open</UI.Pill>}
+        </div>
+        <div className="mt-3">
+          <Sparkline points={equityPoints} tone={online ? (openTrades > 0 ? "#F3C969" : "#34D399") : "#C9962E"} height="h-[64px]" />
           {online && !hasSufficientAnalytics && (
             <p className="mt-1.5 text-[10px] text-white/30">Equity curve fills in once the EA reports enough real closed trades — see Analytics.</p>
           )}
         </div>
+      </UI.Card>
+
+      {/* Equity / Today's P&L — top billing right under status */}
+      <div className="grid grid-cols-2 gap-3" data-testid="home-equity-pnl-row">
+        <UI.Metric label="Equity" icon={CircleDollarSign} value={online ? money(heartbeat.equity) : "—"} sub={online ? `Balance ${money(heartbeat.balance)}` : "Not live"} />
+        <UI.Metric label="Today's P&L" icon={TrendingUp} tone={online ? (pnlPos ? "profit" : "loss") : undefined} value={online ? money(pnlNum) : "—"} sub={online && pnlNum && heartbeat.balance ? `${((pnlNum / Number(heartbeat.balance)) * 100).toFixed(2)}% of balance` : "Today"} />
       </div>
 
-      {/* Mobile hierarchy (owner spec): equity/P&L get top billing right
-          under status, ahead of every other metric -- they answer "how am I
-          doing" before anything else does. */}
-      <div className="grid grid-cols-2 gap-3" data-testid="home-equity-pnl-row">
-        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-4">
-          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.15em] text-white/35"><CircleDollarSign className="h-3 w-3" />Equity</div>
-          <div className="mt-1.5 text-[1.35rem] font-bold tracking-tight">{online?money(heartbeat.equity):"—"}</div>
-          <div className="mt-0.5 text-[11px] text-white/40">{online?`Balance ${money(heartbeat.balance)}`:"Not live"}</div>
-        </div>
-        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-4">
-          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.15em] text-white/35"><TrendingUp className="h-3 w-3" />Today's P&L</div>
-          <div className={`mt-1.5 text-[1.35rem] font-bold tracking-tight ${online?(pnlPos?"text-emerald-300":"text-rose-300"):""}`}>{online?money(pnlNum):"—"}</div>
-          <div className="mt-0.5 text-[11px] text-white/40">{online&&pnlNum&&heartbeat.balance?`${((pnlNum/Number(heartbeat.balance))*100).toFixed(2)}% of balance`:"Today"}</div>
-        </div>
-      </div>
+      {/* Real Bot ON/OFF — prominent, wired to PAUSE_NEW_TRADES / RESUME_TRADING */}
+      <BotControlCard heartbeat={heartbeat} online={online} linked={Boolean(licenseInfo.activation_key)} openTrades={openTrades} openCommand={openCommand} commands={commands} />
 
       <AIMarketOutlookCard
         linked={Boolean(licenseInfo.activation_key)}
@@ -1204,7 +1249,9 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
 
       {/* No license CTA */}
       {!licenseInfo.activation_key && (
-        <Empty title="Connect your license" body="Link your ASE license key once and live data from your MT5 account will stream here automatically." icon={KeyRound} />
+        <UI.EmptyState icon={KeyRound} title="Connect your license"
+          body="Link your license key once and live data from your MT5 account will stream here automatically."
+          action={<UI.Button size="sm" onClick={() => setActive("license")}>Go to License</UI.Button>} />
       )}
 
       {online && <M30ConsensusCard events={events} heartbeat={heartbeat} />}
@@ -1212,38 +1259,35 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
       {/* Advanced details: secondary technical metrics kept out of the
           primary above-the-fold hierarchy, available on demand rather than
           competing for attention with equity/P&L/open-trade/outlook. */}
-      <details className="group rounded-2xl border border-white/[0.07] bg-white/[0.02] open:bg-white/[0.03]">
-        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-[12px] font-semibold text-white/60 select-none">
+      <details className="group rounded-2xl border border-white/[0.07] bg-panel open:bg-white/[0.03]">
+        <summary className="no-select flex cursor-pointer list-none items-center justify-between px-4 py-3 text-[12px] font-semibold text-white/60">
           Advanced details
           <ChevronDown className="h-4 w-4 text-white/35 transition group-open:rotate-180" />
         </summary>
         <div className="grid grid-cols-2 gap-2 px-4 pb-4 sm:grid-cols-4" data-testid="home-summary-grid">
-          <Metric label="Open trades" value={online?openTrades:"—"} detail={online?`${heartbeat.spread??"-"} pts spread`:"No data"} icon={History} tone={openTrades>0?"amber":"neutral"} />
-          <Metric label="Open risk" value={online?pct(ddNum):"—"} detail="Current floating drawdown" icon={Shield} tone={online?riskTone:"neutral"} />
-          <Metric label="Market bias" value={online?bias.label:"—"} detail="Latest fresh EA evidence" icon={Activity} tone={online?bias.tone:"neutral"} />
-          <Metric label="AI confidence" value={online&&conf>0?`${conf}%`:"—"} detail={conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"} icon={Brain} tone={conf>=70?"green":conf>0?"amber":"neutral"} />
-          <Metric label="Your Local Time" value={online?viewerClockSession.label:"—"} detail="Your browser's clock right now -- not this trade's session, not broker time" icon={Clock3} tone={online?viewerClockSession.tone:"neutral"} />
-          <Metric label="Trading status" value={online?botState:"Offline"} detail={tradingOk?"Broker trading enabled":"No new-trade authority"} icon={Bot} tone={online?stateTone:"neutral"} />
+          <UI.Metric label="Open trades" value={online?openTrades:"—"} sub={online?`${heartbeat.spread??"-"} pts spread`:"No data"} icon={History} tone={openTrades>0?"gold":"neutral"} />
+          <UI.Metric label="Open risk" value={online?pct(ddNum):"—"} sub="Current floating drawdown" icon={Shield} tone={online?dsTone(riskTone):"neutral"} />
+          <UI.Metric label="Market bias" value={online?bias.label:"—"} sub="Latest fresh EA evidence" icon={Activity} tone={online?dsTone(bias.tone):"neutral"} />
+          <UI.Metric label="AI confidence" value={online&&conf>0?`${conf}%`:"—"} sub={conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"} icon={Brain} tone={conf>=70?"profit":conf>0?"warn":"neutral"} />
+          <UI.Metric label="Your Local Time" value={online?viewerClockSession.label:"—"} sub="Your browser's clock right now — not this trade's session, not broker time" icon={Clock3} tone={online?dsTone(viewerClockSession.tone):"neutral"} />
+          <UI.Metric label="Trading status" value={online?botState:"Offline"} sub={tradingOk?"Broker trading enabled":"No new-trade authority"} icon={Bot} tone={online?dsTone(stateTone):"neutral"} />
         </div>
       </details>
 
-      {/* Quick nav — 3 cards */}
+      {/* Quick nav — 3 compact cards */}
       <div className="grid grid-cols-3 gap-3">
-        <button onClick={()=>setActive("trading")} className={`${CARD} p-4 text-left hover:border-amber-300/20 transition`}>
-          <LineChart className="mb-3 h-5 w-5 text-amber-300/60" />
-          <div className="text-[13px] font-semibold">Trading</div>
-          <p className="mt-1 text-[10px] leading-4 text-white/35">Open positions and trade timeline.</p>
-        </button>
-        <button onClick={()=>setActive("intelligence")} className={`${CARD} p-4 text-left hover:border-violet-400/20 transition`}>
-          <Brain className="mb-3 h-5 w-5 text-violet-400/60" />
-          <div className="text-[13px] font-semibold">AI Brain</div>
-          <p className="mt-1 text-[10px] leading-4 text-white/35">AI decisions, ML state, blocks.</p>
-        </button>
-        <button onClick={()=>setActive("control")} className={`${CARD} p-4 text-left hover:border-white/15 transition`}>
-          <SlidersHorizontal className="mb-3 h-5 w-5 text-white/40" />
-          <div className="text-[13px] font-semibold">Controls</div>
-          <p className="mt-1 text-[10px] leading-4 text-white/35">Remote commands and Prop Firm.</p>
-        </button>
+        {[
+          ["trading", LineChart, "Trading", "Positions & timeline"],
+          ["intelligence", Brain, "AI Brain", "Decisions & ML state"],
+          ["control", SlidersHorizontal, "Controls", "Commands & Prop Firm"],
+        ].map(([id, Icon, label, sub]) => (
+          <button key={id} onClick={() => setActive(id)}
+            className="no-select rounded-2xl border border-white/[0.07] bg-panel p-3.5 text-left transition hover:border-gold-300/25 active:scale-[0.98]">
+            <Icon className="mb-2.5 h-5 w-5 text-gold-300/70" />
+            <div className="text-[13px] font-semibold">{label}</div>
+            <p className="mt-0.5 text-[10px] leading-4 text-white/35">{sub}</p>
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -1267,8 +1311,8 @@ function SetupHealth({ checks=[] }) {
           {checks.map(c=>{
             const Icon = c.ok ? CheckCircle2 : XCircle;
             return (
-              <div key={c.key||c.label} className={`flex items-start gap-3 rounded-xl border p-3 ${c.ok?"border-emerald-400/15 bg-emerald-300/[0.04]":"border-amber-300/15 bg-amber-300/[0.04]"}`}>
-                <Icon className={`mt-0.5 h-4 w-4 flex-none ${c.ok?"text-emerald-400":"text-amber-400"}`} />
+              <div key={c.key||c.label} className={`flex items-start gap-3 rounded-xl border p-3 ${c.ok?"border-emerald-400/15 bg-emerald-300/[0.04]":"border-gold-300/15 bg-gold-300/[0.04]"}`}>
+                <Icon className={`mt-0.5 h-4 w-4 flex-none ${c.ok?"text-emerald-400":"text-gold-400"}`} />
                 <div className="min-w-0">
                   <div className="text-[13px] font-semibold">{c.label}</div>
                   <div className="mt-0.5 break-words text-[11px] leading-4 text-white/40">{c.detail}</div>
@@ -1320,7 +1364,7 @@ function AnalyticsPage({ heartbeat, events, equityPoints, analytics }) {
       <Card title="Equity curve">
         <div className="mb-2 flex items-center justify-between">
           <span className={MONO_LABEL}>Realized P&L (verified trades)</span>
-          <span className="font-mono text-[13px] font-bold text-amber-200">
+          <span className="font-mono text-[13px] font-bold text-gold-200">
             {sufficient ? money(analytics.realized_pnl) : "—"}
           </span>
         </div>
@@ -1358,7 +1402,7 @@ function AnalyticsPage({ heartbeat, events, equityPoints, analytics }) {
                 <div className="truncate text-[13px] font-semibold">{module}</div>
                 <p className="mt-1 text-[11px] text-white/35">Recent decisions</p>
               </div>
-              <span className="font-mono text-lg font-black text-amber-200">{count}</span>
+              <span className="font-mono text-lg font-black text-gold-200">{count}</span>
             </div>
           ))}
         </div>
@@ -1464,7 +1508,7 @@ function ActivityPage({ events, filter, setFilter, onForceOpen }) {
           {FILTERS.map(([id,label])=>(
             <button key={id} onClick={()=>setFilter(id)}
               data-testid={id==="entries"?"activity-filter-trade":undefined}
-              className={`rounded-full px-3.5 py-1.5 text-[12px] font-semibold transition ${filter===id?"bg-amber-300 text-black":"border border-white/[0.07] text-white/45 hover:text-white hover:border-white/15"}`}>
+              className={`rounded-full px-3.5 py-1.5 text-[12px] font-semibold transition ${filter===id?"bg-gold-300 text-black":"border border-white/[0.07] text-white/45 hover:text-white hover:border-white/15"}`}>
               {label}
             </button>
           ))}
@@ -1523,8 +1567,8 @@ function TradingUniverseCard({ linked, setActive }) {
   return (
     <Card title="TRADING UNIVERSE" subtitle="Gold Mode is live today. Index Mode is architecture-only — detection and diagnostics run, but no index trade will ever open until a real strategy ships.">
       {!linked && (
-        <div className="mb-4 flex items-center gap-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-3.5 text-[13px] text-amber-200">
-          <AlertTriangle className="h-4 w-4 flex-none text-amber-400" />
+        <div className="mb-4 flex items-center gap-3 rounded-xl border border-gold-300/20 bg-gold-300/[0.06] p-3.5 text-[13px] text-gold-200">
+          <AlertTriangle className="h-4 w-4 flex-none text-gold-400" />
           <span>Link your license first. <button onClick={() => setActive("license")} className="font-semibold underline">Open License</button></span>
         </div>
       )}
@@ -1558,7 +1602,7 @@ function TradingUniverseCard({ linked, setActive }) {
               existing "Detection-only" convention, rather than implying real
               enforcement that doesn't exist yet. Do not remove this note when
               real EA-side enforcement ships -- replace it. */}
-          <div className="mt-3 rounded-xl border border-amber-300/15 bg-amber-300/[0.04] p-3 text-[11px] leading-4 text-amber-200/80">
+          <div className="mt-3 rounded-xl border border-gold-300/15 bg-gold-300/[0.04] p-3 text-[11px] leading-4 text-gold-200/80">
             Not yet enforced by the live EA — these values are saved here but the bot does not read them back yet. Use the EA's own MT5 inputs to actually cap open trades until this ships.
           </div>
 
@@ -1567,10 +1611,10 @@ function TradingUniverseCard({ linked, setActive }) {
             <NumField label="Max open trades — Index" value={settings.max_open_trades_index} onChange={v => upd("max_open_trades_index", v)} suffix="trades" min={0} max={20} step="1" note="Not yet enforced — see note above" />
           </div>
 
-          {msg && <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.07] p-3 text-[12px] text-amber-200">{msg}</div>}
+          {msg && <div className="mt-4 rounded-xl border border-gold-300/20 bg-gold-300/[0.07] p-3 text-[12px] text-gold-200">{msg}</div>}
 
           <button onClick={save} disabled={busy}
-            className="mt-4 w-full rounded-2xl bg-amber-300 py-3 text-[13px] font-bold text-black disabled:opacity-35 disabled:cursor-not-allowed transition hover:bg-amber-200">
+            className="mt-4 w-full rounded-2xl bg-gold-300 py-3 text-[13px] font-bold text-black disabled:opacity-35 disabled:cursor-not-allowed transition hover:bg-gold-200">
             {busy ? "Saving…" : "Save trading universe settings"}
           </button>
         </>
@@ -1588,8 +1632,8 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
       {/* Commands */}
       <Card title="Remote commands" subtitle="Every command needs license verification and EA acknowledgement before it executes.">
         {!linked && (
-          <div className="mb-4 flex items-center gap-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-3.5 text-[13px] text-amber-200">
-            <AlertTriangle className="h-4 w-4 flex-none text-amber-400" />
+          <div className="mb-4 flex items-center gap-3 rounded-xl border border-gold-300/20 bg-gold-300/[0.06] p-3.5 text-[13px] text-gold-200">
+            <AlertTriangle className="h-4 w-4 flex-none text-gold-400" />
             <span>Link your license first. <button onClick={()=>setActive("license")} className="font-semibold underline">Open License</button></span>
           </div>
         )}
@@ -1606,7 +1650,7 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
             );
           })}
         </div>
-        {commandMsg && <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.07] p-3 text-[12px] text-amber-200">{commandMsg}</div>}
+        {commandMsg && <div className="mt-4 rounded-xl border border-gold-300/20 bg-gold-300/[0.07] p-3 text-[12px] text-gold-200">{commandMsg}</div>}
       </Card>
 
       {/* Command history */}
@@ -1651,7 +1695,7 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
         </div>
 
         <label className="mt-4 flex items-start gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] p-3.5 cursor-pointer">
-          <input type="checkbox" checked={propFirmForm.allow_retest_add} onChange={e=>upd("allow_retest_add",e.target.checked)} className="mt-1 h-4 w-4 accent-amber-300" />
+          <input type="checkbox" checked={propFirmForm.allow_retest_add} onChange={e=>upd("allow_retest_add",e.target.checked)} className="mt-1 h-4 w-4 accent-gold-300" />
           <span>
             <span className="block text-[13px] font-semibold">Allow one confirmed retest add</span>
             <span className="mt-0.5 block text-[11px] text-white/38">One small retest, capped inside the basket risk limit.</span>
@@ -1665,12 +1709,12 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
         )}
 
         <label className="mt-5 flex items-start gap-3 text-[12px] text-white/45 cursor-pointer">
-          <input type="checkbox" checked={propFirmConfirmed} onChange={e=>setPropFirmConfirmed(e.target.checked)} className="mt-0.5 h-4 w-4 accent-amber-300" />
+          <input type="checkbox" checked={propFirmConfirmed} onChange={e=>setPropFirmConfirmed(e.target.checked)} className="mt-0.5 h-4 w-4 accent-gold-300" />
           I've verified these values against my prop firm's rules. Safety buffer stays above zero in case of calculation differences.
         </label>
 
         <button onClick={applyPropFirm} disabled={!linked||!propFirmConfirmed||propFirmBusy}
-          className="mt-4 w-full rounded-2xl bg-amber-300 py-3 text-[13px] font-bold text-black disabled:opacity-35 disabled:cursor-not-allowed transition hover:bg-amber-200">
+          className="mt-4 w-full rounded-2xl bg-gold-300 py-3 text-[13px] font-bold text-black disabled:opacity-35 disabled:cursor-not-allowed transition hover:bg-gold-200">
           {propFirmBusy?"Sending to EA…":"Apply to EA"}
         </button>
 
@@ -1733,15 +1777,15 @@ function EaDownloadCard({ hasLicense, release }) {
           <p className="mt-1 text-[12px] leading-5 text-white/45">Signed, license-gated compiled .ex5. Operator cloud tokens and fanout settings are stripped before download.</p>
         </div>
         {!loading && (
-          <span className={`flex-none rounded-full px-2.5 py-1 font-mono text-[10px] font-black uppercase tracking-widest ${info?.stable ? "bg-emerald-300 text-[#06110c]" : "bg-amber-300/80 text-[#1a1400]"}`}>
+          <span className={`flex-none rounded-full px-2.5 py-1 font-mono text-[10px] font-black uppercase tracking-widest ${info?.stable ? "bg-emerald-300 text-[#06110c]" : "bg-gold-300/80 text-[#1a1400]"}`}>
             {info?.stable ? "Stable" : "Release candidate"}
           </span>
         )}
       </div>
 
       {updateAvailable && (
-        <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/[0.08] p-3">
-          <div className="text-[12px] font-bold text-amber-200">XauCloud update available</div>
+        <div className="mt-3 rounded-xl border border-gold-300/30 bg-gold-300/[0.08] p-3">
+          <div className="text-[12px] font-bold text-gold-200">XauCloud update available</div>
           <div className="mt-1 text-[11px] leading-4 text-white/50">
             Installed {release.installed_version} · Latest {release.latest_version}
           </div>
@@ -1753,7 +1797,7 @@ function EaDownloadCard({ hasLicense, release }) {
 
       {error && <div className="mt-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-[12px] text-rose-300">{error}</div>}
       <button onClick={requestDownload} disabled={downloading || loading || !available || !hasLicense}
-        className="mt-4 w-full rounded-xl bg-amber-300 px-5 py-3 text-[13px] font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-40">
+        className="mt-4 w-full rounded-xl bg-gold-300 px-5 py-3 text-[13px] font-extrabold text-black transition hover:bg-gold-200 disabled:opacity-40">
         {downloading ? "Preparing download…" : !hasLicense ? "Link a license to download" : !available ? "No release available"
           : updateAvailable ? "Download and Install Latest Version" : `Download ${version} .EX5`}
       </button>
@@ -1766,8 +1810,8 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
   return (
     <div className="space-y-4">
       {/* Key card */}
-      <div className="rounded-3xl border border-amber-300/20 bg-amber-300/[0.06] p-5">
-        <div className={`mb-2 ${MONO_LABEL} text-amber-300`}>Activation key</div>
+      <div className="rounded-3xl border border-gold-300/20 bg-gold-300/[0.06] p-5">
+        <div className={`mb-2 ${MONO_LABEL} text-gold-300`}>Activation key</div>
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0 break-words font-mono text-xl font-black">{info?.activation_key||"No license linked"}</div>
           {info?.activation_key && <CopyBtn value={info.activation_key} label="Copy key" />}
@@ -1782,17 +1826,17 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
       <Card title="Link a license key">
         <div className="flex flex-col gap-3 sm:flex-row">
           <input value={licenseInput} onChange={e=>setLicenseInput(e.target.value.toUpperCase())} placeholder="ASE-XXXX-XXXX"
-            className="min-w-0 flex-1 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 font-mono text-[13px] text-white outline-none focus:border-amber-300/40 placeholder:text-white/25" />
-          <button onClick={linkLicense} className="rounded-xl bg-amber-300 px-5 py-2.5 text-[13px] font-bold text-black hover:bg-amber-200 transition">Link license</button>
+            className="min-w-0 flex-1 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 font-mono text-[13px] text-white outline-none focus:border-gold-300/40 placeholder:text-white/25" />
+          <button onClick={linkLicense} className="rounded-xl bg-gold-300 px-5 py-2.5 text-[13px] font-bold text-black hover:bg-gold-200 transition">Link license</button>
         </div>
-        {commandMsg && <div className="mt-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.07] p-3 text-[12px] text-amber-200">{commandMsg}</div>}
+        {commandMsg && <div className="mt-3 rounded-xl border border-gold-300/20 bg-gold-300/[0.07] p-3 text-[12px] text-gold-200">{commandMsg}</div>}
       </Card>
 
       {/* Binding details */}
       <div className="grid gap-3 sm:grid-cols-2">
         <div className={`${CARD} p-4`}>
           <div className={MONO_LABEL}>License ID</div>
-          <div className="mt-2 break-all font-mono text-[12px] font-bold leading-5 text-amber-100">{info?.license_id||"—"}</div>
+          <div className="mt-2 break-all font-mono text-[12px] font-bold leading-5 text-gold-100">{info?.license_id||"—"}</div>
           <div className="mt-2 flex items-center justify-between gap-3">
             <span className="text-[11px] text-white/35">{me.email}</span>
             {info?.license_id && <CopyBtn value={info.license_id} label="Copy ID" />}
@@ -1818,8 +1862,8 @@ function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
     <div className="space-y-4">
       <Card title="EA Setup & Connection" subtitle="Live setup details for this licensed Command Center account." className="scroll-mt-20">
         <div data-testid="ea-setup-connection">
-          <div className={`mb-4 flex items-start gap-3 rounded-xl border p-3 ${settingsOnline?"border-emerald-400/15 bg-emerald-300/[0.04]":"border-amber-300/15 bg-amber-300/[0.04]"}`}>
-            {settingsOnline ? <CheckCircle2 className="mt-0.5 h-4 w-4 flex-none text-emerald-400" /> : <Wifi className="mt-0.5 h-4 w-4 flex-none text-amber-300" />}
+          <div className={`mb-4 flex items-start gap-3 rounded-xl border p-3 ${settingsOnline?"border-emerald-400/15 bg-emerald-300/[0.04]":"border-gold-300/15 bg-gold-300/[0.04]"}`}>
+            {settingsOnline ? <CheckCircle2 className="mt-0.5 h-4 w-4 flex-none text-emerald-400" /> : <Wifi className="mt-0.5 h-4 w-4 flex-none text-gold-300" />}
             <div className="min-w-0">
               <div className="text-[13px] font-semibold">{settingsOnline?"EA connected":"EA offline"}</div>
               <div className="mt-0.5 break-words text-[11px] leading-4 text-white/40">
@@ -1890,6 +1934,209 @@ function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─── More (native grouped hub) ──────────────────────────────────────────────
+function MorePage({ setActive, me, status, openNotifications, logout }) {
+  const eaVer = status?.release?.public_display_name || "XauCloud";
+  const updateAvailable = status?.release?.update_available;
+  return (
+    <div className="space-y-5" data-testid="more-page">
+      <div>
+        <h1 className="text-[1.6rem] font-black tracking-tight">More</h1>
+        <p className="mt-0.5 truncate text-[12.5px] text-white/45">{me?.full_name || me?.email || "Your account"}</p>
+      </div>
+
+      <UI.ListGroup label="Account">
+        <UI.ListRow icon={KeyRound} label="License" sub="Key, MT5 binding, EA download" onClick={() => setActive("license")} />
+        <UI.ListRow icon={User} label="Account & Security" sub="Profile, connection, log out" onClick={() => setActive("settings")} last />
+      </UI.ListGroup>
+
+      <UI.ListGroup label="Trading">
+        <UI.ListRow icon={SlidersHorizontal} label="Bot Control" sub="Pause / resume, commands, Prop Firm" onClick={() => setActive("control")} />
+        <UI.ListRow icon={Brain} label="AI Brain" sub="Decisions, ML state, blocks" onClick={() => setActive("intelligence")} />
+        <UI.ListRow icon={LineChart} label="Market Outlook" sub="Signals, evidence, history" onClick={() => { window.location.href = "/ai-market-outlook"; }} last />
+      </UI.ListGroup>
+
+      <UI.ListGroup label="Learn">
+        <UI.ListRow icon={GraduationCap} label="Education Center" sub="How XauCloud works, in plain English" onClick={() => setActive("education")} />
+        <UI.ListRow icon={Rocket} label="Installation Guide" sub="Set up the EA on MetaTrader 5" onClick={() => setActive("education")} />
+        <UI.ListRow icon={HelpCircle} label="FAQ" sub="Common questions answered" onClick={() => setActive("education")} last />
+      </UI.ListGroup>
+
+      <UI.ListGroup label="App">
+        <UI.ListRow icon={Bell} label="Notifications" sub="Trades, outlook, license, system" onClick={openNotifications} />
+        <UI.ListRow icon={Download} label="Downloads & Updates" sub={updateAvailable ? "Update available" : "Latest EA"} onClick={() => setActive("license")} />
+        <UI.ListRow icon={ShieldCheck} label="About XauCloud" value={eaVer} last />
+      </UI.ListGroup>
+
+      <button onClick={logout} className="no-select w-full rounded-2xl border border-red-400/20 bg-red-500/[0.06] px-4 py-3 text-[13px] font-semibold text-red-300 transition hover:bg-red-500/[0.1]">
+        Log out
+      </button>
+
+      <p className="pb-2 text-center text-[10px] text-white/25">XauCloud · {eaVer} · xaucloud.io</p>
+    </div>
+  );
+}
+
+// ─── Education Center ────────────────────────────────────────────────────────
+// Plain-English learning hub. Real content, native drill-down (list → topic),
+// no giant single article. FAQ answers the real questions customers ask.
+const EDU_TOPICS = [
+  {
+    id: "start", icon: GraduationCap, title: "Getting Started", sub: "What XauCloud is and how it works",
+    sections: [
+      { h: "What is XauCloud?", body: "XauCloud is an automated Gold (XAUUSD) trading system for MetaTrader 5. A licensed Expert Advisor (EA) runs on your MT5 terminal and trades Gold for you, while this Command Center lets you watch and control it from your phone." },
+      { h: "What does the EA do?", body: "The EA continuously studies Gold, waits for a high-quality setup, sizes the trade to your account risk, and then manages the position — moving to protect profit and closing when the move is done. No martingale, no grid." },
+      { h: "What does Command Center do?", body: "It shows your bot's status, equity, today's P&L, the current AI Market Outlook, any live setup, and your open position — and lets you pause or resume new trades safely." },
+      { h: "What happens after I install?", body: "Once the EA is attached to XAUUSD and your license is linked, its heartbeat appears here within seconds and live data starts streaming. If it doesn't, check the Installation Guide." },
+    ],
+  },
+  {
+    id: "install", icon: Rocket, title: "Installing XauCloud", sub: "Step-by-step MT5 setup",
+    steps: [
+      "Get a Windows VPS so the EA can run 24/7 (recommended).",
+      "Install MetaTrader 5 on the VPS.",
+      "Log in to your broker trading account in MT5.",
+      "Download the latest XauCloud EA from the License screen.",
+      "In MT5, open File → Open Data Folder, then MQL5 → Experts.",
+      "Copy the XauCloud .ex5 file into the Experts folder.",
+      "Restart MT5 (or refresh the Navigator's Expert Advisors).",
+      "Enable Algo Trading in the MT5 toolbar.",
+      "Drag XauCloud onto an XAUUSD chart.",
+      "Enter your license PIN (your activation key) in the EA inputs.",
+      "Confirm the bot shows Connected here in Command Center.",
+    ],
+  },
+  {
+    id: "trades", icon: LineChart, title: "Understanding Trades", sub: "How it decides, why it waits",
+    sections: [
+      { h: "How it searches for trades", body: "XauCloud looks for evidence that a real move is starting — trend, structure, location and confirmation all have to line up. It is not a trend-follower that jumps on any move." },
+      { h: "What blockers are", body: "Blockers are safety rules that skip a setup that looks risky — e.g. an entry that is too late, or an opposite position still open. A skipped trade is the system protecting you, not a malfunction." },
+      { h: "Why a winning trade may close early", body: "Profit protection can bank a strong gain before the maximum target if the move shows signs of stalling. Locking real profit beats holding for a target that may never arrive." },
+      { h: "Why it may not trade for hours", body: "Gold isn't always in a high-quality setup. No trade is a valid, deliberate decision. More trades does not mean better results." },
+    ],
+  },
+  {
+    id: "pips", icon: Gauge, title: "Pips & Gold Moves", sub: "How results are measured",
+    sections: [
+      { h: "Pips of risk", body: "Results are shown in pips of the trade's own risk distance. Roughly, 10 XauCloud pips ≈ 1 Gold move in the display convention." },
+      { h: "Protected movement", body: "Once a trade is in decent profit, a protected floor follows the move up so a winner rarely turns into a loss." },
+      { h: "Targets", body: "The system aims to let strong moves run while protecting profit along the way. An extraordinary run is capped only by a very high safety ceiling — the intelligent exits almost always close first." },
+    ],
+  },
+  {
+    id: "outlook", icon: Activity, title: "Market Outlook", sub: "Signals, confidence, results",
+    sections: [
+      { h: "Buy / Sell signal", body: "A directional view with a confidence score, an entry, a stop loss, and targets. It reflects what the intelligence currently sees on Gold." },
+      { h: "Tracking, Win, Loss", body: "After a signal is live it is tracked to an outcome: Win (green), Loss (red), or still Tracking (gold). No Valid Outlook means there simply isn't a quality setup right now." },
+      { h: "It still follows the rules", body: "A Market Outlook signal must still comply with the EA's configured execution rules and owner blockers — the Outlook doesn't bypass safety." },
+    ],
+  },
+  {
+    id: "risk", icon: ShieldCheck, title: "Risk & Protection", sub: "How your profit is protected",
+    sections: [
+      { h: "Profit floor & ratchet", body: "Once a trade reaches meaningful profit, a floor locks in a minimum and ratchets upward toward the peak as the move continues." },
+      { h: "Giveback & runner logic", body: "If a trade gives back too much of its peak, or the move structure fails, the system exits and keeps the gain instead of round-tripping." },
+      { h: "The safety ceiling", body: "There is a very high maximum-profit ceiling as a final backstop. In practice the intelligent exits almost always close a trade long before it — the ceiling exists only so an extraordinary trade is never literally unlimited." },
+      { h: "No-loss-close philosophy", body: "The system is built to protect capital first and avoid turning managed winners into losers." },
+    ],
+  },
+  {
+    id: "control", icon: SlidersHorizontal, title: "Bot Control", sub: "Turning the bot on and off",
+    sections: [
+      { h: "Bot On", body: "New valid trades may be opened using the normal evidence engine, blockers and risk rules. Turning it on never forces an immediate trade." },
+      { h: "Bot Off", body: "No new automatic trades open. Crucially, any position already open stays fully protected and managed — stop-loss, profit floor and runner logic keep running until it closes naturally. Bot Off means 'don't open new trades', never 'abandon my open trade'." },
+    ],
+  },
+];
+
+const EDU_FAQ = [
+  ["Why hasn't the bot traded today?", "Gold may not have offered a high-quality setup. No trade is a deliberate, valid decision — the system waits for quality rather than forcing activity."],
+  ["Why was a trade skipped?", "A safety blocker rejected it — e.g. the entry was too late, or an opposite position was still open. Skipping a risky setup is protection working as intended."],
+  ["Can I close a trade myself?", "Yes. In MT5 you can always close manually, and Command Center's Bot Control has safe command options. The EA keeps managing anything it opened."],
+  ["Will Bot Off close my current trade?", "No. Bot Off only stops new entries. Your open position stays protected and managed until it closes on its own."],
+  ["Why did a profitable trade close before the target?", "Profit protection banked the gain because the move showed signs of stalling. Locking real profit is preferred over holding for a target that might not arrive."],
+  ["What happens if my VPS or terminal disconnects?", "Command Center will show Offline and stop showing live data as current. Once the EA reconnects, its heartbeat and data resume automatically."],
+  ["How do I update the EA?", "When an update is available, the License screen shows it. Download the latest .ex5 and replace the old file in your MT5 Experts folder."],
+  ["How do I contact support?", "Use the Support options in More, or reach out via the contact details on xaucloud.io."],
+];
+
+function EducationPage({ setActive }) {
+  const [topicId, setTopicId] = useState(null);
+  const [faqOpen, setFaqOpen] = useState(false);
+  const topic = EDU_TOPICS.find((t) => t.id === topicId);
+
+  if (topic) {
+    return (
+      <div className="space-y-4" data-testid="education-topic">
+        <button onClick={() => setTopicId(null)} className="no-select inline-flex items-center gap-1.5 text-[13px] font-semibold text-white/55 hover:text-white">
+          <ArrowLeft className="h-4 w-4" /> Education
+        </button>
+        <div className="flex items-center gap-2.5">
+          <span className="rounded-xl border border-gold-300/20 bg-gold-300/10 p-2.5"><topic.icon className="h-5 w-5 text-gold-300" /></span>
+          <h1 className="text-[1.4rem] font-black tracking-tight">{topic.title}</h1>
+        </div>
+        {topic.steps ? (
+          <UI.Card>
+            <ol className="space-y-3">
+              {topic.steps.map((s, i) => (
+                <li key={i} className="flex gap-3">
+                  <span className="nums flex h-6 w-6 flex-none items-center justify-center rounded-full bg-gold-300 text-[12px] font-black text-black">{i + 1}</span>
+                  <span className="pt-0.5 text-[13px] leading-5 text-white/75">{s}</span>
+                </li>
+              ))}
+            </ol>
+          </UI.Card>
+        ) : (
+          <div className="space-y-3">
+            {topic.sections.map((s) => (
+              <UI.Card key={s.h}>
+                <div className="text-[14px] font-semibold">{s.h}</div>
+                <p className="mt-1.5 text-[12.5px] leading-5 text-white/55">{s.body}</p>
+              </UI.Card>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5" data-testid="education-page">
+      <button onClick={() => setActive("more")} className="no-select inline-flex items-center gap-1.5 text-[13px] font-semibold text-white/55 hover:text-white">
+        <ArrowLeft className="h-4 w-4" /> More
+      </button>
+      <div>
+        <h1 className="text-[1.6rem] font-black tracking-tight">Education Center</h1>
+        <p className="mt-0.5 text-[12.5px] text-white/45">Understand exactly what you bought — in plain English.</p>
+      </div>
+
+      <UI.ListGroup label="Topics">
+        {EDU_TOPICS.map((t, i) => (
+          <UI.ListRow key={t.id} icon={t.icon} label={t.title} sub={t.sub} onClick={() => setTopicId(t.id)} last={i === EDU_TOPICS.length - 1} />
+        ))}
+      </UI.ListGroup>
+
+      <div>
+        <UI.SectionLabel className="mb-2 px-1">FAQ</UI.SectionLabel>
+        <div className="space-y-2">
+          {EDU_FAQ.map(([q, a], i) => {
+            const open = faqOpen === i;
+            return (
+              <div key={i} className="overflow-hidden rounded-2xl border border-white/[0.07] bg-panel">
+                <button onClick={() => setFaqOpen(open ? null : i)} className="no-select flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
+                  <span className="text-[13px] font-semibold">{q}</span>
+                  <ChevronDown className={`h-4 w-4 flex-none text-white/35 transition ${open ? "rotate-180" : ""}`} />
+                </button>
+                {open && <p className="px-4 pb-4 text-[12.5px] leading-5 text-white/55">{a}</p>}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

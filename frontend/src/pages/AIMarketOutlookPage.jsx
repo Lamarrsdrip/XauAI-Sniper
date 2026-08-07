@@ -20,7 +20,7 @@ const COLOR_STYLE = {
   GREEN: { border: "border-l-emerald-400", text: "text-emerald-300", bg: "bg-emerald-300/[0.04]" },
   RED: { border: "border-l-rose-400", text: "text-rose-300", bg: "bg-rose-300/[0.04]" },
   GRAY: { border: "border-l-white/25", text: "text-white/45", bg: "bg-white/[0.02]" },
-  AMBER: { border: "border-l-amber-300", text: "text-amber-200", bg: "bg-amber-300/[0.04]" },
+  AMBER: { border: "border-l-gold-300", text: "text-gold-200", bg: "bg-gold-300/[0.04]" },
   // PARTIAL_PROFIT / BREAK_EVEN (root-cause fix, 2026-08-05): distinct from
   // GREEN/RED so a genuinely-positive-but-below-TP1 or near-entry close is
   // never visually indistinguishable from a clean win or a real loss.
@@ -177,7 +177,7 @@ function OutlookHero({ outlook, advanced, setAdvanced }) {
       <p className="mt-3 text-[13px] leading-5 text-white/70">{outlook.reasoning}</p>
       {outlook.uncertainty && <p className="mt-1 text-[11px] text-white/35">What would invalidate this: {outlook.uncertainty}</p>}
       {outlook.directional_conflict && (
-        <p className="mt-2 rounded-lg border border-amber-300/25 bg-amber-300/[0.06] px-2.5 py-1.5 text-[11px] text-amber-200">
+        <p className="mt-2 rounded-lg border border-gold-300/25 bg-gold-300/[0.06] px-2.5 py-1.5 text-[11px] text-gold-200">
           Downgraded to TRANSITION: {outlook.directional_conflict}
         </p>
       )}
@@ -406,12 +406,12 @@ function NotificationSettings({ prefs, setPrefs }) {
     <div className={`${CARD} p-5`}>
       <div className="flex items-center justify-between">
         <span className={MONO_LABEL}>Notifications</span>
-        {isVerified ? <Bell className="h-4 w-4 text-amber-300" /> : <BellOff className="h-4 w-4 text-white/30" />}
+        {isVerified ? <Bell className="h-4 w-4 text-gold-300" /> : <BellOff className="h-4 w-4 text-white/30" />}
       </div>
 
       {tier !== "OFF" && (
         <div className="mt-1 flex items-center justify-between gap-3 text-[10px]">
-          <span className={isVerified ? "text-amber-300/80" : "text-white/45"}>{statusLabel}</span>
+          <span className={isVerified ? "text-gold-300/80" : "text-white/45"}>{statusLabel}</span>
           <button onClick={sendTestNotification} disabled={testSending || saving}
                   className="shrink-0 text-white/45 underline decoration-dotted hover:text-white/75 disabled:opacity-50">
             {testSending ? "Registering / sending…" : "Send test notification"}
@@ -420,7 +420,7 @@ function NotificationSettings({ prefs, setPrefs }) {
       )}
 
       {registrationResult?.message && (
-        <p className={`mt-2 rounded-lg border px-3 py-2 text-[10px] leading-4 ${registrationResult.ok ? "border-emerald-400/15 bg-emerald-300/[0.04] text-emerald-200/80" : "border-amber-300/15 bg-amber-300/[0.04] text-amber-100/80"}`}>
+        <p className={`mt-2 rounded-lg border px-3 py-2 text-[10px] leading-4 ${registrationResult.ok ? "border-emerald-400/15 bg-emerald-300/[0.04] text-emerald-200/80" : "border-gold-300/15 bg-gold-300/[0.04] text-gold-100/80"}`}>
           {registrationResult.code}: {registrationResult.message}
         </p>
       )}
@@ -432,18 +432,18 @@ function NotificationSettings({ prefs, setPrefs }) {
       )}
 
       {showOnboarding && (
-        <div className="mt-3 rounded-xl border border-amber-300/25 bg-amber-300/[0.06] p-4">
+        <div className="mt-3 rounded-xl border border-gold-300/25 bg-gold-300/[0.06] p-4">
           <div className="flex items-start gap-3">
-            <Bell className="h-6 w-6 flex-none text-amber-300" />
+            <Bell className="h-6 w-6 flex-none text-gold-300" />
             <div>
-              <div className="text-[13px] font-semibold text-amber-100">Get confirmed signal updates</div>
+              <div className="text-[13px] font-semibold text-gold-100">Get confirmed signal updates</div>
               <p className="mt-1 text-[11px] leading-4 text-white/55">
                 Permission alone is not treated as success. The app will wait for OneSignal to create and link this phone before enabling alerts.
               </p>
             </div>
           </div>
           <button disabled={saving} onClick={allowNotifications}
-                  className="mt-3 w-full rounded-lg bg-amber-300 py-2.5 text-[12px] font-bold text-black disabled:opacity-50">
+                  className="mt-3 w-full rounded-lg bg-gold-300 py-2.5 text-[12px] font-bold text-black disabled:opacity-50">
             {saving ? "Registering device…" : "Allow signal notifications"}
           </button>
         </div>
@@ -453,12 +453,12 @@ function NotificationSettings({ prefs, setPrefs }) {
         <p className="mt-2 text-[11px] text-rose-300/80">Notifications are blocked in browser or iPhone settings. Re-enable them for this app, then tap Retry registration.</p>
       )}
       {registrationResult?.code === "IOS_PWA_INSTALL_REQUIRED" && (
-        <p className="mt-2 text-[11px] text-amber-200">On iPhone, use Share → Add to Home Screen, then open XauCloud from that Home Screen icon.</p>
+        <p className="mt-2 text-[11px] text-gold-200">On iPhone, use Share → Add to Home Screen, then open XauCloud from that Home Screen icon.</p>
       )}
 
       {tier !== "OFF" && !registrationReady && (
         <button disabled={saving} onClick={() => registerDevice({ requestPermission: true })}
-                className="mt-3 w-full rounded-lg border border-amber-300/25 bg-amber-300/[0.05] py-2.5 text-[11px] font-semibold text-amber-100 disabled:opacity-50">
+                className="mt-3 w-full rounded-lg border border-gold-300/25 bg-gold-300/[0.05] py-2.5 text-[11px] font-semibold text-gold-100 disabled:opacity-50">
           {saving ? "Registering…" : "Retry registration"}
         </button>
       )}
@@ -474,7 +474,7 @@ function NotificationSettings({ prefs, setPrefs }) {
           const active = selected && (opt.v === "OFF" || registrationReady);
           return (
             <button key={opt.v} disabled={saving} onClick={() => setTier(opt.v)}
-                    className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left text-[12px] transition ${selected ? "border-amber-300/40 bg-amber-300/[0.06] text-amber-100" : "border-white/[0.06] text-white/60 hover:border-white/15"}`}>
+                    className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left text-[12px] transition ${selected ? "border-gold-300/40 bg-gold-300/[0.06] text-gold-100" : "border-white/[0.06] text-white/60 hover:border-white/15"}`}>
               {opt.l}
               {selected && <span className="text-[9px]">{active ? (opt.v === "OFF" ? "OFF" : "ACTIVE") : "SAVED · NOT ACTIVE"}</span>}
             </button>
@@ -542,7 +542,7 @@ function HistoryCard({ outlook }) {
         </div>
       )}
       {tradeResult?.status === "uncertain" && (
-        <div className="mt-2 rounded-lg border border-amber-300/15 px-2.5 py-1.5 text-[11px] text-amber-200">
+        <div className="mt-2 rounded-lg border border-gold-300/15 px-2.5 py-1.5 text-[11px] text-gold-200">
           Your account: real trade result can&apos;t be confirmed (multiple candidates)
         </div>
       )}
@@ -632,7 +632,7 @@ const STATE_COPY = {
 
 const TONES = {
   emerald: "border-emerald-300/25 bg-emerald-300/[0.055] text-emerald-200",
-  amber: "border-amber-300/25 bg-amber-300/[0.055] text-amber-100",
+  amber: "border-gold-300/25 bg-gold-300/[0.055] text-gold-100",
   rose: "border-rose-300/20 bg-rose-300/[0.045] text-rose-100",
   slate: "border-white/10 bg-white/[0.025] text-white/85",
 };
@@ -723,7 +723,7 @@ function M10ExecutionCard({ contract }) {
           <div className={MONO_LABEL}>M10 execution signal</div>
           <div className="mt-2 text-xl font-bold">{contract?.direction || (contract?.state === "NO_SIGNAL" ? "No signal" : "Waiting")}</div>
         </div>
-        <span className={`rounded-full border px-3 py-1 text-[10px] font-bold ${ready ? "border-emerald-300/25 text-emerald-200" : "border-amber-300/20 text-amber-100"}`}>
+        <span className={`rounded-full border px-3 py-1 text-[10px] font-bold ${ready ? "border-emerald-300/25 text-emerald-200" : "border-gold-300/20 text-gold-100"}`}>
           {ready ? "READY" : humanEnum(contract?.state)}
         </span>
       </div>
@@ -770,7 +770,7 @@ function WaitingCard({ contract }) {
   const actionable = contract?.state === "ACTIONABLE_SIGNAL";
   return (
     <section className={`${CARD} flex gap-4 p-5`}>
-      <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-3"><Icon className="h-5 w-5 text-amber-200/75" /></div>
+      <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-3"><Icon className="h-5 w-5 text-gold-200/75" /></div>
       <div>
         <div className={MONO_LABEL}>{actionable ? "Current execution state" : "What the bot is waiting for"}</div>
         <p className="mt-2 text-[13px] leading-5 text-white/70">
@@ -829,11 +829,11 @@ function AutomatedTradeResultCard({ result }) {
 
   if (result.status === "uncertain") {
     return (
-      <section className={`${CARD} border-l-4 border-l-amber-300 bg-amber-300/[0.04] p-5`}>
+      <section className={`${CARD} border-l-4 border-l-gold-300 bg-gold-300/[0.04] p-5`}>
         <div className={MONO_LABEL}>Your account · real trade result</div>
         <div className="mt-2 flex items-center gap-2">
-          <AlertTriangle className="h-5 w-5 text-amber-300" />
-          <span className="text-lg font-bold text-amber-100">Can&apos;t confirm which trade this was yet</span>
+          <AlertTriangle className="h-5 w-5 text-gold-300" />
+          <span className="text-lg font-bold text-gold-100">Can&apos;t confirm which trade this was yet</span>
         </div>
         <p className="mt-2 text-[12px] leading-5 text-white/55">
           More than one trade in your account matched this signal&apos;s timing, so XauCloud is not guessing which one it was.
@@ -1073,7 +1073,7 @@ export default function AIMarketOutlookPage() {
                   <div className="flex flex-wrap gap-1.5">
                     {DIRECTION_FILTERS.map((f) => (
                       <button key={f} onClick={() => changeDirectionFilter(f)}
-                              className={`rounded-full border px-3 py-1.5 font-mono text-[10px] font-bold transition ${directionFilter === f ? "border-amber-300/40 bg-amber-300/[0.08] text-amber-100" : "border-white/[0.06] text-white/40 hover:border-white/15"}`}>
+                              className={`rounded-full border px-3 py-1.5 font-mono text-[10px] font-bold transition ${directionFilter === f ? "border-gold-300/40 bg-gold-300/[0.08] text-gold-100" : "border-white/[0.06] text-white/40 hover:border-white/15"}`}>
                         {f}
                       </button>
                     ))}
@@ -1084,7 +1084,7 @@ export default function AIMarketOutlookPage() {
                   <div className="flex flex-wrap gap-1.5">
                     {RESULT_FILTERS.map((f) => (
                       <button key={f} onClick={() => changeResultFilter(f)}
-                              className={`rounded-full border px-3 py-1.5 font-mono text-[10px] font-bold transition ${resultFilter === f ? "border-amber-300/40 bg-amber-300/[0.08] text-amber-100" : "border-white/[0.06] text-white/40 hover:border-white/15"}`}>
+                              className={`rounded-full border px-3 py-1.5 font-mono text-[10px] font-bold transition ${resultFilter === f ? "border-gold-300/40 bg-gold-300/[0.08] text-gold-100" : "border-white/[0.06] text-white/40 hover:border-white/15"}`}>
                         {f}
                       </button>
                     ))}

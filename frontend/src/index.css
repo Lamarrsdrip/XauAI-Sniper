@@ -32,10 +32,23 @@
 
 @layer base {
   * { @apply border-border; }
+  /* Native-app shell: html/body carry the deep-black app background so the
+     iPhone safe-area (under the Dynamic Island / home indicator) and any
+     overscroll-bounce region are never white. Every page still paints its
+     own surface on top; this only governs the gaps behind fixed content. */
+  html { background-color: #050507; }
   body {
-    @apply bg-white text-[#111111];
+    @apply text-[#111111];
+    background-color: #050507;
     font-family: 'Manrope', sans-serif;
     -webkit-font-smoothing: antialiased;
+    /* Feel: no tap-highlight flash, no rubber-band page scroll, no iOS
+       auto-zoom of text on rotate. Individual scroll containers opt back
+       into momentum scrolling as needed. */
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    overscroll-behavior-y: none;
   }
 }
 
@@ -117,3 +130,41 @@
 .delay-500 { animation-delay: 500ms; }
 .delay-600 { animation-delay: 600ms; }
 .delay-700 { animation-delay: 700ms; }
+
+/* ── XauCloud native app shell utilities ──────────────────────────────────
+   Safe-area helpers so the shell can sit edge-to-edge under the notch /
+   home indicator. Require viewport-fit=cover in index.html (added). */
+.pt-safe   { padding-top: env(safe-area-inset-top); }
+.pb-safe   { padding-bottom: env(safe-area-inset-bottom); }
+.pl-safe   { padding-left: env(safe-area-inset-left); }
+.pr-safe   { padding-right: env(safe-area-inset-right); }
+.mt-safe   { margin-top: env(safe-area-inset-top); }
+/* Header/nav that must clear the inset AND keep their own padding. */
+.h-safe-top    { height: env(safe-area-inset-top); }
+.h-safe-bottom { height: env(safe-area-inset-bottom); }
+
+/* dvh with a vh fallback so the shell always fills the real visible height
+   (iOS Safari URL-bar collapse / standalone). */
+.min-h-app { min-height: 100vh; min-height: 100dvh; }
+.h-app     { height: 100vh; height: 100dvh; }
+
+/* Momentum scroll containers that hide the scrollbar (native feel). */
+.native-scroll {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.native-scroll::-webkit-scrollbar { display: none; }
+
+/* Disable text selection + callout on interactive controls (native feel),
+   while leaving real content selectable. */
+.no-select { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+
+/* Tabular, aligned numerals for all trading figures. */
+.nums { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
+
+/* Dark scrollbar for the app surfaces (the light one above is for the
+   legacy light marketing chrome). */
+.app-dark ::-webkit-scrollbar-track { background: #0D0E13; }
+.app-dark ::-webkit-scrollbar-thumb { background: #2A2D36; }
+.app-dark ::-webkit-scrollbar-thumb:hover { background: #3A3E49; }

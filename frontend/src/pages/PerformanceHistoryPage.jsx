@@ -32,7 +32,7 @@ function ArchivedPeriodCard({ period }) {
         </div>
         <div>
           <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-white/30">Profit Factor</div>
-          <div className="mt-1 font-mono text-lg font-black text-amber-200">
+          <div className="mt-1 font-mono text-lg font-black text-gold-200">
             {period.profit_factor_state === "ok" ? fmt(period.profit_factor, 2) : period.profit_factor_state === "not_established" ? "N/E" : "--"}
           </div>
         </div>

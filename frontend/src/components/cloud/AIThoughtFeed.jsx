@@ -18,7 +18,7 @@ const TONE = {
   success: { border: "border-emerald-400/20", bg: "bg-emerald-300/[0.05]", text: "text-emerald-300", icon: CheckCircle2 },
   bearish: { border: "border-rose-400/20", bg: "bg-rose-300/[0.05]", text: "text-rose-300", icon: TrendingDown },
   danger:  { border: "border-rose-400/20", bg: "bg-rose-300/[0.05]", text: "text-rose-300", icon: XCircle },
-  warning: { border: "border-amber-300/20", bg: "bg-amber-300/[0.05]", text: "text-amber-200", icon: AlertTriangle },
+  warning: { border: "border-gold-300/20", bg: "bg-gold-300/[0.05]", text: "text-gold-200", icon: AlertTriangle },
   neutral: { border: "border-white/[0.08]", bg: "bg-white/[0.02]", text: "text-white/70", icon: Brain },
 };
 const toneOf = (t) => TONE[t] || TONE.neutral;
@@ -248,17 +248,17 @@ function DecisionTimeline({ items }) {
 const VERDICT_STYLE = {
   YES:  "border-emerald-400/25 bg-emerald-400/10 text-emerald-300",
   NO:   "border-rose-400/25 bg-rose-400/10 text-rose-300",
-  WAIT: "border-amber-300/25 bg-amber-300/10 text-amber-200",
+  WAIT: "border-gold-300/25 bg-gold-300/10 text-gold-200",
 };
 const HEALTH_STYLE = {
   healthy:     { label: "Healthy",     cls: "text-emerald-300" },
   pullback:    { label: "Pullback",    cls: "text-sky-300" },
-  warning:     { label: "Warning",     cls: "text-amber-200" },
+  warning:     { label: "Warning",     cls: "text-gold-200" },
   danger:      { label: "Danger",      cls: "text-rose-300" },
   invalidated: { label: "Invalidated", cls: "text-rose-300" },
   HEALTHY:     { label: "HEALTHY",     cls: "text-emerald-300" },
   PULLBACK:    { label: "PULLBACK",    cls: "text-sky-300" },
-  WARNING:     { label: "WARNING",     cls: "text-amber-200" },
+  WARNING:     { label: "WARNING",     cls: "text-gold-200" },
   DANGER:      { label: "DANGER",      cls: "text-rose-300" },
   INVALIDATED: { label: "INVALIDATED", cls: "text-rose-300" },
 };
@@ -336,8 +336,8 @@ export function CurrentTradePanel({ opinion, onForceClose }) {
       </div>
 
       {inRecovery && (
-        <div className="mb-4 flex items-center gap-2 rounded-2xl border border-amber-300/25 bg-amber-300/[0.08] p-3.5 text-[12px] text-amber-100">
-          <LifeBuoy className="h-4 w-4 flex-none text-amber-300" />
+        <div className="mb-4 flex items-center gap-2 rounded-2xl border border-gold-300/25 bg-gold-300/[0.08] p-3.5 text-[12px] text-gold-100">
+          <LifeBuoy className="h-4 w-4 flex-none text-gold-300" />
           <span>Recovery Mode active — reached {Math.round(opinion.recovery_worst_pct || 0)}% of the way to SL, now watching for a genuine reclaim before deciding anything.</span>
         </div>
       )}
@@ -348,7 +348,7 @@ export function CurrentTradePanel({ opinion, onForceClose }) {
         </div>
       )}
       {pendingMessage && (
-        <div className="mb-4 rounded-2xl border border-amber-300/20 bg-amber-300/[0.07] p-3.5 text-[12px] leading-5 text-amber-100">
+        <div className="mb-4 rounded-2xl border border-gold-300/20 bg-gold-300/[0.07] p-3.5 text-[12px] leading-5 text-gold-100">
           {pendingMessage}
         </div>
       )}

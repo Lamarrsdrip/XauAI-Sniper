@@ -107,7 +107,7 @@ export default function M10VsOutlookCard({
           </div>
 
           {!online && (
-            <p className="mt-3 text-[11px] text-amber-200">
+            <p className="mt-3 text-[11px] text-gold-200">
               EA offline — values shown are last known only; no live agreement is claimed.
             </p>
           )}
@@ -117,12 +117,12 @@ export default function M10VsOutlookCard({
             </p>
           )}
           {online && m10 && m10Freshness !== "FRESH" && (
-            <p className="mt-3 text-[11px] text-amber-200">
+            <p className="mt-3 text-[11px] text-gold-200">
               M10 evidence is {m10Freshness.toLowerCase()} — waiting for fresh data before showing agreement.
             </p>
           )}
           {agree && <p className="mt-3 text-[11px] text-emerald-300">Agree: both currently favor {m10Dir}.</p>}
-          {conflict && <p className="mt-3 text-[11px] text-amber-300">Conflict: M10 favors {m10Dir}; hourly outlook favors {outlookDir}.</p>}
+          {conflict && <p className="mt-3 text-[11px] text-gold-300">Conflict: M10 favors {m10Dir}; hourly outlook favors {outlookDir}.</p>}
           {online && !requestFailed && m10Freshness === "FRESH" && !bothDirectional && (
             <p className="mt-3 text-[11px] text-white/35">
               M10 remains authoritative. The hourly advisory is neutral or waiting and does not erase the M10 state.

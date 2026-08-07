@@ -30,15 +30,15 @@ export default class ErrorBoundary extends React.Component {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#060609] px-4 text-white">
         <div className="w-full max-w-sm rounded-3xl border border-white/[0.08] bg-white/[0.03] p-7 text-center">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-amber-300/25 bg-amber-300/[0.08]">
-            <AlertTriangle className="h-5 w-5 text-amber-300" />
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-gold-300/25 bg-gold-300/[0.08]">
+            <AlertTriangle className="h-5 w-5 text-gold-300" />
           </div>
           <h1 className="mt-4 text-[16px] font-bold">Something went wrong</h1>
           <p className="mt-2 text-[13px] leading-5 text-white/50">
             This page hit an unexpected error. Your account, license, and trading data are unaffected — try reloading.
           </p>
           <button onClick={this.handleReload}
-                  className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-amber-300 py-3 text-[13px] font-bold text-black hover:bg-amber-200">
+                  className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-gold-300 py-3 text-[13px] font-bold text-black hover:bg-gold-200">
             <RefreshCw className="h-4 w-4" /> Reload
           </button>
           {process.env.NODE_ENV === "development" && this.state.error && (

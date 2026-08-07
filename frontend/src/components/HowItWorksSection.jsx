@@ -25,7 +25,7 @@ export default function HowItWorksSection() {
       <div className="mx-auto max-w-6xl px-4 py-14 md:px-8 md:py-20">
 
         <div className="mb-8">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-gold-300/20 bg-gold-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-gold-200">
             How it works
           </span>
           <h2 className="mt-4 font-heading text-3xl font-semibold tracking-tight sm:text-4xl" data-testid="how-it-works-title">
@@ -37,8 +37,8 @@ export default function HowItWorksSection() {
           {STEPS.map(({ icon: Icon, title, body }, i) => (
             <div key={title} className="rounded-[24px] border border-white/[0.08] bg-white/[0.03] p-6">
               <div className="mb-4 flex items-center gap-3">
-                <div className="flex h-10 w-10 flex-none items-center justify-center rounded-2xl border border-amber-300/20 bg-amber-300/[0.08]">
-                  <Icon size={18} weight="duotone" className="text-amber-300" />
+                <div className="flex h-10 w-10 flex-none items-center justify-center rounded-2xl border border-gold-300/20 bg-gold-300/[0.08]">
+                  <Icon size={18} weight="duotone" className="text-gold-300" />
                 </div>
                 <span className="font-mono text-[11px] font-bold text-white/25">0{i + 1}</span>
               </div>

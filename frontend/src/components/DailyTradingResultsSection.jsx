@@ -69,7 +69,7 @@ export default function DailyTradingResultsSection({ api }) {
     <div className="bg-[#060609] border-t border-white/[0.06] text-white" data-testid="daily-trading-results-section">
       <div className="mx-auto max-w-5xl px-4 py-14 md:px-8 md:py-20">
         <div className="mb-6">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-gold-300/20 bg-gold-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-gold-200">
             Real Trading Results
           </span>
           <h2 className="mt-4 font-heading text-3xl font-semibold tracking-tight sm:text-4xl">

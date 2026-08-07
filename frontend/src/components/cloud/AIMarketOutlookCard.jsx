@@ -15,7 +15,7 @@ const DIRECTION_STYLE = {
   SELL: { text: "text-rose-300", border: "border-rose-400/20", bg: "bg-rose-300/[0.05]", Icon: ArrowDownRight },
   NEUTRAL: { text: "text-white/60", border: "border-white/[0.08]", bg: "bg-white/[0.02]", Icon: Minus },
   RANGE: { text: "text-white/60", border: "border-white/[0.08]", bg: "bg-white/[0.02]", Icon: Minus },
-  TRANSITION: { text: "text-amber-200", border: "border-amber-300/20", bg: "bg-amber-300/[0.05]", Icon: Compass },
+  TRANSITION: { text: "text-gold-200", border: "border-gold-300/20", bg: "bg-gold-300/[0.05]", Icon: Compass },
   NO_VALID_OUTLOOK: { text: "text-white/40", border: "border-white/[0.06]", bg: "bg-white/[0.01]", Icon: Minus },
 };
 
@@ -120,13 +120,13 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
   else bodyState = "NO_FRESH_SIGNAL";
 
   return (
-    <Link to="/ai-market-outlook" className={`${CARD} block p-4 hover:border-amber-300/20 transition`} data-testid="ai-market-outlook-card">
+    <Link to="/ai-market-outlook" className={`${CARD} block p-4 hover:border-gold-300/20 transition`} data-testid="ai-market-outlook-card">
       <div className="flex items-center justify-between">
         <span className={MONO_LABEL}>AI Market Outlook</span>
         {notifOn ? (
           <button onClick={turnOffNotifications} title="Phone alerts verified active — click to turn off"
                   className="rounded-full p-1.5 hover:bg-white/[0.06] transition" data-testid="outlook-bell">
-            <Bell className="h-3.5 w-3.5 text-amber-300" />
+            <Bell className="h-3.5 w-3.5 text-gold-300" />
           </button>
         ) : (
           // Turning ON requires a real browser permission grant + device

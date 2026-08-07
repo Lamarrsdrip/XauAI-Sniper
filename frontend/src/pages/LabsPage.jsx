@@ -59,7 +59,7 @@ export default function LabsPage() {
                 </p>
               </div>
             </div>
-            <span className="inline-flex w-fit flex-none items-center gap-1 rounded-full bg-amber-300/80 px-3 py-1 font-mono text-[10px] font-black uppercase tracking-widest text-[#1a1400]">
+            <span className="inline-flex w-fit flex-none items-center gap-1 rounded-full bg-gold-300/80 px-3 py-1 font-mono text-[10px] font-black uppercase tracking-widest text-[#1a1400]">
               <CheckCircle size={10} weight="fill" /> Not yet available
             </span>
           </div>

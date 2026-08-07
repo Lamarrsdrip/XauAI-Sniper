@@ -7,4 +7,4 @@ Disallow: /command/signup
 Disallow: /purchase/success
 Disallow: /purchase/cancel
 
-Sitemap: https://xauaisniper.com/sitemap.xml
+Sitemap: https://xaucloud.io/sitemap.xml

@@ -93,7 +93,7 @@ function buildPayload(doc: Record<string, unknown>, event: string): Record<strin
     ["LOSS", "PARTIAL_PROFIT", "BREAK_EVEN"].includes(String(doc["analytics_outcome"])) &&
     ["LOSS_RED_TIMEOUT", "PARTIAL_PROFIT", "BREAK_EVEN"].includes(String(doc["signal_state"]));
 
-  let title = "XAU AI Sniper";
+  let title = "XauCloud";
   let body = event;
 
   if (event === "TRACKING_STARTED") {
@@ -122,10 +122,10 @@ function buildPayload(doc: Record<string, unknown>, event: string): Record<strin
     }
   } else if (event === "OUTLOOK_PUBLISHED") {
     if (["NO_VALID_OUTLOOK", "NEUTRAL", "RANGE", "TRANSITION"].includes(String(direction))) {
-      title = "XAU AI Sniper — Hourly Outlook";
+      title = "XauCloud — Hourly Outlook";
       body = `No trade right now. Market regime: ${doc["market_regime"] ?? direction}. Evidence strength: ${doc["evidence_strength_pct"] ?? 0}%`;
     } else {
-      title = "XAU AI Sniper — Hourly Outlook";
+      title = "XauCloud — Hourly Outlook";
       body =
         `${direction} outlook · ${confidence}% confidence\n` +
         `Entry: ${doc["preferred_entry_zone_low"]}–${doc["preferred_entry_zone_high"]}\n` +
@@ -338,7 +338,7 @@ async function sendOnesignal(userId: string, payload: Record<string, unknown>): 
     app_id: cfg.app_id,
     include_aliases: { external_id: [userId] },
     target_channel: "push",
-    headings: { en: payload["title"] ?? "XAU AI Sniper" },
+    headings: { en: payload["title"] ?? "XauCloud" },
     contents: { en: payload["body"] ?? "" },
     data: { deep_link: payload["deep_link"] ?? "", outlook_id: payload["outlook_id"], event: payload["event"] ?? "" },
     web_url: webUrl,
@@ -891,7 +891,7 @@ export async function sendTestNotification(userId: string): Promise<Record<strin
   if (devices.length === 0) {
     return { status: "NO_DEVICE", message: "No complete registered device subscription exists for this user." };
   }
-  const payload = { title: "XAU AI Sniper Test", body: "Phone alerts are working.", deep_link: "/ai-market-outlook", outlook_id: null, event: "TEST_NOTIFICATION" };
+  const payload = { title: "XauCloud Test", body: "Phone alerts are working.", deep_link: "/ai-market-outlook", outlook_id: null, event: "TEST_NOTIFICATION" };
   const { ok, failureClass, provider } = await sendOnesignal(userId, payload);
   const nowIso = new Date().toISOString();
   const deliveryStatus = ok ? "SENT" : "FAILED";

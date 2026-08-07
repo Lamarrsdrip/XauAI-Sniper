@@ -91,7 +91,7 @@ export default function CloudLanding() {
                     <span className="h-2 w-2 rounded-full bg-sky-300" /> DEMO PREVIEW
                   </div>
                 </div>
-                <div className="rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1.5 text-[11px] font-bold text-amber-200">
+                <div className="rounded-full border border-gold-300/20 bg-gold-300/[0.08] px-3 py-1.5 text-[11px] font-bold text-gold-200">
                   <KeyRound className="mr-1 inline h-3 w-3" /> PIN safe
                 </div>
               </div>
@@ -112,7 +112,7 @@ export default function CloudLanding() {
                 </div>
                 <div className="space-y-2 text-[11px] leading-5 text-white/52">
                   <p><span className="font-mono text-violet-300">EXAMPLE</span> · advisory AI status appears here</p>
-                  <p><span className="font-mono text-amber-200">CANDIDATE</span> · one entry timer lifecycle</p>
+                  <p><span className="font-mono text-gold-200">CANDIDATE</span> · one entry timer lifecycle</p>
                   <p><span className="font-mono text-sky-300">RESULT</span> · cancelled or broker-confirmed</p>
                 </div>
               </div>
@@ -130,7 +130,7 @@ export default function CloudLanding() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {FEATURES.map(({ icon: Icon, title, body }) => (
               <div key={title} className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-5">
-                <Icon className="mb-4 h-5 w-5 text-amber-200" />
+                <Icon className="mb-4 h-5 w-5 text-gold-200" />
                 <h3 className="text-[14px] font-semibold">{title}</h3>
                 <p className="mt-2 text-[13px] leading-6 text-white/48">{body}</p>
               </div>
@@ -142,7 +142,7 @@ export default function CloudLanding() {
         <section className="mx-auto max-w-7xl px-4 pb-12 md:px-8">
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="rounded-[24px] border border-white/[0.08] bg-white/[0.03] p-6">
-              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-200 mb-2">How it works</div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-gold-200 mb-2">How it works</div>
               <h2 className="text-2xl font-semibold tracking-tight mb-5">Buy, install, activate, monitor.</h2>
               <div className="space-y-2.5">
                 {["Buy a license and download the currently published verified EX5", "Install it on MT5 or your VPS, add your PIN, and verify Decision Mode", "Open /command — see heartbeat, M10 evidence, M30 consensus when active, trades, blocks, and errors"].map((step, i) => (
@@ -172,7 +172,7 @@ export default function CloudLanding() {
         {/* CTA */}
         <section className="mx-auto max-w-3xl px-4 pb-16 text-center md:px-8">
           <div className="rounded-[24px] border border-white/[0.08] bg-white/[0.04] p-8">
-            <Shield className="mx-auto mb-4 h-7 w-7 text-amber-200" />
+            <Shield className="mx-auto mb-4 h-7 w-7 text-gold-200" />
             <h2 className="text-2xl font-semibold tracking-tight">Run the bot locally. See everything remotely.</h2>
             <p className="mx-auto mt-3 max-w-lg text-[13px] leading-6 text-white/48">
               The Command Center is for licensed users who want live status, AI Director decisions, ML state, alerts, and queue-based safe controls — without sitting beside MT5.

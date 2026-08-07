@@ -23,7 +23,7 @@ export default function ReassuranceSection() {
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
             {POINTS.map(({ icon: Icon, text }) => (
               <div key={text} className="flex items-start gap-3">
-                <Icon size={17} weight="duotone" className="mt-0.5 flex-none text-amber-300" />
+                <Icon size={17} weight="duotone" className="mt-0.5 flex-none text-gold-300" />
                 <span className="text-[13px] leading-6 text-white/60">{text}</span>
               </div>
             ))}

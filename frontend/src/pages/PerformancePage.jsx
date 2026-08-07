@@ -59,7 +59,7 @@ export default function PerformancePage() {
           <ArrowLeft size={14} weight="bold" /> Back to XauCloud
         </Link>
 
-        <span className="mt-8 inline-flex items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">
+        <span className="mt-8 inline-flex items-center gap-1.5 rounded-full border border-gold-300/20 bg-gold-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-gold-200">
           Full Performance
         </span>
 
@@ -85,8 +85,8 @@ export default function PerformancePage() {
             </p>
 
             {!data.sufficient_data && (
-              <div className="mt-6 rounded-2xl border border-amber-300/20 bg-amber-300/[0.06] p-5">
-                <div className="font-mono text-sm font-bold text-amber-200">Forward tracking active</div>
+              <div className="mt-6 rounded-2xl border border-gold-300/20 bg-gold-300/[0.06] p-5">
+                <div className="font-mono text-sm font-bold text-gold-200">Forward tracking active</div>
                 <div className="mt-1 text-[13px] text-white/60">
                   {data.total_trades} closed trade{data.total_trades === 1 ? "" : "s"} since {dateStr(data.epoch_started_at)}. Collecting enough data to
                   calculate stable performance metrics ({data.minimum_sample} needed).

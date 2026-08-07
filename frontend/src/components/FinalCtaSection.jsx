@@ -8,7 +8,7 @@ export default function FinalCtaSection() {
           Let XauCloud watch Gold, qualify the setup, and manage the execution.
         </h2>
         <a href="#purchase"
-          className="mt-7 inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-9 py-3.5 text-[14px] font-extrabold text-black transition hover:bg-amber-200">
+          className="mt-7 inline-flex items-center justify-center gap-2 rounded-full bg-gold-300 px-9 py-3.5 text-[14px] font-extrabold text-black transition hover:bg-gold-200">
           Get XauCloud
         </a>
       </div>

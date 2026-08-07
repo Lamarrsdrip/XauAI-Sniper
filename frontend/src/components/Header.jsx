@@ -40,7 +40,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
           <div className="flex items-center gap-2">
             {quoteAvailable && (
               <div className="hidden items-center gap-2 rounded-full border border-white/[0.08] bg-black/30 px-3 py-1.5 md:flex" data-testid="gold-ticker">
-                <Crosshair size={11} className="text-amber-300" weight="bold" />
+                <Crosshair size={11} className="text-gold-300" weight="bold" />
                 <span className="font-mono text-[12px] font-bold" data-testid="gold-bid-price">{goldPrice.bid?.toFixed(2)}</span>
                 <span className={`flex items-center gap-0.5 font-mono text-[11px] font-semibold ${up ? "text-emerald-400" : "text-red-400"}`} data-testid="gold-change">
                   {up ? <TrendUp size={10} weight="bold" /> : <TrendDown size={10} weight="bold" />}
@@ -49,7 +49,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
               </div>
             )}
             <button onClick={() => onNavigate("purchase")}
-              className="rounded-full bg-amber-300 px-4 py-1.5 text-[12px] font-bold text-black transition hover:bg-amber-200">
+              className="rounded-full bg-gold-300 px-4 py-1.5 text-[12px] font-bold text-black transition hover:bg-gold-200">
               Buy Now
             </button>
             <a href="https://www.mql5.com/en/market/product/188838" target="_blank" rel="noopener noreferrer"
@@ -85,7 +85,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
             ))}
             <div className="mt-4 flex flex-col gap-2.5">
               <button onClick={() => { onNavigate("purchase"); setMobileOpen(false); }}
-                className="rounded-2xl bg-amber-300 px-4 py-3.5 text-center text-sm font-bold text-black">
+                className="rounded-2xl bg-gold-300 px-4 py-3.5 text-center text-sm font-bold text-black">
                 Buy Now
               </button>
               <a href="/command" className="rounded-2xl border border-white/[0.1] bg-white/[0.04] px-4 py-3.5 text-center text-sm font-semibold text-white/70">

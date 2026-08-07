@@ -6,9 +6,9 @@ const CARDS = [
     icon: Target,
     title: "Gold-specialized intelligence",
     body: "Built around XAUUSD market behavior — structure, trend, momentum, and volatility — rather than a generic multi-symbol signal.",
-    tone: "text-amber-300",
-    border: "border-amber-300/20",
-    glow: "bg-amber-300/[0.07]",
+    tone: "text-gold-300",
+    border: "border-gold-300/20",
+    glow: "bg-gold-300/[0.07]",
   },
   {
     icon: ShieldCheck,
@@ -42,7 +42,7 @@ export default function FeaturesSection() {
       <div className="mx-auto max-w-6xl px-4 py-14 md:px-8 md:py-20">
 
         <div className="mb-8">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-gold-300/20 bg-gold-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-gold-200">
             Features
           </span>
           <h2 className="mt-4 max-w-lg font-heading text-3xl font-semibold tracking-tight text-white sm:text-4xl">

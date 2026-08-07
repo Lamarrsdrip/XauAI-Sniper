@@ -7,7 +7,7 @@ import React from "react";
 // gives each route its own, still reusing the site's existing copy rather
 // than inventing new marketing claims.
 export default function Seo({ title, description, path = "" }) {
-  const url = `https://xauaisniper.com${path}`;
+  const url = `https://xaucloud.io${path}`;
   return (
     <>
       <title>{title}</title>

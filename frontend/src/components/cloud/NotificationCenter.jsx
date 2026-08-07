@@ -52,7 +52,7 @@ export function NotificationBell({ onClick }) {
     <button onClick={onClick} className="relative rounded-full border border-white/[0.07] bg-white/[0.03] p-2 text-white/45 hover:text-white transition" data-testid="notification-bell">
       <Bell className="h-4 w-4" />
       {unread > 0 && (
-        <span className="absolute -right-1 -top-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-300 px-1 font-mono text-[9px] font-bold text-black">
+        <span className="absolute -right-1 -top-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-gold-300 px-1 font-mono text-[9px] font-bold text-black">
           {unread > 99 ? "99+" : unread}
         </span>
       )}
@@ -64,13 +64,13 @@ function NotificationRow({ item, onMarkRead }) {
   const unread = !item.read_at;
   return (
     <div
-      className={`rounded-xl border px-4 py-3 transition ${unread ? "border-amber-300/20 bg-amber-300/[0.04]" : "border-white/[0.06] bg-white/[0.015]"}`}
+      className={`rounded-xl border px-4 py-3 transition ${unread ? "border-gold-300/20 bg-gold-300/[0.04]" : "border-white/[0.06] bg-white/[0.015]"}`}
       onClick={() => unread && onMarkRead(item.id)}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            {unread && <span className="h-1.5 w-1.5 flex-none rounded-full bg-amber-300" />}
+            {unread && <span className="h-1.5 w-1.5 flex-none rounded-full bg-gold-300" />}
             <span className={`truncate text-[13px] font-semibold ${unread ? "text-white" : "text-white/70"}`}>{item.title || "Notification"}</span>
           </div>
           <p className="mt-1 text-[12px] leading-4 text-white/50">{item.body}</p>
@@ -163,7 +163,7 @@ export default function NotificationCenterPanel({ open, onClose }) {
               : counts[cat]?.unread || 0;
             return (
               <button key={cat} onClick={() => setCategory(cat)}
-                className={`flex-none rounded-full border px-3 py-1.5 text-[11px] font-semibold transition ${category === cat ? "border-amber-300/40 bg-amber-300/[0.08] text-amber-100" : "border-white/[0.06] text-white/45 hover:border-white/15"}`}>
+                className={`flex-none rounded-full border px-3 py-1.5 text-[11px] font-semibold transition ${category === cat ? "border-gold-300/40 bg-gold-300/[0.08] text-gold-100" : "border-white/[0.06] text-white/45 hover:border-white/15"}`}>
                 {CATEGORY_LABELS[cat]}{count > 0 ? ` (${count})` : ""}
               </button>
             );
@@ -171,7 +171,7 @@ export default function NotificationCenterPanel({ open, onClose }) {
         </div>
 
         <label className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-2.5 text-[11px] text-white/45">
-          <input type="checkbox" checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)} className="accent-amber-300" />
+          <input type="checkbox" checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)} className="accent-gold-300" />
           Unread only
         </label>
 

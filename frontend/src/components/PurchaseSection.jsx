@@ -85,7 +85,7 @@ export default function PurchaseSection({ api }) {
       <div className="mx-auto max-w-5xl px-4 py-14 md:px-8 md:py-20">
 
         <div className="mb-8 text-center">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-gold-300/20 bg-gold-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-gold-200">
             Lifetime License
           </span>
           <h2 className="mt-4 font-heading text-3xl font-semibold tracking-tight sm:text-4xl" data-testid="purchase-title">
@@ -118,7 +118,7 @@ export default function PurchaseSection({ api }) {
                     onClick={() => setCurrency(c)}
                     className={`rounded-full px-2.5 py-1 font-mono text-[10px] font-bold transition ${
                       (priceData?.display_currency || "NGN") === c
-                        ? "bg-amber-300 text-black"
+                        ? "bg-gold-300 text-black"
                         : "bg-white/[0.06] text-white/40 hover:bg-white/[0.1]"
                     }`}
                   >
@@ -135,7 +135,7 @@ export default function PurchaseSection({ api }) {
             <div className="mb-6 space-y-2">
               {PERKS.map((p) => (
                 <div key={p} className="flex items-center gap-2.5">
-                  <Check size={13} weight="bold" className="flex-none text-amber-300" />
+                  <Check size={13} weight="bold" className="flex-none text-gold-300" />
                   <span className="text-[13px] text-white/60">{p}</span>
                 </div>
               ))}
@@ -148,7 +148,7 @@ export default function PurchaseSection({ api }) {
                 value={buyerName}
                 onChange={(e) => setBuyerName(e.target.value)}
                 placeholder="Full name"
-                className="w-full rounded-2xl border border-white/[0.1] bg-white/[0.05] px-4 py-3 font-mono text-sm text-white placeholder-white/25 outline-none transition focus:border-amber-300/40 focus:bg-white/[0.08]"
+                className="w-full rounded-2xl border border-white/[0.1] bg-white/[0.05] px-4 py-3 font-mono text-sm text-white placeholder-white/25 outline-none transition focus:border-gold-300/40 focus:bg-white/[0.08]"
               />
               <input
                 data-testid="purchase-email"
@@ -156,7 +156,7 @@ export default function PurchaseSection({ api }) {
                 value={buyerEmail}
                 onChange={(e) => setBuyerEmail(e.target.value)}
                 placeholder="Email address"
-                className="w-full rounded-2xl border border-white/[0.1] bg-white/[0.05] px-4 py-3 font-mono text-sm text-white placeholder-white/25 outline-none transition focus:border-amber-300/40 focus:bg-white/[0.08]"
+                className="w-full rounded-2xl border border-white/[0.1] bg-white/[0.05] px-4 py-3 font-mono text-sm text-white placeholder-white/25 outline-none transition focus:border-gold-300/40 focus:bg-white/[0.08]"
               />
               {priceLoadFailed && (
                 <div className="flex items-center justify-between gap-3 rounded-2xl border border-rose-400/25 bg-rose-400/[0.06] px-4 py-3 text-[12px] text-rose-300" data-testid="purchase-price-error">
@@ -171,7 +171,7 @@ export default function PurchaseSection({ api }) {
                 data-testid="purchase-btn"
                 onClick={openMethodChoice}
                 disabled={loading || checkoutBlocked}
-                className="mt-1 w-full inline-flex items-center justify-center gap-2 rounded-full bg-amber-300 px-6 py-4 text-[14px] font-extrabold text-black transition hover:bg-amber-200 disabled:opacity-50">
+                className="mt-1 w-full inline-flex items-center justify-center gap-2 rounded-full bg-gold-300 px-6 py-4 text-[14px] font-extrabold text-black transition hover:bg-gold-200 disabled:opacity-50">
                 <ShoppingCart size={17} weight="bold" />
                 {loading ? "Redirecting…" : priceLoadFailed ? "Price Unavailable" : paymentUnavailable ? "Payments Unavailable" : priceLoading ? "Loading…" : `Continue to Payment · ${displayPrice}`}
               </button>

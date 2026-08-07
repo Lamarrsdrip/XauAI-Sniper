@@ -14,6 +14,7 @@ import PurchaseSection from "@/components/PurchaseSection";
 import FaqSection from "@/components/FaqSection";
 import FinalCtaSection from "@/components/FinalCtaSection";
 import ReleaseStrip from "@/components/ReleaseStrip";
+import ComingSoonAppsSection from "@/components/ComingSoonAppsSection";
 import PurchaseSuccessPage from "@/components/PurchaseSuccessPage";
 import AdminPortal from "@/components/AdminPortal";
 import Footer from "@/components/Footer";
@@ -69,6 +70,7 @@ function MainDashboard() {
         <ReassuranceSection />
         <section id="purchase"><PurchaseSection api={API} /></section>
         <ReleaseStrip api={API} />
+        <ComingSoonAppsSection />
         <section id="faq"><FaqSection /></section>
         <FinalCtaSection />
       </main>

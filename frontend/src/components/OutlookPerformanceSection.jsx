@@ -36,7 +36,7 @@ function Chip({ active, onClick, children }) {
       onClick={onClick}
       className={`flex-none rounded-full px-3.5 py-1.5 font-mono text-[11px] font-bold uppercase tracking-wide transition-all duration-200 ${
         active
-          ? "bg-amber-300 text-black shadow-[0_0_0_1px_rgba(212,175,55,0.4)]"
+          ? "bg-gold-300 text-black shadow-[0_0_0_1px_rgba(212,175,55,0.4)]"
           : "border border-white/[0.1] bg-white/[0.03] text-white/45 hover:border-white/25 hover:text-white/80"
       }`}
     >
@@ -95,7 +95,7 @@ function ConfidenceBadge({ pct }) {
   // Thresholds are a display convention only (not a statistic) -- the
   // underlying confidence_pct is always the real value from the backend.
   const tier = pct >= 75 ? { label: "High Confidence", cls: "text-emerald-300" }
-    : pct >= 50 ? { label: "Medium Confidence", cls: "text-amber-200" }
+    : pct >= 50 ? { label: "Medium Confidence", cls: "text-gold-200" }
     : { label: "Low Confidence", cls: "text-white/45" };
   return (
     <span className={`font-mono text-[9px] font-bold uppercase tracking-wide ${tier.cls}`}>
@@ -226,7 +226,7 @@ export default function OutlookPerformanceSection({ api }) {
       `}</style>
       <div className="mx-auto max-w-5xl px-4 py-14 md:px-8 md:py-20">
         <div className="mb-6">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-amber-200">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-gold-300/20 bg-gold-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-gold-200">
             Market Outlook
           </span>
           <h2 className="mt-4 font-heading text-3xl font-semibold tracking-tight sm:text-4xl" data-testid="outlook-performance-title">
@@ -301,7 +301,7 @@ export default function OutlookPerformanceSection({ api }) {
               type="button"
               onClick={() => setLimit((l) => l + LOAD_MORE_STEP)}
               disabled={loadingMore}
-              className="flex items-center gap-2 rounded-full border border-white/[0.1] bg-white/[0.04] px-5 py-2.5 font-mono text-[11px] font-bold uppercase tracking-wide text-white/60 transition hover:border-amber-300/30 hover:text-amber-200 disabled:opacity-50"
+              className="flex items-center gap-2 rounded-full border border-white/[0.1] bg-white/[0.04] px-5 py-2.5 font-mono text-[11px] font-bold uppercase tracking-wide text-white/60 transition hover:border-gold-300/30 hover:text-gold-200 disabled:opacity-50"
             >
               {loadingMore ? <ArrowsClockwise size={13} className="animate-spin" /> : <CaretDown size={13} />}
               {loadingMore ? "Loading…" : "Load older signals"}

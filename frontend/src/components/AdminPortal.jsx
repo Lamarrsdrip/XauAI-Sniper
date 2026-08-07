@@ -20,14 +20,14 @@ function Badge({ tone = "neutral", children }) {
   const cls = {
     green:  "bg-emerald-400/10 text-emerald-300 border-emerald-400/20",
     red:    "bg-red-500/10 text-red-300 border-red-400/20",
-    amber:  "bg-amber-300/10 text-amber-200 border-amber-300/20",
+    amber:  "bg-gold-300/10 text-gold-200 border-gold-300/20",
     neutral:"bg-white/[0.06] text-white/55 border-white/[0.08]",
   }[tone] || "bg-white/[0.06] text-white/55 border-white/[0.08]";
   return <span className={`inline-block rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${cls}`}>{children}</span>;
 }
 
 function StatCard({ label, value, sub, tone = "neutral", testId }) {
-  const color = { green: "text-emerald-300", red: "text-red-300", amber: "text-amber-200", neutral: "text-white" }[tone] || "text-white";
+  const color = { green: "text-emerald-300", red: "text-red-300", amber: "text-gold-200", neutral: "text-white" }[tone] || "text-white";
   return (
     <div className={`${CARD} p-4`} data-testid={testId}>
       <div className={LABEL}>{label}</div>
@@ -61,7 +61,7 @@ function Field({ label, children }) {
 function Input({ className = "", ...props }) {
   return (
     <input
-      className={`w-full rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 text-[13px] text-white outline-none placeholder:text-white/25 focus:border-amber-300/50 ${className}`}
+      className={`w-full rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 text-[13px] text-white outline-none placeholder:text-white/25 focus:border-gold-300/50 ${className}`}
       {...props}
     />
   );
@@ -70,7 +70,7 @@ function Input({ className = "", ...props }) {
 function Btn({ children, variant = "primary", className = "", ...props }) {
   const base = "inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[13px] font-bold transition disabled:opacity-40";
   const v = {
-    primary: "bg-amber-300 text-black hover:bg-amber-200",
+    primary: "bg-gold-300 text-black hover:bg-gold-200",
     ghost:   "border border-white/[0.08] bg-white/[0.04] text-white/70 hover:text-white hover:bg-white/[0.08]",
     danger:  "bg-red-500/15 text-red-300 border border-red-400/20 hover:bg-red-500/25",
     green:   "bg-emerald-400/15 text-emerald-300 border border-emerald-400/20 hover:bg-emerald-400/25",
@@ -102,18 +102,17 @@ export default function AdminPortal({ api }) {
 
   if (!admin) return <LoginPage api={api} onLogin={handleLogin} />;
 
-  const TABS = [
-    { id: "dashboard",     label: "Dashboard",     icon: House          },
-    { id: "pins",          label: "Licenses",      icon: Key            },
-    { id: "command",       label: "Bot Ops",       icon: Pulse          },
-    { id: "notifications", label: "Notifications", icon: Bell           },
-    { id: "performance",   label: "Performance",   icon: TrendUp        },
-    { id: "settings",      label: "Settings",      icon: GearSix        },
-    { id: "configurator",  label: "EA Config",     icon: ChartBar       },
-    { id: "transactions",  label: "Payments",      icon: CurrencyNgn    },
-    { id: "bankTransfers", label: "Bank Transfers", icon: Bank          },
-    { id: "account",       label: "Account",       icon: UserCircle     },
+  // Grouped operations nav (owner spec): Overview / Customers / Money /
+  // Trading / Comms / System — desktop sidebar, mobile horizontal scroll.
+  const NAV_GROUPS = [
+    { label: "Overview",  tabs: [["dashboard", "Dashboard", House]] },
+    { label: "Customers", tabs: [["pins", "Licenses", Key]] },
+    { label: "Money",     tabs: [["transactions", "Payments", CurrencyNgn], ["bankTransfers", "Bank Transfers", Bank]] },
+    { label: "Trading",   tabs: [["command", "Bot Ops", Pulse], ["performance", "Performance", TrendUp], ["configurator", "EA Config", ChartBar]] },
+    { label: "Comms",     tabs: [["notifications", "Notifications", Bell]] },
+    { label: "System",    tabs: [["settings", "Settings", GearSix], ["account", "Account", UserCircle]] },
   ];
+  const ALL_TABS = NAV_GROUPS.flatMap((g) => g.tabs);
 
   return (
     <div className={`min-h-screen ${BG} text-white`} data-testid="admin-portal">
@@ -121,7 +120,7 @@ export default function AdminPortal({ api }) {
       <header className="sticky top-0 z-50 border-b border-white/[0.07] bg-[#060609]/92 backdrop-blur-2xl">
         <div className="mx-auto flex h-[56px] max-w-7xl items-center justify-between gap-3 px-5 md:px-8">
           <div className="flex items-center gap-3">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-300">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gold-300">
               <span className="font-mono text-[10px] font-black text-black">XA</span>
             </div>
             <span className="text-[14px] font-semibold">XauCloud</span>
@@ -139,35 +138,58 @@ export default function AdminPortal({ api }) {
         </div>
       </header>
 
-      {/* Tab bar */}
-      <div className="sticky top-[56px] z-40 border-b border-white/[0.06] bg-[#060609]/92 backdrop-blur-xl overflow-x-auto">
-        <div className="mx-auto flex max-w-7xl gap-0 px-5 md:px-8 min-w-max">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            const active = tab === t.id;
+      {/* Mobile grouped nav — horizontal scroll */}
+      <div className="sticky top-[56px] z-40 overflow-x-auto border-b border-white/[0.06] bg-[#060609]/92 backdrop-blur-xl md:hidden">
+        <div className="flex min-w-max gap-0 px-4">
+          {ALL_TABS.map(([id, label, Icon]) => {
+            const active = tab === id;
             return (
-              <button key={t.id} onClick={() => setTab(t.id)} data-testid={`admin-tab-${t.id}`}
-                className={`flex items-center gap-1.5 border-b-2 px-4 py-3 text-[12px] font-semibold transition-colors whitespace-nowrap ${active ? "border-amber-300 text-white" : "border-transparent text-white/38 hover:text-white/65"}`}>
+              <button key={id} onClick={() => setTab(id)} data-testid={`admin-tab-${id}`}
+                className={`flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3.5 py-3 text-[12px] font-semibold transition-colors ${active ? "border-gold-300 text-white" : "border-transparent text-white/38 hover:text-white/65"}`}>
                 <Icon size={13} weight={active ? "fill" : "regular"} />
-                {t.label}
+                {label}
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Content */}
-      <div className="mx-auto max-w-7xl px-5 md:px-8 py-7">
-        {tab === "dashboard"     && <DashboardTab     api={api} />}
-        {tab === "pins"          && <PinsTab          api={api} />}
-        {tab === "command"       && <CommandOpsTab    api={api} />}
-        {tab === "notifications" && <NotificationsTab api={api} />}
-        {tab === "performance"   && <PerformanceTab   api={api} />}
-        {tab === "settings"      && <SettingsTab      api={api} />}
-        {tab === "configurator"  && <ConfigTab        api={api} />}
-        {tab === "transactions"  && <TransactionsTab  api={api} />}
-        {tab === "bankTransfers" && <BankTransfersTab api={api} />}
-        {tab === "account"       && <AccountTab api={api} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
+      {/* Body: desktop grouped sidebar + content */}
+      <div className="mx-auto flex max-w-7xl gap-6 px-4 py-6 md:px-8">
+        <aside className="hidden w-52 flex-none md:block">
+          <nav className="sticky top-[80px] space-y-5">
+            {NAV_GROUPS.map((g) => (
+              <div key={g.label}>
+                <div className="mb-1.5 px-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/30">{g.label}</div>
+                <div className="space-y-0.5">
+                  {g.tabs.map(([id, label, Icon]) => {
+                    const active = tab === id;
+                    return (
+                      <button key={id} onClick={() => setTab(id)} data-testid={`admin-tab-desktop-${id}`}
+                        className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-[13px] font-semibold transition ${active ? "bg-gold-300 text-black" : "text-white/50 hover:bg-white/[0.05] hover:text-white"}`}>
+                        <Icon size={15} weight={active ? "fill" : "regular"} />
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </nav>
+        </aside>
+
+        <main className="min-w-0 flex-1">
+          {tab === "dashboard"     && <DashboardTab     api={api} />}
+          {tab === "pins"          && <PinsTab          api={api} />}
+          {tab === "command"       && <CommandOpsTab    api={api} />}
+          {tab === "notifications" && <NotificationsTab api={api} />}
+          {tab === "performance"   && <PerformanceTab   api={api} />}
+          {tab === "settings"      && <SettingsTab      api={api} />}
+          {tab === "configurator"  && <ConfigTab        api={api} />}
+          {tab === "transactions"  && <TransactionsTab  api={api} />}
+          {tab === "bankTransfers" && <BankTransfersTab api={api} />}
+          {tab === "account"       && <AccountTab api={api} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
+        </main>
       </div>
     </div>
   );
@@ -219,11 +241,11 @@ function LoginPage({ api, onLogin }) {
     <div className={`min-h-screen ${BG} flex items-center justify-center p-6`} data-testid="admin-login-page">
       <div className="w-full max-w-sm">
         <div className="text-center mb-7">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-300">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-gold-300">
             <span className="font-mono text-base font-black text-black">XA</span>
           </div>
-          <h1 className="text-2xl font-semibold text-white">XauAI Admin</h1>
-          <p className="mt-1 text-[13px] text-white/38">Published-release management portal</p>
+          <h1 className="text-2xl font-semibold text-white">XauCloud Admin</h1>
+          <p className="mt-1 text-[13px] text-white/38">Operations console</p>
         </div>
 
         {!mfaToken ? (
@@ -231,7 +253,7 @@ function LoginPage({ api, onLogin }) {
             <Field label="Email">
               <div className="relative">
                 <Envelope size={14} className="absolute left-3 top-3 text-white/30" />
-                <Input data-testid="admin-email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@xauaisniper.com" className="pl-9" />
+                <Input data-testid="admin-email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@xaucloud.io" className="pl-9" />
               </div>
             </Field>
 
@@ -314,7 +336,7 @@ function DashboardTab({ api }) {
           <div className="grid grid-cols-2 gap-3">
             <div className={`${CARD} p-4`}>
               <div className={LABEL}>Paid licenses</div>
-              <div className={`${VALUE} mt-2 text-amber-200`}>{b.sold_via_payment}</div>
+              <div className={`${VALUE} mt-2 text-gold-200`}>{b.sold_via_payment}</div>
             </div>
             <div className={`${CARD} p-4`}>
               <div className={LABEL}>Manual licenses</div>
@@ -391,11 +413,11 @@ function NotificationsTab({ api }) {
         </div>
 
         {!configured && (
-          <div className="mt-4 flex items-start gap-3 rounded-xl border border-amber-300/25 bg-amber-300/[0.06] p-4">
-            <WarningCircle size={18} className="mt-0.5 flex-none text-amber-300" />
+          <div className="mt-4 flex items-start gap-3 rounded-xl border border-gold-300/25 bg-gold-300/[0.06] p-4">
+            <WarningCircle size={18} className="mt-0.5 flex-none text-gold-300" />
             <div>
-              <div className="text-[13px] font-semibold text-amber-200">No notification can be delivered yet</div>
-              <p className="mt-1 text-[12px] leading-5 text-amber-100/80">{onesignal.remediation}</p>
+              <div className="text-[13px] font-semibold text-gold-200">No notification can be delivered yet</div>
+              <p className="mt-1 text-[12px] leading-5 text-gold-100/80">{onesignal.remediation}</p>
               <p className="mt-2 text-[11px] leading-5 text-white/40">
                 Go to the Settings tab and enter your OneSignal App ID + REST API Key. Unlike the retired VAPID
                 system, this takes effect immediately -- no backend restart needed.
@@ -510,7 +532,7 @@ function StartPeriodDialog({ api, h, onDone, onCancel }) {
           )}
           {step === "confirm" && (
             <>
-              <div className="rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-4 text-[12px] leading-5 text-amber-100">
+              <div className="rounded-xl border border-gold-300/20 bg-gold-300/[0.06] p-4 text-[12px] leading-5 text-gold-100">
                 You're about to archive the current period and start <span className="font-bold">"{name}"</span> effective
                 immediately. The homepage will show <span className="font-bold">0 closed trades</span> until real trades
                 close after this moment. This action is logged with your admin account and cannot be undone.
@@ -724,7 +746,7 @@ function PinsTab({ api }) {
                     <div className="mt-0.5 flex flex-wrap gap-2 text-[11px] text-white/35">
                       {p.buyer_name && <span>{p.buyer_name}</span>}
                       {p.buyer_email && <span>{p.buyer_email}</span>}
-                      {p.payment_ref && <span className="text-amber-200">PAID</span>}
+                      {p.payment_ref && <span className="text-gold-200">PAID</span>}
                     </div>
                   </div>
                   <div className="flex flex-shrink-0 items-center gap-2">
@@ -945,7 +967,7 @@ function NombaSettingsSection({ api }) {
       title="Nomba payment configuration"
       action={
         <label className="flex items-center gap-2 text-[11px] text-white/50 cursor-pointer">
-          <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} className="accent-amber-300" />
+          <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} className="accent-gold-300" />
           Enable Nomba Payments
         </label>
       }
@@ -963,7 +985,7 @@ function NombaSettingsSection({ api }) {
             {["sandbox", "production"].map(env => (
               <button key={env} onClick={() => setEnvironment(env)}
                 className={`flex-1 rounded-xl border px-4 py-2.5 text-[12px] font-bold uppercase tracking-wide transition ${
-                  environment === env ? "border-amber-300/50 bg-amber-300/10 text-amber-200" : "border-white/[0.08] bg-white/[0.03] text-white/50 hover:text-white/80"
+                  environment === env ? "border-gold-300/50 bg-gold-300/10 text-gold-200" : "border-white/[0.08] bg-white/[0.03] text-white/50 hover:text-white/80"
                 }`}>
                 {env}
               </button>
@@ -982,8 +1004,8 @@ function NombaSettingsSection({ api }) {
           <NombaCredentialFields env="sandbox" values={sandboxForm} onChange={setEnvField} existing={cfg.sandbox} />
         </div>
 
-        <div className="rounded-xl border border-amber-300/15 bg-amber-300/[0.02] p-4">
-          <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-amber-200/70">Production credentials</div>
+        <div className="rounded-xl border border-gold-300/15 bg-gold-300/[0.02] p-4">
+          <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-gold-200/70">Production credentials</div>
           <p className="mb-3 text-[11px] text-white/35">Changing any production field requires your current admin password below.</p>
           <NombaCredentialFields env="production" values={productionForm} onChange={setEnvField} existing={cfg.production} />
         </div>
@@ -1292,7 +1314,7 @@ function SettingsTab({ api }) {
               </span>
               <input type="checkbox" checked={!!marketSettings.platform_gold_mode_enabled}
                 onChange={e => setMarketSettings(s => ({ ...s, platform_gold_mode_enabled: e.target.checked }))}
-                className="h-5 w-5 accent-amber-300" />
+                className="h-5 w-5 accent-gold-300" />
             </label>
             <label className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.06] bg-white/[0.015] p-3.5 cursor-pointer">
               <span>
@@ -1301,7 +1323,7 @@ function SettingsTab({ api }) {
               </span>
               <input type="checkbox" checked={!!marketSettings.platform_index_mode_enabled}
                 onChange={e => setMarketSettings(s => ({ ...s, platform_index_mode_enabled: e.target.checked }))}
-                className="h-5 w-5 accent-amber-300" />
+                className="h-5 w-5 accent-gold-300" />
             </label>
             <Field label="Allowed index symbols (comma-separated)">
               <Input value={indexSymbolsInput} onChange={e => setIndexSymbolsInput(e.target.value)}
@@ -1311,7 +1333,7 @@ function SettingsTab({ api }) {
             <Field label="Default trading universe">
               <select value={marketSettings.default_trading_universe}
                 onChange={e => setMarketSettings(s => ({ ...s, default_trading_universe: e.target.value }))}
-                className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-[13px] text-white outline-none focus:border-amber-300/40">
+                className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-[13px] text-white outline-none focus:border-gold-300/40">
                 <option value="GOLD_ONLY">Gold only</option>
                 <option value="INDEX_ONLY">Index only</option>
                 <option value="GOLD_AND_INDEX">Gold + Index</option>
@@ -1340,7 +1362,7 @@ function ConfigTab() {
   ];
   return (
     <div className="space-y-5" data-testid="admin-config-tab">
-      <div className="rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-4 py-3 text-[12px] leading-5 text-amber-200/90">
+      <div className="rounded-xl border border-gold-300/25 bg-gold-300/[0.06] px-4 py-3 text-[12px] leading-5 text-gold-200/90">
         Read-only release contract. This admin page does <strong>not</strong> write trading parameters and cannot change a running EA. Runtime inputs must be set intentionally in MT5 and proven in the terminal journal.
       </div>
       <CardSection title="Owner-approved release contract">
@@ -1510,7 +1532,7 @@ function BankTransfersTab({ api }) {
             </Field>
           </div>
         )}
-        {msg && <p className="mt-3 text-[12px] text-amber-300">{msg}</p>}
+        {msg && <p className="mt-3 text-[12px] text-gold-300">{msg}</p>}
       </CardSection>
 
       <CardSection title={`Review queue · ${entries.length}`} action={
@@ -1791,7 +1813,7 @@ function MfaSection({ api, admin, onLogin }) {
             <div>
               <div className={LABEL}>Secret (manual entry)</div>
               <div className="mt-1 flex items-center gap-2">
-                <code className="flex-1 break-all font-mono text-[12px] text-amber-200">{pending.secret}</code>
+                <code className="flex-1 break-all font-mono text-[12px] text-gold-200">{pending.secret}</code>
                 <CopyIconBtn value={pending.secret} />
               </div>
             </div>
@@ -1869,11 +1891,11 @@ function AccountTab({ api, admin, onLogin, onLogout }) {
       <CardSection title="Admin account">
         <div className="space-y-5">
           <div className="flex items-center gap-3 pb-4 border-b border-white/[0.06]">
-            <UserCircle size={30} weight="duotone" className="text-amber-200" />
+            <UserCircle size={30} weight="duotone" className="text-gold-200" />
             <div>
               <div className="text-[14px] font-semibold">{admin?.name || "Admin"}</div>
               <div className="text-[12px] text-white/40">{admin?.email}</div>
-              <div className="mt-0.5 font-mono text-[10px] text-amber-200">ADMIN · RELEASE CONTROL</div>
+              <div className="mt-0.5 font-mono text-[10px] text-gold-200">ADMIN · RELEASE CONTROL</div>
             </div>
           </div>
 
