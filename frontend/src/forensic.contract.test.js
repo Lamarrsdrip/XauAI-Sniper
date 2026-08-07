@@ -67,11 +67,11 @@ describe("forensic operating-company browser contracts", () => {
     expect(copy).toMatch(/compatibility is broker-specific/i);
   });
 
-  test("optional push failure cannot prevent the base service worker", () => {
+  test("service worker is first-party (no OneSignal) and handles PWA caching", () => {
     const sw = fs.readFileSync(path.join(__dirname, "../public/service-worker.js"), "utf8");
-    expect(sw).toMatch(/try\s*{/);
-    expect(sw).toMatch(/importScripts\('https:\/\/cdn\.onesignal\.com/);
-    expect(sw).toMatch(/catch \(error\)/);
+    expect(sw).not.toMatch(/onesignal/i);
+    expect(sw).toMatch(/addEventListener\("install"/);
+    expect(sw).toMatch(/addEventListener\("fetch"/);
   });
 
   test("customer auth controls have associated labels and browser autocomplete", () => {
