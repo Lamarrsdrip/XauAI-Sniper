@@ -13,7 +13,7 @@ import Seo from "@/components/Seo";
 
 const outlookAxios = axios.create({ baseURL: API, withCredentials: true });
 
-const CARD = "rounded-2xl border border-white/[0.07] bg-[#0d0e13]";
+const CARD = "rounded-2xl bg-[#0C0D12]";
 const MONO_LABEL = "font-mono text-[10px] uppercase tracking-[0.2em] text-white/35";
 
 const COLOR_STYLE = {
@@ -1018,7 +1018,7 @@ export default function AIMarketOutlookPage() {
   } : null;
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-[#07090d] text-white">
+    <div className="min-h-screen overflow-x-hidden bg-[#050507] text-white">
       <Seo
         title="AI Gold Market Outlook — XauCloud M10 Execution Truth"
         description="M10 execution truth with hourly advisory context for XAUUSD Gold trading, from the XauCloud AI Director."
