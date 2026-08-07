@@ -796,7 +796,7 @@ function latestM10Signal(events, heartbeat) {
   return accountMatches && symbolMatches ? latest : null;
 }
 
-function M10SignalCard({ events, heartbeat }) {
+function M10SignalCard({ events, heartbeat, online = true }) {
   // v6.25.1 owner directive 2026-07-17 -- explicit newest-by-timestamp
   // selection (not "first match in whatever order events arrived"), and
   // verify the event actually belongs to the currently-connected
@@ -804,7 +804,18 @@ function M10SignalCard({ events, heartbeat }) {
   // session/build must never be silently displayed as current.
   const latest = latestM10Signal(events, heartbeat);
   const [showTechnical, setShowTechnical] = useState(false);
-  if (!latest) return null;
+  // Always keep the section on the dashboard so it's findable — show a waiting
+  // state until the EA posts a fresh M10 reading, instead of rendering nothing.
+  if (!latest) return (
+    <div className="rounded-2xl bg-panel p-4" data-testid="m10-signal-card">
+      <div className={MONO_LABEL}>M10 Signal Engine · Evidence</div>
+      <p className="mt-2 text-[12px] leading-5 text-white/45">
+        {online
+          ? "No live M10 evidence yet. The engine publishes a fresh reading after the next completed M10 scan (about every 10 minutes)."
+          : "Waiting for your EA heartbeat. M10 evidence appears here once your bot is online and reports a scan."}
+      </p>
+    </div>
+  );
 
   const decision = latest.decision || "DATA_UNAVAILABLE";
   const preferredDir = latest.preferred_direction || "NONE";
@@ -1304,8 +1315,8 @@ function HomePage({ status, heartbeat, licenseInfo, online, equityPoints, events
       {/* One market-intelligence module — full evidence/history on tap */}
       <OutlookModule outlook={homeOutlook} online={online} onOpen={() => { window.location.href = "/ai-market-outlook"; }} />
 
-      {/* M10 Signal Engine · Evidence — renders only when live M10 evidence exists */}
-      {online && <M10SignalCard events={events} heartbeat={heartbeat} />}
+      {/* M10 Signal Engine · Evidence — always on the dashboard (waiting state until a fresh reading) */}
+      {linked && <M10SignalCard events={events} heartbeat={heartbeat} online={online} />}
 
       {/* Focused open-position module (only when a trade is live) */}
       <PositionModule linked={linked} online={online} onDetails={() => setActive("trading")} />
