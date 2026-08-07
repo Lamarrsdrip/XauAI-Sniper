@@ -70,10 +70,10 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
 
       {mobileOpen && (
         <div className="fixed inset-0 z-[100] flex flex-col bg-[#060609]/98 text-white backdrop-blur-2xl lg:hidden">
-          <div className="flex items-center justify-between border-b border-white/[0.08] px-5 py-4">
+          <div className="flex items-center justify-between border-b border-white/[0.08] px-5 pb-4 pt-safe-top">
             <span className="font-heading text-base font-semibold">Menu</span>
-            <button onClick={() => setMobileOpen(false)} className="rounded-full border border-white/[0.08] p-2 text-white/60">
-              <X size={16} weight="bold" />
+            <button onClick={() => setMobileOpen(false)} aria-label="Close menu" className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full border border-white/[0.08] text-white/60">
+              <X size={18} weight="bold" />
             </button>
           </div>
           <nav className="flex flex-col gap-1 p-4">

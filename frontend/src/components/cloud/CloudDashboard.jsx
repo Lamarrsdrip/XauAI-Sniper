@@ -15,7 +15,6 @@ import AIMarketOutlookCard from "./AIMarketOutlookCard";
 import M10VsOutlookCard, { M10_DECISION_LABELS, M30_LIFECYCLE_LABELS, FRESHNESS_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
 import { API } from "@/lib/api";
-import { logoutOneSignalUser } from "@/lib/onesignal";
 import * as UI from "@/lib/ui";
 import * as AK from "@/lib/appkit";
 import { webPushSupported, webPushStatus, enableWebPush, disableWebPush, testWebPush } from "@/lib/webpush";
@@ -674,7 +673,6 @@ export default function CloudDashboard() {
   };
 
   const logout = async () => {
-    try { await logoutOneSignalUser(commandAxios); } catch {}
     try { await commandAxios.post("/cloud/auth/logout"); } catch {}
     navigate("/command");
   };
@@ -1099,28 +1097,31 @@ function HomeRecentActivity({ events = [], onOpenFull }) {
   );
 }
 
-// Prominent, dismissible push-enable prompt — surfaced on Home (and Outlook)
-// so the first-party notification opt-in is front-and-centre, not buried.
+// Simple push on/off toggle, surfaced on the dashboard. First-party (VAPID).
 function NotificationPrompt() {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [dismissed, setDismissed] = useState(() => { try { return localStorage.getItem("xau_push_prompt_dismissed") === "1"; } catch { return false; } });
   useEffect(() => { if (webPushSupported()) webPushStatus().then(setStatus).catch(() => {}); }, []);
-  if (!webPushSupported() || dismissed || !status || status.subscribed) return null;
-  const enable = async () => { setBusy(true); try { await enableWebPush(commandAxios); setStatus(await webPushStatus()); } catch { /* leave prompt up */ } finally { setBusy(false); } };
-  const dismiss = () => { try { localStorage.setItem("xau_push_prompt_dismissed", "1"); } catch { /* ignore */ } setDismissed(true); };
+  if (!webPushSupported() || !status) return null;
+  const set = async (next) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (next) await enableWebPush(commandAxios); else await disableWebPush(commandAxios);
+      setStatus(await webPushStatus());
+    } catch { /* keep last state */ } finally { setBusy(false); }
+  };
   return (
-    <AK.Panel className="p-4">
-      <div className="flex items-start gap-3">
-        <span className="flex-none rounded-xl bg-gold-300/12 p-2"><Bell className="h-4 w-4 text-gold-300" /></span>
-        <div className="min-w-0 flex-1">
-          <div className="text-[13.5px] font-bold">Turn on alerts</div>
-          <p className="mt-0.5 text-[12px] leading-4 text-white/50">Get notified when trades open or close, on new AI Outlook signals, and on license &amp; system events.</p>
-          <div className="mt-2.5 flex gap-2">
-            <AK.Button size="sm" onClick={enable} disabled={busy}>{busy ? "Working…" : "Enable alerts"}</AK.Button>
-            <AK.Button variant="ghost" size="sm" onClick={dismiss}>Not now</AK.Button>
+    <AK.Panel>
+      <div className="flex items-center justify-between gap-3 px-4 py-3.5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex-none rounded-lg bg-gold-300/12 p-2"><Bell className="h-4 w-4 text-gold-300" /></span>
+          <div className="min-w-0">
+            <div className="text-[13.5px] font-semibold">Push notifications</div>
+            <div className="truncate text-[11.5px] text-white/45">{busy ? "Working…" : status.subscribed ? "On for this device" : "Trade, outlook & system alerts"}</div>
           </div>
         </div>
+        <Toggle value={Boolean(status.subscribed)} onChange={set} />
       </div>
     </AK.Panel>
   );

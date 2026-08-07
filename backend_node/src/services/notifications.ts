@@ -3,6 +3,7 @@ import { getDb } from "../db.js";
 import { env } from "../env.js";
 import { getSettings } from "./settings.js";
 import { NAMESPACE_URL, uuidV5 } from "./uuidV5.js";
+import { sendWebPushToUser } from "./webPush.js";
 import { buildResultConversion } from "./marketOutlookCore.js";
 
 /** Port of backend/notifications.py -- push notification dispatch via OneSignal. */
@@ -324,62 +325,22 @@ interface SendResult {
   provider: Record<string, unknown>;
 }
 
-async function sendOnesignal(userId: string, payload: Record<string, unknown>): Promise<SendResult> {
-  const cfg = await onesignalConfig();
-  if (!(cfg.app_id && cfg.api_key)) {
-    return { ok: false, failureClass: SERVER_NOT_CONFIGURED, provider: { http_status: null, message_id: null } };
-  }
-
-  const deepLink = String(payload["deep_link"] ?? "/ai-market-outlook");
-  const webUrl = `${env.PUBLIC_SITE_URL}${deepLink.startsWith("/") ? deepLink : `/${deepLink}`}`;
-  const providerIdentity = payload["notification_key"] ?? `xau-outlook:${payload["outlook_id"] ?? "none"}:${payload["event"] ?? "unknown"}:${userId}`;
-  const providerIdempotency = uuidV5(NAMESPACE_URL, String(providerIdentity));
-  const body = {
-    app_id: cfg.app_id,
-    include_aliases: { external_id: [userId] },
-    target_channel: "push",
-    headings: { en: payload["title"] ?? "XauCloud" },
-    contents: { en: payload["body"] ?? "" },
-    data: { deep_link: payload["deep_link"] ?? "", outlook_id: payload["outlook_id"], event: payload["event"] ?? "" },
-    web_url: webUrl,
-    idempotency_key: providerIdempotency,
-  };
-
-  let resp: Response;
+// OneSignal has been removed as the push provider. Every push now routes
+// through the app's own first-party Web Push (VAPID) subscriptions. Kept the
+// SendResult shape so all existing callers are unchanged.
+async function sendUserPush(userId: string, payload: Record<string, unknown>): Promise<SendResult> {
   try {
-    resp = await fetch(ONESIGNAL_API_URL, {
-      method: "POST",
-      headers: { Authorization: `Key ${cfg.api_key}`, "Content-Type": "application/json; charset=utf-8" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10_000),
+    const sent = await sendWebPushToUser(String(userId), {
+      title: String(payload["title"] ?? "XauCloud"),
+      body: String(payload["body"] ?? ""),
+      deep_link: String(payload["deep_link"] ?? (payload["outlook_id"] ? "/ai-market-outlook" : "/command/dashboard")),
+      category: String(payload["category"] ?? notificationCategory(String(payload["event"] ?? ""))),
     });
-  } catch (err) {
-    const isTimeout = err instanceof Error && err.name === "TimeoutError";
-    return {
-      ok: false,
-      failureClass: isTimeout ? TEMPORARY_DELIVERY_FAILURE : TEMPORARY_DELIVERY_FAILURE,
-      provider: { http_status: null, message_id: null, error: isTimeout ? "timeout" : "network" },
-    };
-  }
-
-  let data: Record<string, unknown> = {};
-  try {
-    data = (await resp.json()) as Record<string, unknown>;
+    if (sent > 0) return { ok: true, failureClass: null, provider: { channel: "web_push", sent } };
+    return { ok: false, failureClass: NO_ACTIVE_ONESIGNAL_RECIPIENT, provider: { channel: "web_push", sent: 0 } };
   } catch {
-    data = {};
+    return { ok: false, failureClass: TEMPORARY_DELIVERY_FAILURE, provider: { channel: "web_push", error: "send_failed" } };
   }
-  const provider: Record<string, unknown> = {
-    http_status: resp.status,
-    message_id: cleanText(data["id"]) || null,
-    errors: data["errors"] ?? null,
-    warnings: data["warnings"] ?? null,
-  };
-
-  if (resp.status === 401 || resp.status === 403) return { ok: false, failureClass: AUTHENTICATION_FAILED, provider };
-  if (resp.status >= 500) return { ok: false, failureClass: TEMPORARY_DELIVERY_FAILURE, provider };
-  if (resp.status >= 400) return { ok: false, failureClass: INVALID_PAYLOAD, provider };
-  if (provider["message_id"]) return { ok: true, failureClass: null, provider };
-  return { ok: false, failureClass: NO_ACTIVE_ONESIGNAL_RECIPIENT, provider };
 }
 
 const HEARTBEAT_STALE_SECONDS = 90;
@@ -446,7 +407,7 @@ export async function sendOutlookNotification(doc: Record<string, unknown>, even
         logEntry["delivery_status"] = "NO_DEVICE";
         logEntry["failure_reason"] = "SUBSCRIPTION_MISSING";
       } else {
-        const { ok, failureClass, provider } = await sendOnesignal(userId, payload);
+        const { ok, failureClass, provider } = await sendUserPush(userId, payload);
         Object.assign(logEntry, {
           sent_time: new Date().toISOString(),
           delivery_status: ok ? "SENT" : "FAILED",
@@ -553,7 +514,7 @@ export async function sendAutomatedTradeResultNotification(doc: Record<string, u
         logEntry["delivery_status"] = "NO_DEVICE";
         logEntry["failure_reason"] = "SUBSCRIPTION_MISSING";
       } else {
-        const { ok, failureClass, provider } = await sendOnesignal(userId, payload);
+        const { ok, failureClass, provider } = await sendUserPush(userId, payload);
         Object.assign(logEntry, {
           sent_time: new Date().toISOString(),
           delivery_status: ok ? "SENT" : "FAILED",
@@ -777,7 +738,7 @@ export async function sendTradeActivityNotification(activity: Record<string, unk
         logEntry["failure_reason"] = "SUBSCRIPTION_MISSING";
       } else {
         payload["notification_key"] = `${idemKey}:provider`;
-        const { ok, failureClass, provider } = await sendOnesignal(userId, payload);
+        const { ok, failureClass, provider } = await sendUserPush(userId, payload);
         Object.assign(logEntry, {
           sent_time: new Date().toISOString(),
           delivery_status: ok ? "SENT" : "FAILED",
@@ -892,7 +853,7 @@ export async function sendTestNotification(userId: string): Promise<Record<strin
     return { status: "NO_DEVICE", message: "No complete registered device subscription exists for this user." };
   }
   const payload = { title: "XauCloud Test", body: "Phone alerts are working.", deep_link: "/ai-market-outlook", outlook_id: null, event: "TEST_NOTIFICATION" };
-  const { ok, failureClass, provider } = await sendOnesignal(userId, payload);
+  const { ok, failureClass, provider } = await sendUserPush(userId, payload);
   const nowIso = new Date().toISOString();
   const deliveryStatus = ok ? "SENT" : "FAILED";
   await db.collection("cloud_notification_log").insertOne({

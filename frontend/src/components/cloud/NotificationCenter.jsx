@@ -141,22 +141,22 @@ export default function NotificationCenterPanel({ open, onClose }) {
   return (
     <div className="fixed inset-0 z-[80] flex justify-end bg-black/60 backdrop-blur-sm" onClick={onClose}>
       <div className="flex h-full w-full max-w-md flex-col border-l border-white/[0.08] bg-[#07080b]" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-white/[0.07] px-4 py-4">
+        <div className="flex items-center justify-between gap-2 border-b border-white/[0.07] px-4 pb-3 pt-safe-top">
           <div>
             <div className="text-[15px] font-bold">Notifications</div>
             <div className="mt-0.5 font-mono text-[10px] text-white/35">{totalUnread > 0 ? `${totalUnread} unread` : "You're all caught up"}</div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={markAllRead} className="flex items-center gap-1 rounded-full border border-white/[0.07] px-3 py-1.5 text-[11px] text-white/50 hover:text-white">
+            <button onClick={markAllRead} className="flex min-h-[40px] items-center gap-1 rounded-full border border-white/[0.07] px-3 text-[11px] text-white/50 hover:text-white">
               <CheckCheck className="h-3.5 w-3.5" /> Mark all read
             </button>
-            <button onClick={onClose} className="rounded-full border border-white/[0.07] p-2 text-white/45 hover:text-white">
-              <X className="h-4 w-4" />
+            <button onClick={onClose} aria-label="Close" className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full border border-white/[0.07] text-white/45 hover:text-white">
+              <X className="h-5 w-5" />
             </button>
           </div>
         </div>
 
-        <div className="flex gap-1.5 overflow-x-auto border-b border-white/[0.06] px-4 py-2.5">
+        <div className="native-scroll flex gap-1.5 overflow-x-auto border-b border-white/[0.06] px-4 py-2.5">
           {CATEGORY_ORDER.map((cat) => {
             const count = cat === "ALL"
               ? Object.values(counts).reduce((s, c) => s + (c?.unread || 0), 0)
@@ -175,7 +175,7 @@ export default function NotificationCenterPanel({ open, onClose }) {
           Unread only
         </label>
 
-        <div className="flex-1 space-y-2 overflow-y-auto px-4 py-4">
+        <div className="flex-1 space-y-2 overflow-y-auto px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
           {items.map((item) => <NotificationRow key={item.id} item={item} onMarkRead={markRead} />)}
           {items.length === 0 && !loading && (
             <p className="py-10 text-center text-[12px] text-white/35">No notifications here yet.</p>

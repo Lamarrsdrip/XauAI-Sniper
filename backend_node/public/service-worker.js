@@ -5,20 +5,9 @@
  * same root-scope worker. The page can query the worker to distinguish a
  * healthy PWA worker from a PWA worker whose OneSignal import failed.
  */
-let oneSignalWorkerImported = false;
-let oneSignalWorkerError = "";
-
-try {
-  importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js');
-  oneSignalWorkerImported = true;
-} catch (error) {
-  oneSignalWorkerError = String(error?.message || error || "OneSignal worker import failed");
-  // Push remains optional for the rest of the PWA, but registration UI must
-  // report this state rather than claiming that notifications are available.
-  console.warn("[XauAI] OneSignal worker unavailable; push remains disabled.", error);
-}
-
-const WORKER_VERSION = "xau-pwa-onesignal-device-v1";
+// OneSignal removed. Push is first-party (VAPID) via the dedicated /push-sw.js
+// worker at the /push/ scope. This worker handles PWA caching only.
+const WORKER_VERSION = "xaucloud-pwa-v2-firstparty-push";
 const CACHE_NAME = "xauai-cloud-v" + Date.now();
 
 self.addEventListener("install", () => {
@@ -87,8 +76,7 @@ self.addEventListener("message", (event) => {
     const response = {
       type: "XAU_PUSH_DIAGNOSTICS_RESULT",
       worker_version: WORKER_VERSION,
-      onesignal_worker_imported: oneSignalWorkerImported,
-      onesignal_worker_error: oneSignalWorkerError ? oneSignalWorkerError.slice(0, 180) : "",
+      first_party_push: true,
       scope: self.registration?.scope || "",
     };
     if (event.ports?.[0]) event.ports[0].postMessage(response);
