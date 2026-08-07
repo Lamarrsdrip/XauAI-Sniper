@@ -136,6 +136,13 @@
    home indicator. Require viewport-fit=cover in index.html (added). */
 .pt-safe   { padding-top: env(safe-area-inset-top); }
 .pb-safe   { padding-bottom: env(safe-area-inset-bottom); }
+/* ONE authoritative app-header top inset: full-bleed background stays behind
+   the iPhone status bar / Dynamic Island, while the header's CONTENT begins
+   below the safe-area inset. max() keeps it compact on non-notch devices
+   (falls back to normal header padding, never a giant gap). Every app shell
+   header uses this same class — no per-page top-spacing rules. */
+.pt-safe-top { padding-top: max(env(safe-area-inset-top), 0.7rem); }
+.pt-safe-top-lg { padding-top: max(env(safe-area-inset-top), 1rem); }
 .pl-safe   { padding-left: env(safe-area-inset-left); }
 .pr-safe   { padding-right: env(safe-area-inset-right); }
 .mt-safe   { margin-top: env(safe-area-inset-top); }

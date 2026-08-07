@@ -117,7 +117,7 @@ export default function AdminPortal({ api }) {
   return (
     <div className={`min-h-screen ${BG} text-white`} data-testid="admin-portal">
       {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-white/[0.07] bg-[#060609]/92 backdrop-blur-2xl">
+      <header className="sticky top-0 z-50 border-b border-white/[0.07] bg-[#060609]/92 pt-safe-top backdrop-blur-2xl">
         <div className="mx-auto flex h-[56px] max-w-7xl items-center justify-between gap-3 px-5 md:px-8">
           <div className="flex items-center gap-3">
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gold-300">
@@ -139,7 +139,7 @@ export default function AdminPortal({ api }) {
       </header>
 
       {/* Mobile grouped nav — horizontal scroll */}
-      <div className="sticky top-[56px] z-40 overflow-x-auto border-b border-white/[0.06] bg-[#060609]/92 backdrop-blur-xl md:hidden">
+      <div className="sticky top-[calc(56px+max(env(safe-area-inset-top),0.7rem))] z-40 overflow-x-auto border-b border-white/[0.06] bg-[#060609]/92 backdrop-blur-xl md:hidden">
         <div className="flex min-w-max gap-0 px-4">
           {ALL_TABS.map(([id, label, Icon]) => {
             const active = tab === id;

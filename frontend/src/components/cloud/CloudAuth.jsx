@@ -11,7 +11,7 @@ const cloudAxios = axios.create({ baseURL: API, withCredentials: true });
 
 function AuthShell({ title, subtitle, children }) {
   return (
-    <div className="min-h-screen bg-[#050505] text-white flex flex-col">
+    <div className="min-h-app bg-[#050507] text-white flex flex-col pt-safe-top pb-safe">
       <InstallAppPrompt />
       <nav className="border-b border-white/5 backdrop-blur-xl bg-[#050505]/80">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
