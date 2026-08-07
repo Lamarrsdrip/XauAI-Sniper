@@ -17,6 +17,7 @@ import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter"
 import { API } from "@/lib/api";
 import { logoutOneSignalUser } from "@/lib/onesignal";
 import * as UI from "@/lib/ui";
+import * as AK from "@/lib/appkit";
 
 // Map the legacy tone vocabulary used by helpers below (green/red/amber/blue/
 // violet) onto the XauCloud design-system tones so screens read consistently.
@@ -1064,30 +1065,32 @@ function HomeOpenPositionSummary({ linked, online, setActive }) {
 // recent activity without the removed raw AI-reasoning/blocker feed. Reuses
 // the same `events` data HomePage already receives (no new API call),
 // filtered to plain-language trade lifecycle events only.
+const clockTime = (iso) => { try { return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }); } catch { return ""; } };
 function HomeRecentActivity({ events = [], onOpenFull }) {
-  const meaningful = (events || [])
-    .filter((e) => ["entries", "exits"].includes(eventCategory(e)))
-    .slice(0, 3);
+  const meaningful = (events || []).filter((e) => ["entries", "exits"].includes(eventCategory(e))).slice(0, 3);
   if (!meaningful.length) return null;
   return (
-    <div className={`${CARD} p-4`} data-testid="home-recent-activity">
-      <div className="flex items-center justify-between">
-        <span className={MONO_LABEL}>Recent Activity</span>
-        <button onClick={onOpenFull} className="text-[10px] font-semibold text-gold-300/70 transition hover:text-gold-300">View all</button>
-      </div>
-      <div className="mt-3 space-y-2">
+    <AK.Panel>
+      <AK.PanelHead title="Recent activity" onMore={onOpenFull} />
+      <div className="pb-1.5" data-testid="home-recent-activity">
         {meaningful.map((e, i) => {
-          const cat = eventCategory(e);
-          const label = cat === "entries" ? "Trade opened" : "Trade closed";
+          const opened = eventCategory(e) === "entries";
+          const sym = e.symbol || getEventField(e, "symbol", "XAUUSD");
+          const dir = getEventField(e, "signal_direction", "") || getEventField(e, "position_direction", "");
+          const pnlRaw = getEventField(e, "profit", "");
+          const hasPnl = pnlRaw !== "" && pnlRaw !== null && pnlRaw !== undefined;
           return (
-            <div key={e.id || i} className="flex items-center justify-between gap-3 text-[12px]">
-              <span className="truncate text-white/70">{label} · {e.symbol || getEventField(e, "symbol", "XAUUSD")}</span>
-              <span className="flex-none font-mono text-[10px] text-white/30">{relativeTime(e.ts)}</span>
-            </div>
+            <AK.FeedItem key={e.id || i}
+              time={clockTime(e.ts)}
+              title={opened ? "Trade opened" : "Trade closed"}
+              tone={opened ? "gold" : hasPnl ? (Number(pnlRaw) >= 0 ? "profit" : "loss") : "white"}
+              detail={`${dir ? dir + " " : ""}${sym}${hasPnl ? ` · ${money(Number(pnlRaw))}` : ""}`}
+              last={i === meaningful.length - 1}
+            />
           );
         })}
       </div>
-    </div>
+    </AK.Panel>
   );
 }
 
@@ -1127,28 +1130,20 @@ function BotControlCard({ heartbeat, online, linked, openTrades, openCommand, co
 
   const disabled = !online || !linked || Boolean(turningTo);
   return (
-    <UI.Card tone={online ? (running ? "profit" : "warn") : "neutral"}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className={UI.T.label}>Trading Bot</div>
-          <div className="mt-1.5 flex items-center gap-2">
-            <UI.StatusDot tone={stateTone} pulse={Boolean(turningTo)} />
-            <span className="text-[17px] font-black leading-none">{stateLabel}</span>
-          </div>
-          <p className="mt-1.5 text-[11.5px] leading-4 text-white/45">
-            {running ? "Opening new valid trades automatically." : online ? "New entries paused. Open trades stay protected." : "Waiting for your EA heartbeat."}
-          </p>
+    <div className="flex items-center justify-between gap-3 px-4 py-3.5">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <AK.Dot tone={running ? "profit" : online ? "gold" : "neutral"} pulse={Boolean(turningTo)} />
+          <span className="text-[15px] font-bold leading-none">Bot {stateLabel}</span>
         </div>
-        <UI.Button
-          variant={running ? "secondary" : "primary"}
-          onClick={running ? turnOff : turnOn}
-          disabled={disabled}
-          className="flex-none"
-        >
-          {turningTo ? "Working…" : running ? "Turn Off" : "Turn On"}
-        </UI.Button>
+        <p className="mt-1.5 text-[11.5px] leading-4 text-white/45">
+          {running ? "Opening valid trades automatically." : online ? "New entries paused — open trades stay protected." : "Waiting for your EA heartbeat."}
+        </p>
       </div>
-    </UI.Card>
+      <AK.Button variant={running ? "dark" : "primary"} onClick={running ? turnOff : turnOn} disabled={disabled} className="flex-none">
+        {turningTo ? "Working…" : running ? "Turn Off" : "Turn On"}
+      </AK.Button>
+    </div>
   );
 }
 
@@ -1162,134 +1157,71 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
   const pnlPos     = pnlNum >= 0;
   const aiEvent    = latestAiFieldsEvent(events);
   const conf       = Number(getEventField(aiEvent, "ai_confidence", 0)) || 0;
-  const viewerClockSession = getViewerClockSession();
   const bias       = getMarketBias(aiEvent, heartbeat);
   const botState   = humanBotState(heartbeat.bot_state, openTrades, tradingOk, online);
-  const stateTone  = openTrades>0?"amber":tradingOk?"green":"neutral";
   const m10Signal  = latestM10Signal(events, heartbeat);
 
-  const offlineCopy = licenseInfo?.activation_key
-    ? "License linked. Waiting for EA heartbeat from your MT5 terminal."
-    : "Link your license key, attach the EA to MT5, and live data will appear here.";
-
   return (
-    <div className="space-y-4">
-      {/* Hero status — compact, answers "is my bot online / trading?" in a glance */}
-      <UI.Card tone={online ? (openTrades > 0 ? "gold" : tradingOk ? "profit" : "neutral") : "neutral"} data-testid="bot-status-card">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="mb-1.5 flex items-center gap-2">
-              {online
-                ? <UI.StatusDot tone={openTrades > 0 ? "gold" : "profit"} pulse />
-                : <Wifi className="h-3 w-3 text-white/40" />}
-              <span className={UI.T.label}>
-                {online
-                  ? `${heartbeat.symbol || "XAUUSD"} · ${status?.production_status?.display_timeframe || "M10"} · ${heartbeat.market_mode === "INDEX_MODE" ? `Index (${heartbeat.index_profile || "GENERIC"})` : "Gold"}`
-                  : "No connection"}
-              </span>
-            </div>
-            <h1 className="text-[1.6rem] font-black leading-none tracking-tight">{botState}</h1>
-            <p className="mt-1.5 truncate text-[12.5px] leading-5 text-white/45">
-              {online ? `${heartbeat.broker_server || "Broker"} · Account ${heartbeat.account_number || "—"}` : offlineCopy}
-            </p>
+    <AK.Screen>
+      {/* Account header — dense, prominent inline numbers (not two boxes) */}
+      <AK.Panel className="p-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <AK.Dot tone={online ? (openTrades > 0 ? "gold" : tradingOk ? "profit" : "neutral") : "neutral"} pulse={online} />
+            <span className="truncate text-[13px] font-bold">{botState}</span>
+            <span className="truncate text-[11px] text-white/35">{online ? `${heartbeat.symbol || "XAUUSD"} · ${status?.production_status?.display_timeframe || "M10"}` : "Offline"}</span>
           </div>
-          <button onClick={refresh} aria-label="Refresh" className="no-select flex-none rounded-full border border-white/[0.07] bg-white/[0.04] p-2.5 text-white/45 transition hover:text-white active:scale-95">
-            <RefreshCw className="h-4 w-4" />
-          </button>
+          <button onClick={refresh} aria-label="Refresh" className="no-select flex-none rounded-full p-1.5 text-white/40 active:scale-90"><RefreshCw className="h-4 w-4" /></button>
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <UI.Pill tone={online ? "profit" : "loss"}>{online ? "Connected" : "Offline"}</UI.Pill>
-          {online && <UI.Pill tone={tradingOk ? "profit" : "warn"}>{tradingOk ? "Trading on" : "New entries paused"}</UI.Pill>}
-          {online && openTrades > 0 && <UI.Pill tone="gold">{openTrades} open</UI.Pill>}
+        <div className="mt-3 flex items-end justify-between gap-4">
+          <AK.BigStat label="Equity" value={online ? money(heartbeat.equity) : "—"} sub={online ? `Bal ${money(heartbeat.balance)}` : (licenseInfo?.activation_key ? "Waiting for EA" : "No license linked")} />
+          <div className="min-w-0 text-right">
+            <div className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-white/35">Today</div>
+            <div className={AK.cx("nums mt-1 text-[1.55rem] font-black leading-none tracking-tight", online ? (pnlPos ? "text-profit" : "text-loss") : "text-white")}>{online ? money(pnlNum) : "—"}</div>
+            <div className="mt-1 truncate text-[11px] text-white/40">{online && pnlNum && heartbeat.balance ? `${((pnlNum / Number(heartbeat.balance)) * 100).toFixed(2)}%` : "P&L"}</div>
+          </div>
         </div>
         <div className="mt-3">
-          <Sparkline points={equityPoints} tone={online ? (openTrades > 0 ? "#F3C969" : "#34D399") : "#C9962E"} height="h-[64px]" />
-          {online && !hasSufficientAnalytics && (
-            <p className="mt-1.5 text-[10px] text-white/30">Equity curve fills in once the EA reports enough real closed trades — see Analytics.</p>
-          )}
+          <Sparkline points={equityPoints} tone={online ? (openTrades > 0 ? "#F3C969" : "#34D399") : "#C9962E"} height="h-[52px]" />
+          {online && !hasSufficientAnalytics && <p className="mt-1 text-[10px] text-white/30">Curve fills in as the EA reports closed trades.</p>}
         </div>
-      </UI.Card>
+      </AK.Panel>
 
-      {/* Equity / Today's P&L — top billing right under status */}
-      <div className="grid grid-cols-2 gap-3" data-testid="home-equity-pnl-row">
-        <UI.Metric label="Equity" icon={CircleDollarSign} value={online ? money(heartbeat.equity) : "—"} sub={online ? `Balance ${money(heartbeat.balance)}` : "Not live"} />
-        <UI.Metric label="Today's P&L" icon={TrendingUp} tone={online ? (pnlPos ? "profit" : "loss") : undefined} value={online ? money(pnlNum) : "—"} sub={online && pnlNum && heartbeat.balance ? `${((pnlNum / Number(heartbeat.balance)) * 100).toFixed(2)}% of balance` : "Today"} />
-      </div>
+      {/* Bot control — a control row */}
+      <AK.Panel>
+        <BotControlCard heartbeat={heartbeat} online={online} linked={Boolean(licenseInfo.activation_key)} openTrades={openTrades} openCommand={openCommand} commands={commands} />
+      </AK.Panel>
 
-      {/* Real Bot ON/OFF — prominent, wired to PAUSE_NEW_TRADES / RESUME_TRADING */}
-      <BotControlCard heartbeat={heartbeat} online={online} linked={Boolean(licenseInfo.activation_key)} openTrades={openTrades} openCommand={openCommand} commands={commands} />
-
-      <AIMarketOutlookCard
-        linked={Boolean(licenseInfo.activation_key)}
-        online={online}
-        onOutlookChange={setHomeOutlook}
-        onStatusChange={setOutlookStatus}
-      />
-
+      {/* Market intelligence + position — existing functional modules (restyle pass queued) */}
+      <AIMarketOutlookCard linked={Boolean(licenseInfo.activation_key)} online={online} onOutlookChange={setHomeOutlook} onStatusChange={setOutlookStatus} />
       {online && <M10SignalCard events={events} heartbeat={heartbeat} />}
-
-      <M10VsOutlookCard
-        m10={m10Signal}
-        outlook={homeOutlook}
-        online={online}
-        loading={outlookStatus.loading}
-        requestFailed={outlookStatus.requestFailed}
-      />
-
-      {/* Compact open-position summary: only appears when a trade is
-          genuinely open. Full detail + Force Close now live only under
-          Trading -> Open Trades -> Trade Details -- this never recreates
-          the removed Open Trade Thinking dashboard. */}
+      <M10VsOutlookCard m10={m10Signal} outlook={homeOutlook} online={online} loading={outlookStatus.loading} requestFailed={outlookStatus.requestFailed} />
       <HomeOpenPositionSummary linked={Boolean(licenseInfo.activation_key)} online={online} setActive={setActive} />
 
-      {/* Recent activity: genuine trade-lifecycle events only, plain
-          language -- the removed raw AI-reasoning/blocker feed lives on
-          under Trading (full AIThoughtFeed), not on Home. */}
+      {/* Recent activity — timeline feed */}
       <HomeRecentActivity events={events} onOpenFull={() => setActive("activity")} />
 
-      {/* No license CTA */}
-      {!licenseInfo.activation_key && (
-        <UI.EmptyState icon={KeyRound} title="Connect your license"
-          body="Link your license key once and live data from your MT5 account will stream here automatically."
-          action={<UI.Button size="sm" onClick={() => setActive("license")}>Go to License</UI.Button>} />
+      {/* Snapshot — one panel of inline stats, not six boxes */}
+      {online && (
+        <AK.Panel>
+          <AK.PanelHead title="Snapshot" />
+          <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-4 pb-4 pt-1">
+            <AK.Stat label="Open trades" value={openTrades} tone={openTrades > 0 ? "gold" : undefined} />
+            <AK.Stat label="Open risk" value={pct(ddNum)} tone={dsTone(riskTone)} />
+            <AK.Stat label="Market bias" value={bias.label} tone={dsTone(bias.tone)} />
+            <AK.Stat label="AI confidence" value={conf > 0 ? `${conf}%` : "—"} tone={conf >= 70 ? "profit" : undefined} />
+          </div>
+        </AK.Panel>
       )}
 
       {online && <M30ConsensusCard events={events} heartbeat={heartbeat} />}
 
-      {/* Advanced details: secondary technical metrics kept out of the
-          primary above-the-fold hierarchy, available on demand rather than
-          competing for attention with equity/P&L/open-trade/outlook. */}
-      <details className="group rounded-2xl border border-white/[0.07] bg-panel open:bg-white/[0.03]">
-        <summary className="no-select flex cursor-pointer list-none items-center justify-between px-4 py-3 text-[12px] font-semibold text-white/60">
-          Advanced details
-          <ChevronDown className="h-4 w-4 text-white/35 transition group-open:rotate-180" />
-        </summary>
-        <div className="grid grid-cols-2 gap-2 px-4 pb-4 sm:grid-cols-4" data-testid="home-summary-grid">
-          <UI.Metric label="Open trades" value={online?openTrades:"—"} sub={online?`${heartbeat.spread??"-"} pts spread`:"No data"} icon={History} tone={openTrades>0?"gold":"neutral"} />
-          <UI.Metric label="Open risk" value={online?pct(ddNum):"—"} sub="Current floating drawdown" icon={Shield} tone={online?dsTone(riskTone):"neutral"} />
-          <UI.Metric label="Market bias" value={online?bias.label:"—"} sub="Latest fresh EA evidence" icon={Activity} tone={online?dsTone(bias.tone):"neutral"} />
-          <UI.Metric label="AI confidence" value={online&&conf>0?`${conf}%`:"—"} sub={conf>=85?"Very high":conf>=70?"High":conf>=55?"Moderate":conf>0?"Building":"Waiting"} icon={Brain} tone={conf>=70?"profit":conf>0?"warn":"neutral"} />
-          <UI.Metric label="Your Local Time" value={online?viewerClockSession.label:"—"} sub="Your browser's clock right now — not this trade's session, not broker time" icon={Clock3} tone={online?dsTone(viewerClockSession.tone):"neutral"} />
-          <UI.Metric label="Trading status" value={online?botState:"Offline"} sub={tradingOk?"Broker trading enabled":"No new-trade authority"} icon={Bot} tone={online?dsTone(stateTone):"neutral"} />
-        </div>
-      </details>
-
-      {/* Quick nav — 3 compact cards */}
-      <div className="grid grid-cols-3 gap-3">
-        {[
-          ["trading", LineChart, "Trading", "Positions & timeline"],
-          ["intelligence", Brain, "AI Brain", "Decisions & ML state"],
-          ["control", SlidersHorizontal, "Controls", "Commands & Prop Firm"],
-        ].map(([id, Icon, label, sub]) => (
-          <button key={id} onClick={() => setActive(id)}
-            className="no-select rounded-2xl border border-white/[0.07] bg-panel p-3.5 text-left transition hover:border-gold-300/25 active:scale-[0.98]">
-            <Icon className="mb-2.5 h-5 w-5 text-gold-300/70" />
-            <div className="text-[13px] font-semibold">{label}</div>
-            <p className="mt-0.5 text-[10px] leading-4 text-white/35">{sub}</p>
-          </button>
-        ))}
-      </div>
-    </div>
+      {!licenseInfo.activation_key && (
+        <AK.Panel>
+          <AK.Empty icon={KeyRound} title="Connect your license" body="Link your license key once and live MT5 data streams here automatically." action={<AK.Button size="sm" onClick={() => setActive("license")}>Go to License</AK.Button>} />
+        </AK.Panel>
+      )}
+    </AK.Screen>
   );
 }
 
