@@ -1,6 +1,6 @@
 import React from "react";
 
-const CARD = "rounded-2xl border border-white/[0.07] bg-[#0d0e13]";
+const CARD = "rounded-2xl bg-[#0C0D12]";
 const MONO_LABEL = "font-mono text-[10px] uppercase tracking-[0.2em] text-white/35";
 
 function timestampLabel(value) {

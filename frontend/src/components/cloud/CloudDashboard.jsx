@@ -144,7 +144,9 @@ const latestAiFieldsEvent = (events=[]) => events.find(e => {
 const weightedEventCount = (events=[]) => events.reduce((sum,e)=>sum + Number(e.repeat_count||1), 0);
 
 // ─── Design tokens ───────────────────────────────────────────────────────────
-const CARD = "rounded-2xl border border-white/[0.07] bg-[#0d0e13]";
+// Exchange-style flush panel (borderless raised block) — replaces the old
+// floating bordered card so remaining `${CARD}` usages read as dense panels.
+const CARD = "rounded-2xl bg-[#0C0D12]";
 const MONO_LABEL = "font-mono text-[10px] uppercase tracking-[0.2em] text-white/35";
 
 function pill(tone) {

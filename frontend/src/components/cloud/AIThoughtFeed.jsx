@@ -532,9 +532,9 @@ export default function AIThoughtFeed({ linked, compact = false, onOpenFull, onF
           {onOpenFull && <button onClick={onOpenFull} className="normal-case tracking-normal text-white/45 hover:text-white transition text-[11px] font-semibold">Open full feed →</button>}
         </div>
         {loading ? (
-          <div className="rounded-2xl border border-white/[0.07] bg-[#0d0e13] p-6 text-center text-[12px] text-white/35">Reading the AI's thinking…</div>
+          <div className="rounded-2xl bg-[#0C0D12] p-6 text-center text-[12px] text-white/35">Reading the AI's thinking…</div>
         ) : cards.length === 0 ? (
-          <div className="rounded-2xl border border-white/[0.07] bg-[#0d0e13] p-6 text-center text-[12px] text-white/35">{NO_FRESH_DECISION_TEXT}</div>
+          <div className="rounded-2xl bg-[#0C0D12] p-6 text-center text-[12px] text-white/35">{NO_FRESH_DECISION_TEXT}</div>
         ) : (
           <ThoughtCard card={cards[0]} />
         )}
