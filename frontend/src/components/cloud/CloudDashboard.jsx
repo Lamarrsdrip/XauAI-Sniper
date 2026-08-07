@@ -1027,7 +1027,7 @@ function M30ConsensusCard({ events, heartbeat }) {
 // Exchange-style open-position module (Bybit/Binance-tier): symbol · side ·
 // running, big floating P&L, entry/current/stop row, protected-floor line,
 // tap to full trade detail. Only renders when a trade is genuinely open.
-function PositionModule({ linked, online, setActive }) {
+function PositionModule({ linked, online, onDetails }) {
   const [opinion, setOpinion] = useState(null);
   const fetchOpinion = useCallback(async () => {
     if (!linked || !online) return;
@@ -1066,7 +1066,7 @@ function PositionModule({ linked, online, setActive }) {
         {prot > 0
           ? <span className="text-[11.5px] text-white/55"><span className="text-gold-300">◆</span> Protected {money(prot)}</span>
           : <span className="text-[11.5px] text-white/40">Managing position</span>}
-        <button onClick={() => setActive("trading")} className="no-select inline-flex items-center text-[12px] font-semibold text-white/50 active:text-white">Details <ChevronRight className="h-4 w-4" /></button>
+        {onDetails && <button onClick={onDetails} className="no-select inline-flex items-center text-[12px] font-semibold text-white/50 active:text-white">Details <ChevronRight className="h-4 w-4" /></button>}
       </div>
     </div>
   );
@@ -1304,8 +1304,11 @@ function HomePage({ status, heartbeat, licenseInfo, online, equityPoints, events
       {/* One market-intelligence module — full evidence/history on tap */}
       <OutlookModule outlook={homeOutlook} online={online} onOpen={() => { window.location.href = "/ai-market-outlook"; }} />
 
+      {/* M10 Signal Engine · Evidence — renders only when live M10 evidence exists */}
+      {online && <M10SignalCard events={events} heartbeat={heartbeat} />}
+
       {/* Focused open-position module (only when a trade is live) */}
-      <PositionModule linked={linked} online={online} setActive={setActive} />
+      <PositionModule linked={linked} online={online} onDetails={() => setActive("trading")} />
 
       {/* Dense stat chip row — not a box grid */}
       <StatChips online={online} ddNum={ddNum} winRate={winRate} spread={heartbeat.spread} openTrades={openTrades} />
@@ -1369,6 +1372,8 @@ function TradingPage({ heartbeat, events, online, tradingOk, linked, openCommand
   return (
     <AK.Screen>
       <AK.ScreenHeader title="Trading" sub={online ? `${heartbeat.symbol || "XAUUSD"} · ${heartbeat.timeframe || "M10"}` : "Terminal offline"} />
+      {/* Focused open-position module (exchange order style) — top of the terminal */}
+      <PositionModule linked={linked} online={online} />
       {/* Compact market strip — dense inline stats, not a metric-card grid */}
       <AK.Panel>
         <div className="grid grid-cols-3 gap-x-3 px-4 py-3.5">
@@ -1377,7 +1382,7 @@ function TradingPage({ heartbeat, events, online, tradingOk, linked, openCommand
           <AK.Stat label="Bot" value={humanBotState(heartbeat.bot_state, openTrades, tradingOk, online)} tone={online ? (tradingOk ? "profit" : "gold") : undefined} />
         </div>
       </AK.Panel>
-      {/* Focused position module + human-readable execution feed (flush panels) */}
+      {/* Human-readable execution feed */}
       <AIThoughtFeed linked={linked} onForceClose={openCommand} />
     </AK.Screen>
   );
