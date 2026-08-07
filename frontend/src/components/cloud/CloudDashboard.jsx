@@ -1099,6 +1099,33 @@ function HomeRecentActivity({ events = [], onOpenFull }) {
   );
 }
 
+// Prominent, dismissible push-enable prompt — surfaced on Home (and Outlook)
+// so the first-party notification opt-in is front-and-centre, not buried.
+function NotificationPrompt() {
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [dismissed, setDismissed] = useState(() => { try { return localStorage.getItem("xau_push_prompt_dismissed") === "1"; } catch { return false; } });
+  useEffect(() => { if (webPushSupported()) webPushStatus().then(setStatus).catch(() => {}); }, []);
+  if (!webPushSupported() || dismissed || !status || status.subscribed) return null;
+  const enable = async () => { setBusy(true); try { await enableWebPush(commandAxios); setStatus(await webPushStatus()); } catch { /* leave prompt up */ } finally { setBusy(false); } };
+  const dismiss = () => { try { localStorage.setItem("xau_push_prompt_dismissed", "1"); } catch { /* ignore */ } setDismissed(true); };
+  return (
+    <AK.Panel className="p-4">
+      <div className="flex items-start gap-3">
+        <span className="flex-none rounded-xl bg-gold-300/12 p-2"><Bell className="h-4 w-4 text-gold-300" /></span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13.5px] font-bold">Turn on alerts</div>
+          <p className="mt-0.5 text-[12px] leading-4 text-white/50">Get notified when trades open or close, on new AI Outlook signals, and on license &amp; system events.</p>
+          <div className="mt-2.5 flex gap-2">
+            <AK.Button size="sm" onClick={enable} disabled={busy}>{busy ? "Working…" : "Enable alerts"}</AK.Button>
+            <AK.Button variant="ghost" size="sm" onClick={dismiss}>Not now</AK.Button>
+          </div>
+        </div>
+      </div>
+    </AK.Panel>
+  );
+}
+
 // ── Bot ON/OFF — real control, not decorative ───────────────────────────────
 // Wired to the existing safe remote-command infra: RESUME_TRADING (on) /
 // PAUSE_NEW_TRADES (off). OFF stops NEW automatic entries only — the EA keeps
@@ -1191,6 +1218,9 @@ function HomePage({ status, heartbeat, licenseInfo, online, tradingOk, equityPoi
           {online && !hasSufficientAnalytics && <p className="mt-1 text-[10px] text-white/30">Curve fills in as the EA reports closed trades.</p>}
         </div>
       </AK.Panel>
+
+      {/* Prominent push-enable prompt */}
+      <NotificationPrompt />
 
       {/* Bot control — a control row */}
       <AK.Panel>
