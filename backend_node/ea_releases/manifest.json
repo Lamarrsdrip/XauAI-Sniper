@@ -1,18 +1,28 @@
 {
-  "current_version": "v6.26.1",
+  "current_version": "v6.26.2",
   "website_product_name": "XauCloud",
   "mt5_market_product_name": "XauCloud",
   "releases": {
     "v6.26.1": {
       "version": "v6.26.1",
       "edition": "Max-profit ceiling 100 -> 1000 pips-of-risk; xaucloud.io endpoints",
-      "source_commit": "8d22ce5ebfd01b9dfa0fec7260d4e77429934b9c",
       "build_timestamp": "2026-08-07T20:03:19Z",
-      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe via Wine, Mac live install)",
       "ex5_filename": "XauCloud-v6.26.1.ex5",
       "ex5_sha256": "6b76520715674da640012e32132591085a4ddcff6de8df664000d2739bf126a5",
       "customer_filename": "XauCloud-v6.26.1.ex5",
-      "release_notes": "Bigger winners: the maximum-profit ceiling is raised from 100 to 1000 pips-of-risk, so exceptional Gold moves can keep running while all existing profit protection (profit floor, 70% peak ratchet, 45% giveback, runner, structure, 10-minute extension) still manages every trade. Now connects to the new xaucloud.io service. Improved connection reliability. No other trading behaviour changed.",
+      "release_notes": "Raised the maximum-profit ceiling from 100 to 1000 pips-of-risk.",
+      "stable_status": false
+    },
+    "v6.26.2": {
+      "version": "v6.26.2",
+      "edition": "Strategy Tester init fix (tester self-tests non-fatal) + 1000-pip ceiling",
+      "source_commit": "b27c3eb0b2f85a4827a222ef950d85ad6115a912",
+      "build_timestamp": "2026-08-08T00:45:12Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe via Wine, Mac live install)",
+      "ex5_filename": "XauCloud-v6.26.2.ex5",
+      "ex5_sha256": "9c449a9a1b101ec6a3aa5069e4b6a671fcec813ffa86ec246e450fd7fe2f4fc0",
+      "customer_filename": "XauCloud-v6.26.2.ex5",
+      "release_notes": "Now runs reliably in the MetaTrader 5 Strategy Tester for historical backtests (tester diagnostic self-tests no longer block startup; live/demo licensing and the full trading engine are unchanged). Keeps the 1000-pip profit ceiling. Connects to xaucloud.io. No change to live trading behaviour.",
       "stable_status": true
     }
   }
