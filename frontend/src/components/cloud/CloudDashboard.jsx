@@ -720,7 +720,7 @@ export default function CloudDashboard() {
       {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} analytics={analytics} />}
       {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
       {active==="activity"     && <ActivityPage events={events} filter={filter} setFilter={setFilter} onForceOpen={setModalCommand} />}
-      {active==="control"      && <ControlPage commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true; propFirmIdempotencyKey.current=null;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} />}
+      {active==="control"      && <ControlPage heartbeat={heartbeat} online={online} commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true; propFirmIdempotencyKey.current=null;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} />}
       {active==="license"      && <LicensePage license={license} licenseInput={licenseInput} setLicenseInput={setLicenseInput} linkLicense={linkLicense} commandMsg={commandMsg} heartbeat={heartbeat} me={me} status={status} />}
       {active==="settings"     && <SettingsPage me={me} heartbeat={heartbeat} licenseInfo={licenseInfo} logout={logout} status={status} />}
       {active==="more"         && <MorePage setActive={setActive} me={me} status={status} openNotifications={()=>setNotifOpen(true)} logout={logout} />}
@@ -1686,12 +1686,18 @@ function TradingUniverseCard({ linked, setActive }) {
   );
 }
 
-function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, setActive, propFirm, propFirmForm, setPropFirmForm, markDirty, propFirmConfirmed, setPropFirmConfirmed, propFirmBusy, applyPropFirm }) {
+function ControlPage({ heartbeat, online, commands, openCommand, commandMsg, licenseKey, linked, setActive, propFirm, propFirmForm, setPropFirmForm, markDirty, propFirmConfirmed, setPropFirmConfirmed, propFirmBusy, applyPropFirm }) {
   const applied = propFirm?.applied||{};
   const upd = (field, value)=>{ markDirty(); setPropFirmForm(p=>({...p,[field]:value})); };
+  const openTrades = online ? Number(heartbeat?.open_positions || 0) : 0;
 
   return (
-    <div className="space-y-4">
+    <AK.Screen>
+      <AK.ScreenHeader title="Bot Control" sub="Pause / resume, remote commands & Prop Firm protection" />
+      {/* Focused control surface: live bot state + on/off toggle */}
+      <AK.Panel>
+        <BotControlCard heartbeat={heartbeat || {}} online={online} linked={linked} openTrades={openTrades} openCommand={openCommand} commands={commands} />
+      </AK.Panel>
       {/* Commands */}
       <Card title="Remote commands" subtitle="Every command needs license verification and EA acknowledgement before it executes.">
         {!linked && (
@@ -1794,7 +1800,7 @@ function ControlPage({ commands, openCommand, commandMsg, licenseKey, linked, se
           </div>
         </div>
       </Card>
-    </div>
+    </AK.Screen>
   );
 }
 
