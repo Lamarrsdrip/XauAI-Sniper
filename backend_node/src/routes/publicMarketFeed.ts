@@ -12,6 +12,50 @@ function secretMatches(provided: unknown): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+interface CalendarEvent {
+  title?: string;
+  country?: string;
+  date?: string;
+  impact?: string;
+  forecast?: string;
+  previous?: string;
+}
+
+// Separate cache from routes/smart.ts's EA-facing /news/check -- kept
+// isolated so a bug here can never affect that trading-safety endpoint.
+let calendarCache: Record<string, unknown>[] = [];
+let calendarCacheTime = 0;
+
+async function fetchHighImpactCalendar(): Promise<Record<string, unknown>[]> {
+  const now = Date.now() / 1000;
+  if (now - calendarCacheTime < 3600 && calendarCache.length > 0) return calendarCache;
+
+  try {
+    const resp = await fetch("https://nfs.faireconomy.media/ff_calendar_thisweek.json", { signal: AbortSignal.timeout(10_000) });
+    if (resp.ok) {
+      const data = (await resp.json()) as CalendarEvent[];
+      const events = data
+        .filter((ev) => ["high", "medium"].includes((ev.impact ?? "").toLowerCase()))
+        .map((ev) => ({
+          title: ev.title ?? "",
+          country: ev.country ?? "",
+          date: ev.date ?? "",
+          impact: (ev.impact ?? "").toLowerCase(),
+          forecast: ev.forecast ?? "",
+          previous: ev.previous ?? "",
+        }));
+      if (events.length > 0) {
+        calendarCache = events;
+        calendarCacheTime = now;
+      }
+      return events;
+    }
+  } catch {
+    /* fall through to whatever's cached, even if stale */
+  }
+  return calendarCache;
+}
+
 /**
  * Cross-project feed for talabeckglobal.com: the real live XAUUSD bid/ask
  * our own EAs report via POST /cloud/monitor/activity (not a scraped
@@ -41,17 +85,25 @@ export async function registerPublicMarketFeedRoutes(app: FastifyInstance): Prom
     const stale = ageSec === null || ageSec > 90;
     const quote = extractEvidenceQuoteFromDetails(details, lastActivityAt ?? null);
     const available = quote.valid && !stale;
+    const calendar = await fetchHighImpactCalendar();
 
     return {
-      symbol: "XAUUSD",
-      available,
-      bid: available ? quote.bid : null,
-      ask: available ? quote.ask : null,
-      spread: available ? quote.spread : null,
-      quote_at: quote.quote_at ?? lastActivityAt ?? null,
-      age_sec: ageSec,
-      stale,
-      source: "xaucloud_bot_live",
+      price: {
+        symbol: "XAUUSD",
+        available,
+        bid: available ? quote.bid : null,
+        ask: available ? quote.ask : null,
+        spread: available ? quote.spread : null,
+        quote_at: quote.quote_at ?? lastActivityAt ?? null,
+        age_sec: ageSec,
+        stale,
+        source: "xaucloud_bot_live",
+      },
+      calendar: {
+        events: calendar,
+        count: calendar.length,
+        source: "forexfactory",
+      },
     };
   });
 }
