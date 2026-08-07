@@ -392,12 +392,14 @@ function NotificationsTab({ api }) {
   if (loading && !data) return <div className="py-12 text-center text-white/40 text-sm">Loading notification health…</div>;
 
   const onesignal = data?.onesignal || {};
-  const configured = onesignal.configured === true;
+  // First-party Web Push (VAPID) is self-managed — keys generate on the server,
+  // no admin config required — so push is always available (no OneSignal).
+  const configured = true;
 
   return (
     <div className="space-y-5" data-testid="admin-notifications-tab">
       <CardSection
-        title="Push notification system health (OneSignal)"
+        title="Push notification system health"
         action={
           <button onClick={load} className="flex items-center gap-1.5 text-[11px] text-white/40 hover:text-white/75 transition">
             <ArrowClockwise size={13} /> Refresh
@@ -407,7 +409,7 @@ function NotificationsTab({ api }) {
         {error && <p className="mb-3 text-[12px] text-red-300">{error}</p>}
 
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          <StatCard label="OneSignal" value={configured ? "Configured" : "Not configured"} tone={configured ? "green" : "amber"} testId="stat-onesignal-configured" />
+          <StatCard label="Push (VAPID)" value="Active" tone="green" testId="stat-onesignal-configured" />
           <StatCard label="Subscribed devices" value={data?.subscribed_devices ?? "—"} testId="stat-device-count" />
           <StatCard label="State" value={onesignal.initialization_state || "—"} tone="neutral" testId="stat-init-state" />
         </div>
@@ -1263,30 +1265,13 @@ function SettingsTab({ api }) {
         </Field>
       </CardSection>
 
-      {/* v6.25.3 owner directive 2026-07-17 -- OneSignal replaces the retired
-          self-hosted VAPID/pywebpush push system, which was permanently
-          blocked by a missing Python package in production. App ID is not
-          secret (the frontend SDK needs it directly); REST API Key is. Get
-          both from onesignal.com -> your app -> Settings -> Keys & IDs. */}
-      <CardSection title="Push notifications (OneSignal)">
-        <p className="text-[12px] text-white/40 mb-4 leading-5">
-          Free account at <span className="text-white/60">onesignal.com</span> — create a Web Push app, then paste
-          its App ID and REST API Key here. Takes effect immediately, no backend restart needed.
+      {/* Push is first-party (self-managed VAPID) — no third-party keys needed. */}
+      <CardSection title="Push notifications">
+        <p className="text-[12px] leading-5 text-white/45">
+          XauCloud push is <span className="text-white/70">first-party (Web Push / VAPID)</span>. Keys are generated and
+          managed automatically on the server — nothing to configure here. Customers enable push from their
+          dashboard or Settings. OneSignal has been removed.
         </p>
-        <div className="space-y-4">
-          <Field label="OneSignal App ID">
-            <Input data-testid="settings-onesignal-app-id" value={onesignalAppId} onChange={e => setOnesignalAppId(e.target.value)}
-              placeholder="e.g. 8f4d2a1c-..." className="font-mono" />
-          </Field>
-          <Field label="OneSignal REST API Key">
-            <Input data-testid="settings-onesignal-api-key" type="password" value={onesignalApiKey} onChange={e => setOnesignalApiKey(e.target.value)}
-              placeholder={settings?.onesignal_api_key_configured ? "Configured — enter new key to change" : "os_v2_app_xxxxxx"} className="font-mono" />
-            <p className="mt-1 text-[11px] text-white/35">
-              Status: <span className={settings?.onesignal_api_key_configured ? "text-emerald-400" : "text-red-400"}>{settings?.onesignal_api_key_configured ? "Configured" : "Not set"}</span>
-              {settings?.onesignal_api_key_preview && settings.onesignal_api_key_configured && <span className="ml-1 font-mono">({settings.onesignal_api_key_preview})</span>}
-            </p>
-          </Field>
-        </div>
       </CardSection>
 
       <Btn onClick={save} disabled={saving} data-testid="settings-save-btn">
