@@ -38,7 +38,7 @@ const CARDS = [
 
 export default function FeaturesSection() {
   return (
-    <div className="bg-[#060609] border-t border-white/[0.06]" data-testid="features-section">
+    <div className="bg-[#07080B] border-t border-white/[0.06]" data-testid="features-section">
       <div className="mx-auto max-w-6xl px-4 py-14 md:px-8 md:py-20">
 
         <div className="mb-8">

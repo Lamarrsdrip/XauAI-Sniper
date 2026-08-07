@@ -16,7 +16,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
 
   return (
     <>
-      <header data-testid="main-header" className="sticky top-0 z-50 border-b border-white/[0.07] bg-[#060609]/92 text-white backdrop-blur-2xl">
+      <header data-testid="main-header" className="sticky top-0 z-50 border-b border-white/[0.07] bg-[#07080B]/92 text-white backdrop-blur-2xl">
         <div className="mx-auto flex h-[60px] max-w-7xl items-center justify-between gap-3 px-4 md:px-8">
 
           <button type="button" onClick={() => { onNavigate("overview"); setMobileOpen(false); }}
@@ -30,7 +30,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
               const active = activeSection === item.id;
               return (
                 <button key={item.id} type="button" data-testid={`nav-${item.id}`} onClick={() => onNavigate(item.id)}
-                  className={`rounded-full px-4 py-1.5 text-[13px] font-medium transition-all ${active ? "bg-white text-[#060609]" : "text-white/50 hover:text-white hover:bg-white/[0.06]"}`}>
+                  className={`rounded-full px-4 py-1.5 text-[13px] font-medium transition-all ${active ? "bg-white text-[#07080B]" : "text-white/50 hover:text-white hover:bg-white/[0.06]"}`}>
                   {item.label}
                 </button>
               );
@@ -69,7 +69,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
       </header>
 
       {mobileOpen && (
-        <div className="fixed inset-0 z-[100] flex flex-col bg-[#060609]/98 text-white backdrop-blur-2xl lg:hidden">
+        <div className="fixed inset-0 z-[100] flex flex-col bg-[#07080B]/98 text-white backdrop-blur-2xl lg:hidden">
           <div className="flex items-center justify-between border-b border-white/[0.08] px-5 pb-4 pt-safe-top">
             <span className="font-heading text-base font-semibold">Menu</span>
             <button onClick={() => setMobileOpen(false)} aria-label="Close menu" className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full border border-white/[0.08] text-white/60">

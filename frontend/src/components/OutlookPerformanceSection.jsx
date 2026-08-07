@@ -218,7 +218,7 @@ export default function OutlookPerformanceSection({ api }) {
   const filtersActive = directionFilter !== "All" || resultFilter !== "All" || dateFilter !== "All time";
 
   return (
-    <div className="bg-[#060609] border-t border-white/[0.06] text-white" data-testid="outlook-performance-section">
+    <div className="bg-[#07080B] border-t border-white/[0.06] text-white" data-testid="outlook-performance-section">
       <style>{`
         @keyframes xauFadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         .anim-fade-up { animation: xauFadeUp 0.45s ease-out both; }
@@ -269,7 +269,7 @@ export default function OutlookPerformanceSection({ api }) {
         )}
 
         {allSignals.length > 0 && (
-          <div className="sticky top-[60px] z-10 -mx-4 mt-6 flex flex-wrap items-center gap-1.5 border-y border-white/[0.06] bg-[#060609]/95 px-4 py-2.5 backdrop-blur-md sm:mx-0 sm:rounded-2xl sm:border sm:px-3">
+          <div className="sticky top-[60px] z-10 -mx-4 mt-6 flex flex-wrap items-center gap-1.5 border-y border-white/[0.06] bg-[#07080B]/95 px-4 py-2.5 backdrop-blur-md sm:mx-0 sm:rounded-2xl sm:border sm:px-3">
             {DIRECTION_FILTERS.map((f) => (
               <Chip key={`dir-${f}`} active={directionFilter === f} onClick={() => setDirectionFilter(f)}>{f}</Chip>
             ))}

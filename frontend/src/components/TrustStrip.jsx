@@ -12,7 +12,7 @@ const MQL5_MARKET_URL = "https://www.mql5.com/en/market/product/188838";
 
 export default function TrustStrip() {
   return (
-    <div className="bg-[#060609] border-t border-white/[0.06]" data-testid="trust-strip">
+    <div className="bg-[#07080B] border-t border-white/[0.06]" data-testid="trust-strip">
       <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
           {FACTS.map(({ icon: Icon, label }) => (

@@ -12,7 +12,7 @@ const POINTS = [
 
 export default function ReassuranceSection() {
   return (
-    <div className="bg-[#060609] border-t border-white/[0.06] text-white" data-testid="reassurance-section">
+    <div className="bg-[#07080B] border-t border-white/[0.06] text-white" data-testid="reassurance-section">
       <div className="mx-auto max-w-6xl px-4 py-14 md:px-8 md:py-20">
 
         <div className="rounded-[28px] border border-white/[0.08] bg-white/[0.03] p-6 md:p-8">

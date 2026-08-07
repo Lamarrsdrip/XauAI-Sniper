@@ -81,7 +81,7 @@ export default function PurchaseSection({ api }) {
   const showingConverted = priceData?.display_currency && priceData.display_currency !== "NGN" && priceData.display_amount_formatted;
 
   return (
-    <div className="bg-[#060609] border-t border-white/[0.06] text-white" data-testid="purchase-section">
+    <div className="bg-[#07080B] border-t border-white/[0.06] text-white" data-testid="purchase-section">
       <div className="mx-auto max-w-5xl px-4 py-14 md:px-8 md:py-20">
 
         <div className="mb-8 text-center">

@@ -28,7 +28,7 @@ export default function FaqSection() {
   const [open, setOpen] = useState(null);
 
   return (
-    <div className="bg-[#060609] border-t border-white/[0.06] text-white" data-testid="faq-section">
+    <div className="bg-[#07080B] border-t border-white/[0.06] text-white" data-testid="faq-section">
       <div className="mx-auto max-w-2xl px-4 py-14 md:px-8 md:py-20">
 
         <div className="mb-8">
