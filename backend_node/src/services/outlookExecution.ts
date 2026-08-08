@@ -17,6 +17,17 @@ export async function enqueueIfActionable(doc: Record<string, unknown> | null): 
   const signalId = String(doc["id"] ?? "");
   if (!account || !["BUY", "SELL"].includes(direction) || !signalId) return null;
 
+  // Authoritative Outlook stop-loss + reference entry travel WITH the command
+  // so the EA fires this exact signal's stop after the shared entry delay
+  // (owner directive 2026-08-08 — items 2 & 3). The EA still recalculates lot
+  // size from the ACTUAL execution price → this SL, and skips if the SL is no
+  // longer valid at fire time. sl is the signal's suggested/invalidation stop.
+  const outlookSl = Number(doc["suggested_sl"] ?? doc["invalidation_price"] ?? doc["final_structural_sl"] ?? 0) || 0;
+  const entryLow = Number(doc["preferred_entry_zone_low"] ?? 0) || 0;
+  const entryHigh = Number(doc["preferred_entry_zone_high"] ?? 0) || 0;
+  const entryRef = entryLow > 0 && entryHigh > 0 ? Math.round(((entryLow + entryHigh) / 2) * 100) / 100 : 0;
+  const chaseLimit = Number(doc["chase_limit"] ?? 0) || 0;
+
   const db = getDb();
   const commandId = randomUUID();
   const dedupeKey = `${account}:OUTLOOK_SIGNAL_OPEN:${signalId}`;
@@ -31,7 +42,14 @@ export async function enqueueIfActionable(doc: Record<string, unknown> | null): 
     label: "Market Outlook signal execution (owner-approved, automatic)",
     status: "PENDING",
     requested_at: nowIso,
-    payload: { direction, signal_id: signalId },
+    payload: {
+      direction,
+      signal_id: signalId,
+      sl: outlookSl,
+      entry_ref: entryRef,
+      chase_limit: chaseLimit,
+      generated_at: String(doc["generated_at"] ?? nowIso),
+    },
     ack_at: "",
     ack_status: "",
     ack_message: "",

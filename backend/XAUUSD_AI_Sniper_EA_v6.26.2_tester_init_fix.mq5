@@ -1946,7 +1946,7 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.262"
+#property version   "6.263"
 #property description "XauCloud-m10 permanent harmful-category blocks: Asia allows only A+, while A+ reset-pending entries are permanently blocked everywhere."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
@@ -2031,8 +2031,8 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "XauCloud-m10_v6.26.2_TESTER_INIT_FIX_1000"
-#define XAUAI_EA_VERSION_NUM "6.26.2"
+#define XAUAI_EA_VERSION "XauCloud-m10_v6.26.3_OUTLOOK_DELAY_SL_1000"
+#define XAUAI_EA_VERSION_NUM "6.26.3"
 #define XAUAI_BUILD_HASH "xaucloud-tester-init-fix-1000-20260808"
 
 // v6.26.0 owner directive (2026-08-05): permanent migration off the R
@@ -4377,6 +4377,28 @@ struct XAU_TimingProofRecord
    string   openTradeCaller;        // exact function/call-site tag that is about to call OpenTrade()
 };
 XAU_TimingProofRecord g_pendingTimingProof;
+
+// --- Pending Outlook execution (owner directive 2026-08-08, items 2 & 3) ---
+// A Market Outlook OUTLOOK_SIGNAL_OPEN command is NOT executed on arrival.
+// It is armed here and fired only after the SAME single authoritative entry
+// delay the normal candidate pipeline uses (XAU_EffectiveEntryDelaySeconds,
+// 120-180s), then revalidated and executed with its OWN authoritative SL via
+// OpenTrade(...,explicitSL). One delay only -- no stacking, no second engine.
+struct XAU_PendingOutlook
+{
+   bool     active;
+   string   signalId;
+   string   commandId;      // transport id -> terminal ack after fire/skip
+   int      dir;            // +1 BUY, -1 SELL
+   double   outlookSL;      // authoritative stop supplied with the signal
+   double   entryRef;       // reference entry (chase / trace only)
+   double   chaseLimit;     // beyond this the entry is too chased -> skip
+   datetime generatedTime;  // when the signal was generated (expiry base)
+   datetime approvedTime;   // when the EA armed it
+   datetime armTime;        // approvedTime + delaySeconds (single delay)
+   int      delaySeconds;   // the one authoritative delay applied
+};
+XAU_PendingOutlook g_pendingOutlook = {false, "", "", 0, 0.0, 0.0, 0.0, 0, 0, 0, 0};
 
 // Bounded, posId-keyed record of the above, consumed once the trade closes to
 // compute actual-vs-estimated-instant-entry MAE/MFE and a delay-helped-or-hurt
@@ -19947,6 +19969,7 @@ void OnTick()
    // this function is never affected by it.
    XAU_PostTradeCooldownTick();
    XAU_ReadinessStuckWatchdog();
+   XAU_ProcessPendingOutlook(); // fire any armed Outlook entry once its single delay elapses (items 2 & 3)
 
    // v4.9.6 — DIAGNOSTIC HEARTBEAT (prints every 60s telling user WHY bot is idle)
    if(TimeCurrent() - g_lastHeartbeat >= 60)
@@ -22621,7 +22644,7 @@ void PrintBacktestAuditReport()
 // the soft blockers get bypassed, by design"). Hard safety below (hedge/
 // exposure/margin/broker/risk) is untouched and still applies to every
 // caller, manual override included.
-bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false)
+bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false, double explicitSL = 0.0)
 {
    g_lastOpenTradeFailureReason="PRE_BROKER_EXECUTION_GATE_REJECTED_SEE_EXACT_GATE_LOG";
    g_lastOpenTradeBrokerRetcode=0;
@@ -22999,6 +23022,42 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       tp = NormalizeDouble(price - slDist * tpM, digits);
    }
 
+   if(explicitSL > 0.0)
+   {
+      // --- AUTHORITATIVE OUTLOOK SL (owner directive 2026-08-08, item 3) ---
+      // A Market Outlook signal supplied this exact stop. Do NOT recompute it
+      // structurally and do NOT widen it. Validate only that it sits on the
+      // correct side of the REAL execution price and respects the broker stop
+      // level; if not, skip the trade (never invent, relocate, or widen a
+      // stop). slDist below is the distance from the actual entry price to
+      // this stop, so the unchanged lot-sizing math further down derives the
+      // correct volume for the configured risk even though price may have
+      // moved during the 2-3 minute delay.
+      bool outlookSideOk = (signal == 1) ? (explicitSL < price - minDist)
+                                         : (explicitSL > price + minDist);
+      if(!outlookSideOk)
+      {
+         g_lastOpenTradeFailureReason = StringFormat(
+            "OUTLOOK_SL_INVALID_AT_EXECUTION sl=%.2f price=%.2f minStopDist=%.2f",
+            explicitSL, price, minDist);
+         PrintFormat("OUTLOOK_SL_REJECT | %s", g_lastOpenTradeFailureReason);
+         BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "OutlookSL",
+                                   signal, funnelSetup, funnelGrade, funnelScore,
+                                   true, false, "BLOCKED", "OUTLOOK_SL_INVALID_AT_EXECUTION",
+                                   true, false, false, 0, 0,
+                                   "Outlook stop is on the wrong side of price or inside the broker stop level; trade skipped.",
+                                   reason, price);
+         return false;
+      }
+      slDist = MathAbs(price - explicitSL);
+      sl = NormalizeDouble(explicitSL, digits);
+      tp = NormalizeDouble(signal == 1 ? price + slDist * tpM : price - slDist * tpM, digits);
+      g_latestDecisionSnapshot.slSource = SL_M5_SWING_INVALIDATION;
+      PrintFormat("OUTLOOK_SL_APPLIED | signal=%s outlookSL=%.2f execPrice=%.2f slDist=%.2f (authoritative, not widened)",
+                  signal==1?"BUY":"SELL", sl, price, slDist);
+   }
+   else
+   {
    // v6.24.4: label what actually computed the stop, and -- only if the
    // owner has explicitly opted in via InpUseStructuralSL -- replace the
    // pure-ATR distance with a valid nearby M5 swing invalidation. Either
@@ -23056,6 +23115,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    tp = NormalizeDouble(signal == 1 ? price + slDist * tpM : price - slDist * tpM, digits);
    PrintFormat("SL_WIDENING_APPLIED | signal=%s rawStructuralSL=%.2f rawSLDistance=%.2f wideningFactor=%.2f finalSL=%.2f finalSLDistance=%.2f",
                signal==1?"BUY":"SELL", rawStructuralSL, rawSLDistance, XAU_SL_WIDENING_FACTOR, sl, slDist);
+   } // end structural/widening SL path (explicitSL<=0)
 
    // first-ever candidate always evaluates to NORMAL_FRESH_SIGNAL and falls
    // through unaffected). This is a QUALITY heuristic, not a safety
@@ -44199,6 +44259,129 @@ void BotMonitorAckCommand(string commandId, string status, string message)
    }
 }
 
+// --- Outlook delayed-execution helpers (owner directive 2026-08-08) ---------
+
+// Best-effort ISO-8601 ("2026-08-08T09:00:00.000Z") -> datetime. Returns 0 on
+// failure so the caller can fall back to TimeCurrent(). Only used for expiry.
+datetime XAU_ParseIsoToDatetime(string iso)
+{
+   if(StringLen(iso) < 10) return 0;
+   string s = iso;
+   StringReplace(s, "T", " ");
+   StringReplace(s, "-", ".");
+   StringReplace(s, "Z", "");
+   int dot = StringFind(s, ".", 10); // strip fractional seconds if present
+   if(dot >= 0) s = StringSubstr(s, 0, dot);
+   datetime t = StringToTime(s);
+   return t;
+}
+
+// True if a still-open position is already mapped to this Outlook signal id
+// (CloudMap parallel arrays), so we never double-fire the same signal.
+bool XAU_OutlookSignalAlreadyOpen(string signalId)
+{
+   if(StringLen(signalId) == 0) return false;
+   int n = ArraySize(g_cloudPosIds);
+   for(int i = 0; i < n; i++)
+   {
+      if(g_cloudSigIds[i] == signalId && PositionSelectByTicket(g_cloudPosIds[i]))
+         return true;
+   }
+   return false;
+}
+
+// Fire (or skip) an armed Outlook entry once the single authoritative delay has
+// elapsed. Revalidates the signal, then opens with its EXACT SL via OpenTrade's
+// explicitSL path (which also re-checks owner blockers, direction-exclusivity,
+// duplicate-core, broker/margin/spread and derives the lot from actual entry ->
+// this SL). Never invents/relocates/widens a stop: if invalid, it skips.
+void XAU_ProcessPendingOutlook()
+{
+   if(!g_pendingOutlook.active) return;
+   if(TimeCurrent() < g_pendingOutlook.armTime) return; // single delay still running
+
+   int    dir       = g_pendingOutlook.dir;
+   string signalId  = g_pendingOutlook.signalId;
+   string commandId = g_pendingOutlook.commandId;
+   double outlookSL = g_pendingOutlook.outlookSL;
+   double chaseLim  = g_pendingOutlook.chaseLimit;
+
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double price = (dir == 1) ? ask : bid;
+   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   long   stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = stopLevel * point;
+
+   string skipReason = "";
+   if(TimeCurrent() > g_pendingOutlook.generatedTime + g_pendingOutlook.delaySeconds + 300)
+      skipReason = "SIGNAL_EXPIRED";                          // too late / signal aged out
+   else if(SymbolInfoInteger(Symbol(), SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_DISABLED)
+      skipReason = "MARKET_NOT_TRADEABLE";
+   else if(bid <= 0.0 || ask <= 0.0)
+      skipReason = "INVALID_BID_ASK";
+   else if(XAU_OutlookSignalAlreadyOpen(signalId))
+      skipReason = "DUPLICATE_ALREADY_OPEN";
+   else if((dir == 1  && !(outlookSL < price - minDist)) ||
+           (dir == -1 && !(outlookSL > price + minDist)))
+      skipReason = "OUTLOOK_SL_NO_LONGER_VALID";             // crossed / wrong side / inside freeze
+   else if(chaseLim > 0.0 && ((dir == 1 && price > chaseLim) || (dir == -1 && price < chaseLim)))
+      skipReason = "PRICE_MOVED_TOO_FAR";                    // chased beyond the signal's limit
+
+   if(StringLen(skipReason) > 0)
+   {
+      string smsg = StringFormat(
+         "OUTLOOK_SKIPPED signalId=%s dir=%s reason=%s execPrice=%.2f outlookSL=%.2f delaySec=%d",
+         signalId, dir == 1 ? "BUY" : "SELL", skipReason, price, outlookSL, g_pendingOutlook.delaySeconds);
+      Print("OUTLOOK_TRACE SKIP | ", smsg);
+      BotMonitorActivity("OUTLOOK_EXECUTION_SKIPPED", "COMMAND", smsg);
+      BotMonitorAckCommand(commandId, "SKIPPED", smsg);
+      g_pendingOutlook.active = false;
+      return;
+   }
+
+   // Fire through the authoritative engine with the exact Outlook SL.
+   string reason = StringFormat("OUTLOOK_SIGNAL_OPEN signalId=%s (delayed %ds, authoritative SL %.2f)",
+                                signalId, g_pendingOutlook.delaySeconds, outlookSL);
+   double atrNow = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
+   bool opened = OpenTrade(dir, atrNow, reason, 1.0, true, outlookSL);
+
+   if(opened)
+   {
+      ulong posId = 0;
+      ulong dealTicket = trade.ResultDeal();
+      if(dealTicket > 0 && HistoryDealSelect(dealTicket))
+         posId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+      if(posId == 0) posId = trade.ResultOrder();
+      double filledPrice = trade.ResultPrice();
+      double filledLots  = trade.ResultVolume();
+      double actualSL = 0.0;
+      if(posId > 0 && PositionSelectByTicket(posId)) actualSL = PositionGetDouble(POSITION_SL);
+      if(posId > 0) CloudMapAdd(posId, signalId);
+      string emsg = StringFormat(
+         "OUTLOOK_EXECUTED signalId=%s dir=%s ticket=%I64u entryRef=%.2f execPrice=%.2f outlookSL=%.2f actualSL=%.2f lots=%.2f delaySec=%d",
+         signalId, dir == 1 ? "BUY" : "SELL", posId, g_pendingOutlook.entryRef, filledPrice,
+         outlookSL, actualSL, filledLots, g_pendingOutlook.delaySeconds);
+      Print("OUTLOOK_TRACE EXECUTED | ", emsg);
+      BotMonitorActivity("OUTLOOK_EXECUTION_FILLED", "COMMAND", emsg);
+      BotMonitorAckCommand(commandId, "EXECUTED", emsg);
+   }
+   else
+   {
+      // A broker retcode failure is FAILED; any gate/owner-blocker/SL rejection
+      // is a deliberate SKIP (no trade, logged) -- never a reason to invent a stop.
+      string ackStatus = (StringFind(g_lastOpenTradeFailureReason, "RETCODE") >= 0) ? "FAILED" : "SKIPPED";
+      string fmsg = StringFormat(
+         "OUTLOOK_%s signalId=%s dir=%s execPrice=%.2f outlookSL=%.2f openTradeReason=%s skipReason=%s",
+         ackStatus, signalId, dir == 1 ? "BUY" : "SELL", price, outlookSL,
+         g_lastOpenTradeFailureReason, g_lastSkipReason);
+      Print("OUTLOOK_TRACE ", ackStatus, " | ", fmsg);
+      BotMonitorActivity("OUTLOOK_EXECUTION_" + ackStatus, ackStatus == "FAILED" ? "ERROR" : "COMMAND", fmsg);
+      BotMonitorAckCommand(commandId, ackStatus, fmsg);
+   }
+   g_pendingOutlook.active = false;
+}
+
 void BotMonitorPollCommands()
 {
    if(!BotMonitorEnabled()) return;
@@ -44370,40 +44553,68 @@ void BotMonitorPollCommands()
    }
    else if(action == "OUTLOOK_SIGNAL_OPEN")
    {
-      // v6.26.0 Phase 2: Market Outlook execution. The backend has already
-      // run this exact signal through evaluate_owner_policy() (the same
-      // blocker codes as XAU_IsPermanentM10CategoryBlocked/
-      // XAU_OwnerEntryPermission -- see market_outlook.py) before ever
-      // enqueueing this command, and the cloud_bot_commands row is unique
-      // on (account, signal_id, source, direction) backend-side, so this
-      // is never a second, independent policy engine or a second dedup
-      // mechanism -- it deliberately reuses XAU_TryManualOpenNow verbatim
-      // (same hard broker/margin/spread/position-limit checks inside
-      // OpenTrade, same isManualOverride=true bypass of soft timing/
-      // readiness gates, same one-execution-per-commandId idempotency),
-      // just under a distinctly observable action name so Command Center/
-      // signals-produced-vs-executed reporting can tell the two sources
-      // apart. The command body's own "signal_id" (not the transport-level
-      // commandId) is what XAU_TryManualOpenNow keys idempotency on here,
-      // since a single Outlook signal could in principle be redelivered
-      // under a different transport commandId after a backend retry.
-      string oDirRaw = JsonStringField(body, "direction");
+      // Market Outlook execution. The backend already ran this exact signal
+      // through evaluate_owner_policy() before enqueueing, and the
+      // cloud_bot_commands row is unique on (account, signal_id, source,
+      // direction) backend-side, so this is never a second policy engine or a
+      // second dedup mechanism. The owner blockers are STILL re-asserted at
+      // fire time inside OpenTrade() (XAU_OwnerEntryPermission FINAL_EXECUTION
+      // + XAU_PermanentM10CategoryFinalAssertion, neither exempted by manual
+      // override), so a signal that becomes blocked during the delay is caught.
+      // v6.26.3 owner directive 2026-08-08 (items 2 & 3): ARM ONLY -- do NOT
+      // execute on arrival. Parse the signal + its authoritative SL, arm a
+      // single delayed entry using the SAME delay the normal candidate
+      // pipeline uses (XAU_EffectiveEntryDelaySeconds). XAU_ProcessPendingOutlook()
+      // fires it after the delay, revalidates, and opens with THIS exact SL via
+      // OpenTrade(...,explicitSL). We ack ACKED now (removes it from the PENDING
+      // poll); the terminal EXECUTED/SKIPPED/FAILED ack is sent at fire time.
+      string oDirRaw   = JsonStringField(body, "direction");
       string oSignalId = JsonStringField(body, "signal_id");
+      double oSL       = JsonNumberField(body, "sl");
+      double oEntryRef = JsonNumberField(body, "entry_ref");
+      double oChase    = JsonNumberField(body, "chase_limit");
+      string oGenRaw   = JsonStringField(body, "generated_at");
       StringToUpper(oDirRaw);
       int oDir = (StringFind(oDirRaw, "BUY") >= 0) ? 1 : (StringFind(oDirRaw, "SELL") >= 0) ? -1 : 0;
 
-      string oReject = "";
-      ulong  oTicket = 0;
-      double oPrice = 0.0, oSL = 0.0, oTP = 0.0, oLots = 0.0;
-      string oIdempotencyKey = StringLen(oSignalId) > 0 ? ("OUTLOOK_" + oSignalId) : commandId;
-      bool oOpened = XAU_TryManualOpenNow(oDir, oIdempotencyKey, oReject, oTicket, oPrice, oSL, oTP, oLots);
-      status = oOpened ? "EXECUTED" : "FAILED";
-      result = oOpened
-             ? StringFormat("OUTLOOK_SIGNAL_OPEN filled: %s signalId=%s ticket=%I64u price=%.5f sl=%.5f tp=%.5f lots=%.2f",
-                            oDirRaw, oSignalId, oTicket, oPrice, oSL, oTP, oLots)
-             : ("OUTLOOK_SIGNAL_OPEN_REJECTED_" + oReject);
-      if(oOpened)
-         CloudMapAdd(oTicket, oSignalId); // links this position back to its originating Outlook signal, same map TRADE_OPENED/notifications already read
+      if(oDir == 0 || StringLen(oSignalId) == 0 || oSL <= 0.0)
+      {
+         status = "FAILED";
+         result = StringFormat("OUTLOOK_SIGNAL_OPEN_REJECTED_INVALID_PAYLOAD dir=%s signalId=%s sl=%.2f",
+                               oDirRaw, oSignalId, oSL);
+      }
+      else if(g_pendingOutlook.active && g_pendingOutlook.signalId == oSignalId)
+      {
+         status = "ACKED";
+         result = "OUTLOOK_ALREADY_ARMED signalId=" + oSignalId;
+      }
+      else if(XAU_OutlookSignalAlreadyOpen(oSignalId))
+      {
+         status = "SKIPPED";
+         result = "OUTLOOK_DUPLICATE_ALREADY_OPEN signalId=" + oSignalId;
+      }
+      else
+      {
+         int oDelaySec = (int)MathRound(XAU_EffectiveEntryDelaySeconds());
+         datetime oGenTime = XAU_ParseIsoToDatetime(oGenRaw);
+         if(oGenTime <= 0) oGenTime = TimeCurrent();
+         g_pendingOutlook.active        = true;
+         g_pendingOutlook.signalId      = oSignalId;
+         g_pendingOutlook.commandId     = commandId;
+         g_pendingOutlook.dir           = oDir;
+         g_pendingOutlook.outlookSL     = oSL;
+         g_pendingOutlook.entryRef      = oEntryRef;
+         g_pendingOutlook.chaseLimit    = oChase;
+         g_pendingOutlook.generatedTime = oGenTime;
+         g_pendingOutlook.approvedTime  = TimeCurrent();
+         g_pendingOutlook.armTime       = TimeCurrent() + oDelaySec;
+         g_pendingOutlook.delaySeconds  = oDelaySec;
+         status = "ACKED";
+         result = StringFormat("OUTLOOK_ARMED signalId=%s dir=%s sl=%.2f delaySec=%d fireAt=%s",
+                               oSignalId, oDir == 1 ? "BUY" : "SELL", oSL, oDelaySec,
+                               TimeToString(g_pendingOutlook.armTime, TIME_DATE | TIME_SECONDS));
+         Print("OUTLOOK_TRACE ARMED | ", result);
+      }
    }
 
    g_lastRemoteCommandState = action + ": " + result;

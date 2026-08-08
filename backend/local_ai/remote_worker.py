@@ -148,7 +148,7 @@ class RelayClient:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Outbound-only XauCloud VPS local-AI relay worker")
-    parser.add_argument("--public-url", default=os.environ.get("XAU_PUBLIC_BACKEND_URL", "https://xauaisniper.com"))
+    parser.add_argument("--public-url", default=os.environ.get("XAU_PUBLIC_BACKEND_URL", "https://xaucloud.io"))
     parser.add_argument("--gateway-url", default="http://127.0.0.1:8765")
     parser.add_argument("--worker-id", default=f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}")
     parser.add_argument("--token", default=os.environ.get("XAU_LOCAL_AI_WORKER_SECRET", ""))

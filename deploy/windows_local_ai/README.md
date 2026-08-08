@@ -1,7 +1,7 @@
 # XauCloud local AI (Windows VPS)
 
 This deployment is intentionally loopback-only and zero-credit by default.
-Customer EAs reach it through the authenticated `https://xauaisniper.com`
+Customer EAs reach it through the authenticated `https://xaucloud.io`
 relay; the VPS worker makes outbound HTTPS requests only.
 
 - Runtime: pinned native `llama.cpp` b10229 with the benchmark-selected model
