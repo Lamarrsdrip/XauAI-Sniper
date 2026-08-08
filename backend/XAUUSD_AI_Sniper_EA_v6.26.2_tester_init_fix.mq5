@@ -23022,6 +23022,12 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       tp = NormalizeDouble(price - slDist * tpM, digits);
    }
 
+   // Declared at function scope so BOTH the Outlook (explicitSL) branch and the
+   // structural/widening branch below populate them, and downstream risk-geometry
+   // consumers (owner 1R distance ~line 23800, RISK_GEOMETRY log) can read them.
+   double rawStructuralSL = 0.0;
+   double rawSLDistance   = 0.0;
+   XAU_FinalRiskGeometry finalGeometry;
    if(explicitSL > 0.0)
    {
       // --- AUTHORITATIVE OUTLOOK SL (owner directive 2026-08-08, item 3) ---
@@ -23055,6 +23061,14 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       g_latestDecisionSnapshot.slSource = SL_M5_SWING_INVALIDATION;
       PrintFormat("OUTLOOK_SL_APPLIED | signal=%s outlookSL=%.2f execPrice=%.2f slDist=%.2f (authoritative, not widened)",
                   signal==1?"BUY":"SELL", sl, price, slDist);
+      // Authoritative Outlook SL is NEVER widened: raw == final == the exact stop,
+      // so downstream 1R geometry uses this distance verbatim.
+      rawStructuralSL = sl;
+      rawSLDistance   = slDist;
+      finalGeometry.structuralDistance         = slDist;
+      finalGeometry.widenedDistance            = slDist;
+      finalGeometry.finalOriginalRiskDistance  = slDist;
+      finalGeometry.effectiveHardStopDistance  = slDist;
    }
    else
    {
@@ -23107,9 +23121,9 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // output is the ONE canonical "1R" every downstream module (missed-move
    // check, post-profit re-entry, lot sizing, R-Exit capture) reads --
    // never a second, independently recomputed distance anywhere else.
-   double rawStructuralSL = sl;
-   double rawSLDistance = slDist;
-   XAU_FinalRiskGeometry finalGeometry = XAU_ComputeFinalRiskGeometry(rawSLDistance);
+   rawStructuralSL = sl;
+   rawSLDistance = slDist;
+   finalGeometry = XAU_ComputeFinalRiskGeometry(rawSLDistance);
    slDist = finalGeometry.finalOriginalRiskDistance;
    sl = NormalizeDouble(signal == 1 ? price - slDist : price + slDist, digits);
    tp = NormalizeDouble(signal == 1 ? price + slDist * tpM : price - slDist * tpM, digits);
