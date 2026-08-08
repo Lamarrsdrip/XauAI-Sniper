@@ -70,8 +70,8 @@ export default function HeroSection({ goldPrice }) {
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_40%_40%_at_88%_10%,rgba(47,211,160,0.06),transparent)]" />
       </div>
 
-      <div className="relative z-10 mx-auto max-w-6xl px-4 pb-16 pt-14 md:px-8 md:pb-24 md:pt-20">
-        <div className="grid items-center gap-12 lg:grid-cols-[1.12fr_0.88fr]">
+      <div className="relative z-10 mx-auto max-w-6xl px-4 pb-12 pt-11 md:px-8 md:pb-16 md:pt-16">
+        <div className="grid items-center gap-10 lg:grid-cols-[1.12fr_0.88fr]">
           <div className="text-center lg:text-left">
             <div className="flex flex-wrap items-center justify-center gap-2 lg:justify-start">
               <div className="inline-flex items-center gap-2 rounded-full border border-[#F3C969]/20 bg-[#F3C969]/[0.08] px-3.5 py-1.5">

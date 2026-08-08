@@ -24,7 +24,7 @@ function StoreBadge({ icon: Icon, top, bottom }) {
 
 export default function ComingSoonAppsSection() {
   return (
-    <section className="mx-auto max-w-3xl px-5 py-16 text-center">
+    <section className="mx-auto max-w-3xl px-5 py-12 text-center">
       <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.22em] text-[#F3C969]/70">Roadmap</div>
       <h2 className="text-2xl font-black tracking-tight text-white sm:text-3xl">XauCloud Mobile Apps</h2>
       <p className="mx-auto mt-3 max-w-md text-[13px] leading-6 text-white/45">

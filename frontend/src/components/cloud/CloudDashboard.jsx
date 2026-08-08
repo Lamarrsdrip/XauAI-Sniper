@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
 import {
-  Activity, AreaChart, BarChart3, Bot, Brain, CheckCircle2, ChevronDown, CircleDollarSign,
+  Activity, BarChart3, Bot, Brain, CheckCircle2, ChevronDown, CircleDollarSign,
   Clock3, Copy, Flame, Gauge, History, Home, KeyRound, LineChart, Loader2,
-  Lock, LogOut, Menu, Pause, Play, RefreshCw, Settings, Shield,
-  SlidersHorizontal, Square, TerminalSquare, TrendingUp, TrendingDown, Wifi, XCircle, AlertTriangle, Search, Zap,
+  LogOut, Menu, Pause, Play, RefreshCw, Settings, Shield,
+  SlidersHorizontal, TerminalSquare, TrendingUp, Wifi, XCircle, AlertTriangle, Search, Zap,
   Bell, GraduationCap, HelpCircle, Download, User, BookOpen, MessageCircle, ShieldCheck, Rocket, ArrowLeft, ChevronRight,
 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
@@ -36,7 +36,7 @@ const NAV = [
 ];
 const MORE_NAV = [
   ["intelligence", "AI Brain",  Brain,            "AI Director decisions, ML state, blocks"],
-  ["control",      "Control",   SlidersHorizontal, "Remote commands & Prop Firm Mode"      ],
+  ["control",      "Control",   SlidersHorizontal, "Bot on/off & Prop Firm protection"     ],
   ["license",      "License",   KeyRound,          "License binding and key management"    ],
   ["settings",     "Settings",  Settings,          "Account and app settings"              ],
 ];
@@ -44,16 +44,35 @@ const FILTERS = [
   ["all","All"],["entries","Entries"],["blocks","Blocks"],["exits","Exits"],
   ["risk","Risk"],["ai","AI"],["errors","Errors"],["overrides","Overrides"],
 ];
-const COMMANDS = [
-  { action:"PAUSE_NEW_TRADES",   label:"Pause",          detail:"Pause fresh entries. Open trades keep being managed.", icon:Pause,    tone:"amber", dangerous:false },
-  { action:"RESUME_TRADING",     label:"Resume",         detail:"Allow new entries again after EA acknowledgement.",    icon:Play,     tone:"green", dangerous:false },
-  { action:"STOP_TRADING",       label:"Stop",           detail:"Stop fresh entries. Trade management stays active.",   icon:Square,   tone:"red",   dangerous:true  },
-  { action:"CLOSE_ALL_TRADES",   label:"Close all",      detail:"Ask the EA to close all EA-managed positions.",        icon:XCircle,  tone:"red",   dangerous:true  },
-  { action:"FORCE_SYNC",         label:"Force sync",     detail:"Rebuild startup intelligence and position state.",     icon:RefreshCw,tone:"amber", dangerous:false },
-  { action:"FORCE_REPORT_UPLOAD",label:"Upload reports", detail:"Mark local intelligence reports for upload.",          icon:AreaChart, tone:"amber", dangerous:false },
-  { action:"MANUAL_OPEN_NOW", label:"Manual Buy Now",  detail:"Open a BUY immediately at current market price. This bypasses candidate age, Entry Readiness, timing wait, grade/score and AI opinion — it does NOT bypass spread/margin/stops/market-open broker safety checks. Builds a fresh execution snapshot at the moment the EA receives this command; no prior blocked signal is required or reused.", icon:TrendingUp, tone:"green", dangerous:true, payload:{direction:"BUY"} },
-  { action:"MANUAL_OPEN_NOW", label:"Manual Sell Now",  detail:"Open a SELL immediately at current market price. This bypasses candidate age, Entry Readiness, timing wait, grade/score and AI opinion — it does NOT bypass spread/margin/stops/market-open broker safety checks. Builds a fresh execution snapshot at the moment the EA receives this command; no prior blocked signal is required or reused.", icon:TrendingDown, tone:"red", dangerous:true, payload:{direction:"SELL"} },
+// The old customer-facing "Remote commands" card wall (Pause / Resume / Stop /
+// Close all / Force sync / manual open) was removed 2026-08-08 — the single
+// customer control authority is now the Bot ON/OFF toggle (BotControlCard),
+// which itself queues PAUSE_NEW_TRADES / RESUME_TRADING through the SAME
+// backend command infra (cloud_bot_commands + EA acknowledgement). No backend
+// command capability was removed; only the duplicate old UI surface.
+const PF_GROUPS = [
+  { label: "Account", fields: [
+    { key: "starting_balance", label: "Starting balance", kind: "money", step: "1", min: 0,
+      note: "Your prop account's original balance. Total drawdown is measured from this number." },
+  ]},
+  { label: "Loss limits", fields: [
+    { key: "daily_loss_pct", label: "Daily loss limit", kind: "pct", step: "0.1", min: 0.5, max: 20,
+      note: "The most your account may lose in a single day before the bot stops opening new trades." },
+    { key: "max_loss_pct", label: "Maximum total loss", kind: "pct", step: "0.1", min: 0.5, max: 30,
+      note: "The overall drawdown ceiling for the whole account or challenge." },
+    { key: "safety_buffer_pct", label: "Safety buffer", kind: "pct", step: "0.1", min: 0, max: 10,
+      note: "The bot locks trading this far before the firm's stated limit, to absorb calculation differences. Keep this above zero." },
+  ]},
+  { label: "Risk", fields: [
+    { key: "risk_per_trade_pct", label: "Risk per trade", kind: "pct", step: "0.01", min: 0.01, max: 2,
+      note: "Risk taken on each individual trade, sized from your stop distance." },
+    { key: "max_basket_risk_pct", label: "Maximum basket risk", kind: "pct", step: "0.01", min: 0.01, max: 4,
+      note: "The combined risk allowed across all open positions at once." },
+  ]},
 ];
+const pfFmt = (kind, v) => kind === "money"
+  ? `$${Number(v || 0).toLocaleString("en-US", { maximumFractionDigits: 0 })}`
+  : `${Number(v || 0)}%`;
 const DEFAULT_PROP = {
   enabled:false, starting_balance:0, daily_loss_pct:4, max_loss_pct:8,
   safety_buffer_pct:0.5, risk_per_trade_pct:0.15, max_basket_risk_pct:0.75,
@@ -1698,120 +1717,227 @@ function TradingUniverseCard({ linked, setActive }) {
 }
 
 function ControlPage({ heartbeat, online, commands, openCommand, commandMsg, licenseKey, linked, setActive, propFirm, propFirmForm, setPropFirmForm, markDirty, propFirmConfirmed, setPropFirmConfirmed, propFirmBusy, applyPropFirm }) {
-  const applied = propFirm?.applied||{};
-  const upd = (field, value)=>{ markDirty(); setPropFirmForm(p=>({...p,[field]:value})); };
   const openTrades = online ? Number(heartbeat?.open_positions || 0) : 0;
+  const recent = (commands || []).slice(0, 8);
 
   return (
     <AK.Screen>
-      <AK.ScreenHeader title="Bot Control" sub="Pause / resume, remote commands & Prop Firm protection" />
-      {/* Focused control surface: live bot state + on/off toggle */}
+      <AK.ScreenHeader title="Bot Control" sub="Turn automated trading on or off, and set your Prop Firm limits" />
+
+      {/* The single customer control authority — Bot ON / OFF (queues
+          PAUSE_NEW_TRADES / RESUME_TRADING through the same command infra the
+          old Remote Commands card used). */}
       <AK.Panel>
         <BotControlCard heartbeat={heartbeat || {}} online={online} linked={linked} openTrades={openTrades} openCommand={openCommand} commands={commands} />
       </AK.Panel>
-      {/* Commands */}
-      <Card title="Remote commands" subtitle="Every command needs license verification and EA acknowledgement before it executes.">
-        {!linked && (
-          <div className="mb-4 flex items-center gap-3 rounded-xl border border-gold-300/20 bg-gold-300/[0.06] p-3.5 text-[13px] text-gold-200">
-            <AlertTriangle className="h-4 w-4 flex-none text-gold-400" />
-            <span>Link your license first. <button onClick={()=>setActive("license")} className="font-semibold underline">Open License</button></span>
-          </div>
-        )}
-        <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-          {COMMANDS.map(cmd=>{
-            const Icon=cmd.icon;
-            return (
-              <button key={cmd.label} onClick={()=>openCommand(cmd)} disabled={!linked}
-                className={`rounded-2xl border p-4 text-left transition disabled:opacity-35 disabled:cursor-not-allowed ${cardTone(cmd.tone)}`}>
-                <Icon className="mb-3 h-5 w-5 opacity-70" />
-                <div className="text-[14px] font-semibold">{cmd.label}</div>
-                <p className="mt-1 text-[11px] leading-4 text-white/42">{cmd.detail}</p>
-              </button>
-            );
-          })}
-        </div>
-        {commandMsg && <div className="mt-4 rounded-xl border border-gold-300/20 bg-gold-300/[0.07] p-3 text-[12px] text-gold-200">{commandMsg}</div>}
-      </Card>
+      <p className="px-1 text-[11.5px] leading-4 text-white/40">
+        Bot <span className="font-semibold text-white/60">OFF</span> stops new automatic entries — open positions stay protected and managed. Bot <span className="font-semibold text-white/60">ON</span> resumes normal entries after the EA acknowledges.
+      </p>
 
-      {/* Command history */}
-      <Card title="Command history" subtitle="Queued, acknowledged, failed, or skipped commands.">
-        {commands.length ? (
-          <div className="space-y-2">
-            {commands.map(cmd=>(
-              <div key={cmd.id} className="flex items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
-                <div className="min-w-0 flex-1">
-                  <div className="text-[13px] font-semibold">{cmd.label||cmd.action}</div>
-                  <div className="mt-0.5 text-[11px] text-white/35">{relativeTime(cmd.requested_at)} · {cmd.ack_message||"Waiting for EA"}</div>
-                </div>
-                <span className={pill(cmd.status==="EXECUTED"?"green":cmd.status==="FAILED"?"red":"amber")}>{cmd.status}</span>
+      {/* Prop Firm protection — native grouped settings */}
+      <PropFirmSection
+        online={online} linked={linked} propFirm={propFirm} commandMsg={commandMsg}
+        propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={markDirty}
+        propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed}
+        propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} setActive={setActive}
+      />
+
+      {/* Trading universe (architecture phase) */}
+      <TradingUniverseCard linked={linked} setActive={setActive} />
+
+      {/* Command history — now reflects Bot ON/OFF + Prop Firm acknowledgements */}
+      {recent.length > 0 && (
+        <div>
+          <AK.Label className="mb-1.5">Recent commands</AK.Label>
+          <AK.Panel>
+            {recent.map((cmd, i) => (
+              <AK.Row key={cmd.id || i}
+                label={cmd.label || cmd.action}
+                sub={`${relativeTime(cmd.requested_at)} · ${cmd.ack_message || "Waiting for EA"}`}
+                right={<span className={pill(cmd.status === "EXECUTED" ? "green" : cmd.status === "FAILED" ? "red" : "amber")}>{cmd.status}</span>}
+                last={i === recent.length - 1}
+              />
+            ))}
+          </AK.Panel>
+        </div>
+      )}
+    </AK.Screen>
+  );
+}
+
+// Native, grouped "Prop Firm Protection" settings (replaces the old long web
+// form). Each value is a compact disclosure row that opens a focused bottom
+// sheet with a numeric keypad + explanation, so the screen stays short and
+// scannable. Backend contract is unchanged: UPDATE_PROP_FIRM_CONFIG is only
+// sent on Apply, and the bot stays on its previous config until the EA
+// acknowledges (apply_status PENDING → EXECUTED).
+function propFirmAck({ online, busy, status }) {
+  const s = String(status || "").toUpperCase();
+  if (busy) return { label: "Sending to EA…", tone: "gold", spin: true };
+  if (s === "NOT_LINKED") return { label: "Link a license first", tone: "neutral" };
+  if (["EXECUTED", "APPLIED"].includes(s)) return { label: "Applied by EA", tone: "profit" };
+  if (["FAILED", "ERROR", "REJECTED", "SKIPPED"].includes(s)) return { label: "Failed — not applied", tone: "loss" };
+  if (["PENDING", "ACKED", "QUEUED", "SENT"].includes(s)) return { label: online ? "Waiting for EA…" : "Queued — EA offline", tone: "gold", spin: online };
+  return { label: "Not configured", tone: "neutral" };
+}
+
+function PropFirmSection({ online, linked, propFirm, commandMsg, propFirmForm, setPropFirmForm, markDirty, propFirmConfirmed, setPropFirmConfirmed, propFirmBusy, applyPropFirm, setActive }) {
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState("");
+  const applied = propFirm?.applied || {};
+  const enabled = Boolean(propFirmForm.enabled);
+  const upd = (key, value) => { markDirty(); setPropFirmForm((p) => ({ ...p, [key]: value })); };
+
+  const openEdit = (f) => {
+    const raw = f.kind === "multi" ? Math.round(Number(propFirmForm[f.key] || 0) * 100) : (propFirmForm[f.key] ?? "");
+    setDraft(String(raw));
+    setEditing(f);
+  };
+  const saveEdit = () => {
+    if (!editing) return;
+    let v = Number(draft);
+    if (!Number.isFinite(v)) v = editing.min ?? 0;
+    if (editing.min != null) v = Math.max(editing.min, v);
+    if (editing.max != null) v = Math.min(editing.max, v);
+    upd(editing.key, editing.kind === "multi" ? v / 100 : v);
+    setEditing(null);
+  };
+
+  const ack = propFirmAck({ online, busy: propFirmBusy, status: propFirm?.apply_status });
+  const retestSuffix = "% of normal";
+
+  return (
+    <div className="space-y-2.5">
+      <AK.Label>Prop Firm Protection</AK.Label>
+
+      {/* Master switch + live state + (when on) a compact summary strip */}
+      <AK.Panel>
+        <div className="flex items-center gap-3 px-4 py-3.5">
+          <span className={AK.cx("flex h-9 w-9 flex-none items-center justify-center rounded-xl", enabled ? "bg-gold-300/12 text-gold-300" : "bg-white/[0.06] text-white/40")}>
+            <ShieldCheck className="h-[18px] w-[18px]" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[14.5px] font-semibold leading-tight">Prop Firm Protection · {enabled ? "ON" : "OFF"}</div>
+            <div className="mt-0.5 text-[11.5px] leading-4 text-white/45">
+              {enabled ? "FTMO-style limits — exposure capped before your firm's rules." : "Off — the bot uses your normal risk settings."}
+            </div>
+          </div>
+          <Toggle value={enabled} onChange={(v) => upd("enabled", v)} />
+        </div>
+
+        {enabled && (
+          <div className="grid grid-cols-4 gap-px border-t border-white/[0.05] bg-white/[0.05]">
+            {[
+              ["Daily", pfFmt("pct", propFirmForm.daily_loss_pct)],
+              ["Total", pfFmt("pct", propFirmForm.max_loss_pct)],
+              ["Buffer", pfFmt("pct", propFirmForm.safety_buffer_pct)],
+              ["Risk", pfFmt("pct", propFirmForm.risk_per_trade_pct)],
+            ].map(([k, v]) => (
+              <div key={k} className="bg-[#0C0D12] px-2 py-2.5 text-center">
+                <div className="text-[9.5px] uppercase tracking-wider text-white/35">{k}</div>
+                <div className="nums mt-0.5 text-[13px] font-bold text-white/85">{v}</div>
               </div>
             ))}
           </div>
-        ) : (
-          <Empty title="No commands yet" body={`Commands appear here after you confirm with license key ${licenseKey||"ASE-..."}.`} icon={Lock} />
         )}
-      </Card>
+      </AK.Panel>
 
-      {/* v6.9.0 — Trading Universe (architecture phase) */}
-      <TradingUniverseCard linked={linked} setActive={setActive} />
+      {!linked && (
+        <p className="px-1 text-[11.5px] leading-4 text-gold-200/80">
+          <button onClick={() => setActive("license")} className="font-semibold underline">Link your license</button> to configure and apply Prop Firm limits.
+        </p>
+      )}
 
-      {/* Prop Firm Mode */}
-      <Card title="PROP FIRM MODE" subtitle="Set the firm's exact limits. The EA stays unchanged until it receives and acknowledges this command.">
-        <div className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-white/[0.03] p-4 mb-5">
-          <div>
-            <div className="text-[14px] font-semibold">{propFirmForm.enabled?"Protection on":"Protection off"}</div>
-            <div className="mt-0.5 text-[12px] text-white/40">Caps exposure and locks before your firm's limits.</div>
-          </div>
-          <Toggle value={propFirmForm.enabled} onChange={v=>upd("enabled",v)} />
+      {/* Grouped setting rows — tap a row to edit in a focused sheet */}
+      {enabled && PF_GROUPS.map((group) => (
+        <div key={group.label}>
+          <AK.Label className="mb-1.5">{group.label}</AK.Label>
+          <AK.Panel>
+            {group.fields.map((f, i) => (
+              <AK.Row key={f.key}
+                label={f.label}
+                value={pfFmt(f.kind, propFirmForm[f.key])}
+                valueTone="white"
+                onClick={() => openEdit(f)}
+                last={i === group.fields.length - 1}
+              />
+            ))}
+          </AK.Panel>
         </div>
+      ))}
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <NumField label="Starting balance" value={propFirmForm.starting_balance} onChange={v=>upd("starting_balance",v)} suffix="$" step="1" note="Prop account's original balance for total DD tracking." />
-          <NumField label="Daily loss limit"    value={propFirmForm.daily_loss_pct}    onChange={v=>upd("daily_loss_pct",v)}    min={0.5} max={20} />
-          <NumField label="Maximum total loss"  value={propFirmForm.max_loss_pct}      onChange={v=>upd("max_loss_pct",v)}      min={0.5} max={30} />
-          <NumField label="Safety buffer"       value={propFirmForm.safety_buffer_pct} onChange={v=>upd("safety_buffer_pct",v)} min={0} max={10} note="EA locks this far before the firm's stated limit." />
-          <NumField label="Risk per trade"      value={propFirmForm.risk_per_trade_pct} onChange={v=>upd("risk_per_trade_pct",v)} min={0.01} max={2} />
-          <NumField label="Maximum basket risk" value={propFirmForm.max_basket_risk_pct} onChange={v=>upd("max_basket_risk_pct",v)} min={0.01} max={4} />
+      {/* Advanced — optional retest add */}
+      {enabled && (
+        <div>
+          <AK.Label className="mb-1.5">Advanced</AK.Label>
+          <AK.Panel>
+            <div className="flex items-center gap-3 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-[13.5px] font-medium text-white/85">Allow one confirmed retest add</div>
+                <div className="mt-0.5 text-[11.5px] text-white/40">One small retest, capped inside the basket risk limit.</div>
+              </div>
+              <Toggle value={Boolean(propFirmForm.allow_retest_add)} onChange={(v) => upd("allow_retest_add", v)} />
+            </div>
+            {propFirmForm.allow_retest_add && (
+              <AK.Row label="Retest add size"
+                value={`${Math.round(Number(propFirmForm.retest_add_lot_multi || 0) * 100)}${retestSuffix}`}
+                valueTone="white"
+                onClick={() => openEdit({ key: "retest_add_lot_multi", label: "Retest add size", kind: "multi", step: "1", min: 5, max: 50, note: "Size of the retest add, as a percentage of your normal position size." })}
+                last
+              />
+            )}
+          </AK.Panel>
         </div>
+      )}
 
-        <label className="mt-4 flex items-start gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] p-3.5 cursor-pointer">
-          <input type="checkbox" checked={propFirmForm.allow_retest_add} onChange={e=>upd("allow_retest_add",e.target.checked)} className="mt-1 h-4 w-4 accent-gold-300" />
-          <span>
-            <span className="block text-[13px] font-semibold">Allow one confirmed retest add</span>
-            <span className="mt-0.5 block text-[11px] text-white/38">One small retest, capped inside the basket risk limit.</span>
-          </span>
+      {/* Apply + acknowledgement (always available so you can also push OFF) */}
+      <AK.Panel pad>
+        <label className="flex items-start gap-3 text-[12px] leading-5 text-white/50 cursor-pointer">
+          <input type="checkbox" checked={propFirmConfirmed} onChange={(e) => setPropFirmConfirmed(e.target.checked)} className="mt-0.5 h-4 w-4 flex-none accent-gold-300" />
+          {enabled
+            ? "I've verified these values against my prop firm's rules, and the safety buffer stays above zero."
+            : "Turn Prop Firm Protection off on the bot and return to my normal risk settings."}
         </label>
-
-        {propFirmForm.allow_retest_add && (
-          <div className="mt-3 max-w-xs">
-            <NumField label="Retest add size" value={Number(propFirmForm.retest_add_lot_multi||0)*100} onChange={v=>upd("retest_add_lot_multi",v/100)} min={5} max={50} suffix="% of normal" step="1" />
-          </div>
-        )}
-
-        <label className="mt-5 flex items-start gap-3 text-[12px] text-white/45 cursor-pointer">
-          <input type="checkbox" checked={propFirmConfirmed} onChange={e=>setPropFirmConfirmed(e.target.checked)} className="mt-0.5 h-4 w-4 accent-gold-300" />
-          I've verified these values against my prop firm's rules. Safety buffer stays above zero in case of calculation differences.
-        </label>
-
-        <button onClick={applyPropFirm} disabled={!linked||!propFirmConfirmed||propFirmBusy}
-          className="mt-4 w-full rounded-2xl bg-gold-300 py-3 text-[13px] font-bold text-black disabled:opacity-35 disabled:cursor-not-allowed transition hover:bg-gold-200">
-          {propFirmBusy?"Sending to EA…":"Apply to EA"}
+        <button onClick={applyPropFirm} disabled={!linked || !propFirmConfirmed || propFirmBusy}
+          className="mt-3.5 w-full rounded-xl bg-gold-300 py-3 text-[13px] font-bold text-black transition hover:bg-gold-200 disabled:opacity-35 disabled:cursor-not-allowed">
+          {propFirmBusy ? "Sending to EA…" : enabled ? "Apply limits to EA" : "Apply (turn off) to EA"}
         </button>
 
-        <div className="mt-4 grid grid-cols-2 gap-3">
-          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
-            <div className={MONO_LABEL}>Command status</div>
-            <div className="mt-2 text-[13px] font-semibold">{propFirm?.apply_status||"NOT CONFIGURED"}</div>
-            <div className="mt-0.5 text-[11px] text-white/38">{propFirm?.apply_message||"No command sent yet."}</div>
+        <div className="mt-3 flex items-center gap-2.5 rounded-xl bg-white/[0.03] px-3 py-2.5">
+          {ack.spin ? <Loader2 className="h-3.5 w-3.5 flex-none animate-spin text-gold-300" /> : <AK.Dot tone={ack.tone} />}
+          <div className="min-w-0 flex-1">
+            <div className={AK.cx("text-[12.5px] font-semibold", AK.toneText(ack.tone))}>{ack.label}</div>
+            {(propFirm?.apply_message || commandMsg) && (
+              <div className="mt-0.5 truncate text-[11px] text-white/40">{propFirm?.apply_message || commandMsg}</div>
+            )}
           </div>
-          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
-            <div className={MONO_LABEL}>Applied by EA</div>
-            <div className={`mt-2 text-[13px] font-semibold ${applied.enabled?"text-emerald-300":"text-white/45"}`}>{applied.enabled?"ON":"OFF"}</div>
-            <div className="mt-0.5 text-[11px] text-white/38">Risk {Number(applied.risk_per_trade_pct||0).toFixed(2)}% · Basket {Number(applied.max_basket_risk_pct||0).toFixed(2)}%</div>
-          </div>
+          <span className={AK.cx("nums flex-none text-[11px] font-semibold", applied.enabled ? "text-profit" : "text-white/35")}>
+            EA: {applied.enabled ? "ON" : "OFF"}
+          </span>
         </div>
-      </Card>
-    </AK.Screen>
+      </AK.Panel>
+
+      {/* Focused edit sheet */}
+      <AK.Sheet open={Boolean(editing)} onClose={() => setEditing(null)} title={editing?.label}>
+        {editing && (
+          <div>
+            <div className="flex items-center rounded-xl bg-white/[0.05] px-3.5 focus-within:ring-1 focus-within:ring-gold-300/40">
+              {editing.kind === "money" && <span className="text-[20px] font-bold text-white/40">$</span>}
+              <input autoFocus type="number" inputMode="decimal" step={editing.step} min={editing.min} max={editing.max}
+                value={draft} onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveEdit()}
+                className="nums min-w-0 flex-1 bg-transparent py-3.5 text-[22px] font-bold text-white outline-none" />
+              <span className="ml-2 flex-none text-[14px] font-semibold text-white/35">{editing.kind === "money" ? "" : editing.kind === "multi" ? retestSuffix.trim() : "%"}</span>
+            </div>
+            {editing.note && <p className="mt-3 text-[12.5px] leading-5 text-white/50">{editing.note}</p>}
+            <div className="mt-4 grid grid-cols-2 gap-2.5">
+              <AK.Button variant="dark" onClick={() => setEditing(null)}>Cancel</AK.Button>
+              <AK.Button variant="primary" onClick={saveEdit}>Save</AK.Button>
+            </div>
+          </div>
+        )}
+      </AK.Sheet>
+    </div>
   );
 }
 
@@ -2066,7 +2192,7 @@ function MorePage({ setActive, me, status, openNotifications, logout }) {
       </UI.ListGroup>
 
       <UI.ListGroup label="Trading">
-        <UI.ListRow icon={SlidersHorizontal} label="Bot Control" sub="Pause / resume, commands, Prop Firm" onClick={() => setActive("control")} />
+        <UI.ListRow icon={SlidersHorizontal} label="Bot Control" sub="Bot on/off & Prop Firm protection" onClick={() => setActive("control")} />
         <UI.ListRow icon={Brain} label="AI Brain" sub="Decisions, ML state, blocks" onClick={() => setActive("intelligence")} />
         <UI.ListRow icon={LineChart} label="Market Outlook" sub="Signals, evidence, history" onClick={() => { window.location.href = "/ai-market-outlook"; }} last />
       </UI.ListGroup>

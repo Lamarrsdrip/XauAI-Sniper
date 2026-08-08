@@ -22,7 +22,7 @@ const STEPS = [
 export default function HowItWorksSection() {
   return (
     <div className="bg-[#07080B] border-t border-white/[0.06] text-white" data-testid="how-it-works-section">
-      <div className="mx-auto max-w-6xl px-4 py-14 md:px-8 md:py-20">
+      <div className="mx-auto max-w-6xl px-4 py-11 md:px-8 md:py-16">
 
         <div className="mb-8">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-gold-300/20 bg-gold-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-gold-200">

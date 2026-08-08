@@ -73,7 +73,7 @@ export default function GoldReplaySection({ api }) {
 
   return (
     <div className="bg-[#07080B] text-white" data-testid="gold-replay-section">
-      <div className="mx-auto max-w-5xl px-4 pt-14 md:px-8 md:pt-20">
+      <div className="mx-auto max-w-5xl px-4 pt-11 md:px-8 md:pt-16">
         <div className="mb-6">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-300/20 bg-sky-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-sky-200">
             Real 30-Day Backtest

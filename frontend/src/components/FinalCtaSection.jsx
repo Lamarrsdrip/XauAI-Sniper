@@ -3,7 +3,7 @@ import React from "react";
 export default function FinalCtaSection() {
   return (
     <div className="bg-[#07080B] border-t border-white/[0.06] text-white" data-testid="final-cta-section">
-      <div className="mx-auto max-w-2xl px-4 py-16 text-center md:px-8 md:py-20">
+      <div className="mx-auto max-w-2xl px-4 py-11 text-center md:px-8 md:py-16">
         <h2 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
           Let XauCloud watch Gold, qualify the setup, and manage the execution.
         </h2>
