@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.26.2",
+  "current_version": "v6.26.3",
   "website_product_name": "XauCloud",
   "mt5_market_product_name": "XauCloud",
   "releases": {
@@ -23,6 +23,18 @@
       "ex5_sha256": "9c449a9a1b101ec6a3aa5069e4b6a671fcec813ffa86ec246e450fd7fe2f4fc0",
       "customer_filename": "XauCloud-v6.26.2.ex5",
       "release_notes": "Now runs reliably in the MetaTrader 5 Strategy Tester for historical backtests (tester diagnostic self-tests no longer block startup; live/demo licensing and the full trading engine are unchanged). Keeps the 1000-pip profit ceiling. Connects to xaucloud.io. No change to live trading behaviour.",
+      "stable_status": false
+    },
+    "v6.26.3": {
+      "version": "v6.26.3",
+      "edition": "Outlook delayed execution + authoritative Outlook SL + 1000-pip ceiling",
+      "source_commit": "a220cb6a5f9273b20908147fa57ac919433a5f88",
+      "build_timestamp": "2026-08-08T08:17:52Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe via Wine, Mac live install)",
+      "ex5_filename": "XauCloud-v6.26.3.ex5",
+      "ex5_sha256": "31851810efa51aa2844930bd42e89bdfa6015c0ab15ca2ab56ddec6f46efbde7",
+      "customer_filename": "XauCloud-v6.26.3.ex5",
+      "release_notes": "Market Outlook signals that fire real trades now wait the same 2-3 minute entry delay as normal trades (one delay only), re-validate on execution, and use the signal's own stop-loss - recalculating position size from the actual entry price to that stop. If the stop is no longer valid at execution, the trade is skipped rather than opened with a substitute stop. Keeps the 1000-pip profit ceiling. Connects to xaucloud.io. No change to normal-entry evidence logic, risk %, profit floor, 70% peak protection, 45% giveback, runner, 10-minute extension, or exit rules.",
       "stable_status": true
     }
   }
