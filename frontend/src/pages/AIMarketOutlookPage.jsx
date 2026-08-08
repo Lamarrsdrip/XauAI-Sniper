@@ -420,7 +420,7 @@ function PrimaryStateCard({ contract }) {
     : meta.title;
   const confidence = contract?.confidence;
   return (
-    <section className={`relative overflow-hidden rounded-[28px] border p-6 sm:p-8 ${TONES[meta.tone]}`} aria-live="polite">
+    <section className={`relative overflow-hidden rounded-3xl border p-5 sm:p-6 ${TONES[meta.tone]}`} aria-live="polite">
       <div className="pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full bg-current opacity-[0.035] blur-2xl" />
       <div className="relative">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -785,7 +785,7 @@ export default function AIMarketOutlookPage() {
         description="M10 execution truth with hourly advisory context for XAUUSD Gold trading, from the XauCloud AI Director."
         path="/ai-market-outlook"
       />
-      <div className="mx-auto max-w-6xl px-4 pb-16 pt-[max(1.5rem,env(safe-area-inset-top))] sm:px-6">
+      <div className="mx-auto max-w-6xl px-4 pb-12 pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-6">
         <div className="mb-6 flex items-center gap-3">
           <button onClick={() => navigate(-1)} className="rounded-full border border-white/10 p-2 hover:border-white/25">
             <ArrowLeft className="h-4 w-4" />

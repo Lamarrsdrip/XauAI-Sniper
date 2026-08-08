@@ -54,7 +54,7 @@ export default function PerformancePage() {
         path="/performance"
       />
       <Header activeSection="" onNavigate={() => {}} goldPrice={null} />
-      <div className="mx-auto max-w-4xl px-4 py-14 md:px-8 md:py-20">
+      <div className="mx-auto max-w-4xl px-4 py-11 md:px-8 md:py-16">
         <Link to="/" className="inline-flex items-center gap-2 text-[13px] text-white/45 hover:text-white transition">
           <ArrowLeft size={14} weight="bold" /> Back to XauCloud
         </Link>
