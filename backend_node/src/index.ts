@@ -39,6 +39,7 @@ import { registerAdminDashboardRoutes } from "./routes/admin/dashboard.js";
 import { registerAdminPinsRoutes } from "./routes/admin/pins.js";
 import { registerAdminConfigsRoutes } from "./routes/admin/configs.js";
 import { registerAdminAccountRoutes } from "./routes/admin/account.js";
+import { registerAdminEmailRoutes } from "./routes/admin/email.js";
 import { registerAdminReleasesRoutes } from "./routes/admin/releases.js";
 import { registerDownloadRoutes } from "./routes/downloads.js";
 import { registerPerformanceRoutes } from "./routes/performance.js";
@@ -176,6 +177,7 @@ async function main(): Promise<void> {
       await registerAdminPinsRoutes(api);
       await registerAdminConfigsRoutes(api);
       await registerAdminAccountRoutes(api);
+      await registerAdminEmailRoutes(api);
       await registerAdminReleasesRoutes(api);
       await registerDownloadRoutes(api);
       await registerPerformanceRoutes(api);

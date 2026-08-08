@@ -471,21 +471,6 @@ function Toggle({ value, onChange }) {
   );
 }
 
-function NumField({ label, value, onChange, suffix="%", min=0, max, step="0.01", note }) {
-  return (
-    <label className="block">
-      <span className="block text-[12px] font-medium text-white/55 mb-1.5">{label}</span>
-      <div className="flex items-center rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 focus-within:border-gold-300/40 transition">
-        <input type="number" inputMode="decimal" min={min} max={max} step={step} value={value}
-          onChange={e=>onChange(Number(e.target.value))}
-          className="min-w-0 flex-1 bg-transparent py-2.5 text-[13px] font-semibold text-white outline-none" />
-        <span className="ml-2 text-[11px] text-white/30">{suffix}</span>
-      </div>
-      {note && <span className="mt-1 block text-[11px] text-white/30 leading-4">{note}</span>}
-    </label>
-  );
-}
-
 function CommandModal({ command, onCancel, onSubmit, busy, message, licenseKey }) {
   const [key, setKey] = useState(licenseKey||"");
   useEffect(()=>{ if(licenseKey) setKey(licenseKey); },[licenseKey]);
@@ -1628,94 +1613,6 @@ function ActivityPage({ events, filter, setFilter, onForceOpen }) {
 }
 
 // ─── Control ──────────────────────────────────────────────────────────────────
-// v6.9.0 — Trading Universe (architecture phase). Index Mode toggle is
-// intentionally disabled with an explanatory note: no real, tested index
-// entry strategy exists yet, and the EA's own InpIndexModeLogOnly safety
-// switch is what actually prevents index trades — this panel is settings
-// storage + visibility, not a live trading control, until that changes.
-function TradingUniverseCard({ linked, setActive }) {
-  const [settings, setSettings] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-
-  const fetchSettings = useCallback(async () => {
-    try { const r = await commandAxios.get("/cloud/trading-universe"); setSettings(r.data); }
-    catch { /* left as null — card shows a load-failed state */ }
-  }, []);
-  useEffect(() => { fetchSettings(); }, [fetchSettings]);
-
-  const save = async () => {
-    if (!settings) return;
-    setBusy(true); setMsg("");
-    try {
-      const r = await commandAxios.post("/cloud/trading-universe", settings);
-      setSettings(r.data.settings);
-      setMsg("Saved.");
-    } catch (e) { setMsg(e.response?.data?.detail || "Save failed"); }
-    finally { setBusy(false); }
-  };
-
-  const upd = (field, value) => setSettings(s => ({ ...s, [field]: value }));
-
-  return (
-    <Card title="TRADING UNIVERSE" subtitle="Gold Mode is live today. Index Mode is architecture-only — detection and diagnostics run, but no index trade will ever open until a real strategy ships.">
-      {!linked && (
-        <div className="mb-4 flex items-center gap-3 rounded-xl border border-gold-300/20 bg-gold-300/[0.06] p-3.5 text-[13px] text-gold-200">
-          <AlertTriangle className="h-4 w-4 flex-none text-gold-400" />
-          <span>Link your license first. <button onClick={() => setActive("license")} className="font-semibold underline">Open License</button></span>
-        </div>
-      )}
-      {!settings ? (
-        <div className="text-[13px] text-white/40">Loading…</div>
-      ) : (
-        <>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
-              <div>
-                <div className="text-[14px] font-semibold">Gold trading</div>
-                <div className="mt-0.5 text-[12px] text-white/40">Gold Mode strategy is live today.</div>
-              </div>
-              <Toggle value={settings.enable_gold} onChange={v => upd("enable_gold", v)} />
-            </div>
-            <div className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.06] bg-white/[0.015] p-4 opacity-60">
-              <div>
-                <div className="text-[14px] font-semibold">Index trading</div>
-                <div className="mt-0.5 text-[12px] text-white/40">Detection-only — no strategy enabled yet.</div>
-              </div>
-              <Toggle value={settings.enable_index} onChange={v => upd("enable_index", v)} />
-            </div>
-          </div>
-
-          {/* v6.25.2 owner directive 2026-07-17 -- audit found these controls
-              were stored (POST /cloud/trading-universe) but never read back by
-              anything, including /cloud/master/config (the only config the EA
-              actually polls) -- they looked identical in weight to genuinely
-              enforced controls elsewhere on this page (e.g. Prop Firm Mode)
-              but did nothing. Disclosing honestly, matching the Index card's
-              existing "Detection-only" convention, rather than implying real
-              enforcement that doesn't exist yet. Do not remove this note when
-              real EA-side enforcement ships -- replace it. */}
-          <div className="mt-3 rounded-xl border border-gold-300/15 bg-gold-300/[0.04] p-3 text-[11px] leading-4 text-gold-200/80">
-            Not yet enforced by the live EA — these values are saved here but the bot does not read them back yet. Use the EA's own MT5 inputs to actually cap open trades until this ships.
-          </div>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <NumField label="Max open trades — Gold" value={settings.max_open_trades_gold} onChange={v => upd("max_open_trades_gold", v)} suffix="trades" min={0} max={20} step="1" note="Not yet enforced — see note above" />
-            <NumField label="Max open trades — Index" value={settings.max_open_trades_index} onChange={v => upd("max_open_trades_index", v)} suffix="trades" min={0} max={20} step="1" note="Not yet enforced — see note above" />
-          </div>
-
-          {msg && <div className="mt-4 rounded-xl border border-gold-300/20 bg-gold-300/[0.07] p-3 text-[12px] text-gold-200">{msg}</div>}
-
-          <button onClick={save} disabled={busy}
-            className="mt-4 w-full rounded-2xl bg-gold-300 py-3 text-[13px] font-bold text-black disabled:opacity-35 disabled:cursor-not-allowed transition hover:bg-gold-200">
-            {busy ? "Saving…" : "Save trading universe settings"}
-          </button>
-        </>
-      )}
-    </Card>
-  );
-}
-
 function ControlPage({ heartbeat, online, commands, openCommand, commandMsg, licenseKey, linked, setActive, propFirm, propFirmForm, setPropFirmForm, markDirty, propFirmConfirmed, setPropFirmConfirmed, propFirmBusy, applyPropFirm }) {
   const openTrades = online ? Number(heartbeat?.open_positions || 0) : 0;
   const recent = (commands || []).slice(0, 8);
@@ -1741,9 +1638,6 @@ function ControlPage({ heartbeat, online, commands, openCommand, commandMsg, lic
         propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed}
         propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} setActive={setActive}
       />
-
-      {/* Trading universe (architecture phase) */}
-      <TradingUniverseCard linked={linked} setActive={setActive} />
 
       {/* Command history — now reflects Bot ON/OFF + Prop Firm acknowledgements */}
       {recent.length > 0 && (

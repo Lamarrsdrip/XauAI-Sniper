@@ -1,9 +1,11 @@
 import type { FastifyRequest } from "fastify";
 import { getSettings } from "./settings.js";
-import { getActiveNombaCredentials } from "./nombaConfig.js";
 import { TELEGRAM_SUPPORT_URL } from "./emailBranding.js";
 
-export const DEFAULT_PAYMENT_METHOD_ORDER = ["bank_transfer", "paystack", "nomba"];
+// Nomba removed as a payment option (owner directive 2026-08-08). Checkout now
+// offers Nigeria Bank Transfer + Paystack only. Dormant Nomba backend routes
+// remain for historical/in-flight transactions but are never surfaced.
+export const DEFAULT_PAYMENT_METHOD_ORDER = ["bank_transfer", "paystack"];
 export const PAYMENT_METHOD_COPY: Record<string, { label: string; description: string; instant: boolean }> = {
   bank_transfer: {
     label: "Nigeria Bank Transfer",
@@ -15,7 +17,6 @@ export const PAYMENT_METHOD_COPY: Record<string, { label: string; description: s
     description: "Card and supported Paystack payment methods. Instant fulfillment after verified payment.",
     instant: true,
   },
-  nomba: { label: "Nomba", description: "Awaiting approval. Not currently available.", instant: true },
 };
 
 export interface PaymentMethodsSettings {
@@ -91,15 +92,5 @@ export async function paymentMethodAvailability(_request: FastifyRequest): Promi
     /* own flag stays false */
   }
 
-  let nombaAvailable = false;
-  try {
-    if (settings.nomba_enabled) {
-      const [, creds] = await getActiveNombaCredentials();
-      nombaAvailable = Boolean(creds);
-    }
-  } catch {
-    /* own flag stays false */
-  }
-
-  return { bank_transfer: bankTransferAvailable, paystack: paystackAvailable, nomba: nombaAvailable };
+  return { bank_transfer: bankTransferAvailable, paystack: paystackAvailable };
 }

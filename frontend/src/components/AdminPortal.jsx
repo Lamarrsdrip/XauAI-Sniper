@@ -3,7 +3,7 @@ import axios from "axios";
 import {
   Key, GearSix, SignOut, ShieldCheck, Copy, Check, Trash, Plus,
   UserCircle, CurrencyNgn, Envelope, Lock, Eye, EyeSlash, ArrowLeft,
-  FloppyDisk, Lightning, Flame,
+  FloppyDisk,
   House, Pulse, TrendUp, Bell, ArrowClockwise, WarningCircle, Bank,
 } from "@phosphor-icons/react";
 
@@ -109,7 +109,7 @@ export default function AdminPortal({ api }) {
     { label: "Customers", tabs: [["pins", "Licenses", Key]] },
     { label: "Money",     tabs: [["transactions", "Payments", CurrencyNgn], ["bankTransfers", "Bank Transfers", Bank]] },
     { label: "Trading",   tabs: [["command", "Bot Ops", Pulse], ["performance", "Performance", TrendUp]] },
-    { label: "Comms",     tabs: [["notifications", "Notifications", Bell]] },
+    { label: "Comms",     tabs: [["notifications", "Notifications", Bell], ["email", "Email", Envelope]] },
     { label: "System",    tabs: [["settings", "Settings", GearSix], ["account", "Account", UserCircle]] },
   ];
   const ALL_TABS = NAV_GROUPS.flatMap((g) => g.tabs);
@@ -183,6 +183,7 @@ export default function AdminPortal({ api }) {
           {tab === "pins"          && <PinsTab          api={api} />}
           {tab === "command"       && <CommandOpsTab    api={api} />}
           {tab === "notifications" && <NotificationsTab api={api} />}
+          {tab === "email"         && <EmailTab         api={api} />}
           {tab === "performance"   && <PerformanceTab   api={api} />}
           {tab === "settings"      && <SettingsTab      api={api} />}
           {tab === "transactions"  && <TransactionsTab  api={api} />}
@@ -349,7 +350,7 @@ function DashboardTab({ api }) {
             {[
               ["Licenses", "Create, revoke, activate, and copy ASE license keys."],
               ["Bot Ops",  "Watch live heartbeat, command queue, and EA activity."],
-              ["Payments", "Review Nomba (and historical Paystack) transactions and generated license keys."],
+              ["Payments", "Review Paystack transactions and generated license keys."],
               ["Settings", "Set license price, payment keys, and email delivery."],
             ].map(([title, body]) => (
               <div key={title} className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-3">
@@ -372,6 +373,148 @@ function DashboardTab({ api }) {
 // visibility into push health, backed by GET /admin/notifications/health.
 // The only "not configured" state now is the admin not having entered a
 // real OneSignal App ID + REST API Key yet -- see the Settings tab.
+// ─── Email console ────────────────────────────────────────────────────────────
+// Compose and send a message to one address or broadcast to every customer.
+// Sending goes through whatever SMTP provider is configured in Settings
+// (Gmail or Hostinger support@xaucloud.io). Broadcast requires a confirm tick.
+function EmailTab({ api }) {
+  const [mode, setMode] = useState("single");
+  const [to, setTo] = useState("");
+  const [subject, setSubject] = useState("");
+  const [preview, setPreview] = useState("");
+  const [body, setBody] = useState("");
+  const [audience, setAudience] = useState(null);
+  const [confirmBroadcast, setConfirmBroadcast] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [testBusy, setTestBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [log, setLog] = useState([]);
+  const h = useMemo(() => auth(), []);
+
+  const loadMeta = useCallback(() => {
+    ax.get(`${api}/admin/email/audience`, h).then(r => setAudience(r.data)).catch(() => {});
+    ax.get(`${api}/admin/email/log`, h).then(r => setLog(r.data.entries || [])).catch(() => {});
+  }, [api, h]);
+  useEffect(() => { loadMeta(); }, [loadMeta]);
+
+  const canCompose = subject.trim() && body.trim();
+  const readyToSend = canCompose && (mode === "single" ? /@/.test(to) : confirmBroadcast);
+
+  const payload = () => ({ mode, to: to.trim(), subject, body_html: body, preview_text: preview, confirm: mode === "broadcast" });
+
+  const sendTest = async () => {
+    if (!canCompose) { setError("Add a subject and message first."); return; }
+    setTestBusy(true); setError(""); setResult(null);
+    try {
+      const r = await ax.post(`${api}/admin/email/test`, { subject, body_html: body, preview_text: preview }, h);
+      setResult({ kind: "test", to: r.data.to });
+    } catch (e) { setError(e.response?.data?.detail || "Test send failed."); }
+    finally { setTestBusy(false); }
+  };
+
+  const send = async () => {
+    if (!readyToSend) return;
+    setBusy(true); setError(""); setResult(null);
+    try {
+      const r = await ax.post(`${api}/admin/email/send`, payload(), h);
+      setResult({ kind: "send", ...r.data });
+      setConfirmBroadcast(false);
+      loadMeta();
+    } catch (e) { setError(e.response?.data?.detail || "Send failed."); }
+    finally { setBusy(false); }
+  };
+
+  const total = audience?.total ?? 0;
+
+  return (
+    <div className="max-w-2xl space-y-5" data-testid="admin-email-tab">
+      <CardSection title="Send email">
+        <p className="text-[12px] text-white/40 mb-4 leading-5">
+          Compose a message and send it to one person or broadcast it to every customer. Uses the SMTP
+          provider set in <span className="text-white/60">Settings → Email sending</span>. Always send a test to yourself first.
+        </p>
+
+        {/* Audience mode */}
+        <div className="mb-4 grid grid-cols-2 gap-2 rounded-xl bg-white/[0.04] p-1">
+          {[["single", "One recipient"], ["broadcast", `All customers${total ? ` · ${total}` : ""}`]].map(([m, label]) => (
+            <button key={m} onClick={() => { setMode(m); setConfirmBroadcast(false); }}
+              className={`rounded-lg px-3 py-2 text-[12.5px] font-semibold transition ${mode === m ? "bg-gold-300 text-black" : "text-white/55 hover:text-white"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="space-y-4">
+          {mode === "single" && (
+            <Field label="Recipient email">
+              <Input data-testid="email-to" type="email" value={to} onChange={e => setTo(e.target.value)} placeholder="customer@email.com" />
+            </Field>
+          )}
+          <Field label="Subject">
+            <Input data-testid="email-subject" value={subject} onChange={e => setSubject(e.target.value)} placeholder="A short, clear subject line" />
+          </Field>
+          <Field label="Preview text (optional)">
+            <Input data-testid="email-preview" value={preview} onChange={e => setPreview(e.target.value)} placeholder="The grey line shown after the subject in inboxes" />
+          </Field>
+          <Field label="Message">
+            <textarea data-testid="email-body" value={body} onChange={e => setBody(e.target.value)} rows={9}
+              placeholder="Write your message. Plain text is fine — line breaks are kept. Basic HTML (links, bold, lists) also works."
+              className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-[13px] leading-6 text-white outline-none focus:border-gold-300/40 resize-y" />
+            <p className="mt-1 text-[11px] text-white/35">Sent inside the branded XauCloud wrapper (logo header + footer added automatically).</p>
+          </Field>
+
+          {mode === "broadcast" && (
+            <label className="flex items-start gap-3 rounded-xl border border-gold-300/25 bg-gold-300/[0.06] p-3.5 cursor-pointer">
+              <input type="checkbox" checked={confirmBroadcast} onChange={e => setConfirmBroadcast(e.target.checked)} className="mt-0.5 h-4 w-4 flex-none accent-gold-300" />
+              <span className="text-[12.5px] leading-5 text-gold-100">
+                I understand this sends to <span className="font-bold">all {total} customer{total === 1 ? "" : "s"}</span>. This can't be unsent.
+              </span>
+            </label>
+          )}
+        </div>
+
+        {error && <div className="mt-4 rounded-xl border border-rose-400/20 bg-rose-500/10 p-3 text-[12px] text-rose-300">{error}</div>}
+        {result?.kind === "test" && <div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3 text-[12px] text-emerald-300">Test sent to {result.to}. Check that inbox before sending for real.</div>}
+        {result?.kind === "send" && (
+          <div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3 text-[12px] text-emerald-300">
+            Sent {result.sent} of {result.recipients}{result.failed ? ` · ${result.failed} failed` : ""}.
+          </div>
+        )}
+
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <Btn variant="ghost" onClick={sendTest} disabled={testBusy || !canCompose}>
+            <Envelope size={14} weight="bold" /> {testBusy ? "Sending…" : "Send test to me"}
+          </Btn>
+          <Btn onClick={send} disabled={busy || !readyToSend}>
+            <Envelope size={14} weight="bold" /> {busy ? "Sending…" : mode === "single" ? "Send email" : `Broadcast to ${total}`}
+          </Btn>
+        </div>
+      </CardSection>
+
+      <CardSection title="Recent sends">
+        {log.length === 0 ? (
+          <p className="py-4 text-center text-[13px] text-white/35">No emails sent yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {log.map((e, i) => (
+              <div key={i} className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-semibold text-white">{e.subject}</div>
+                  <div className="mt-0.5 text-[11px] text-white/35">{new Date(e.at).toLocaleString()} · {e.mode === "broadcast" ? "Broadcast" : "Single"}</div>
+                </div>
+                <span className={`flex-none rounded-full px-2.5 py-0.5 text-[11px] font-bold ${e.failed ? "bg-gold-300/12 text-gold-200" : "bg-emerald-400/12 text-emerald-300"}`}>
+                  {e.sent}/{e.recipients}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardSection>
+    </div>
+  );
+}
+
 function NotificationsTab({ api }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -771,33 +914,8 @@ function PinsTab({ api }) {
   );
 }
 
-// ─── Nomba payment settings ───────────────────────────────────────────────────
-function NombaCredentialFields({ env, values, onChange, existing }) {
-  const set = (field) => (e) => onChange(env, field, e.target.value);
-  const ex = existing || {};
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <Field label="Client ID">
-        <Input value={values.client_id} onChange={set("client_id")} className="font-mono"
-          placeholder={ex.client_id?.configured ? `Configured (${ex.client_id.preview})` : "Enter Client ID"} />
-      </Field>
-      <Field label="Client Secret">
-        <Input type="password" value={values.client_secret} onChange={set("client_secret")} className="font-mono"
-          placeholder={ex.client_secret?.configured ? "Configured — enter new to change" : "Enter Client Secret"} />
-      </Field>
-      <Field label="Account ID">
-        <Input value={values.account_id} onChange={set("account_id")} className="font-mono"
-          placeholder={ex.account_id?.configured ? `Configured (${ex.account_id.preview})` : "Enter Account ID"} />
-      </Field>
-      <Field label="Webhook Signature Key">
-        <Input type="password" value={values.webhook_signature_key} onChange={set("webhook_signature_key")} className="font-mono"
-          placeholder={ex.webhook_signature_key?.configured ? "Configured — enter new to change" : "Enter Webhook Signature Key"} />
-      </Field>
-    </div>
-  );
-}
-
-const PAYMENT_METHOD_LABELS = { bank_transfer: "Nigeria Bank Transfer", paystack: "Paystack", nomba: "Nomba" };
+// ─── Payment method priority ──────────────────────────────────────────────────
+const PAYMENT_METHOD_LABELS = { bank_transfer: "Nigeria Bank Transfer", paystack: "Paystack" };
 
 function PaymentMethodPrioritySettings({ api }) {
   const [settings, setSettings] = useState(null);
@@ -872,204 +990,6 @@ function PaymentMethodPrioritySettings({ api }) {
         ))}
       </div>
       {saving && <p className="mt-3 text-[11px] text-white/35">Saving…</p>}
-    </CardSection>
-  );
-}
-
-const NOMBA_EMPTY_ENV_FORM = { client_id: "", client_secret: "", account_id: "", webhook_signature_key: "" };
-const NOMBA_PAYMENT_METHODS = ["card", "transfer", "ussd", "qr"];
-
-function NombaSettingsSection({ api }) {
-  const [cfg, setCfg] = useState(null);
-  const [enabled, setEnabled] = useState(false);
-  const [environment, setEnvironment] = useState("sandbox");
-  const [sandboxForm, setSandboxForm] = useState(NOMBA_EMPTY_ENV_FORM);
-  const [productionForm, setProductionForm] = useState(NOMBA_EMPTY_ENV_FORM);
-  const [methods, setMethods] = useState(NOMBA_PAYMENT_METHODS);
-  const [currency, setCurrency] = useState("NGN");
-  const [description, setDescription] = useState("");
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState(null);
-  const [error, setError] = useState("");
-
-  const load = useCallback(() => {
-    ax.get(`${api}/admin/settings/nomba`).then(r => {
-      setCfg(r.data);
-      setEnabled(r.data.enabled);
-      setEnvironment(r.data.environment);
-      setMethods(r.data.allowed_payment_methods || NOMBA_PAYMENT_METHODS);
-      setCurrency(r.data.currency || "NGN");
-      setDescription(r.data.payment_description || "");
-    }).catch(() => {});
-  }, [api]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const productionTouched = productionForm.client_id || productionForm.client_secret ||
-    productionForm.account_id || productionForm.webhook_signature_key ||
-    (environment === "production" && cfg?.environment !== "production");
-
-  const setEnvField = (env, field, value) => {
-    (env === "sandbox" ? setSandboxForm : setProductionForm)(prev => ({ ...prev, [field]: value }));
-  };
-
-  const save = async () => {
-    setError(""); setSaving(true); setSaved(false);
-    const payload = { enabled, environment, allowed_payment_methods: methods, currency, payment_description: description };
-    if (sandboxForm.client_id) payload.sandbox_client_id = sandboxForm.client_id;
-    if (sandboxForm.client_secret) payload.sandbox_client_secret = sandboxForm.client_secret;
-    if (sandboxForm.account_id) payload.sandbox_account_id = sandboxForm.account_id;
-    if (sandboxForm.webhook_signature_key) payload.sandbox_webhook_signature_key = sandboxForm.webhook_signature_key;
-    if (productionForm.client_id) payload.production_client_id = productionForm.client_id;
-    if (productionForm.client_secret) payload.production_client_secret = productionForm.client_secret;
-    if (productionForm.account_id) payload.production_account_id = productionForm.account_id;
-    if (productionForm.webhook_signature_key) payload.production_webhook_signature_key = productionForm.webhook_signature_key;
-    if (productionTouched) {
-      if (!currentPassword) { setError("Enter your current admin password to change production settings."); setSaving(false); return; }
-      payload.current_password = currentPassword;
-    }
-    try {
-      await ax.put(`${api}/admin/settings/nomba`, payload);
-      setSaved(true); setTimeout(() => setSaved(false), 3000);
-      setSandboxForm(NOMBA_EMPTY_ENV_FORM); setProductionForm(NOMBA_EMPTY_ENV_FORM); setCurrentPassword("");
-      load();
-    } catch (e) {
-      setError(e.response?.data?.detail || "Failed to save Nomba settings.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const testConnection = async () => {
-    setTesting(true); setTestResult(null);
-    try {
-      const r = await ax.post(`${api}/admin/settings/nomba/test-connection`);
-      setTestResult(r.data);
-    } catch (e) {
-      setTestResult({ success: false, message: e.response?.data?.detail || "Test connection failed." });
-    } finally {
-      setTesting(false);
-      load();
-    }
-  };
-
-  const toggleMethod = (m) => {
-    setMethods(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
-  };
-
-  if (!cfg) return null;
-  const activeEnvView = environment === "sandbox" ? cfg.sandbox : cfg.production;
-
-  return (
-    <CardSection
-      title="Nomba payment configuration"
-      action={
-        <label className="flex items-center gap-2 text-[11px] text-white/50 cursor-pointer">
-          <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} className="accent-gold-300" />
-          Enable Nomba Payments
-        </label>
-      }
-    >
-      {!cfg.encryption_configured && (
-        <div className="mb-4 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-[12px] text-red-300">
-          PAYMENT_CONFIG_ENCRYPTION_KEY is not set on the server. Nomba credentials cannot be saved until this
-          environment variable is configured — see audits/nomba_migration/ for setup instructions.
-        </div>
-      )}
-
-      <div className="space-y-5">
-        <Field label="Environment">
-          <div className="flex gap-2">
-            {["sandbox", "production"].map(env => (
-              <button key={env} onClick={() => setEnvironment(env)}
-                className={`flex-1 rounded-xl border px-4 py-2.5 text-[12px] font-bold uppercase tracking-wide transition ${
-                  environment === env ? "border-gold-300/50 bg-gold-300/10 text-gold-200" : "border-white/[0.08] bg-white/[0.03] text-white/50 hover:text-white/80"
-                }`}>
-                {env}
-              </button>
-            ))}
-          </div>
-          <p className="mt-1.5 text-[11px] text-white/35">
-            Status: {activeEnvView?.last_validation_ok === true && <Badge tone="green">Last test passed</Badge>}
-            {activeEnvView?.last_validation_ok === false && <Badge tone="red">Last test failed</Badge>}
-            {activeEnvView?.last_validation_ok == null && <Badge tone="neutral">Not tested yet</Badge>}
-            {activeEnvView?.last_validated_at && <span className="ml-2 text-white/30">({new Date(activeEnvView.last_validated_at).toLocaleString()})</span>}
-          </p>
-        </Field>
-
-        <div className="rounded-xl border border-white/[0.06] p-4">
-          <div className="mb-3 text-[11px] font-bold uppercase tracking-wide text-white/40">Sandbox credentials</div>
-          <NombaCredentialFields env="sandbox" values={sandboxForm} onChange={setEnvField} existing={cfg.sandbox} />
-        </div>
-
-        <div className="rounded-xl border border-gold-300/15 bg-gold-300/[0.02] p-4">
-          <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-gold-200/70">Production credentials</div>
-          <p className="mb-3 text-[11px] text-white/35">Changing any production field requires your current admin password below.</p>
-          <NombaCredentialFields env="production" values={productionForm} onChange={setEnvField} existing={cfg.production} />
-        </div>
-
-        {productionTouched && (
-          <Field label="Current admin password (required to change production settings)">
-            <Input type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} placeholder="••••••••" />
-          </Field>
-        )}
-
-        <Field label="Allowed payment methods">
-          <div className="flex flex-wrap gap-2">
-            {NOMBA_PAYMENT_METHODS.map(m => (
-              <button key={m} onClick={() => toggleMethod(m)}
-                className={`rounded-full border px-3.5 py-1.5 text-[11px] font-bold uppercase transition ${
-                  methods.includes(m) ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-white/[0.08] bg-white/[0.03] text-white/40"
-                }`}>
-                {m}
-              </button>
-            ))}
-          </div>
-        </Field>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Field label="Currency">
-            <Input value={currency} onChange={e => setCurrency(e.target.value.toUpperCase())} className="font-mono" />
-          </Field>
-          <Field label="Payment description">
-            <Input value={description} onChange={e => setDescription(e.target.value)} placeholder="XauCloud EA Lifetime License" />
-          </Field>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Field label="Callback URL (read-only, copy into your Nomba dashboard)">
-            <div className="flex gap-2">
-              <Input value={cfg.callback_url} readOnly className="font-mono text-white/50" />
-              <Btn variant="ghost" onClick={() => navigator.clipboard.writeText(cfg.callback_url)}><Copy size={14} /></Btn>
-            </div>
-          </Field>
-          <Field label="Webhook URL (read-only, copy into your Nomba dashboard)">
-            <div className="flex gap-2">
-              <Input value={cfg.webhook_url} readOnly className="font-mono text-white/50" />
-              <Btn variant="ghost" onClick={() => navigator.clipboard.writeText(cfg.webhook_url)}><Copy size={14} /></Btn>
-            </div>
-          </Field>
-        </div>
-
-        {error && <div className="text-[12px] text-rose-400 font-mono">{error}</div>}
-        {testResult && (
-          <div className={`rounded-xl border px-4 py-3 text-[12px] ${testResult.success ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-red-400/20 bg-red-500/10 text-red-300"}`}>
-            {testResult.message}
-          </div>
-        )}
-
-        <div className="flex items-center gap-3 pt-2 border-t border-white/[0.06]">
-          <Btn onClick={save} disabled={saving}>
-            <FloppyDisk size={15} /> {saving ? "Saving…" : saved ? "Saved ✓" : "Save Configuration"}
-          </Btn>
-          <Btn variant="ghost" onClick={testConnection} disabled={testing}>
-            <Lightning size={15} /> {testing ? "Testing…" : "Test Connection"}
-          </Btn>
-        </div>
-      </div>
     </CardSection>
   );
 }
@@ -1154,14 +1074,12 @@ function SettingsTab({ api }) {
               <span className="text-white/50">₦</span>
               <Input data-testid="settings-price" type="number" value={priceNaira} onChange={e => setPriceNaira(parseInt(e.target.value) || 0)} className="font-mono" />
             </div>
-            <p className="mt-1 text-[11px] text-white/35">Current: ₦{priceNaira?.toLocaleString()} — used by both the Nomba checkout below and any still-resolving Paystack transaction.</p>
+            <p className="mt-1 text-[11px] text-white/35">Current: ₦{priceNaira?.toLocaleString()} — used by the Paystack checkout and Nigeria bank-transfer orders.</p>
           </Field>
         </div>
       </CardSection>
 
       <PaymentMethodPrioritySettings api={api} />
-
-      <NombaSettingsSection api={api} />
 
       <CardSection title="Paystack (active — second payment option)">
         <p className="text-[12px] text-white/40 mb-4 leading-5">

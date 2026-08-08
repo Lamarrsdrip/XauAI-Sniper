@@ -20,7 +20,12 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
   const adminPassword = adminPasswordEnv || (generatedPassword = randomBytes(18).toString("base64url"));
 
   const existing = await db.collection("users").findOne({ email: adminEmail });
-  if (!existing) {
+  // Never seed a second admin: if the owner has changed their login email in
+  // the Account tab (e.g. to admin@ai.xaucloud.io), the seed-email lookup above
+  // won't match, but an admin still exists — seeding again would create a
+  // duplicate account with a random password. Only seed when NO admin exists.
+  const anyAdmin = existing ?? (await db.collection("users").findOne({ role: "admin" }));
+  if (!anyAdmin) {
     await db.collection("users").insertOne({
       email: adminEmail,
       password_hash: await hashPassword(adminPassword),
@@ -35,7 +40,7 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
     } else {
       log.info(`Admin seeded: ${adminEmail}`);
     }
-  } else if (adminPasswordEnv && !(await verifyPassword(adminPassword, String(existing["password_hash"] ?? "")))) {
+  } else if (existing && adminPasswordEnv && !(await verifyPassword(adminPassword, String(existing["password_hash"] ?? "")))) {
     await db.collection("users").updateOne({ email: adminEmail }, { $set: { password_hash: await hashPassword(adminPassword) } });
     log.info("Admin password updated");
   }
