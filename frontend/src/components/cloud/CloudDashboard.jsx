@@ -1842,32 +1842,85 @@ function PropFirmSection({ online, linked, propFirm, commandMsg, propFirmForm, s
 // the anonymous public page where it always 401'd for a first-time visitor
 // anyway. Same backend contract as before: POST /download/request-token
 // (cookie-authenticated) -> short-lived signed URL -> GET /download/ea-release.
+// iOS/iPadOS can't silently write an .ex5 to disk from the web — a direct
+// navigation just dumps the user into the blank "Open in…" system preview.
+// So on iOS we open a compact sheet and use the native Web Share sheet
+// (Save to Files / AirDrop) when available. Desktop keeps a normal attachment
+// download. iPadOS 13+ reports as "MacIntel" but has touch points.
+function isIosLike() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  if (/iPad|iPhone|iPod/.test(ua)) return true;
+  return navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1;
+}
+
 function EaDownloadCard({ hasLicense, release }) {
   const [info, setInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   useEffect(() => {
     commandAxios.get("/download/info").then(r => setInfo(r.data)).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
-  const requestDownload = async () => {
+  const available = info?.available !== false;
+  const version = info?.version || "Published release";
+  const filename = info?.filename || `XauCloud-${String(version).replace(/^v/i, "")}.ex5`;
+  const updateAvailable = release?.update_available;
+
+  const requestSignedUrl = async () => {
+    const { data } = await commandAxios.post("/download/request-token");
+    return `${API}${data.download_url}`;
+  };
+  const handleDownloadError = (e) => {
+    setError(e?.response?.status === 403
+      ? "No active license linked to your account yet. Link your license above first."
+      : (e?.response?.data?.detail || "Could not start download. Please try again."));
+  };
+
+  // Desktop / Windows / Mac: authoritative attachment download (server already
+  // sends Content-Disposition: attachment with the resolved filename).
+  const desktopDownload = async () => {
     setDownloading(true); setError("");
     try {
-      const { data } = await commandAxios.post("/download/request-token");
-      window.location.href = `${API}${data.download_url}`;
-    } catch (e) {
-      setError(e.response?.status === 403
-        ? "No active license linked to your account yet. Link your license above first."
-        : (e.response?.data?.detail || "Could not start download. Please try again."));
-    }
+      const url = await requestSignedUrl();
+      const a = document.createElement("a");
+      a.href = url; a.rel = "noopener"; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+    } catch (e) { handleDownloadError(e); }
     setDownloading(false);
   };
 
-  const available = info?.available !== false;
-  const version = info?.version || "Published release";
-  const updateAvailable = release?.update_available;
+  // iOS/iPadOS: fetch the signed .ex5 and hand it to the native share sheet
+  // (Save to Files, AirDrop to the Windows/VPS machine, etc.). Falls back to a
+  // plain navigation only if Web Share with files isn't available.
+  const iosShare = async () => {
+    setDownloading(true); setError("");
+    try {
+      const url = await requestSignedUrl();
+      try {
+        const res = await fetch(url, { credentials: "include" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const file = new File([blob], filename, { type: "application/octet-stream" });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: "XauCloud EA", text: filename });
+        } else {
+          const objUrl = URL.createObjectURL(blob);
+          window.location.href = objUrl;
+          setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
+        }
+        setSheetOpen(false);
+      } catch {
+        window.location.href = url; // last resort: system handler
+      }
+    } catch (e) { handleDownloadError(e); }
+    setDownloading(false);
+  };
+
+  const onPrimaryClick = () => (isIosLike() ? setSheetOpen(true) : desktopDownload());
 
   return (
     <Card title="Download EA">
@@ -1896,11 +1949,34 @@ function EaDownloadCard({ hasLicense, release }) {
       )}
 
       {error && <div className="mt-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-[12px] text-rose-300">{error}</div>}
-      <button onClick={requestDownload} disabled={downloading || loading || !available || !hasLicense}
+      <button onClick={onPrimaryClick} disabled={downloading || loading || !available || !hasLicense}
         className="mt-4 w-full rounded-xl bg-gold-300 px-5 py-3 text-[13px] font-extrabold text-black transition hover:bg-gold-200 disabled:opacity-40">
         {downloading ? "Preparing download…" : !hasLicense ? "Link a license to download" : !available ? "No release available"
-          : updateAvailable ? "Download and Install Latest Version" : `Download ${version} .EX5`}
+          : updateAvailable ? "Download and install latest version" : "Download latest EA"}
       </button>
+
+      {/* iOS/iPad polished flow */}
+      <AK.Sheet open={sheetOpen} onClose={() => setSheetOpen(false)} title="Install XauCloud EA">
+        <p className="text-[13px] leading-5 text-white/55">
+          The EA runs in <span className="text-white/80">MetaTrader 5</span> on Windows or your Windows VPS — not on the phone itself.
+        </p>
+        <div className="mt-3 flex items-center justify-between rounded-xl bg-white/[0.04] px-3.5 py-2.5">
+          <span className="text-[12px] text-white/45">Latest version</span>
+          <span className="nums text-[13px] font-bold text-white/85">{version}</span>
+        </div>
+        <div className="mt-4 space-y-2.5">
+          <AK.Button size="lg" onClick={iosShare} disabled={downloading}>
+            <Download className="h-4 w-4" /> {downloading ? "Preparing…" : "Download / share file"}
+          </AK.Button>
+          <a href="/#how-it-works" target="_blank" rel="noopener noreferrer"
+            className="no-select flex w-full items-center justify-center gap-1.5 rounded-xl border border-white/[0.12] px-5 py-3.5 text-[14px] font-bold text-white/85 active:bg-white/[0.05]">
+            <BookOpen className="h-4 w-4" /> Installation guide
+          </a>
+        </div>
+        <p className="mt-3 text-[11.5px] leading-4 text-white/35">
+          Tip: choose <span className="text-white/55">Save to Files</span> or AirDrop it to your Windows machine, then load it in MT5 → Experts.
+        </p>
+      </AK.Sheet>
     </Card>
   );
 }
