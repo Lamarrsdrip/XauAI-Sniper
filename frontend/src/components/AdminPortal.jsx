@@ -3,7 +3,7 @@ import axios from "axios";
 import {
   Key, GearSix, SignOut, ShieldCheck, Copy, Check, Trash, Plus,
   UserCircle, CurrencyNgn, Envelope, Lock, Eye, EyeSlash, ArrowLeft,
-  FloppyDisk, ChartBar, Lightning, Flame,
+  FloppyDisk, Lightning, Flame,
   House, Pulse, TrendUp, Bell, ArrowClockwise, WarningCircle, Bank,
 } from "@phosphor-icons/react";
 
@@ -108,7 +108,7 @@ export default function AdminPortal({ api }) {
     { label: "Overview",  tabs: [["dashboard", "Dashboard", House]] },
     { label: "Customers", tabs: [["pins", "Licenses", Key]] },
     { label: "Money",     tabs: [["transactions", "Payments", CurrencyNgn], ["bankTransfers", "Bank Transfers", Bank]] },
-    { label: "Trading",   tabs: [["command", "Bot Ops", Pulse], ["performance", "Performance", TrendUp], ["configurator", "EA Config", ChartBar]] },
+    { label: "Trading",   tabs: [["command", "Bot Ops", Pulse], ["performance", "Performance", TrendUp]] },
     { label: "Comms",     tabs: [["notifications", "Notifications", Bell]] },
     { label: "System",    tabs: [["settings", "Settings", GearSix], ["account", "Account", UserCircle]] },
   ];
@@ -185,7 +185,6 @@ export default function AdminPortal({ api }) {
           {tab === "notifications" && <NotificationsTab api={api} />}
           {tab === "performance"   && <PerformanceTab   api={api} />}
           {tab === "settings"      && <SettingsTab      api={api} />}
-          {tab === "configurator"  && <ConfigTab        api={api} />}
           {tab === "transactions"  && <TransactionsTab  api={api} />}
           {tab === "bankTransfers" && <BankTransfersTab api={api} />}
           {tab === "account"       && <AccountTab api={api} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
@@ -1082,6 +1081,9 @@ function SettingsTab({ api }) {
   const [priceNaira, setPriceNaira] = useState(300000);
   const [smtpEmail, setSmtpEmail] = useState("");
   const [smtpPw, setSmtpPw] = useState("");
+  const [smtpHost, setSmtpHost] = useState("");
+  const [smtpPort, setSmtpPort] = useState(465);
+  const [mailFrom, setMailFrom] = useState("");
   const [onesignalAppId, setOnesignalAppId] = useState("");
   const [onesignalApiKey, setOnesignalApiKey] = useState("");
   // Customer email & admin notification redesign (owner spec, 2026-08-04)
@@ -1098,35 +1100,10 @@ function SettingsTab({ api }) {
   const [saved, setSaved] = useState(false);
   const h = useMemo(() => auth(), []);
 
-  // v6.9.0 — global Gold/Index Mode platform switches (architecture phase)
-  const [marketSettings, setMarketSettings] = useState(null);
-  const [marketSaving, setMarketSaving] = useState(false);
-  const [marketSaved, setMarketSaved] = useState(false);
-  const [indexSymbolsInput, setIndexSymbolsInput] = useState("");
-
-  useEffect(() => {
-    ax.get(`${api}/admin/market-mode-settings`, h).then(r => {
-      setMarketSettings(r.data);
-      setIndexSymbolsInput((r.data.allowed_index_symbols || []).join(", "));
-    }).catch(() => {});
-  }, [api, h]);
-
-  const saveMarketSettings = async () => {
-    setMarketSaving(true);
-    const payload = {
-      ...marketSettings,
-      allowed_index_symbols: indexSymbolsInput.split(",").map(s => s.trim().toUpperCase()).filter(Boolean),
-    };
-    try {
-      const r = await ax.put(`${api}/admin/market-mode-settings`, payload, h);
-      setMarketSettings(r.data.settings);
-      setMarketSaved(true); setTimeout(() => setMarketSaved(false), 3000);
-    } catch {} finally { setMarketSaving(false); }
-  };
-
   useEffect(() => {
     ax.get(`${api}/admin/settings`, h).then(r => {
       setSettings(r.data); setPriceNaira(r.data.pin_price_naira || 300000); setSmtpEmail(r.data.smtp_email || "");
+      setSmtpHost(r.data.smtp_host || ""); setSmtpPort(r.data.smtp_port || 465); setMailFrom(r.data.mail_from || "");
       setOnesignalAppId(r.data.onesignal_app_id || "");
       setEmailSenderName(r.data.email_sender_name || "XauCloud");
       setAdminNotificationEmail(r.data.admin_notification_email || "");
@@ -1147,6 +1124,9 @@ function SettingsTab({ api }) {
     updates.pin_price_kobo = Math.round(priceNaira * 100);
     if (smtpEmail) updates.smtp_email = smtpEmail;
     if (smtpPw) updates.smtp_password = smtpPw;
+    updates.smtp_host = smtpHost;
+    updates.smtp_port = Number(smtpPort) || 465;
+    updates.mail_from = mailFrom;
     if (onesignalAppId) updates.onesignal_app_id = onesignalAppId;
     if (onesignalApiKey) updates.onesignal_api_key = onesignalApiKey;
     updates.email_sender_name = emailSenderName;
@@ -1200,19 +1180,36 @@ function SettingsTab({ api }) {
         </div>
       </CardSection>
 
-      <CardSection title="Email configuration (Gmail SMTP)">
-        <p className="text-[12px] text-white/40 mb-4 leading-5">Auto-send license keys to buyers after payment. Use a Gmail App Password — <span className="text-white/60">myaccount.google.com → Security → App Passwords.</span></p>
+      <CardSection title="Email sending (SMTP)">
+        <p className="text-[12px] text-white/40 mb-4 leading-5">
+          Sends license keys, receipts and admin emails. Works with <span className="text-white/60">Gmail</span> (leave host blank —
+          use a Google App Password) <span className="text-white/60">or Hostinger</span> to send as your own domain, e.g.
+          <span className="text-white/60"> support@xaucloud.io</span> (host <span className="font-mono text-white/60">smtp.hostinger.com</span>, port 465).
+        </p>
         <div className="space-y-4">
-          <Field label="Gmail address">
+          <Field label="Login email / username">
             <div className="relative">
               <Envelope size={13} className="absolute left-3 top-3 text-white/30" />
-              <Input data-testid="settings-smtp-email" type="email" value={smtpEmail} onChange={e => setSmtpEmail(e.target.value)} placeholder="you@gmail.com" className="pl-9" />
+              <Input data-testid="settings-smtp-email" type="email" value={smtpEmail} onChange={e => setSmtpEmail(e.target.value)} placeholder="support@xaucloud.io or you@gmail.com" className="pl-9" />
             </div>
           </Field>
-          <Field label="App password">
+          <Field label="Password / App password">
             <Input data-testid="settings-smtp-password" type="password" value={smtpPw} onChange={e => setSmtpPw(e.target.value)}
-              placeholder={settings?.smtp_configured ? "Configured — enter new to change" : "xxxx xxxx xxxx xxxx"} className="font-mono" />
+              placeholder={settings?.smtp_configured ? "Configured — enter new to change" : "Hostinger mailbox password or Gmail app password"} className="font-mono" />
             <p className="mt-1 text-[11px] text-white/35">Status: <span className={settings?.smtp_configured ? "text-emerald-400" : "text-red-400"}>{settings?.smtp_configured ? "Configured" : "Not set"}</span></p>
+          </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="SMTP host">
+              <Input data-testid="settings-smtp-host" value={smtpHost} onChange={e => setSmtpHost(e.target.value)} placeholder="smtp.hostinger.com (blank = Gmail)" className="font-mono" />
+            </Field>
+            <Field label="SMTP port">
+              <Input data-testid="settings-smtp-port" type="number" value={smtpPort} onChange={e => setSmtpPort(parseInt(e.target.value) || 465)} placeholder="465" className="font-mono" />
+              <p className="mt-1 text-[11px] text-white/35">465 = SSL · 587 = STARTTLS</p>
+            </Field>
+          </div>
+          <Field label="From address (what customers see)">
+            <Input data-testid="settings-mail-from" type="email" value={mailFrom} onChange={e => setMailFrom(e.target.value)} placeholder="support@xaucloud.io (blank = login email)" />
+            <p className="mt-1 text-[11px] text-white/35">Most providers require this to match the login mailbox.</p>
           </Field>
         </div>
       </CardSection>
@@ -1277,89 +1274,6 @@ function SettingsTab({ api }) {
       <Btn onClick={save} disabled={saving} data-testid="settings-save-btn">
         <FloppyDisk size={14} weight="bold" /> {saving ? "Saving…" : saved ? "Saved!" : "Save settings"}
       </Btn>
-
-      {/* v6.9.0 — Market Modes (architecture phase). These gate what the
-          website/dashboard advertises, not live EA behavior — the EA's own
-          InpIndexModeLogOnly safety switch is what actually blocks index
-          trades until a real, tested index strategy exists. */}
-      <CardSection title="Market modes">
-        <p className="mb-4 text-[12px] leading-5 text-white/40">
-          Controls what the public site and Command Center offer. Gold Mode is the primary published product, but live M30 behavior and each broker deployment still require explicit runtime proof.
-          Index Mode is currently detection + diagnostics only — no index entry strategy has shipped yet, so
-          enabling it here only affects what customers see, not what the EA trades.
-        </p>
-        {!marketSettings ? (
-          <p className="text-[12px] text-white/35">Loading…</p>
-        ) : (
-          <div className="space-y-4">
-            <label className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-white/[0.03] p-3.5 cursor-pointer">
-              <span>
-                <span className="block text-[13px] font-semibold">Gold Mode enabled on platform</span>
-                <span className="mt-0.5 block text-[11px] text-white/38">Primary XAUUSD product; broker and terminal proof required.</span>
-              </span>
-              <input type="checkbox" checked={!!marketSettings.platform_gold_mode_enabled}
-                onChange={e => setMarketSettings(s => ({ ...s, platform_gold_mode_enabled: e.target.checked }))}
-                className="h-5 w-5 accent-gold-300" />
-            </label>
-            <label className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.06] bg-white/[0.015] p-3.5 cursor-pointer">
-              <span>
-                <span className="block text-[13px] font-semibold">Index Mode enabled on platform</span>
-                <span className="mt-0.5 block text-[11px] text-white/38">Detection-only until a real index strategy ships. Leave off until then.</span>
-              </span>
-              <input type="checkbox" checked={!!marketSettings.platform_index_mode_enabled}
-                onChange={e => setMarketSettings(s => ({ ...s, platform_index_mode_enabled: e.target.checked }))}
-                className="h-5 w-5 accent-gold-300" />
-            </label>
-            <Field label="Allowed index symbols (comma-separated)">
-              <Input value={indexSymbolsInput} onChange={e => setIndexSymbolsInput(e.target.value)}
-                placeholder="US30, NAS100, GER40" className="font-mono" />
-              <p className="mt-1 text-[11px] text-white/35">Only meaningful once a real index symbol/broker is confirmed — see docs/index_mode_state_and_scanner_design.md.</p>
-            </Field>
-            <Field label="Default trading universe">
-              <select value={marketSettings.default_trading_universe}
-                onChange={e => setMarketSettings(s => ({ ...s, default_trading_universe: e.target.value }))}
-                className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-[13px] text-white outline-none focus:border-gold-300/40">
-                <option value="GOLD_ONLY">Gold only</option>
-                <option value="INDEX_ONLY">Index only</option>
-                <option value="GOLD_AND_INDEX">Gold + Index</option>
-              </select>
-              <p className="mt-1 text-[11px] text-white/35">Stays Gold only until Index Mode is fully tested — matches the EA's own default.</p>
-            </Field>
-            <Btn onClick={saveMarketSettings} disabled={marketSaving}>
-              <FloppyDisk size={14} weight="bold" /> {marketSaving ? "Saving…" : marketSaved ? "Saved!" : "Save market modes"}
-            </Btn>
-          </div>
-        )}
-      </CardSection>
-    </div>
-  );
-}
-
-// ─── EA Config ────────────────────────────────────────────────────────────────
-function ConfigTab() {
-  const contract = [
-    ["Decision authority", "Source default: legacy M10. Intended normal mode after proof: three completed M10 snapshots feeding M30."],
-    ["Evidence weights", "Oldest 20% · middle 30% · newest 50%. Never use the forming candle."],
-    ["Entry timing", "Exactly one fresh 120–180 second timer per immutable candidate."],
-    ["Final outcome", "Execute if still valid and below 0.30R; otherwise cancel. Never wait another candle or slot."],
-    ["Structural stop", "Mandatory invalidation, widened exactly once by 1.20. Missing structure at expiry cancels."],
-    ["Risk and broker truth", "Configured core sizing remains 10%; broker acceptance plus matching truth is required."],
-  ];
-  return (
-    <div className="space-y-5" data-testid="admin-config-tab">
-      <div className="rounded-xl border border-gold-300/25 bg-gold-300/[0.06] px-4 py-3 text-[12px] leading-5 text-gold-200/90">
-        Read-only release contract. This admin page does <strong>not</strong> write trading parameters and cannot change a running EA. Runtime inputs must be set intentionally in MT5 and proven in the terminal journal.
-      </div>
-      <CardSection title="Owner-approved release contract">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {contract.map(([title, body]) => (
-            <div key={title} className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-4">
-              <div className="text-[12px] font-semibold text-white/80">{title}</div>
-              <p className="mt-2 text-[11px] leading-5 text-white/42">{body}</p>
-            </div>
-          ))}
-        </div>
-      </CardSection>
     </div>
   );
 }

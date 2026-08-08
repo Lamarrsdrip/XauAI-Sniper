@@ -26,6 +26,9 @@ const AdminSettingsUpdateSchema = z.object({
   pin_price_kobo: z.number().int().nullable().optional(),
   smtp_email: z.string().nullable().optional(),
   smtp_password: z.string().nullable().optional(),
+  smtp_host: z.string().nullable().optional(),
+  smtp_port: z.number().int().nullable().optional(),
+  mail_from: z.string().nullable().optional(),
   onesignal_app_id: z.string().nullable().optional(),
   onesignal_api_key: z.string().nullable().optional(),
   email_sender_name: z.string().nullable().optional(),
@@ -119,6 +122,9 @@ export async function registerAdminSettingsRoutes(app: FastifyInstance): Promise
       pin_price_naira: priceKobo / 100,
       smtp_email: s["smtp_email"] ?? "",
       smtp_configured: Boolean(sp),
+      smtp_host: s["smtp_host"] ?? "",
+      smtp_port: Number(s["smtp_port"]) > 0 ? Number(s["smtp_port"]) : 465,
+      mail_from: s["mail_from"] ?? "",
       onesignal_app_id: s["onesignal_app_id"] ?? "",
       onesignal_api_key_configured: Boolean(osk),
       onesignal_api_key_preview: osk.length > 10 ? `${osk.slice(0, 6)}...${osk.slice(-4)}` : osk ? "set" : "not set",
@@ -167,6 +173,9 @@ export async function registerAdminSettingsRoutes(app: FastifyInstance): Promise
     if (req.pin_price_kobo !== undefined && req.pin_price_kobo !== null) updates["pin_price_kobo"] = req.pin_price_kobo;
     if (req.smtp_email !== undefined && req.smtp_email !== null) updates["smtp_email"] = req.smtp_email;
     if (req.smtp_password !== undefined && req.smtp_password !== null) updates["smtp_password"] = req.smtp_password;
+    if (req.smtp_host !== undefined && req.smtp_host !== null) updates["smtp_host"] = req.smtp_host.trim();
+    if (req.smtp_port !== undefined && req.smtp_port !== null) updates["smtp_port"] = req.smtp_port;
+    if (req.mail_from !== undefined && req.mail_from !== null) updates["mail_from"] = req.mail_from.trim().toLowerCase();
     if (req.onesignal_app_id !== undefined && req.onesignal_app_id !== null) updates["onesignal_app_id"] = req.onesignal_app_id.trim();
     if (req.onesignal_api_key !== undefined && req.onesignal_api_key !== null) updates["onesignal_api_key"] = req.onesignal_api_key.trim();
     if (req.email_sender_name !== undefined && req.email_sender_name !== null) updates["email_sender_name"] = req.email_sender_name.trim();
