@@ -175,3 +175,25 @@
 .app-dark ::-webkit-scrollbar-track { background: #0D0E13; }
 .app-dark ::-webkit-scrollbar-thumb { background: #2A2D36; }
 .app-dark ::-webkit-scrollbar-thumb:hover { background: #3A3E49; }
+
+/* TipTap in the admin email composer. The delivered email never uses these
+   web styles; it is rendered server-side into table/inline-safe markup. */
+.xc-rich-editor {
+  min-height: 150px;
+  padding: 0.875rem;
+  color: rgba(255,255,255,.78);
+  font-size: 12px;
+  line-height: 1.7;
+  outline: none;
+}
+.xc-rich-editor-compact { min-height: 100px; }
+.xc-rich-editor p { margin: 0 0 .75rem; }
+.xc-rich-editor h1 { margin: .25rem 0 .75rem; font-size: 1.5rem; line-height: 1.25; font-weight: 800; color: white; }
+.xc-rich-editor h2 { margin: .25rem 0 .7rem; font-size: 1.25rem; line-height: 1.3; font-weight: 800; color: white; }
+.xc-rich-editor h3 { margin: .25rem 0 .6rem; font-size: 1rem; line-height: 1.35; font-weight: 800; color: white; }
+.xc-rich-editor ul, .xc-rich-editor ol { margin: 0 0 .75rem; padding-left: 1.25rem; }
+.xc-rich-editor ul { list-style: disc; }
+.xc-rich-editor ol { list-style: decimal; }
+.xc-rich-editor blockquote { margin: .5rem 0 .75rem; border-left: 3px solid #F3C969; padding-left: .8rem; color: rgba(255,255,255,.55); }
+.xc-rich-editor a { color: #F3C969; text-decoration: underline; }
+.xc-rich-editor p:last-child { margin-bottom: 0; }
