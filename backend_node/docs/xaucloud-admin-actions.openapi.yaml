@@ -1,0 +1,546 @@
+openapi: 3.1.0
+info:
+  title: XauCloud Admin Gateway
+  version: 2.0.0
+  description: Controlled 29-action ChatGPT administration gateway for XauCloud. Detailed backend capabilities remain internal. Consequential operations require prepare, explicit owner approval, a short-lived confirmation token and an idempotency key.
+servers:
+  - url: https://xaucloud.io/api
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    IdentityLookup:
+      type: object
+      properties:
+        user_id: { type: string, minLength: 1, maxLength: 160 }
+        email: { type: string, format: email, maxLength: 320 }
+        order_id: { type: string, minLength: 1, maxLength: 160 }
+        license_id: { type: string, minLength: 1, maxLength: 160 }
+    ConfirmationFields:
+      type: object
+      properties:
+        confirmation_token: { type: string, minLength: 20, maxLength: 300 }
+        idempotency_key: { type: string, minLength: 8, maxLength: 128 }
+paths:
+  /admin/actions/gateway/capabilities:
+    get:
+      operationId: getAdminCapabilities
+      summary: Discover exact XauCloud Admin capabilities, availability and confirmation requirements.
+      responses: { '200': { description: OK } }
+
+  /admin/actions/gateway/customer360:
+    post:
+      operationId: getCustomer360
+      summary: Consolidated sanitized customer view from user, email, order or license identity.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id: { type: string, maxLength: 160 }
+                email: { type: string, format: email, maxLength: 320 }
+                order_id: { type: string, maxLength: 160 }
+                license_id: { type: string, maxLength: 160 }
+      responses: { '200': { description: OK } }
+
+  /admin/actions/gateway/customer-diagnose:
+    post:
+      operationId: diagnoseCustomerIssue
+      summary: Diagnose why a customer did not receive access, fulfillment, license or delivery. Never remediates automatically.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id: { type: string, maxLength: 160 }
+                email: { type: string, format: email, maxLength: 320 }
+                order_id: { type: string, maxLength: 160 }
+                license_id: { type: string, maxLength: 160 }
+      responses: { '200': { description: Diagnosis } }
+
+  /admin/actions/gateway/users/query:
+    post:
+      operationId: queryUsers
+      summary: Search users, get a user, or inspect account access status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation]
+              properties:
+                operation: { type: string, enum: [search_users, get_user, get_account_access_status] }
+                q: { type: string, maxLength: 320 }
+                user_id: { type: string, maxLength: 160 }
+                email: { type: string, format: email, maxLength: 320 }
+                status: { type: string, enum: [active, disabled, all] }
+                limit: { type: integer, minimum: 1, maximum: 100 }
+      responses: { '200': { description: OK } }
+
+  /admin/actions/gateway/users/prepare:
+    post:
+      operationId: prepareUserAction
+      summary: Prepare a controlled user action. Does not execute it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, user_id]
+              properties:
+                operation: { type: string, enum: [disable_user, enable_user, resend_verification_email, send_password_reset, revoke_sessions, unlock_user] }
+                user_id: { type: string, maxLength: 160 }
+                reason: { type: string, maxLength: 500 }
+      responses: { '200': { description: Prepared }, '404': { description: Unsupported or unavailable } }
+
+  /admin/actions/gateway/users/execute:
+    post:
+      operationId: executeUserAction
+      summary: Execute only a previously prepared user action after explicit owner approval.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, user_id, confirmation_token, idempotency_key]
+              properties:
+                operation: { type: string, enum: [disable_user, enable_user, resend_verification_email, send_password_reset, revoke_sessions, unlock_user] }
+                user_id: { type: string, maxLength: 160 }
+                reason: { type: string, maxLength: 500 }
+                confirmation_token: { type: string, minLength: 20, maxLength: 300 }
+                idempotency_key: { type: string, minLength: 8, maxLength: 128 }
+      responses: { '200': { description: Executed } }
+
+  /admin/actions/gateway/licenses/query:
+    post:
+      operationId: queryLicenses
+      summary: Search licenses, inspect one, activation summary or license history.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation]
+              properties:
+                operation: { type: string, enum: [list_licenses, get_license, get_activation_summary, get_license_history] }
+                q: { type: string, maxLength: 320 }
+                license_id: { type: string, maxLength: 160 }
+                limit: { type: integer, minimum: 1, maximum: 100 }
+      responses: { '200': { description: OK } }
+
+  /admin/actions/gateway/licenses/prepare:
+    post:
+      operationId: prepareLicenseAction
+      summary: Prepare transfer, activation change, activation reset or license email resend.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, license_id]
+              properties:
+                operation: { type: string, enum: [transfer_license, deactivate_license, activate_license, reset_activation, resend_license_email] }
+                license_id: { type: string, maxLength: 160 }
+                new_email: { type: string, format: email, maxLength: 320 }
+                reason: { type: string, maxLength: 500 }
+      responses: { '200': { description: Prepared } }
+
+  /admin/actions/gateway/licenses/execute:
+    post:
+      operationId: executeLicenseAction
+      summary: Execute a prepared license action after explicit owner approval.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, license_id, confirmation_token, idempotency_key]
+              properties:
+                operation: { type: string, enum: [transfer_license, deactivate_license, activate_license, reset_activation, resend_license_email] }
+                license_id: { type: string, maxLength: 160 }
+                new_email: { type: string, format: email, maxLength: 320 }
+                reason: { type: string, maxLength: 500 }
+                confirmation_token: { type: string, minLength: 20, maxLength: 300 }
+                idempotency_key: { type: string, minLength: 8, maxLength: 128 }
+      responses: { '200': { description: Executed } }
+
+  /admin/actions/gateway/orders/query:
+    post:
+      operationId: queryOrdersPayments
+      summary: Inspect orders, failed payments, fulfillment recovery and refund eligibility.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation]
+              properties:
+                operation: { type: string, enum: [list_orders, get_order, failed_payments, recovery_status, refund_eligibility] }
+                q: { type: string, maxLength: 320 }
+                order_id: { type: string, maxLength: 160 }
+                status: { type: string, maxLength: 80 }
+                limit: { type: integer, minimum: 1, maximum: 100 }
+      responses: { '200': { description: OK } }
+
+  /admin/actions/gateway/orders/prepare:
+    post:
+      operationId: prepareOrderPaymentAction
+      summary: Prepare fulfillment recovery, purchase confirmation resend or supported refund.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, order_id]
+              properties:
+                operation: { type: string, enum: [retry_fulfillment, resend_purchase_confirmation, issue_refund] }
+                order_id: { type: string, maxLength: 160 }
+                amount_minor: { type: integer, minimum: 1 }
+                reason: { type: string, maxLength: 500 }
+      responses: { '200': { description: Prepared }, '404': { description: Unsupported capability } }
+
+  /admin/actions/gateway/orders/execute:
+    post:
+      operationId: executeOrderPaymentAction
+      summary: Execute a previously prepared order/payment action once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, order_id, confirmation_token, idempotency_key]
+              properties:
+                operation: { type: string, enum: [retry_fulfillment, resend_purchase_confirmation, issue_refund] }
+                order_id: { type: string, maxLength: 160 }
+                amount_minor: { type: integer, minimum: 1 }
+                reason: { type: string, maxLength: 500 }
+                confirmation_token: { type: string, minLength: 20, maxLength: 300 }
+                idempotency_key: { type: string, minLength: 8, maxLength: 128 }
+      responses: { '200': { description: Executed } }
+
+  /admin/actions/gateway/email/query:
+    post:
+      operationId: queryTransactionalEmail
+      summary: Inspect transactional templates and sanitized delivery records.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation]
+              properties:
+                operation: { type: string, enum: [list_templates, get_template, delivery_logs, get_delivery] }
+                template_id: { type: string, maxLength: 80 }
+                delivery_id: { type: string, maxLength: 160 }
+                limit: { type: integer, minimum: 1, maximum: 500 }
+      responses: { '200': { description: OK } }
+
+  /admin/actions/gateway/email/draft:
+    post:
+      operationId: manageTransactionalEmailDraft
+      summary: Save or preview a structured transactional email draft. Never sends it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, template_id]
+              properties:
+                operation: { type: string, enum: [save_template_draft, preview_template] }
+                template_id: { type: string, maxLength: 80 }
+                subject: { type: string, maxLength: 300 }
+                preheader: { type: string, maxLength: 300 }
+                document: { type: object, properties: { version: { type: integer }, blocks: { type: array, maxItems: 100, items: { type: object, properties: { id: { type: string }, type: { type: string }, title: { type: string }, text: { type: string }, body: { type: string }, label: { type: string }, url: { type: string } } } } } }
+                sample_context: { type: object, properties: { first_name: { type: string }, account_email: { type: string }, buyer_name: { type: string }, buyer_email: { type: string }, order_id: { type: string }, amount: { type: string } } }
+      responses: { '200': { description: Draft/preview } }
+
+  /admin/actions/gateway/email/prepare:
+    post:
+      operationId: prepareTransactionalEmailAction
+      summary: Prepare template publish, rollback or supported delivery retry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation]
+              properties:
+                operation: { type: string, enum: [publish_template, rollback_template, retry_delivery] }
+                template_id: { type: string, maxLength: 80 }
+                delivery_id: { type: string, maxLength: 160 }
+      responses: { '200': { description: Prepared } }
+
+  /admin/actions/gateway/email/execute:
+    post:
+      operationId: executeTransactionalEmailAction
+      summary: Execute a prepared transactional email action once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, confirmation_token, idempotency_key]
+              properties:
+                operation: { type: string, enum: [publish_template, rollback_template, retry_delivery] }
+                template_id: { type: string, maxLength: 80 }
+                delivery_id: { type: string, maxLength: 160 }
+                confirmation_token: { type: string, minLength: 20, maxLength: 300 }
+                idempotency_key: { type: string, minLength: 8, maxLength: 128 }
+      responses: { '200': { description: Executed } }
+
+  /admin/actions/gateway/support/query:
+    post:
+      operationId: querySupport
+      summary: List/get support tickets or customer support context.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation]
+              properties:
+                operation: { type: string, enum: [list_tickets, get_ticket, customer_context] }
+                ticket_id: { type: string, maxLength: 160 }
+                email: { type: string, format: email, maxLength: 320 }
+                limit: { type: integer, minimum: 1, maximum: 100 }
+      responses: { '200': { description: OK } }
+
+  /admin/actions/gateway/support/draft:
+    post:
+      operationId: manageSupportDraft
+      summary: Create a support reply draft or audited internal note. Draft does not send.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, ticket_id, body]
+              properties:
+                operation: { type: string, enum: [reply_draft, internal_note] }
+                ticket_id: { type: string, maxLength: 160 }
+                body: { type: string, minLength: 1, maxLength: 10000 }
+      responses: { '200': { description: Draft/note saved } }
+
+  /admin/actions/gateway/support/prepare:
+    post:
+      operationId: prepareSupportAction
+      summary: Prepare sending a reply, closing/reopening or assigning a ticket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, ticket_id]
+              properties:
+                operation: { type: string, enum: [send_reply, close_ticket, reopen_ticket, assign_ticket] }
+                ticket_id: { type: string, maxLength: 160 }
+                draft_id: { type: string, maxLength: 160 }
+                assignee: { type: string, maxLength: 160 }
+      responses: { '200': { description: Prepared } }
+
+  /admin/actions/gateway/support/execute:
+    post:
+      operationId: executeSupportAction
+      summary: Execute a previously prepared support action after explicit approval.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, ticket_id, confirmation_token, idempotency_key]
+              properties:
+                operation: { type: string, enum: [send_reply, close_ticket, reopen_ticket, assign_ticket] }
+                ticket_id: { type: string, maxLength: 160 }
+                draft_id: { type: string, maxLength: 160 }
+                assignee: { type: string, maxLength: 160 }
+                confirmation_token: { type: string, minLength: 20, maxLength: 300 }
+                idempotency_key: { type: string, minLength: 8, maxLength: 128 }
+      responses: { '200': { description: Executed } }
+
+  /admin/actions/gateway/content/query:
+    post:
+      operationId: queryContentAndNotifications
+      summary: Read controlled website content, notifications, push status/audience and live announcements.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation]
+              properties:
+                operation: { type: string, enum: [website_content, notifications, notification_status, notification_audience_count, live_announcement, landing_page] }
+                user_id: { type: string, maxLength: 160 }
+                audience: { type: string, enum: [all_authenticated_users, existing_customers, active_customers] }
+                resource_id: { type: string, maxLength: 160 }
+                limit: { type: integer, minimum: 1, maximum: 100 }
+      responses: { '200': { description: OK } }
+
+  /admin/actions/gateway/content/draft:
+    post:
+      operationId: manageContentDraft
+      summary: Create structured website, notification or approved replay publication drafts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation]
+              properties:
+                operation: { type: string, enum: [website_draft, notification_draft, replay_publication_draft] }
+                title: { type: string, maxLength: 160 }
+                body: { type: string, maxLength: 4000 }
+                slot: { type: string, enum: [homepage_hero_campaign, homepage_announcement, homepage_performance_feature, homepage_promo_banner, pricing_promo] }
+                audience: { type: string, enum: [all_authenticated_users, existing_customers, active_customers] }
+                destination: { type: string, enum: [homepage, command_center, purchase, performance, replay, login, support] }
+                replay_id: { type: string, maxLength: 160 }
+                content: { type: object, properties: { headline: { type: string }, subheadline: { type: string }, cta_label: { type: string }, cta_destination: { type: string } } }
+      responses: { '200': { description: Draft saved } }
+
+  /admin/actions/gateway/content/prepare:
+    post:
+      operationId: prepareContentAction
+      summary: Prepare website publish/rollback, notification send or replay publish/unpublish.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, resource_id]
+              properties:
+                operation: { type: string, enum: [publish_website, rollback_website, send_notification, publish_replay, unpublish_replay] }
+                resource_id: { type: string, maxLength: 160 }
+      responses: { '200': { description: Prepared } }
+
+  /admin/actions/gateway/content/execute:
+    post:
+      operationId: executeContentAction
+      summary: Execute a prepared content or notification action exactly once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, resource_id, confirmation_token, idempotency_key]
+              properties:
+                operation: { type: string, enum: [publish_website, rollback_website, send_notification, publish_replay, unpublish_replay] }
+                resource_id: { type: string, maxLength: 160 }
+                confirmation_token: { type: string, minLength: 20, maxLength: 300 }
+                idempotency_key: { type: string, minLength: 8, maxLength: 128 }
+      responses: { '200': { description: Executed } }
+
+  /admin/actions/gateway/replays-releases/query:
+    post:
+      operationId: queryReplaysReleases
+      summary: Read historical replays, replay trades, production release and approved release candidates.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation]
+              properties:
+                operation: { type: string, enum: [list_replays, get_replay, get_replay_trades, production_release, list_release_candidates, get_release_candidate, deployment_status] }
+                replay_id: { type: string, maxLength: 160 }
+                version: { type: string, maxLength: 160 }
+                offset: { type: integer, minimum: 0 }
+                limit: { type: integer, minimum: 1, maximum: 100 }
+      responses: { '200': { description: OK } }
+
+  /admin/actions/gateway/replays-releases/prepare:
+    post:
+      operationId: prepareReplayReleaseAction
+      summary: Prepare release promotion/rollback only if XauCloud has a verified automated release mechanism.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, version]
+              properties:
+                operation: { type: string, enum: [promote_release, rollback_release] }
+                version: { type: string, maxLength: 160 }
+      responses: { '404': { description: Intentionally unavailable when no verified automated deployment primitive exists } }
+
+  /admin/actions/gateway/replays-releases/execute:
+    post:
+      operationId: executeReplayReleaseAction
+      summary: Execute only a previously prepared approved release operation. Unavailable without a verified deployment primitive.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, version, confirmation_token, idempotency_key]
+              properties:
+                operation: { type: string, enum: [promote_release, rollback_release] }
+                version: { type: string, maxLength: 160 }
+                confirmation_token: { type: string, minLength: 20, maxLength: 300 }
+                idempotency_key: { type: string, minLength: 8, maxLength: 128 }
+      responses: { '404': { description: Intentionally unavailable when no verified deployment primitive exists } }
+
+  /admin/actions/gateway/diagnostics/query:
+    post:
+      operationId: queryDiagnosticsAuditAnalytics
+      summary: Query sanitized diagnostics, audit events and aggregate business analytics.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation]
+              properties:
+                operation: { type: string, enum: [system_health, service_status, integration_health, recent_errors, recent_warnings, audit_search, audit_event, dashboard_metrics, dashboard_metrics_range, compare_dashboard_periods, conversion_funnel, revenue_summary, license_summary, support_summary] }
+                limit: { type: integer, minimum: 1, maximum: 200 }
+                id: { type: string, maxLength: 160 }
+                email: { type: string, format: email, maxLength: 320 }
+                user_id: { type: string, maxLength: 160 }
+                license_id: { type: string, maxLength: 160 }
+                order_id: { type: string, maxLength: 160 }
+                ticket_id: { type: string, maxLength: 160 }
+                from: { type: string, format: date-time }
+                to: { type: string, format: date-time }
+      responses: { '200': { description: OK } }
+
+  /admin/actions/gateway/request-trace/{id}:
+    get:
+      operationId: getRequestTrace
+      summary: Explain a request/correlation id using sanitized diagnostics and audit records.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+      responses: { '200': { description: Trace } }

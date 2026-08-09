@@ -43,6 +43,7 @@ import { registerAdminEmailRoutes } from "./routes/admin/email.js";
 import { ensureGptEmailActionIndexes, registerGptEmailActionRoutes } from "./routes/admin/gptEmailActions.js";
 import { ensureMarketingActionInfrastructure, registerMarketingActionRoutes } from "./routes/admin/marketingActions.js";
 import { ensureAdminOpsInfrastructure, registerAdminOpsActionRoutes } from "./routes/admin/adminOpsActions.js";
+import { registerAdminGatewayActionRoutes } from "./routes/admin/adminGatewayActions.js";
 import { registerAdminReleasesRoutes } from "./routes/admin/releases.js";
 import { registerDownloadRoutes } from "./routes/downloads.js";
 import { registerPerformanceRoutes } from "./routes/performance.js";
@@ -211,6 +212,7 @@ async function main(): Promise<void> {
       await api.register(registerGptEmailActionRoutes);
       await registerMarketingActionRoutes(api);
       await api.register(registerAdminOpsActionRoutes);
+      await api.register(registerAdminGatewayActionRoutes);
       await registerAdminReleasesRoutes(api);
       await registerDownloadRoutes(api);
       await registerPerformanceRoutes(api);
