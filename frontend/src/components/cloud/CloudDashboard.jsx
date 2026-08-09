@@ -6,7 +6,7 @@ import {
   Clock3, Copy, Flame, Gauge, History, Home, KeyRound, LineChart, Loader2,
   LogOut, Menu, Pause, Play, RefreshCw, Settings, Shield,
   SlidersHorizontal, TerminalSquare, TrendingUp, Wifi, XCircle, AlertTriangle, Search, Zap,
-  Bell, GraduationCap, HelpCircle, Download, User, BookOpen, MessageCircle, ShieldCheck, Rocket, ArrowLeft, ChevronRight,
+  Bell, GraduationCap, HelpCircle, Download, User, BookOpen, MessageCircle, ShieldCheck, Rocket, ArrowLeft, ChevronRight, Target,
 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
