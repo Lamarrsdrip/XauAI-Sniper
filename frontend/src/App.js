@@ -27,6 +27,7 @@ import PerformancePage from "@/pages/PerformancePage";
 import PerformanceHistoryPage from "@/pages/PerformanceHistoryPage";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { API } from "@/lib/api";
+import { CampaignLandingPage, CommandCenterAnnouncements, WebsiteCampaignSlots } from "@/components/MarketingSurfaces";
 
 function MainDashboard() {
   const [activeSection, setActiveSection] = useState("overview");
@@ -58,6 +59,7 @@ function MainDashboard() {
   return (
     <div className="min-h-screen bg-[#060609]" data-testid="app-root">
       <Header activeSection={activeSection} onNavigate={scrollTo} goldPrice={goldPrice} />
+      <WebsiteCampaignSlots />
       <main>
         <section id="overview"><HeroSection goldPrice={goldPrice} /></section>
         <TrustStrip />
@@ -94,7 +96,8 @@ function App() {
           <Route path="/command" element={<CloudLanding />} />
           <Route path="/command/signup" element={<CloudSignup />} />
           <Route path="/command/login" element={<CloudLogin />} />
-          <Route path="/command/dashboard" element={<CloudDashboard />} />
+          <Route path="/command/dashboard" element={<><CommandCenterAnnouncements /><CloudDashboard /></>} />
+          <Route path="/campaign/:slug" element={<CampaignLandingPage />} />
           <Route path="/ai-market-outlook" element={<AIMarketOutlookPage />} />
           <Route path="/labs" element={<LabsPage />} />
           <Route path="/performance" element={<PerformancePage />} />

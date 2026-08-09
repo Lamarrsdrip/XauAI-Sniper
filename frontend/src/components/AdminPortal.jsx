@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import axios from "axios";
 import EmailComposer from "./admin/EmailComposer";
+import MarketingControl from "./admin/MarketingControl";
 import {
   Key, GearSix, SignOut, ShieldCheck, Copy, Check, Trash, Plus,
   UserCircle, CurrencyNgn, Envelope, Lock, Eye, EyeSlash, ArrowLeft,
-  FloppyDisk,
+  FloppyDisk, Megaphone,
   House, Pulse, TrendUp, Bell, ArrowClockwise, WarningCircle, Bank,
 } from "@phosphor-icons/react";
 
@@ -110,7 +111,7 @@ export default function AdminPortal({ api }) {
     { label: "Customers", tabs: [["pins", "Licenses", Key]] },
     { label: "Money",     tabs: [["transactions", "Payments", CurrencyNgn], ["bankTransfers", "Bank Transfers", Bank]] },
     { label: "Trading",   tabs: [["command", "Bot Ops", Pulse], ["performance", "Performance", TrendUp]] },
-    { label: "Comms",     tabs: [["notifications", "Notifications", Bell], ["email", "Email", Envelope]] },
+    { label: "Comms",     tabs: [["marketing", "Marketing", Megaphone], ["notifications", "Notifications", Bell], ["email", "Email", Envelope]] },
     { label: "System",    tabs: [["settings", "Settings", GearSix], ["account", "Account", UserCircle]] },
   ];
   const ALL_TABS = NAV_GROUPS.flatMap((g) => g.tabs);
@@ -185,6 +186,7 @@ export default function AdminPortal({ api }) {
           {tab === "command"       && <CommandOpsTab    api={api} />}
           {tab === "notifications" && <NotificationsTab api={api} />}
           {tab === "email"         && <EmailComposer    api={api} />}
+          {tab === "marketing"     && <MarketingControl api={api} />}
           {tab === "performance"   && <PerformanceTab   api={api} />}
           {tab === "settings"      && <SettingsTab      api={api} />}
           {tab === "transactions"  && <TransactionsTab  api={api} />}

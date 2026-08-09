@@ -12,6 +12,22 @@ export interface EmailSendResult {
   error?: string;
 }
 
+export interface ResolvedEmailSender {
+  name: string;
+  address: string;
+  formatted: string;
+}
+
+/** Resolves only the public sender identity; credentials never leave this service. */
+export async function resolveEmailSender(senderNameOverride?: string): Promise<ResolvedEmailSender> {
+  const settings = await getSettings();
+  const smtpEmail = String(settings["smtp_email"] ?? "").trim();
+  const address = String(settings["mail_from"] ?? settings["support_email"] ?? smtpEmail).trim() || smtpEmail;
+  const configuredName = String(settings["email_sender_name"] ?? "XauCloud").trim() || "XauCloud";
+  const name = senderNameOverride?.trim() || configuredName;
+  return { name, address, formatted: address ? `${name} <${address}>` : name };
+}
+
 /**
  * Shared SMTP sender. Defaults to Gmail SMTP_SSL (the original "Google app"
  * setup, kept working untouched), but host / port / from-address are now
@@ -33,10 +49,7 @@ export async function sendEmailDetailed(
   const host = String(settings["smtp_host"] ?? "").trim() || "smtp.gmail.com";
   const port = Number(settings["smtp_port"]) > 0 ? Number(settings["smtp_port"]) : 465;
   const secure = port === 465; // 465 = implicit TLS; 587 = STARTTLS
-  const configuredSender = String(settings["email_sender_name"] ?? "XauCloud").trim() || "XauCloud";
-  const senderName = options.senderName?.trim() || configuredSender;
-  // Visible From: explicit mail_from, else support_email, else the SMTP login.
-  const fromAddress = String(settings["mail_from"] ?? settings["support_email"] ?? smtpEmail).trim() || smtpEmail;
+  const sender = await resolveEmailSender(options.senderName);
   try {
     const transporter = nodemailer.createTransport({
       host,
@@ -45,10 +58,10 @@ export async function sendEmailDetailed(
       auth: { user: smtpEmail, pass: smtpPassword },
     });
     await transporter.sendMail({
-      from: { name: senderName, address: fromAddress },
+      from: { name: sender.name, address: sender.address },
       // Some providers (incl. Hostinger) reject a From that differs from the
       // authenticated mailbox; keep replies flowing to the visible address.
-      replyTo: options.replyTo?.trim() || fromAddress,
+      replyTo: options.replyTo?.trim() || sender.address,
       to: toEmail,
       subject,
       html,

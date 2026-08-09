@@ -41,6 +41,8 @@ export const env = {
   PAYSTACK_PIN_PRICE_KOBO: Number(process.env["PAYSTACK_PIN_PRICE_KOBO"] ?? "30000000"),
   SMTP_EMAIL: process.env["SMTP_EMAIL"] ?? "",
   SMTP_PASSWORD: process.env["SMTP_PASSWORD"] ?? "",
+  XAUCLOUD_GPT_ACTION_SECRET: (process.env["XAUCLOUD_GPT_ACTION_SECRET"] ?? "").trim(),
+  XAUCLOUD_GPT_ACTION_CONFIRMATION_TTL_SECONDS: Number(process.env["XAUCLOUD_GPT_ACTION_CONFIRMATION_TTL_SECONDS"] ?? "600"),
   EMERGENT_LLM_KEY: process.env["EMERGENT_LLM_KEY"] ?? "",
   AI_COST_DAILY_CALL_LIMIT: Number(process.env["AI_COST_DAILY_CALL_LIMIT"] ?? "0"),
   AI_COST_MIN_SECONDS: Number(process.env["AI_COST_MIN_SECONDS"] ?? "0"),

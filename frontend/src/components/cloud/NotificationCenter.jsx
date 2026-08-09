@@ -13,10 +13,11 @@ const CATEGORY_LABELS = {
   LICENSE: "License",
   BOT_UPDATES: "Bot Updates",
   PAYMENTS: "Payments",
+  MARKETING: "Marketing",
   SYSTEM: "System",
   SUPPORT: "Support",
 };
-const CATEGORY_ORDER = ["ALL", "TRADES", "MARKET_OUTLOOK", "SIGNALS", "LICENSE", "BOT_UPDATES", "PAYMENTS", "SYSTEM", "SUPPORT"];
+const CATEGORY_ORDER = ["ALL", "TRADES", "MARKET_OUTLOOK", "SIGNALS", "LICENSE", "BOT_UPDATES", "PAYMENTS", "MARKETING", "SYSTEM", "SUPPORT"];
 
 function timeAgo(iso) {
   if (!iso) return "";
