@@ -67,6 +67,26 @@ describe("XauCloud email campaign renderer", () => {
     expect(rendered.html).not.toContain(">BAD<");
   });
 
+  test("renders premium text-only Action blocks without raw HTML in the request document", () => {
+    const document = EmailDocumentSchema.parse({
+      version: 1,
+      theme,
+      blocks: [
+        { id: "hero", type: "hero", badge: "PREMIUM", title: "XauCloud intelligence", subtitle: "Styled on the trusted backend." },
+        { id: "intro", type: "text", text: "Hi {{first_name}}, your premium update is ready." },
+        { id: "columns", type: "columns", columns: [{ title: "Intelligence", text: "Clear market context." }, { title: "Control", text: "One focused Command Center." }] },
+        { id: "cta", type: "button", text: "OPEN COMMAND CENTER", url: "https://xaucloud.io/command", style: "gold", fullWidth: true },
+      ],
+    });
+    expect(JSON.stringify(document)).not.toContain('"html"');
+    const rendered = renderEmailCampaign(document, { previewText: "Premium update" }, branding, { first_name: "Tala", account_email: "tala@example.test" });
+    expect(rendered.html).toContain("XauCloud intelligence");
+    expect(rendered.html).toContain("Clear market context.");
+    expect(rendered.html).toContain("OPEN COMMAND CENTER");
+    expect(rendered.html).toContain(".xc-stack{display:block!important;width:100%!important");
+    expect(rendered.text).toContain("Intelligence\nClear market context.");
+  });
+
   test("handles a very long, special-character and emoji message without breaking schema limits", () => {
     const long = `<p>${"Gold & risk < clarity > noise 🟡 ".repeat(500)}</p>`;
     const parsed = EmailDocumentSchema.parse({ version: 1, theme, blocks: [{ id: "long", type: "text", html: long }] });

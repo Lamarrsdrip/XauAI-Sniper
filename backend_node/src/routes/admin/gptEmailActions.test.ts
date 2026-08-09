@@ -34,8 +34,8 @@ vi.mock("../../services/webPush.js", () => ({
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
-import { registerGptEmailActionRoutes, verifyGptActionSecret } from "./gptEmailActions.js";
-import { registerMarketingActionRoutes } from "./marketingActions.js";
+import { ensureGptEmailActionIndexes, registerGptEmailActionRoutes, verifyGptActionSecret } from "./gptEmailActions.js";
+import { ensureMarketingActionInfrastructure, registerMarketingActionRoutes } from "./marketingActions.js";
 
 type Doc = Record<string, unknown>;
 
@@ -102,7 +102,11 @@ const secret = "test-action-secret-that-is-at-least-thirty-two-characters-long";
 const auth = { authorization: `Bearer ${secret}` };
 const theme = { width: 640, background: "#08080A", contentBackground: "#FFFFFF", accent: "#D6B35A", radius: 10, spacing: "normal" };
 
-function draftBody(audience = "all_users") {
+interface DraftPayload extends Doc {
+  document: { version: number; theme: typeof theme; blocks: Doc[] };
+}
+
+function draftBody(audience = "all_users"): DraftPayload {
   return {
     title: "Release update",
     subject: "A new XauCloud update is live",
@@ -113,7 +117,7 @@ function draftBody(audience = "all_users") {
       theme,
       blocks: [
         { id: "hero-1", type: "hero", badge: "Product update", title: "The new update is live", subtitle: "A clearer XauCloud workflow." },
-        { id: "text-1", type: "text", html: "<p>Hi {{first_name}},</p><p>Open your Command Center for details.</p><script>bad()</script>" },
+        { id: "text-1", type: "text", text: "Hi {{first_name}}, open your Command Center for details." },
         { id: "risk-1", type: "risk" },
       ],
     },
@@ -127,6 +131,8 @@ async function createApp(): Promise<FastifyInstance> {
     const statusCode = typeof (error as { statusCode?: unknown }).statusCode === "number" ? Number((error as { statusCode: number }).statusCode) : 500;
     return reply.code(statusCode).send({ detail: error instanceof Error ? error.message : "Internal server error" });
   });
+  await ensureGptEmailActionIndexes();
+  await ensureMarketingActionInfrastructure();
   await app.register(registerGptEmailActionRoutes);
   await registerMarketingActionRoutes(app);
   return app;
@@ -204,7 +210,32 @@ describe("private GPT email actions", () => {
     const preview = await app.inject({ method: "POST", url: `/admin/actions/email/drafts/${draft["id"]}/preview`, headers: { ...auth, "x-forwarded-for": "preview" } });
     expect(preview.statusCode).toBe(200);
     expect(preview.json().text).toContain("Questions? support@xaucloud.io");
-    expect(preview.json().text).not.toContain("bad()");
+    expect(preview.json().text).toContain("Hi Customer, open your Command Center for details.");
+  });
+
+  it("keeps raw HTML out of GPT draft requests while preserving premium structured blocks", async () => {
+    const premium = draftBody();
+    premium.document.blocks = [
+      { id: "hero", type: "hero", badge: "Private release", title: "A premium XauCloud update", subtitle: "Responsive styling is generated inside XauCloud." },
+      { id: "intro", type: "text", text: "Hi {{first_name}}, your new release is ready." },
+      { id: "columns", type: "columns", columns: [{ title: "Intelligence", text: "Clear market context." }, { title: "Control", text: "One focused Command Center." }] },
+      { id: "metrics", type: "metrics", title: "Approved highlights", items: [{ label: "Status", value: "Live" }, { label: "Delivery", value: "XauCloud" }] },
+      { id: "cta", type: "button", text: "OPEN COMMAND CENTER", url: "https://xaucloud.io/command", style: "gold", fullWidth: true },
+      { id: "risk", type: "risk" },
+    ];
+    const created = await app.inject({ method: "POST", url: "/admin/actions/email/drafts", headers: { ...auth, "x-forwarded-for": "premium-structured" }, payload: premium });
+    expect(created.statusCode, created.body).toBe(200);
+    expect(JSON.stringify(created.json().document)).not.toContain('"html"');
+
+    const preview = await app.inject({ method: "POST", url: `/admin/actions/email/drafts/${created.json().id}/preview`, headers: { ...auth, "x-forwarded-for": "premium-preview" } });
+    expect(preview.statusCode, preview.body).toBe(200);
+    expect(preview.json().text).toContain("Intelligence\nClear market context.");
+    expect(preview.json().text).toContain("OPEN COMMAND CENTER");
+
+    const withRawHtml = draftBody();
+    withRawHtml.document.blocks = [{ id: "raw-html", type: "text", html: "<p>Do not cross the Action boundary.</p>" }];
+    const rejected = await app.inject({ method: "POST", url: "/admin/actions/email/drafts", headers: { ...auth, "x-forwarded-for": "raw-html-rejected" }, payload: withRawHtml });
+    expect(rejected.statusCode).toBe(422);
   });
 
   it("sends a test only to the explicit validated address", async () => {

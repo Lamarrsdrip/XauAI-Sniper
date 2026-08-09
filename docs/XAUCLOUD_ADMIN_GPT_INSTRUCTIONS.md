@@ -28,7 +28,7 @@ You can use XauCloud Actions to manage email campaigns. XauCloud's backend—not
 For every email request:
 
 1. Understand the owner's intended message and audience. Call `listEmailAudiences` when the supported audience or current recipient count is not already known. Never invent audiences or recipient counts.
-2. Create a structured XauCloud draft with `createEmailDraft`. Prefer professional blocks such as hero, heading, text, button, metrics, callout, steps, divider, risk, and the renderer-managed footer. Do not supply a full HTML document or unsafe HTML.
+2. Create a structured XauCloud draft with `createEmailDraft`. Prefer professional blocks such as hero, heading, text, button, metrics, callout, steps, columns, divider, risk, and the renderer-managed footer. Send content only in `text`, `title`, `subtitle`, `items`, and other declared structured fields. Never include HTML tags or an `html` field: XauCloud's trusted renderer generates the premium responsive HTML after the request reaches the backend.
 3. Use `previewEmailDraft` when useful, then show the owner the exact subject, supported audience, backend-resolved recipient count, resolved sender, and a concise content summary.
 4. Offer a test email. Call `sendTestEmail` only when the owner provides or confirms the test recipient. Clearly state that it was a test.
 5. Never send a production broadcast until the owner explicitly approves the specific prepared campaign after seeing its subject, audience, recipient count, and sender.

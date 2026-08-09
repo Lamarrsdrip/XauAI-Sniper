@@ -124,7 +124,7 @@ async function publishVersionedAsset(kind: string, collection: string, campaignI
   return record;
 }
 
-export async function registerMarketingActionRoutes(app: FastifyInstance): Promise<void> {
+export async function ensureMarketingActionInfrastructure(): Promise<void> {
   await ensureMarketingFacts();
   const db = getDb();
   await Promise.all([
@@ -134,7 +134,10 @@ export async function registerMarketingActionRoutes(app: FastifyInstance): Promi
     db.collection("marketing_push_delivery_log").createIndex({ idempotency_key: 1 }, { unique: true }),
     db.collection("marketing_landing_pages").createIndex({ slug: 1, status: 1 }),
   ]);
+}
 
+export async function registerMarketingActionRoutes(app: FastifyInstance): Promise<void> {
+  const db = getDb();
   const action = { preHandler: requireGptAction };
 
   app.get("/admin/actions/marketing/context", action, async () => {

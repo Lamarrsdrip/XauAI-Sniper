@@ -19,11 +19,30 @@ import {
 } from "../../services/adminEmailCampaign.js";
 import { resolveEmailSender, sendEmailDetailed } from "../../services/email.js";
 import { emailBranding } from "../../services/emailBranding.js";
-import { EmailDocumentSchema, personalize } from "../../services/emailCampaign.js";
+import { EmailBlockSchema, EmailDocumentSchema, personalize } from "../../services/emailCampaign.js";
 
 const ACTION_ACTOR_EMAIL = "chatgpt-action@xaucloud.internal";
 const ACTION_ACTOR_NAME = "XauCloud Admin (ChatGPT Action)";
 const TOKEN_PREFIX = "xc_confirm_";
+
+// GPT Actions send content across an external request boundary. Keep raw HTML
+// out of that request entirely: the trusted XauCloud renderer turns these
+// structured fields into the same premium, responsive email HTML used by the
+// Admin composer. The normal Admin composer remains backward-compatible with
+// its sanitized rich-text `html` fields through EmailDocumentSchema.
+const ActionEmailColumnSchema = z.object({
+  title: z.string().max(300).optional(),
+  text: z.string().max(5_000).optional(),
+}).strict();
+
+const ActionEmailBlockSchema = EmailBlockSchema
+  .omit({ html: true, columns: true })
+  .extend({ columns: z.array(ActionEmailColumnSchema).length(2).optional() })
+  .strict();
+
+const ActionEmailDocumentSchema = EmailDocumentSchema
+  .extend({ blocks: z.array(ActionEmailBlockSchema).min(1).max(100) })
+  .strict();
 
 const DraftCreateSchema = z.object({
   campaign_id: z.string().min(1).max(100).optional(),
@@ -33,7 +52,7 @@ const DraftCreateSchema = z.object({
   audience: AudienceSchema,
   to: z.union([z.string().email().max(320), z.literal("")]).optional().default(""),
   selected_recipients: z.array(z.string().email().max(320)).max(250).optional().default([]),
-  document: EmailDocumentSchema,
+  document: ActionEmailDocumentSchema,
 }).superRefine((value, ctx) => {
   if (value.audience === "single" && !value.to) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["to"], message: "A single-recipient draft requires to." });
   if (value.audience === "selected" && value.selected_recipients.length === 0) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["selected_recipients"], message: "A selected audience requires at least one recipient." });
@@ -147,7 +166,7 @@ function actionStatus(row: Record<string, unknown>, duplicate = false) {
   };
 }
 
-export async function registerGptEmailActionRoutes(app: FastifyInstance): Promise<void> {
+export async function ensureGptEmailActionIndexes(): Promise<void> {
   const db = getDb();
   await Promise.all([
     db.collection("admin_email_action_confirmations").createIndex({ token_hash: 1 }, { unique: true }),
@@ -157,7 +176,9 @@ export async function registerGptEmailActionRoutes(app: FastifyInstance): Promis
       { unique: true, partialFilterExpression: { source: "chatgpt_action", idempotency_key: { $type: "string" } } },
     ),
   ]);
+}
 
+export async function registerGptEmailActionRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireGptAction);
   app.addHook("onResponse", async (request, reply) => {
     const config = request.routeOptions.config as unknown as Record<string, unknown>;

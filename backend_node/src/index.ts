@@ -40,8 +40,8 @@ import { registerAdminPinsRoutes } from "./routes/admin/pins.js";
 import { registerAdminConfigsRoutes } from "./routes/admin/configs.js";
 import { registerAdminAccountRoutes } from "./routes/admin/account.js";
 import { registerAdminEmailRoutes } from "./routes/admin/email.js";
-import { registerGptEmailActionRoutes } from "./routes/admin/gptEmailActions.js";
-import { registerMarketingActionRoutes } from "./routes/admin/marketingActions.js";
+import { ensureGptEmailActionIndexes, registerGptEmailActionRoutes } from "./routes/admin/gptEmailActions.js";
+import { ensureMarketingActionInfrastructure, registerMarketingActionRoutes } from "./routes/admin/marketingActions.js";
 import { registerAdminReleasesRoutes } from "./routes/admin/releases.js";
 import { registerDownloadRoutes } from "./routes/downloads.js";
 import { registerPerformanceRoutes } from "./routes/performance.js";
@@ -93,8 +93,17 @@ app.setErrorHandler((error, request, reply) => {
 });
 
 async function main(): Promise<void> {
-  await connectDb();
-  await runStartupTasks(app.log);
+  let applicationReady = false;
+
+  // Hostinger requires the process to bind its port within three seconds.
+  // Keep the health endpoints available during initialization, but fail all
+  // application traffic closed until the database and indexes are ready.
+  app.addHook("onRequest", async (request, reply) => {
+    const pathName = request.url.split("?", 1)[0];
+    if (!applicationReady && pathName !== "/health" && pathName !== "/api/health") {
+      return reply.code(503).send({ detail: "Service is starting." });
+    }
+  });
 
   // Capture the raw request body alongside Fastify's normal JSON parsing --
   // required so the Paystack/Nomba webhook handlers can verify HMAC
@@ -250,11 +259,17 @@ async function main(): Promise<void> {
   // quotes) -- deferred; it is a one-shot historical-data repair, not
   // required for live signal generation/tracking, which both loops above
   // already cover.
-  void outlookHourlyLoop();
-  void outlookLifecycleLoop();
-
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
   app.log.info(`XauCloud Node backend listening on :${env.PORT}`);
+
+  await connectDb();
+  await runStartupTasks(app.log);
+  await Promise.all([ensureGptEmailActionIndexes(), ensureMarketingActionInfrastructure()]);
+  applicationReady = true;
+  app.log.info("XauCloud startup initialization complete");
+
+  void outlookHourlyLoop();
+  void outlookLifecycleLoop();
 }
 
 process.on("SIGTERM", async () => {

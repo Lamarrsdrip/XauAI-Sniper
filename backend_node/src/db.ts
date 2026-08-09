@@ -3,19 +3,17 @@ import { env } from "./env.js";
 
 /** Port of server.py's `client = AsyncIOMotorClient(mongo_url); db = client[DB_NAME]`. */
 const client = new MongoClient(env.MONGO_URL);
-let dbInstance: Db | undefined;
+// MongoDB's Db handle is safe to create before the network connection is
+// established. Keeping it available synchronously lets Fastify register all
+// routes and start its health-check listener before slow remote startup work.
+const dbInstance: Db = client.db(env.DB_NAME);
 
 export async function connectDb(): Promise<Db> {
-  if (dbInstance) return dbInstance;
   await client.connect();
-  dbInstance = client.db(env.DB_NAME);
   return dbInstance;
 }
 
 export function getDb(): Db {
-  if (!dbInstance) {
-    throw new Error("Database not connected yet -- call connectDb() during startup first.");
-  }
   return dbInstance;
 }
 

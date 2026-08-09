@@ -24,7 +24,11 @@ export const EmailBlockSchema = z.object({
   tone: z.enum(["neutral", "gold", "warning"]).optional(),
   height: z.number().int().min(8).max(120).optional(),
   items: z.array(z.object({ label: z.string().max(120), value: z.string().max(120).optional(), text: z.string().max(1000).optional(), title: z.string().max(300).optional() })).max(8).optional(),
-  columns: z.array(z.object({ title: z.string().max(300).optional(), html: z.string().max(20_000).optional() })).length(2).optional(),
+  columns: z.array(z.object({
+    title: z.string().max(300).optional(),
+    html: z.string().max(20_000).optional(),
+    text: z.string().max(5_000).optional(),
+  }).strict()).length(2).optional(),
   background: ColorSchema.optional(),
   padding: z.enum(["compact", "normal", "spacious"]).optional(),
 }).strict();
@@ -180,7 +184,7 @@ function renderBlock(block: EmailBlock, theme: EmailDocument["theme"], recipient
       return `<tr><td class="xc-content-pad" style="padding:${pad};background:${block.background ?? theme.contentBackground};">${title ? `<div style="margin-bottom:20px;color:#111114;font:800 22px/28px Arial,sans-serif;">${esc(title)}</div>` : ""}<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}</table></td></tr>`;
     }
     case "columns": {
-      const cols = (block.columns ?? [{}, {}]).map((col) => `<td class="xc-stack" width="50%" valign="top" style="padding:8px;"><div style="color:#111114;font:800 16px/22px Arial,sans-serif;">${esc(personalize(col.title || "", recipient))}</div><div style="margin-top:7px;color:#55555D;font:400 14px/22px Arial,sans-serif;">${rich(col.html, recipient)}</div></td>`).join("");
+      const cols = (block.columns ?? [{}, {}]).map((col) => `<td class="xc-stack" width="50%" valign="top" style="padding:8px;"><div style="color:#111114;font:800 16px/22px Arial,sans-serif;">${esc(personalize(col.title || "", recipient))}</div><div style="margin-top:7px;color:#55555D;font:400 14px/22px Arial,sans-serif;">${rich(col.html || col.text, recipient)}</div></td>`).join("");
       return `<tr><td class="xc-content-pad" style="padding:${pad};background:${block.background ?? theme.contentBackground};"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr class="xc-row">${cols}</tr></table></td></tr>`;
     }
     case "section":
@@ -204,7 +208,7 @@ function documentText(document: EmailDocument, recipient: Personalization, brand
     if (b.html) lines.push(cheerio.load(cleanRichText(b.html, recipient)).text());
     else if (b.text) lines.push(personalize(b.text, recipient));
     for (const item of b.items ?? []) lines.push([item.value, item.label, item.title, item.text].filter(Boolean).map((v) => personalize(String(v), recipient)).join(" — "));
-    for (const col of b.columns ?? []) lines.push([col.title, cheerio.load(cleanRichText(col.html || "", recipient)).text()].filter(Boolean).join("\n"));
+    for (const col of b.columns ?? []) lines.push([col.title, cheerio.load(cleanRichText(col.html || col.text || "", recipient)).text()].filter(Boolean).join("\n"));
     const link = safeHttpUrl(b.url || b.link || "");
     if (link) lines.push(link);
     lines.push("");

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: XauCloud Admin Marketing Actions
-  version: 2.2.0
+  version: 2.3.0
   description: >-
     Private administrative email and controlled marketing actions for XauCloud.
     Email operations use the existing XauCloud drafts, renderer, audience resolver,
@@ -42,8 +42,8 @@ paths:
       operationId: createEmailDraft
       summary: Create a structured XauCloud email draft
       description: >-
-        Create a draft in the same draft library used by the XauCloud Admin
-        composer. Use structured blocks; do not supply arbitrary full HTML.
+        Create a premium draft in the same library as the Admin composer. Send only
+        structured text fields; XauCloud generates the styled HTML server-side.
       requestBody:
         required: true
         content:
@@ -465,7 +465,7 @@ components:
       additionalProperties: false
       properties:
         title: { type: string, maxLength: 300 }
-        html: { type: string, maxLength: 20000, description: Sanitized rich-text fragment only. }
+        text: { type: string, maxLength: 5000, description: Plain content rendered into the premium column layout by XauCloud. }
     EmailBlock:
       type: object
       additionalProperties: false
@@ -473,8 +473,7 @@ components:
       properties:
         id: { type: string, minLength: 1, maxLength: 100 }
         type: { type: string, enum: [hero, announcement, text, heading, button, image, divider, spacer, callout, metrics, feature, steps, columns, section, risk, footer] }
-        html: { type: string, maxLength: 100000, description: Sanitized rich-text fragment; scripts and unsafe markup are removed by XauCloud. }
-        text: { type: string, maxLength: 10000 }
+        text: { type: string, maxLength: 10000, description: Plain content; do not include HTML. XauCloud applies premium responsive styles. }
         title: { type: string, maxLength: 500 }
         subtitle: { type: string, maxLength: 2000 }
         badge: { type: string, maxLength: 80 }
