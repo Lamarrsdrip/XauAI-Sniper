@@ -284,10 +284,11 @@ describe("private GPT email actions", () => {
 
   it("retrieves only approved marketing facts and creates/updates one campaign", async () => {
     state.db.collection("approved_marketing_performance").docs.push({ id: "not-approved", approved_for_marketing: false, net_profit_usd: 999999 });
-    const performance = await app.inject({ method: "GET", url: "/admin/actions/marketing/performance", headers: { ...auth, "x-forwarded-for": "marketing-facts" } });
-    expect(performance.statusCode).toBe(200);
-    expect(performance.json().results.some((row: Doc) => row["id"] === "current-30-day-gold-replay")).toBe(true);
-    expect(performance.json().results.some((row: Doc) => row["id"] === "not-approved")).toBe(false);
+    const context = await app.inject({ method: "GET", url: "/admin/actions/marketing/context", headers: { ...auth, "x-forwarded-for": "marketing-facts" } });
+    expect(context.statusCode).toBe(200);
+    expect(context.json().performance.results.some((row: Doc) => row["id"] === "current-30-day-gold-replay")).toBe(true);
+    expect(context.json().performance.results.some((row: Doc) => row["id"] === "not-approved")).toBe(false);
+    expect(context.json()).toMatchObject({ product: { product_name: "XauCloud" }, website_slots: expect.arrayContaining(["homepage_hero_campaign"]) });
     const create = await app.inject({ method: "POST", url: "/admin/actions/marketing/campaigns", headers: { ...auth, "x-forwarded-for": "campaign-create" }, payload: { name: "Pattern Intelligence launch", objective: "Coordinate this week's launch", core_message: "Pattern Intelligence and the approved replay", approved_fact_ids: ["feature-pattern-intelligence", "current-30-day-gold-replay"], target_audiences: ["existing_customers", "prospects"], cta: { label: "View replay", destination: "replay" } } });
     expect(create.statusCode, create.body).toBe(200);
     const id = create.json().id;

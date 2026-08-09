@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: XauCloud Admin Marketing Actions
-  version: 2.0.0
+  version: 2.1.0
   description: >-
     Private administrative email and controlled marketing actions for XauCloud.
     Email operations use the existing XauCloud drafts, renderer, audience resolver,
@@ -56,19 +56,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Draft" }
-  /admin/actions/email/drafts/{id}:
-    get:
-      operationId: getEmailDraft
-      summary: Retrieve a saved email draft
-      parameters:
-        - $ref: "#/components/parameters/DraftId"
-      responses:
-        "200":
-          description: Current authoritative draft.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Draft" }
-        "404": { $ref: "#/components/responses/NotFound" }
   /admin/actions/email/drafts/{id}/preview:
     post:
       operationId: previewEmailDraft
@@ -189,37 +176,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/BroadcastStatus" }
-  /admin/actions/marketing/product:
+  /admin/actions/marketing/context:
     get:
-      operationId: getCurrentProductInfo
-      summary: Get current approved XauCloud product and production status facts
-      responses: { "200": { description: Current product facts. } }
-  /admin/actions/marketing/features:
-    get:
-      operationId: getApprovedProductFeatures
-      summary: Get only product features approved for marketing
-      responses: { "200": { description: Approved features with source and approval metadata. } }
-  /admin/actions/marketing/performance:
-    get:
-      operationId: getApprovedPerformanceResults
-      summary: Get only performance or replay results approved for marketing
-      description: Never use a performance figure that is not returned by this operation. Clearly describe replay/backtest results as historical, not live or guaranteed.
-      responses: { "200": { description: Approved results, or status unavailable. } }
-  /admin/actions/marketing/release:
-    get:
-      operationId: getCurrentBotRelease
-      summary: Get the current stable production EA release
-      responses: { "200": { description: Current stable release or unavailable. } }
-  /admin/actions/marketing/links:
-    get:
-      operationId: getMarketingLinks
-      summary: Get authoritative marketing destinations
-      responses: { "200": { description: Registered homepage, Command Center, purchase, performance, replay, authenticated bot-download, login, and support destinations. } }
-  /admin/actions/marketing/pricing:
-    get:
-      operationId: getCurrentPricing
-      summary: Get current backend-configured pricing
-      responses: { "200": { description: Current pricing or unavailable. } }
+      operationId: getMarketingContext
+      summary: Get all approved facts, current release, pricing, destinations, and controlled website slots
+      description: Use this authoritative context before creating marketing content. Never invent product functionality, performance, pricing, release data, or links. Clearly describe replay/backtest results as historical, not live or guaranteed.
+      responses: { "200": { description: Current product facts, approved features and performance results, release, pricing, links, and website slots; unavailable values are explicit. } }
   /admin/actions/marketing/campaigns:
     get:
       operationId: listMarketingCampaigns
@@ -242,17 +204,6 @@ paths:
       parameters: [ { $ref: "#/components/parameters/MarketingCampaignId" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MarketingCampaignPatch" } } } }
       responses: { "200": { description: Updated campaign overview. } }
-  /admin/actions/marketing/campaigns/{id}/status:
-    get:
-      operationId: getCampaignStatus
-      summary: Get campaign and channel publication states
-      parameters: [ { $ref: "#/components/parameters/MarketingCampaignId" } ]
-      responses: { "200": { description: Campaign status. } }
-  /admin/actions/marketing/website/slots:
-    get:
-      operationId: getWebsiteMarketingSlots
-      summary: List the only website slots the GPT may control
-      responses: { "200": { description: Controlled slot identifiers. } }
   /admin/actions/marketing/campaigns/{campaignId}/website-drafts:
     post:
       operationId: createWebsiteCampaignDraft
@@ -260,12 +211,6 @@ paths:
       parameters: [ { $ref: "#/components/parameters/CampaignId" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/WebsiteDraft" } } } }
       responses: { "200": { description: Website draft. } }
-  /admin/actions/marketing/campaigns/{campaignId}/website-drafts/{assetId}/preview:
-    get:
-      operationId: previewWebsiteCampaign
-      summary: Preview resolved website copy and CTA
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
-      responses: { "200": { description: Website preview. } }
   /admin/actions/marketing/campaigns/{campaignId}/website-drafts/{assetId}/prepare:
     post:
       operationId: prepareWebsitePublish
@@ -276,24 +221,10 @@ paths:
   /admin/actions/marketing/campaigns/{campaignId}/website-drafts/{assetId}/publish:
     post:
       operationId: publishWebsiteCampaign
-      summary: Consequentially publish a prepared controlled website asset
+      summary: Consequentially publish, unpublish, or roll back a prepared controlled website asset
       parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmedOperation" } } } }
       responses: { "200": { description: Idempotent publication result. } }
-  /admin/actions/marketing/campaigns/{campaignId}/website-drafts/{assetId}/rollback:
-    post:
-      operationId: rollbackWebsiteCampaign
-      summary: Consequentially restore the prepared previous website version
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Confirmation" } } } }
-      responses: { "200": { description: Idempotent rollback result. } }
-  /admin/actions/marketing/campaigns/{campaignId}/website-drafts/{assetId}/unpublish:
-    post:
-      operationId: unpublishWebsiteCampaign
-      summary: Consequentially unpublish a prepared website asset
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Confirmation" } } } }
-      responses: { "200": { description: Idempotent unpublish result. } }
   /admin/actions/marketing/campaigns/{campaignId}/announcements:
     post:
       operationId: createCommandCenterAnnouncement
@@ -301,12 +232,6 @@ paths:
       parameters: [ { $ref: "#/components/parameters/CampaignId" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AnnouncementDraft" } } } }
       responses: { "200": { description: Announcement draft. } }
-  /admin/actions/marketing/campaigns/{campaignId}/announcements/{assetId}/preview:
-    get:
-      operationId: previewCommandCenterAnnouncement
-      summary: Preview announcement and resolved CTA
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
-      responses: { "200": { description: Announcement preview. } }
   /admin/actions/marketing/campaigns/{campaignId}/announcements/{assetId}/prepare:
     post:
       operationId: prepareAnnouncementPublish
@@ -317,17 +242,10 @@ paths:
   /admin/actions/marketing/campaigns/{campaignId}/announcements/{assetId}/publish:
     post:
       operationId: publishCommandCenterAnnouncement
-      summary: Consequentially publish the prepared announcement
+      summary: Consequentially publish or unpublish the prepared announcement
       parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Confirmation" } } } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmedOperation" } } } }
       responses: { "200": { description: Publication result. } }
-  /admin/actions/marketing/campaigns/{campaignId}/announcements/{assetId}/unpublish:
-    post:
-      operationId: unpublishCommandCenterAnnouncement
-      summary: Consequentially unpublish the prepared announcement
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Confirmation" } } } }
-      responses: { "200": { description: Unpublish result. } }
   /admin/actions/marketing/campaigns/{campaignId}/push-drafts:
     post:
       operationId: createPushDraft
@@ -335,12 +253,6 @@ paths:
       parameters: [ { $ref: "#/components/parameters/CampaignId" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PushDraft" } } } }
       responses: { "200": { description: Push draft. } }
-  /admin/actions/marketing/campaigns/{campaignId}/push-drafts/{assetId}/preview:
-    get:
-      operationId: previewPushNotification
-      summary: Preview push copy and resolved deep link
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
-      responses: { "200": { description: Push preview. } }
   /admin/actions/marketing/push/audience-count:
     get:
       operationId: getPushAudienceCount
@@ -367,12 +279,6 @@ paths:
       parameters: [ { $ref: "#/components/parameters/CampaignId" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LandingPageDraft" } } } }
       responses: { "200": { description: Landing page draft. } }
-  /admin/actions/marketing/campaigns/{campaignId}/landing-pages/{assetId}/preview:
-    get:
-      operationId: previewLandingPage
-      summary: Preview the structured landing page
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
-      responses: { "200": { description: Landing page preview. } }
   /admin/actions/marketing/campaigns/{campaignId}/landing-pages/{assetId}/prepare:
     post:
       operationId: prepareLandingPagePublish
@@ -383,17 +289,10 @@ paths:
   /admin/actions/marketing/campaigns/{campaignId}/landing-pages/{assetId}/publish:
     post:
       operationId: publishLandingPage
-      summary: Consequentially publish the prepared landing page
+      summary: Consequentially publish or unpublish the prepared landing page
       parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Confirmation" } } } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmedOperation" } } } }
       responses: { "200": { description: Publication result. } }
-  /admin/actions/marketing/campaigns/{campaignId}/landing-pages/{assetId}/unpublish:
-    post:
-      operationId: unpublishLandingPage
-      summary: Consequentially unpublish the prepared landing page
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Confirmation" } } } }
-      responses: { "200": { description: Unpublish result. } }
   /admin/actions/marketing/campaigns/{campaignId}/social:
     get:
       operationId: getSocialContent
