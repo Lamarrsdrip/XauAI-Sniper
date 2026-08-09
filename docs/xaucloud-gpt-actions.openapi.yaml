@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: XauCloud Admin Marketing Actions
-  version: 2.1.0
+  version: 2.2.0
   description: >-
     Private administrative email and controlled marketing actions for XauCloud.
     Email operations use the existing XauCloud drafts, renderer, audience resolver,
@@ -62,7 +62,7 @@ paths:
       summary: Render a draft with the authoritative XauCloud renderer
       description: Use this to show the owner a concise plain-text representation and preview metadata.
       parameters:
-        - $ref: "#/components/parameters/DraftId"
+        - { name: id, in: path, required: true, schema: { type: string, maxLength: 100 } }
       responses:
         "200":
           description: Sanitized renderer output and metadata.
@@ -84,7 +84,7 @@ paths:
       summary: Send one test email only
       description: Sends the exact draft through the existing XauCloud provider to one explicitly validated test address. It never sends to the draft audience.
       parameters:
-        - $ref: "#/components/parameters/DraftId"
+        - { name: id, in: path, required: true, schema: { type: string, maxLength: 100 } }
       requestBody:
         required: true
         content:
@@ -116,7 +116,7 @@ paths:
         a production email. Present subject, audience, recipient_count, sender,
         warnings, and expiration to the owner before asking for explicit approval.
       parameters:
-        - $ref: "#/components/parameters/DraftId"
+        - { name: id, in: path, required: true, schema: { type: string, maxLength: 100 } }
       responses:
         "200":
           description: Prepared campaign and confirmation token.
@@ -128,13 +128,11 @@ paths:
       operationId: sendEmailBroadcast
       summary: Send a previously prepared campaign to real XauCloud users
       description: >-
-        This action sends an email to real XauCloud users and must only be called
-        after the user explicitly confirms the prepared campaign. Never call it
-        from an inferred or ambiguous instruction. Use exactly the confirmation
-        token returned by prepareEmailBroadcast and a stable unique idempotency
-        key. Do not place subject, content, or audience in this request.
+        Consequential: call only after explicit approval of the prepared campaign.
+        Use the confirmation token from prepareEmailBroadcast and one stable
+        idempotency key. Never infer approval or include free-form campaign fields.
       parameters:
-        - $ref: "#/components/parameters/DraftId"
+        - { name: id, in: path, required: true, schema: { type: string, maxLength: 100 } }
       requestBody:
         required: true
         content:
@@ -181,61 +179,61 @@ paths:
     get:
       operationId: getMarketingCampaign
       summary: Get the global campaign overview and every stored channel asset
-      parameters: [ { $ref: "#/components/parameters/MarketingCampaignId" } ]
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       responses: { "200": { description: Campaign overview. } }
     patch:
       operationId: updateMarketingCampaign
       summary: Update safe campaign-level draft fields
-      parameters: [ { $ref: "#/components/parameters/MarketingCampaignId" } ]
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MarketingCampaignPatch" } } } }
       responses: { "200": { description: Updated campaign overview. } }
   /admin/actions/marketing/campaigns/{campaignId}/website-drafts:
     post:
       operationId: createWebsiteCampaignDraft
       summary: Create content for one controlled website slot
-      parameters: [ { $ref: "#/components/parameters/CampaignId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/WebsiteDraft" } } } }
       responses: { "200": { description: Website draft. } }
   /admin/actions/marketing/campaigns/{campaignId}/website-drafts/{assetId}/prepare:
     post:
       operationId: prepareWebsitePublish
       summary: Prepare publish, unpublish, or rollback without changing the live site
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } }, { name: assetId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PrepareOperation" } } } }
       responses: { "200": { description: Preview and short-lived confirmation. } }
   /admin/actions/marketing/campaigns/{campaignId}/website-drafts/{assetId}/publish:
     post:
       operationId: publishWebsiteCampaign
       summary: Consequentially publish, unpublish, or roll back a prepared controlled website asset
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } }, { name: assetId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmedOperation" } } } }
       responses: { "200": { description: Idempotent publication result. } }
   /admin/actions/marketing/campaigns/{campaignId}/announcements:
     post:
       operationId: createCommandCenterAnnouncement
       summary: Create a controlled Command Center announcement draft
-      parameters: [ { $ref: "#/components/parameters/CampaignId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AnnouncementDraft" } } } }
       responses: { "200": { description: Announcement draft. } }
   /admin/actions/marketing/campaigns/{campaignId}/announcements/{assetId}/prepare:
     post:
       operationId: prepareAnnouncementPublish
       summary: Prepare announcement publication without publishing
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } }, { name: assetId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/PrepareOperation" } } } }
       responses: { "200": { description: Prepared announcement. } }
   /admin/actions/marketing/campaigns/{campaignId}/announcements/{assetId}/publish:
     post:
       operationId: publishCommandCenterAnnouncement
       summary: Consequentially publish or unpublish the prepared announcement
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } }, { name: assetId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmedOperation" } } } }
       responses: { "200": { description: Publication result. } }
   /admin/actions/marketing/campaigns/{campaignId}/push-drafts:
     post:
       operationId: createPushDraft
       summary: Create a marketing push draft using existing Web Push infrastructure
-      parameters: [ { $ref: "#/components/parameters/CampaignId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PushDraft" } } } }
       responses: { "200": { description: Push draft. } }
   /admin/actions/marketing/push/audience-count:
@@ -248,60 +246,60 @@ paths:
     post:
       operationId: preparePushSend
       summary: Resolve eligible push recipients and prepare without sending
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } }, { name: assetId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       responses: { "200": { description: Prepared push and confirmation. } }
   /admin/actions/marketing/campaigns/{campaignId}/push-drafts/{assetId}/send:
     post:
       operationId: sendPushNotification
       summary: Consequentially send the prepared marketing push once
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } }, { name: assetId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Confirmation" } } } }
       responses: { "200": { description: Idempotent aggregate push result. } }
   /admin/actions/marketing/campaigns/{campaignId}/landing-pages:
     post:
       operationId: createLandingPageDraft
       summary: Create a landing page from predefined non-executable blocks
-      parameters: [ { $ref: "#/components/parameters/CampaignId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LandingPageDraft" } } } }
       responses: { "200": { description: Landing page draft. } }
   /admin/actions/marketing/campaigns/{campaignId}/landing-pages/{assetId}/prepare:
     post:
       operationId: prepareLandingPagePublish
       summary: Prepare landing-page publish or unpublish
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } }, { name: assetId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/PrepareOperation" } } } }
       responses: { "200": { description: Prepared landing page. } }
   /admin/actions/marketing/campaigns/{campaignId}/landing-pages/{assetId}/publish:
     post:
       operationId: publishLandingPage
       summary: Consequentially publish or unpublish the prepared landing page
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } }, { name: assetId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmedOperation" } } } }
       responses: { "200": { description: Publication result. } }
   /admin/actions/marketing/campaigns/{campaignId}/social:
     get:
       operationId: getSocialContent
       summary: Get stored social, video, graphics, ad, and FAQ assets
-      parameters: [ { $ref: "#/components/parameters/CampaignId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       responses: { "200": { description: Stored export-oriented assets. } }
     post:
       operationId: saveSocialContent
       summary: Store social copy, video scripts, graphics briefs, ad copy, or FAQ content
-      parameters: [ { $ref: "#/components/parameters/CampaignId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SocialAsset" } } } }
       responses: { "200": { description: Stored asset. } }
   /admin/actions/marketing/campaigns/{campaignId}/social/{assetId}:
     patch:
       operationId: updateSocialContent
       summary: Update stored export content or mark it manually published
-      parameters: [ { $ref: "#/components/parameters/CampaignId" }, { $ref: "#/components/parameters/AssetId" } ]
+      parameters: [ { name: campaignId, in: path, required: true, schema: { type: string, maxLength: 100 } }, { name: assetId, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, properties: { name: { type: string }, content: {}, status: { type: string, enum: [draft, published_manually] } } } } } }
       responses: { "200": { description: Updated stored asset. } }
   /admin/actions/marketing/campaigns/{id}/performance:
     get:
       operationId: getCampaignPerformance
       summary: Get aggregate campaign analytics without individual customer activity
-      parameters: [ { $ref: "#/components/parameters/MarketingCampaignId" } ]
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, maxLength: 100 } } ]
       responses: { "200": { description: Genuine available aggregates; unsupported metrics are unavailable. } }
   /admin/actions/marketing/analytics/compare:
     get:
@@ -315,27 +313,6 @@ components:
       type: http
       scheme: bearer
       description: Dedicated XAUCLOUD_GPT_ACTION_SECRET. This is not an SMTP, mailbox, database, or hosting credential.
-  parameters:
-    DraftId:
-      name: id
-      in: path
-      required: true
-      schema: { type: string, maxLength: 100 }
-    MarketingCampaignId:
-      name: id
-      in: path
-      required: true
-      schema: { type: string, maxLength: 100 }
-    CampaignId:
-      name: campaignId
-      in: path
-      required: true
-      schema: { type: string, maxLength: 100 }
-    AssetId:
-      name: assetId
-      in: path
-      required: true
-      schema: { type: string, maxLength: 100 }
   responses:
     NotFound:
       description: Resource not found.
@@ -453,9 +430,13 @@ components:
         confirmation_token: { type: string }
         idempotency_key: { type: string, minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" }
     ConfirmedOperation:
-      allOf:
-        - $ref: "#/components/schemas/Confirmation"
-        - $ref: "#/components/schemas/PrepareOperation"
+      type: object
+      additionalProperties: false
+      required: [confirmation_token, idempotency_key, operation]
+      properties:
+        confirmation_token: { type: string }
+        idempotency_key: { type: string, minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" }
+        operation: { type: string, enum: [publish, unpublish, rollback] }
     Audience:
       type: string
       enum: [single, all_users, customers, active_license, inactive_license, selected]
