@@ -78,7 +78,7 @@ paths:
               type: object
               required: [operation]
               properties:
-                operation: { type: string, enum: [search_users, get_user, get_account_access_status] }
+                operation: { type: string, enum: [search_users, get_user, get_account_access_status, get_active_session_summary] }
                 q: { type: string, maxLength: 320 }
                 user_id: { type: string, maxLength: 160 }
                 email: { type: string, format: email, maxLength: 320 }
@@ -321,7 +321,7 @@ paths:
               type: object
               required: [operation]
               properties:
-                operation: { type: string, enum: [list_tickets, get_ticket, customer_context] }
+                operation: { type: string, enum: [list_tickets, get_ticket, customer_context, prepare_case_response, customer_trading_summary, customer_trading_history, customer_open_positions, customer_closed_trades, customer_performance_range] }
                 ticket_id: { type: string, maxLength: 160 }
                 email: { type: string, format: email, maxLength: 320 }
                 limit: { type: integer, minimum: 1, maximum: 100 }
@@ -522,7 +522,7 @@ paths:
               type: object
               required: [operation]
               properties:
-                operation: { type: string, enum: [system_health, service_status, integration_health, recent_errors, recent_warnings, audit_search, audit_event, dashboard_metrics, dashboard_metrics_range, compare_dashboard_periods, conversion_funnel, revenue_summary, license_summary, support_summary] }
+                operation: { type: string, enum: [system_health, service_status, integration_health, payment_provider_status, recent_errors, recent_warnings, audit_search, audit_event, dashboard_metrics, dashboard_metrics_range, compare_dashboard_periods, conversion_funnel, revenue_summary, license_summary, support_summary] }
                 limit: { type: integer, minimum: 1, maximum: 200 }
                 id: { type: string, maxLength: 160 }
                 email: { type: string, format: email, maxLength: 320 }

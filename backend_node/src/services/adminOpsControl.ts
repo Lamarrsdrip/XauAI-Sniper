@@ -68,14 +68,30 @@ export function sanitizeUser(row: Record<string, unknown>, includeEmail = true):
 
 export function sanitizeLicense(row: Record<string, unknown>, includePin = false): Record<string, unknown> {
   const pin = String(row["pin"] ?? "");
+  const sourceText = `${String(row["source"] ?? "")} ${String(row["source_type"] ?? "")} ${String(row["issued_by"] ?? "")}`.toLowerCase();
+  const provider = String(row["payment_provider"] ?? row["provider"] ?? "").toLowerCase();
+  const paymentRef = String(row["payment_ref"] ?? row["payment_reference"] ?? "").trim();
+  const sourceType =
+    sourceText.includes("promo") ? "promotional" :
+    sourceText.includes("bank") || provider.includes("bank") ? "bank_transfer" :
+    sourceText.includes("manual") || sourceText.includes("admin") ? "manual_admin" :
+    sourceText.includes("legacy") || sourceText.includes("migration") ? "legacy_migration" :
+    paymentRef ? "paid_order" : "unknown_legacy";
   return {
-    id: String(row["id"] ?? row["_id"] ?? pin),
+    id: String(row["id"] ?? row["_id"] ?? ""),
     pin: includePin && pin ? pin : pin ? `${pin.slice(0, 3)}***${pin.slice(-2)}` : "",
     buyer_email: String(row["buyer_email"] ?? "").toLowerCase(),
     buyer_name: String(row["buyer_name"] ?? ""),
     active: Boolean(row["is_active"]),
     used: Boolean(row["is_used"]),
     mt5_account: row["mt5_account"] ? String(row["mt5_account"]) : null,
+    source_type: sourceType,
+    order_id: row["order_id"] ?? (paymentRef || null),
+    payment_reference: paymentRef || null,
+    payment_provider: row["payment_provider"] ?? row["provider"] ?? null,
+    fulfillment_event_id: row["fulfillment_event_id"] ?? null,
+    issued_by: row["issued_by"] ?? null,
+    issued_at: row["issued_at"] ?? row["created_at"] ?? null,
     payment_ref: row["payment_ref"] ?? null,
     created_at: row["created_at"] ?? null,
     activated_at: row["activated_at"] ?? null,
@@ -142,7 +158,14 @@ export const TransactionalTemplateDraftSchema = z.object({
   document: EmailDocumentSchema,
 }).strict();
 
-const WIRED_TRANSACTIONAL = new Set(["license_delivery", "bank_transfer_instructions", "bank_transfer_rejected"]);
+const WIRED_TRANSACTIONAL = new Set([
+  "license_delivery",
+  "bank_transfer_instructions",
+  "bank_transfer_rejected",
+  "welcome",
+  "account_verification",
+  "password_reset",
+]);
 
 export async function listTransactionalTemplates(): Promise<Record<string, unknown>[]> {
   const db = getDb();
@@ -217,5 +240,9 @@ export async function ensureAdminOpsInfrastructure(): Promise<void> {
     db.collection("admin_ops_idempotency").createIndex({ key: 1, action: 1 }, { unique: true }),
     db.collection("admin_action_audit").createIndex({ at: -1 }),
     db.collection("transactional_email_templates").createIndex({ template_id: 1 }, { unique: true }),
+    db.collection("used_email_verification_tokens").createIndex({ jti: 1 }, { unique: true }),
+    db.collection("used_password_reset_tokens").createIndex({ jti: 1 }, { unique: true }),
+    db.collection("admin_email_log").createIndex({ delivery_id: 1 }),
+    db.collection("support_tickets").createIndex({ id: 1 }, { unique: true }),
   ]);
 }

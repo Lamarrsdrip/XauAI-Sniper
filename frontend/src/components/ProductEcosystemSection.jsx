@@ -18,16 +18,16 @@ export default function ProductEcosystemSection() {
       <div className="mx-auto max-w-6xl px-4 py-14 md:px-8 md:py-20">
         <div className="grid gap-8 lg:grid-cols-[.82fr_1.18fr] lg:gap-12">
           <div>
-            <div className="font-mono text-[9px] uppercase tracking-[0.24em] text-[#F3C969]/70">More than an EA</div>
+            <div className="font-mono text-[9px] uppercase tracking-[0.24em] text-[#F3C969]">More than an EA</div>
             <h2 className="mt-3 max-w-lg font-heading text-[2.1rem] font-semibold leading-[1.08] tracking-tight text-white md:text-[2.7rem]">
               One XauCloud ecosystem from execution to understanding.
             </h2>
-            <p className="mt-4 max-w-lg text-[13px] leading-6 text-white/45">
+            <p className="mt-4 max-w-lg text-[13px] leading-6 text-white/75">
               The trading engine is only one layer. XauCloud is being built as a complete customer operating experience: automation, visibility, analytics, support and education — tied to the same account.
             </p>
-            <div className="mt-6 rounded-2xl border border-[#F3C969]/12 bg-[#F3C969]/[0.045] p-4">
+            <div className="mt-6 rounded-2xl border border-[#F3C969]/30 bg-[#F3C969]/[0.06] p-4">
               <div className="text-[12px] font-bold text-[#F3C969]">Built for real use, not demo-only screens.</div>
-              <p className="mt-1.5 text-[11px] leading-5 text-white/42">
+              <p className="mt-1.5 text-[11px] leading-5 text-white/72">
                 Live surfaces are backed by the existing XauCloud services. Where data is unavailable, the product should say so instead of inventing status, performance or signals.
               </p>
             </div>
@@ -35,12 +35,12 @@ export default function ProductEcosystemSection() {
 
           <div className="grid gap-2.5 sm:grid-cols-2">
             {ITEMS.map(({ icon: Icon, title, body }) => (
-              <div key={title} className="group rounded-2xl border border-white/[0.07] bg-[#0C0D12] p-4 transition hover:border-[#F3C969]/16 hover:bg-[#101116]">
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#F3C969]/9 text-[#F3C969]">
+              <div key={title} className="group rounded-2xl border border-white/[0.12] bg-[#0C0D12] p-4 transition hover:border-[#F3C969]/30 hover:bg-[#101116]">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#F3C969]/12 text-[#F3C969]">
                   <Icon className="h-[17px] w-[17px]" />
                 </span>
                 <h3 className="mt-3 text-[13.5px] font-bold text-white">{title}</h3>
-                <p className="mt-1.5 text-[11.5px] leading-5 text-white/42">{body}</p>
+                <p className="mt-1.5 text-[11.5px] leading-5 text-white/72">{body}</p>
               </div>
             ))}
           </div>

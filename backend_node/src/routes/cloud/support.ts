@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../../db.js";
 import { requireCloudUser, rateLimit } from "../../auth.js";
+import { resolveSupportLinks } from "../../services/customerTradingTelemetry.js";
 
 const CategorySchema = z.enum([
   "account",
@@ -117,6 +118,7 @@ export async function registerCloudSupportRoutes(app: FastifyInstance): Promise<
     rateLimit(`support_create:${userId}`, 8, 600);
 
     const now = new Date().toISOString();
+    const links = await resolveSupportLinks({ user_id: userId, email });
     const ticketId = `support-${randomUUID()}`;
     const messageId = `msg-${randomUUID()}`;
     const doc = {
@@ -141,11 +143,13 @@ export async function registerCloudSupportRoutes(app: FastifyInstance): Promise<
           created_at: now,
         },
       ],
-      related_order_ids: [],
-      related_license_ids: [],
-      related_email_delivery_ids: [],
+      related_order_ids: (links["related_order_ids"] as string[] | undefined) ?? [],
+      related_license_ids: (links["related_license_ids"] as string[] | undefined) ?? [],
+      related_email_delivery_ids: (links["related_email_delivery_ids"] as string[] | undefined) ?? [],
       metadata: {
         source: "command_center",
+        mt5_account: links["mt5_account"] ?? null,
+        license_source_type: links["license_source_type"] ?? null,
       },
     };
 

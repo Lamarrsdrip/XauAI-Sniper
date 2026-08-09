@@ -14,7 +14,12 @@ import {
   verifyPassword,
 } from "../../auth.js";
 import { getUserLicense, verifyCommandLicense } from "../../services/commandLicense.js";
-import { sendEmail } from "../../services/email.js";
+import {
+  sendPasswordResetEmailForUser,
+  sendVerificationEmailForUser,
+  sendWelcomeEmailForUser,
+  verifyEmailToken,
+} from "../../services/accountRecovery.js";
 
 const JWT_ALGORITHM = "HS256" as const;
 
@@ -36,11 +41,6 @@ function hasStrongPassword(password: string): { ok: boolean; error?: string } {
     return { ok: false, error: "Password must include at least one letter and one number" };
   }
   return { ok: true };
-}
-
-/** Port of server.py:5827 `_password_reset_token`. */
-function passwordResetToken(userId: string, jti: string): string {
-  return jwt.sign({ sub: userId, type: "password_reset", jti }, env.JWT_SECRET, { algorithm: JWT_ALGORITHM, expiresIn: "30m" });
 }
 
 /** Port of server.py cloud auth endpoints (lines 6396-6611) and license link/status (5893, 6611). */
@@ -74,6 +74,8 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
       country: (body.country || "").trim(),
       created_at: now.toISOString(),
       last_login_at: now.toISOString(),
+      email_verified: false,
+      session_version: 0,
     };
     try {
       await db.collection("cloud_users").insertOne({ ...doc });
@@ -81,8 +83,12 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
       return reply.code(400).send({ detail: "Email already registered" });
     }
 
-    const token = createCloudToken(uid, email);
+    const token = createCloudToken(uid, email, 0);
     setCloudSessionCookie(reply, token);
+    await Promise.allSettled([
+      sendWelcomeEmailForUser(doc, "account_signup"),
+      sendVerificationEmailForUser(doc, "account_signup"),
+    ]);
     const { password_hash: _ph, ...userOut } = doc;
     return { ok: true, user: userOut };
   });
@@ -108,7 +114,7 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
     await db.collection("login_audit_log").insertOne({ id: randomUUID(), email: u["email"], ip, ok: true, role: "cloud_user", ts: new Date() });
     await db.collection("cloud_users").updateOne({ id: u["id"] }, { $set: { last_login_at: new Date().toISOString() } });
 
-    const token = createCloudToken(String(u["id"]), String(u["email"]));
+    const token = createCloudToken(String(u["id"]), String(u["email"]), Number(u["session_version"] ?? 0));
     setCloudSessionCookie(reply, token);
     const { _id, password_hash, ...userOut } = u;
     return { ok: true, user: userOut };
@@ -140,6 +146,18 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
     return u;
   });
 
+  // GET /cloud/auth/verify-email -- canonical token-safe verification flow.
+  app.get("/cloud/auth/verify-email", async (request, reply) => {
+    const token = z.object({ token: z.string().min(20).max(3000) }).parse(request.query).token;
+    try {
+      await verifyEmailToken(token);
+      return reply.type("text/html").send("<!doctype html><html><body style=\"font-family:Arial;background:#07080B;color:#fff;padding:40px\"><h1>Email verified</h1><p>Your XauCloud email is verified. You can return to Command Center.</p></body></html>");
+    } catch (error) {
+      const status = Number((error as { statusCode?: unknown })?.statusCode ?? 400);
+      return reply.code(status).type("text/html").send("<!doctype html><html><body style=\"font-family:Arial;background:#07080B;color:#fff;padding:40px\"><h1>Verification failed</h1><p>The verification link is invalid, expired, or already used.</p></body></html>");
+    }
+  });
+
   // POST /cloud/auth/forgot-password -- server.py:6499
   app.post("/cloud/auth/forgot-password", async (request) => {
     const body = CloudForgotPasswordSchema.parse(request.body);
@@ -149,18 +167,7 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
     rateLimit(`forgot_password_email:${email}`, 3, 600);
 
     const user = await getDb().collection("cloud_users").findOne({ email });
-    if (user) {
-      const jti = randomUUID();
-      const token = passwordResetToken(String(user["id"]), jti);
-      const resetUrl = `${env.PUBLIC_SITE_URL}/command/reset-password?token=${token}`;
-      const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
-<h2 style="color:#B8860B;">Reset your XauCloud Command Center password</h2>
-<p>Click the link below to set a new password. This link expires in 30 minutes and can only be used once.</p>
-<p><a href="${resetUrl}" style="display:inline-block;background:#B8860B;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;">Reset password</a></p>
-<p style="color:#888;font-size:12px;">If you didn't request this, you can safely ignore this email -- your password will not be changed.</p>
-</div>`;
-      await sendEmail(email, "Reset your XauCloud password", html);
-    }
+    if (user) await sendPasswordResetEmailForUser(user as Record<string, unknown>, "customer_forgot_password");
     return { ok: true, message: "If an account exists for that email, a reset link has been sent." };
   });
 
@@ -188,7 +195,10 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
     const strength = hasStrongPassword(body.new_password);
     if (!strength.ok) return reply.code(400).send({ detail: strength.error });
 
-    const result = await db.collection("cloud_users").updateOne({ id: payload.sub }, { $set: { password_hash: await hashPassword(body.new_password) } });
+    const result = await db.collection("cloud_users").updateOne(
+      { id: payload.sub },
+      { $set: { password_hash: await hashPassword(body.new_password), updated_at: new Date().toISOString() }, $inc: { session_version: 1 } },
+    );
     if (result.matchedCount === 0) return reply.code(404).send({ detail: "Account no longer exists." });
     return { ok: true, message: "Password updated. You can now log in with your new password." };
   });

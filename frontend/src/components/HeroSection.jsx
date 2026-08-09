@@ -5,7 +5,7 @@ function MiniStat({ label, value, tone = "white" }) {
   const cls = tone === "green" ? "text-[#2FD3A0]" : tone === "gold" ? "text-[#F3C969]" : "text-white";
   return (
     <div>
-      <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-white/25">{label}</div>
+      <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-white/58">{label}</div>
       <div className={`mt-1 text-[13px] font-black ${cls}`}>{value}</div>
     </div>
   );
@@ -23,7 +23,7 @@ function ProductPreview({ goldPrice }) {
         <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-3">
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-[#2FD3A0]" style={{ boxShadow: "0 0 0 4px rgba(47,211,160,.12)" }} />
-            <span className="text-[11px] font-semibold text-white/65">XauCloud Command Center</span>
+            <span className="text-[11px] font-semibold text-white/82">XauCloud Command Center</span>
           </div>
           <span className="rounded-full bg-[#F3C969]/10 px-2.5 py-1 font-mono text-[8px] uppercase tracking-[0.14em] text-[#F3C969]">Product preview</span>
         </div>
@@ -32,11 +32,11 @@ function ProductPreview({ goldPrice }) {
           <div className="rounded-2xl bg-[radial-gradient(circle_at_top_right,rgba(243,201,105,.12),transparent_48%),#101117] p-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-white/28">Connected market</div>
+                <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-white/58">Connected market</div>
                 <div className="mt-1 text-[18px] font-black">XAUUSD</div>
               </div>
               <div className="text-right">
-                <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-white/28">Gold bid</div>
+                <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-white/58">Gold bid</div>
                 <div className="mt-1 font-mono text-[16px] font-black text-[#F3C969]">{price}</div>
               </div>
             </div>
@@ -49,16 +49,16 @@ function ProductPreview({ goldPrice }) {
 
           <div className="mt-3 grid grid-cols-2 gap-3">
             <div className="rounded-2xl bg-white/[0.035] p-3">
-              <div className="flex items-center gap-2 text-[11px] font-semibold text-white/65"><Sparkles className="h-3.5 w-3.5 text-[#F3C969]" /> AI Brain</div>
-              <div className="mt-2 text-[10.5px] leading-4 text-white/38">Evidence, blockers and decisions in plain English.</div>
+              <div className="flex items-center gap-2 text-[11px] font-semibold text-white/82"><Sparkles className="h-3.5 w-3.5 text-[#F3C969]" /> AI Brain</div>
+              <div className="mt-2 text-[10.5px] leading-4 text-white/68">Evidence, blockers and decisions in plain English.</div>
             </div>
             <div className="rounded-2xl bg-white/[0.035] p-3">
-              <div className="flex items-center gap-2 text-[11px] font-semibold text-white/65"><Smartphone className="h-3.5 w-3.5 text-[#F3C969]" /> Mobile control</div>
-              <div className="mt-2 text-[10.5px] leading-4 text-white/38">Monitor the EA, support and learning from your phone.</div>
+              <div className="flex items-center gap-2 text-[11px] font-semibold text-white/82"><Smartphone className="h-3.5 w-3.5 text-[#F3C969]" /> Mobile control</div>
+              <div className="mt-2 text-[10.5px] leading-4 text-white/68">Monitor the EA, support and learning from your phone.</div>
             </div>
           </div>
 
-          <div className="mt-3 flex items-center gap-2 rounded-2xl border border-emerald-400/10 bg-emerald-400/[0.04] px-3 py-2.5 text-[10.5px] text-white/48">
+          <div className="mt-3 flex items-center gap-2 rounded-2xl border border-emerald-400/10 bg-emerald-400/[0.04] px-3 py-2.5 text-[10.5px] text-white/72">
             <ShieldCheck className="h-4 w-4 flex-none text-[#2FD3A0]" />
             No martingale · defined risk · automated position management
           </div>
@@ -86,7 +86,7 @@ export default function HeroSection({ goldPrice }) {
                 <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#F3C969]">XAUUSD automation · MetaTrader 5</span>
               </div>
               <a href="https://www.mql5.com/en/market/product/188838" target="_blank" rel="noopener noreferrer"
-                className="inline-flex items-center rounded-full border border-white/[0.11] bg-white/[0.04] px-3.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-white/60 transition hover:bg-white/[0.08]">
+                className="inline-flex items-center rounded-full border border-white/[0.11] bg-white/[0.04] px-3.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-white/78 transition hover:bg-white/[0.08]">
                 Available on MQL5 ↗
               </a>
             </div>
@@ -96,7 +96,7 @@ export default function HeroSection({ goldPrice }) {
               <span className="block bg-gradient-to-r from-[#FFF0BE] via-[#F3C969] to-[#BE8525] bg-clip-text text-transparent">automated Gold trading.</span>
             </h1>
 
-            <p className="mx-auto mt-5 max-w-2xl text-[15px] leading-7 text-white/52 lg:mx-0">
+            <p className="mx-auto mt-5 max-w-2xl text-[15px] leading-7 text-white/76 lg:mx-0">
               XauCloud combines a Gold-focused MT5 Expert Advisor with a mobile Command Center for live monitoring, AI decision visibility, risk controls, analytics, support and trader education.
             </p>
 
@@ -109,7 +109,7 @@ export default function HeroSection({ goldPrice }) {
               ].map((x) => (
                 <div key={x} className="flex items-start gap-2 rounded-xl bg-white/[0.025] px-3 py-2.5">
                   <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 flex-none text-[#F3C969]" />
-                  <span className="text-[11.5px] leading-4 text-white/52">{x}</span>
+                  <span className="text-[11.5px] leading-4 text-white/76">{x}</span>
                 </div>
               ))}
             </div>
@@ -125,7 +125,7 @@ export default function HeroSection({ goldPrice }) {
               </a>
             </div>
 
-            <div className="mt-6 font-mono text-[9.5px] uppercase tracking-[0.14em] text-white/26">
+            <div className="mt-6 font-mono text-[9.5px] uppercase tracking-[0.14em] text-white/58">
               Trading involves risk · Historical results are not guarantees · You remain in control
             </div>
           </div>

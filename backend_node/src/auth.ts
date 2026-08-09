@@ -41,6 +41,7 @@ interface CloudTokenPayload {
   sub: string;
   email: string;
   type: "cloud";
+  session_version?: number;
 }
 
 export function createAccessToken(userId: string, email: string): string {
@@ -49,8 +50,8 @@ export function createAccessToken(userId: string, email: string): string {
 }
 
 /** Port of server.py:5827 `_cloud_token` -- 30-day expiry (not 24h; distinct from the admin access token). */
-export function createCloudToken(userId: string, email: string): string {
-  const payload: CloudTokenPayload = { sub: userId, email, type: "cloud" };
+export function createCloudToken(userId: string, email: string, sessionVersion = 0): string {
+  const payload: CloudTokenPayload = { sub: userId, email, type: "cloud", session_version: sessionVersion };
   return jwt.sign(payload, env.JWT_SECRET, { algorithm: JWT_ALGORITHM, expiresIn: "30d" });
 }
 
@@ -106,6 +107,11 @@ export async function requireCloudUser(request: FastifyRequest, reply: FastifyRe
     );
     if (!user) return void reply.code(401).send({ detail: "User not found" });
     if (user["disabled_at"]) return void reply.code(403).send({ detail: "Account disabled. Contact XauCloud support." });
+    const currentSessionVersion = Number(user["session_version"] ?? 0);
+    const tokenSessionVersion = Number(payload.session_version ?? 0);
+    if (tokenSessionVersion !== currentSessionVersion) {
+      return void reply.code(401).send({ detail: "Session has been revoked. Please log in again." });
+    }
     (request as FastifyRequest & { cloudUser?: Record<string, unknown> }).cloudUser = user;
   } catch (err) {
     if (err instanceof jwt.TokenExpiredError) {
