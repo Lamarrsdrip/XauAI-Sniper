@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.25.31",
+  "current_version": "v6.26.3",
   "internal_codename": "XauCloud_m10_private_vps_ai",
   "production_branch": "XauCloud_m10_private_vps_ai",
   "production_branch_source_commit": "8498c47eefec0e3cba71ec0c3bb5967feb0de096",
@@ -148,6 +148,19 @@
       "ex5_sha256": "7d1edcd815d51465af4c36aa16f6d58516715caa085d7931f34c2ef3c331d12d",
       "customer_filename": "XauCloud-m10.ex5",
       "release_notes": "Fixes a real defect (not just a MetaQuotes-listing cosmetic issue) discovered while diagnosing repeated Market validation failures on the sibling Market-edition fork of this same SafeModifySL()/OWNER_R_EXIT_CLOSE_ONLY() logic: this EA could repeatedly resend an SL-modify or position-close request the broker had just rejected (e.g. price within the broker's freeze/stops band of the position's existing stop), instead of recognizing the rejection and backing off. Root cause: the pre-flight distance checks only validated a *new* target against SYMBOL_TRADE_STOPS_LEVEL/SYMBOL_TRADE_FREEZE_LEVEL, and silently did nothing when a broker reported 0 for those properties (common on many symbols/brokers) -- and never checked the position's *current* stop, which is what the broker actually freezes around. Now: (1) a real minimum safe distance is enforced regardless of what the broker reports, (2) checked against both the current stop and any new target, (3) fresh Bid/Ask is re-read immediately before validating, (4) SL-modify and position-close no longer race each other on the same ticket, (5) new entries are skipped locally (not sent and rejected) when the broker's own trading session is closed. No change to signal logic, risk sizing, or exit intent -- only whether/when an already-decided action reaches the broker.",
+      "stable_status": true
+    },
+    "v6.26.3": {
+      "version": "v6.26.3",
+      "edition": "Pattern Intelligence + BREAKOUT_UP/BREAKOUT_DOWN V4 audited production promotion (v6.26.3 lineage)",
+      "source_lineage": "v6.26.3",
+      "source_sha256": "d9f88e626d908b97885c869049a72cffa09adfb89d5749b7c9ce91ac27366d2d",
+      "build_timestamp": "2026-08-09T02:34:00Z",
+      "compiler_result": "0 errors, 0 warnings, 43379 ms elapsed (MetaEditor64.exe via Wine, isolated MT5 sandbox; Outlook explicit-SL preservation fix)",
+      "ex5_filename": "XauCloud.io.ex5",
+      "ex5_sha256": "c4d7cf6f5160388cbbb2be7fa9644ffc6a94677f740a27327def90aec4e1da54",
+      "customer_filename": "XauCloud.io.ex5",
+      "release_notes": "Promotes the tested v6.26.3-derived Pattern Intelligence + BREAKOUT_UP/BREAKOUT_DOWN V4 audited build under the production XauCloud.io identity. Pattern evidence participates in canonical M10 candidate direction and native setup competition; breakout candidates continue through the existing confirmation, timing, direction-exclusivity, risk, broker-stop and execution gates. Fixes a proven v6.26.3 Outlook execution bug where the already-validated, signal-supplied explicit Outlook stop-loss was overwritten by the normal-trade fixed stop immediately before OrderSend and during post-fill reconciliation; Outlook now retains its own normalized explicit stop, while invalid explicit stops remain rejected. Customer download filename is XauCloud.io.ex5.",
       "stable_status": true
     }
   }

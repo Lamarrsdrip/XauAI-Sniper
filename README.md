@@ -1,22 +1,22 @@
-# XauCloud (internal codename: XauCloud_m10_private_vps_ai)
+# XauCloud
 
-Primary production branch: `XauCloud_m10_private_vps_ai`, cut from the
-replay-approved private-VPS-AI-relay build (`8498c47`, "Fix local Model 4
-inference timeout chain", on top of the "Add private VPS AI relay for
-customer pure-M10 EAs" merge). See
-`audits/xaucloud/16_production_branch_promotion.md` for the promotion record
-and correction history.
+XauCloud is the customer-facing brand of the original XauAI Sniper system.
+This repository and its existing licenses, APIs, database records, magic
+numbers, telemetry schemas, and deployment infrastructure remain the same
+system; compatibility identifiers are retained where changing them would
+break existing installations.
 
-The active EA version is NOT hardcoded here — it's derived live from the EA
-source header by `backend/server.py::_get_ea_meta()` and served at
-`/api/download/info` (this file going stale on every release was itself an
-audit finding; don't hardcode a version number back into this section).
+The authoritative production source is `backend/ea_code/XauCloud.io.mq5`.
+The authoritative customer artifact and its SHA-256 are selected by the EA
+release manifests; the current production filename is `XauCloud.io.ex5`.
+`backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` is a compatibility symlink for
+historical tools and tests, not a second production source.
 
-The platform download endpoints serve `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5`,
-which must always be kept byte-identical to the current root-level
-`XAUUSD_AI_Sniper_EA_vX.X.X.mq5` (see `RELEASE_CHECKLIST.md` for the release
-process — every version bump copies the new source into `backend/ea_code/`).
+Customer downloads are entitlement-gated and resolve the current manifest
+entry on every request. The server verifies the artifact SHA-256 before it
+returns the file.
 
-- Customer download: `/api/download/ea`
+- Release metadata: `/api/download/info`
+- Signed-token request: `/api/download/request-token`
+- Customer download: `/api/download/ea-release`
 - Admin master download: `/api/admin/download/ea-master`
-- Live version/edition/filename: `GET /api/download/info`

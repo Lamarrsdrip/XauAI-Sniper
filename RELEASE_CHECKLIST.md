@@ -1,4 +1,21 @@
-# XauAI Sniper — Release Checklist
+# XauCloud — Release Checklist
+
+## Current production identity (v6.26.3 Pattern + Breakout promotion)
+
+- Authoritative source: `backend/ea_code/XauCloud.io.mq5`
+- Customer artifact: `XauCloud.io.ex5`
+- Release selectors: `backend/ea_releases/manifest.json` and
+  `backend_node/ea_releases/manifest.json`
+- `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` is an intentional compatibility
+  symlink only. Do not distribute that legacy name to customers.
+- Preserve existing magic numbers, licensing identifiers, telemetry schema
+  identifiers, API contracts, and database records unless a separately
+  audited migration explicitly changes them.
+- Outlook-originated trades must retain the validated explicit stop-loss
+  supplied by the Outlook signal. Normal-trade stop policy must not replace it.
+
+The older entries below are retained as release history and may contain the
+pre-rebrand product and file names that were correct at the time.
 
 Use this checklist before calling any version "released."
 A release is NOT complete until every line is checked.

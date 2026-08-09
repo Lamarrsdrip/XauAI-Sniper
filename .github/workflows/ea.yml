@@ -36,15 +36,28 @@ jobs:
 
       # This is the real, honest scope of what this job can do. See the
       # NOT COVERED block below for what it deliberately does not claim.
-      - name: Root/backend source-copy identity check
+      - name: Authoritative production source and compatibility-path check
         run: |
-          diff XAUUSD_AI_Sniper_EA.mq5 backend/ea_code/XAUUSD_AI_Sniper_EA.mq5 \
-            && echo "root and backend/ea_code copies are byte-identical"
+          test -f backend/ea_code/XauCloud.io.mq5
+          test -L backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
+          test "$(readlink backend/ea_code/XAUUSD_AI_Sniper_EA.mq5)" = "XauCloud.io.mq5"
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+
+          source = Path("backend/ea_code/XauCloud.io.mq5")
+          manifest = json.loads(Path("backend/ea_releases/manifest.json").read_text())
+          current = manifest["current_version"]
+          expected = manifest["releases"][current]["source_sha256"]
+          actual = hashlib.sha256(source.read_bytes()).hexdigest()
+          assert actual == expected, f"production source hash mismatch: {actual} != {expected}"
+          print(f"XauCloud.io.mq5 matches manifest source_sha256={actual}")
+          PY
 
       - name: Current production-audit regression suite
         run: |
           python -m pytest \
-            tests/test_xaucloud_m10_v62530_owner_policy.py \
+            tests/test_xaucloud_pattern_breakout_promotion.py \
             tests/test_utf16_tester_event_extractor.py \
             -v --tb=short
 
@@ -128,7 +141,7 @@ jobs:
 #   remote machines outside any CI runner's reach.
 # - Historical release-pin suites. Many old tests intentionally assert the
 #   exact version/build text and behavior of their original release. The
-#   v6.25.24 workflow runs the current production-audit invariants instead;
+#   current workflow runs the current production-audit invariants instead;
 #   the historical suite remains available as evidence but is not a valid
 #   current-release gate until it is explicitly retired or version-scoped.
 # - Redeployment. auto-promote-release updates manifest.json's
