@@ -54,6 +54,7 @@ import { hourlyGenerationTick } from "./services/marketOutlookHourlyTick.js";
 import { trackOutlookLifecycleTick } from "./services/marketOutlookTick.js";
 import { enqueueIfActionable } from "./services/outlookExecution.js";
 import { runStartupTasks } from "./services/startup.js";
+import { isApplicationReady, markApplicationReady, readinessSnapshot, runReadinessStep } from "./services/readiness.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -93,15 +94,17 @@ app.setErrorHandler((error, request, reply) => {
 });
 
 async function main(): Promise<void> {
-  let applicationReady = false;
-
   // Hostinger requires the process to bind its port within three seconds.
   // Keep the health endpoints available during initialization, but fail all
   // application traffic closed until the database and indexes are ready.
   app.addHook("onRequest", async (request, reply) => {
     const pathName = request.url.split("?", 1)[0];
-    if (!applicationReady && pathName !== "/health" && pathName !== "/api/health") {
-      return reply.code(503).send({ detail: "Service is starting." });
+    if (!isApplicationReady() && pathName !== "/health" && pathName !== "/api/health" && pathName !== "/api/readiness") {
+      const readiness = readinessSnapshot();
+      return reply.code(503).send({
+        detail: readiness.state === "FAILED" ? "Service initialization failed." : "Service is starting.",
+        readiness: { state: readiness.state, pending_dependencies: readiness.pending_dependencies, failed_dependencies: readiness.failed_dependencies },
+      });
     }
   });
 
@@ -262,11 +265,16 @@ async function main(): Promise<void> {
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
   app.log.info(`XauCloud Node backend listening on :${env.PORT}`);
 
-  await connectDb();
-  await runStartupTasks(app.log);
-  await Promise.all([ensureGptEmailActionIndexes(), ensureMarketingActionInfrastructure()]);
-  applicationReady = true;
-  app.log.info("XauCloud startup initialization complete");
+  // Keep Hostinger health probes responsive while initializing, but make every
+  // readiness dependency observable and bounded. Previously one opaque boolean
+  // remained false forever if any Mongo/index operation hung, while /api/health
+  // still returned 200 and gave no clue which step was pending.
+  await runReadinessStep("database", () => connectDb(), 30_000);
+  await runReadinessStep("startup_tasks", () => runStartupTasks(app.log), 45_000);
+  await runReadinessStep("gpt_email_actions", () => ensureGptEmailActionIndexes(), 30_000);
+  await runReadinessStep("marketing_actions", () => ensureMarketingActionInfrastructure(), 45_000);
+  markApplicationReady();
+  app.log.info({ readiness: readinessSnapshot() }, "XauCloud startup initialization complete");
 
   void outlookHourlyLoop();
   void outlookLifecycleLoop();

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { readinessSnapshot } from "../services/readiness.js";
 
 /**
  * Port of server.py `GET /api/` (line 1025) and `GET /api/health` (line 1029).
@@ -7,6 +8,10 @@ import type { FastifyInstance } from "fastify";
 export async function registerApiHealthRoutes(app: FastifyInstance): Promise<void> {
   app.get("/", async () => ({ message: "XauCloud EA API v2.0" }));
   app.get("/health", async () => ({ status: "ok" }));
+  app.get("/readiness", async (_request, reply) => {
+    const snapshot = readinessSnapshot();
+    return reply.code(snapshot.state === "READY" ? 200 : 503).send(snapshot);
+  });
 }
 
 /**
