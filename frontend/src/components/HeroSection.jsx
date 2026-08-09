@@ -1,61 +1,67 @@
 import React from "react";
+import { ArrowRight, CheckCircle2, ShieldCheck, Smartphone, Sparkles } from "lucide-react";
 
-// App-preview that mirrors the new Command Center Home (equity hero + position
-// module) so the marketing hero shows the actual premium app, not a generic
-// widget. Uses the real live Gold quote (GET /gold/price) for the entry price;
-// the equity/P&L figures are an illustrative preview, not a promise.
-function AppPreview({ goldPrice }) {
-  const q = goldPrice?.available === true && Number.isFinite(goldPrice?.bid);
-  const price = q ? goldPrice.bid.toFixed(2) : "4251.22";
+function MiniStat({ label, value, tone = "white" }) {
+  const cls = tone === "green" ? "text-[#2FD3A0]" : tone === "gold" ? "text-[#F3C969]" : "text-white";
   return (
-    <div className="relative mx-auto w-full max-w-[360px] lg:mx-0" data-testid="hero-live-visual">
-      <div className="pointer-events-none absolute -inset-8 rounded-[44px] bg-[radial-gradient(60%_55%_at_62%_18%,rgba(243,201,105,.18),transparent)]" />
-      <div className="relative rounded-[26px] border border-white/[0.09] bg-[#0C0D12] p-4 shadow-[0_34px_90px_rgba(0,0,0,.55)]">
-        <div className="flex items-center justify-between">
+    <div>
+      <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-white/25">{label}</div>
+      <div className={`mt-1 text-[13px] font-black ${cls}`}>{value}</div>
+    </div>
+  );
+}
+
+// Product preview — deliberately labelled illustrative. The gold quote can be
+// live; account figures are UI examples and are never presented as performance.
+function ProductPreview({ goldPrice }) {
+  const hasQuote = goldPrice?.available === true && Number.isFinite(goldPrice?.bid);
+  const price = hasQuote ? goldPrice.bid.toFixed(2) : "—";
+  return (
+    <div className="relative mx-auto w-full max-w-[410px] lg:mx-0" data-testid="hero-live-visual">
+      <div className="pointer-events-none absolute -inset-10 rounded-[48px] bg-[radial-gradient(55%_55%_at_58%_18%,rgba(243,201,105,.20),transparent)]" />
+      <div className="relative overflow-hidden rounded-[30px] border border-white/[0.10] bg-[#0A0B0F] shadow-[0_40px_110px_rgba(0,0,0,.6)]">
+        <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-3">
           <div className="flex items-center gap-2">
-            <span className="h-[7px] w-[7px] rounded-full bg-[#2FD3A0]" style={{ boxShadow: "0 0 0 3px rgba(47,211,160,.16)" }} />
-            <span className="text-[11px] font-semibold text-white/55">Command Center · Live</span>
+            <span className="h-2 w-2 rounded-full bg-[#2FD3A0]" style={{ boxShadow: "0 0 0 4px rgba(47,211,160,.12)" }} />
+            <span className="text-[11px] font-semibold text-white/65">XauCloud Command Center</span>
           </div>
-          <span className="rounded-md bg-[#F3C969]/12 px-2 py-0.5 text-[10px] font-bold tracking-wide text-[#F3C969]">GOLD</span>
+          <span className="rounded-full bg-[#F3C969]/10 px-2.5 py-1 font-mono text-[8px] uppercase tracking-[0.14em] text-[#F3C969]">Product preview</span>
         </div>
 
-        <div className="mt-4">
-          <div className="text-[10px] uppercase tracking-[.14em] text-white/40">Equity</div>
-          <div className="mt-1 flex items-end justify-between gap-3">
-            <div className="text-[30px] font-black leading-none tracking-tight" style={{ fontVariantNumeric: "tabular-nums" }}>
-              $3,133<span className="text-[20px] text-white/45">.29</span>
-            </div>
-            <svg width="92" height="36" viewBox="0 0 92 36" preserveAspectRatio="none" className="flex-none">
-              <defs><linearGradient id="hg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#2FD3A0" stopOpacity=".28" /><stop offset="1" stopColor="#2FD3A0" stopOpacity="0" /></linearGradient></defs>
-              <path d="M0,27 L12,25 L24,28 L36,20 L48,22 L60,14 L74,16 L92,8 L92,36 L0,36 Z" fill="url(#hg)" />
-              <path d="M0,27 L12,25 L24,28 L36,20 L48,22 L60,14 L74,16 L92,8" fill="none" stroke="#2FD3A0" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </div>
-          <div className="mt-2 inline-flex items-center gap-1 rounded-lg bg-[#2FD3A0]/12 px-2 py-0.5 text-[12px] font-semibold text-[#2FD3A0]">▲ +$176.67 today</div>
-        </div>
-
-        <div className="mt-4 rounded-xl bg-white/[0.03] p-3">
-          <div className="flex items-center gap-2">
-            <span className="text-[13px] font-bold">XAUUSD</span>
-            <span className="rounded bg-[#F0616D]/14 px-1.5 py-0.5 text-[10px] font-bold text-[#F0616D]">SELL</span>
-            <span className="ml-auto text-[15px] font-black text-[#2FD3A0]" style={{ fontVariantNumeric: "tabular-nums" }}>+$176.20</span>
-          </div>
-          <div className="mt-2 flex items-center justify-between text-[11px] text-white/45" style={{ fontVariantNumeric: "tabular-nums" }}>
-            <span>Entry {price}</span>
-            <span className="text-[#F3C969]">◆ Protected +$110</span>
-          </div>
-        </div>
-
-        <div className="mt-4 flex items-center">
-          {["Analyze", "Qualify", "Execute"].map((s, i) => (
-            <React.Fragment key={s}>
-              <div className="flex flex-col items-center gap-1">
-                <span className="h-[6px] w-[6px] rounded-full bg-[#F3C969]/70" />
-                <span className="text-[9px] uppercase tracking-[.12em] text-white/35">{s}</span>
+        <div className="p-4">
+          <div className="rounded-2xl bg-[radial-gradient(circle_at_top_right,rgba(243,201,105,.12),transparent_48%),#101117] p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-white/28">Connected market</div>
+                <div className="mt-1 text-[18px] font-black">XAUUSD</div>
               </div>
-              {i < 2 && <span className="mx-2 h-px flex-1 bg-white/10" />}
-            </React.Fragment>
-          ))}
+              <div className="text-right">
+                <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-white/28">Gold bid</div>
+                <div className="mt-1 font-mono text-[16px] font-black text-[#F3C969]">{price}</div>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-3 border-t border-white/[0.06] pt-4">
+              <MiniStat label="Bot" value="Monitoring" tone="green" />
+              <MiniStat label="Risk" value="Defined" tone="gold" />
+              <MiniStat label="Control" value="Remote" />
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className="rounded-2xl bg-white/[0.035] p-3">
+              <div className="flex items-center gap-2 text-[11px] font-semibold text-white/65"><Sparkles className="h-3.5 w-3.5 text-[#F3C969]" /> AI Brain</div>
+              <div className="mt-2 text-[10.5px] leading-4 text-white/38">Evidence, blockers and decisions in plain English.</div>
+            </div>
+            <div className="rounded-2xl bg-white/[0.035] p-3">
+              <div className="flex items-center gap-2 text-[11px] font-semibold text-white/65"><Smartphone className="h-3.5 w-3.5 text-[#F3C969]" /> Mobile control</div>
+              <div className="mt-2 text-[10.5px] leading-4 text-white/38">Monitor the EA, support and learning from your phone.</div>
+            </div>
+          </div>
+
+          <div className="mt-3 flex items-center gap-2 rounded-2xl border border-emerald-400/10 bg-emerald-400/[0.04] px-3 py-2.5 text-[10.5px] text-white/48">
+            <ShieldCheck className="h-4 w-4 flex-none text-[#2FD3A0]" />
+            No martingale · defined risk · automated position management
+          </div>
         </div>
       </div>
     </div>
@@ -64,51 +70,67 @@ function AppPreview({ goldPrice }) {
 
 export default function HeroSection({ goldPrice }) {
   return (
-    <div className="relative overflow-hidden bg-[#07080B] text-white" data-testid="hero-section">
+    <div className="relative overflow-hidden bg-[#06070A] text-white" data-testid="hero-section">
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_62%_54%_at_50%_-8%,rgba(243,201,105,0.14),transparent)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_40%_40%_at_88%_10%,rgba(47,211,160,0.06),transparent)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_70%_58%_at_48%_-10%,rgba(243,201,105,0.16),transparent)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_38%_42%_at_92%_18%,rgba(47,211,160,0.055),transparent)]" />
+        <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
       </div>
 
-      <div className="relative z-10 mx-auto max-w-6xl px-4 pb-12 pt-11 md:px-8 md:pb-16 md:pt-16">
-        <div className="grid items-center gap-10 lg:grid-cols-[1.12fr_0.88fr]">
+      <div className="relative z-10 mx-auto max-w-7xl px-4 pb-14 pt-12 md:px-8 md:pb-20 md:pt-20">
+        <div className="grid items-center gap-12 lg:grid-cols-[1.08fr_.92fr]">
           <div className="text-center lg:text-left">
             <div className="flex flex-wrap items-center justify-center gap-2 lg:justify-start">
-              <div className="inline-flex items-center gap-2 rounded-full border border-[#F3C969]/20 bg-[#F3C969]/[0.08] px-3.5 py-1.5">
+              <div className="inline-flex items-center gap-2 rounded-full border border-[#F3C969]/20 bg-[#F3C969]/[0.07] px-3.5 py-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-[#2FD3A0]" />
-                <span className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-[#F3C969]">AI Gold Trading · MetaTrader 5</span>
+                <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#F3C969]">XAUUSD automation · MetaTrader 5</span>
               </div>
-              <a href="https://www.mql5.com/en/market/product/188838" target="_blank" rel="noopener noreferrer" data-testid="hero-mql5-badge"
-                className="inline-flex items-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.05] px-3.5 py-1.5 transition hover:bg-white/[0.09]">
-                <span className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-white/70">On MQL5 Market ↗</span>
+              <a href="https://www.mql5.com/en/market/product/188838" target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center rounded-full border border-white/[0.11] bg-white/[0.04] px-3.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-white/60 transition hover:bg-white/[0.08]">
+                Available on MQL5 ↗
               </a>
             </div>
 
-            <h1 className="mt-6 font-heading text-[2.6rem] font-semibold leading-[1.03] tracking-tight sm:text-6xl" data-testid="hero-title" style={{ textWrap: "balance" }}>
-              Gold, traded with<br /><span className="bg-gradient-to-r from-[#FCE3A0] via-[#F3C969] to-[#C9962E] bg-clip-text text-transparent">machine discipline.</span>
+            <h1 className="mt-6 font-heading text-[2.75rem] font-semibold leading-[1.01] tracking-[-0.035em] sm:text-6xl lg:text-[4.15rem]" data-testid="hero-title" style={{ textWrap: "balance" }}>
+              A professional operating layer for
+              <span className="block bg-gradient-to-r from-[#FFF0BE] via-[#F3C969] to-[#BE8525] bg-clip-text text-transparent">automated Gold trading.</span>
             </h1>
 
-            <p className="mx-auto mt-5 max-w-xl text-[15.5px] leading-7 text-white/55 lg:mx-0">
-              XauCloud watches XAUUSD around the clock, waits for a qualified setup, sizes each trade from your own risk, and manages it to the exit — all inside MetaTrader 5, all visible from a premium Command Center on your phone.
+            <p className="mx-auto mt-5 max-w-2xl text-[15px] leading-7 text-white/52 lg:mx-0">
+              XauCloud combines a Gold-focused MT5 Expert Advisor with a mobile Command Center for live monitoring, AI decision visibility, risk controls, analytics, support and trader education.
             </p>
+
+            <div className="mx-auto mt-6 grid max-w-xl gap-2 text-left sm:grid-cols-2 lg:mx-0">
+              {[
+                "Automated XAUUSD execution and trade management",
+                "Risk-aware sizing and protective controls",
+                "Command Center visibility from phone or desktop",
+                "Support, Forex Academy and market intelligence",
+              ].map((x) => (
+                <div key={x} className="flex items-start gap-2 rounded-xl bg-white/[0.025] px-3 py-2.5">
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 flex-none text-[#F3C969]" />
+                  <span className="text-[11.5px] leading-4 text-white/52">{x}</span>
+                </div>
+              ))}
+            </div>
 
             <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row lg:justify-start">
               <a href="#purchase" data-testid="hero-buy-btn"
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-[#F3C969] px-8 py-3.5 text-[14px] font-extrabold text-black transition hover:brightness-105">
-                Get XauCloud
+                className="inline-flex min-w-[170px] items-center justify-center gap-2 rounded-full bg-[#F3C969] px-7 py-3.5 text-[13.5px] font-extrabold text-black transition hover:brightness-105">
+                Get XauCloud <ArrowRight className="h-4 w-4" />
               </a>
-              <a href="/command" data-testid="hero-perf-btn"
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.05] px-8 py-3.5 text-[14px] font-semibold text-white transition hover:bg-white/[0.09]">
-                Open Command Center
+              <a href="/command"
+                className="inline-flex min-w-[170px] items-center justify-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.045] px-7 py-3.5 text-[13.5px] font-semibold text-white transition hover:bg-white/[0.08]">
+                Explore Command Center
               </a>
             </div>
 
-            <div className="mt-6 flex flex-wrap items-center justify-center gap-x-5 gap-y-1.5 font-mono text-[11px] uppercase tracking-[0.14em] text-white/30 lg:justify-start">
-              <span>Gold-only</span><span className="text-white/15">·</span><span>No martingale</span><span className="text-white/15">·</span><span>Defined stop loss</span><span className="text-white/15">·</span><span>Lifetime license</span>
+            <div className="mt-6 font-mono text-[9.5px] uppercase tracking-[0.14em] text-white/26">
+              Trading involves risk · Historical results are not guarantees · You remain in control
             </div>
           </div>
 
-          <AppPreview goldPrice={goldPrice} />
+          <ProductPreview goldPrice={goldPrice} />
         </div>
       </div>
     </div>

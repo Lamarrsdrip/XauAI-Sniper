@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const schema = readFileSync(new URL("../../../docs/xaucloud-admin-actions.openapi.yaml", import.meta.url), "utf8");
-const source = readFileSync(new URL("./adminGatewayActions.ts", import.meta.url), "utf8");
+const source = readFileSync(
+  new URL("../../../src/routes/admin/adminGatewayActions.ts", import.meta.url),
+  "utf8",
+);
 
 const EXPECTED = [
   "getAdminCapabilities","getCustomer360","diagnoseCustomerIssue","queryUsers","prepareUserAction","executeUserAction",

@@ -515,7 +515,7 @@ function useAuthGuard() {
 }
 
 function AppShell({ active, setActive, children, logout, statusText, online, eaVersion, notifOpen, setNotifOpen }) {
-  const moreActive = ["more", "education", "intelligence", "control", "license", "settings"].includes(active);
+  const moreActive = ["more", "education", "support", "patterns", "intelligence", "control", "license", "settings"].includes(active);
 
   return (
     <div className="min-h-screen bg-[#050507] pb-[calc(5.5rem+env(safe-area-inset-bottom))] text-white" data-testid="bot-monitor-dashboard">
@@ -729,6 +729,8 @@ export default function CloudDashboard() {
       {active==="settings"     && <SettingsPage me={me} heartbeat={heartbeat} licenseInfo={licenseInfo} logout={logout} status={status} />}
       {active==="more"         && <MorePage setActive={setActive} me={me} status={status} openNotifications={()=>setNotifOpen(true)} logout={logout} />}
       {active==="education"    && <EducationPage setActive={setActive} />}
+      {active==="support"      && <SupportCenterPage setActive={setActive} me={me} />}
+      {active==="patterns"     && <PatternScannerPage setActive={setActive} events={events} heartbeat={heartbeat} />}
       <CommandModal command={modalCommand} onCancel={()=>setModalCommand(null)} onSubmit={queueCommand} busy={commandBusy} message={commandMsg} licenseKey={licenseInfo.activation_key} />
     </AppShell>
   );
@@ -1315,6 +1317,8 @@ function HomePage({ status, heartbeat, licenseInfo, online, equityPoints, events
       <AK.Panel><BotControlCard heartbeat={heartbeat} online={online} linked={linked} openTrades={openTrades} openCommand={openCommand} commands={commands} /></AK.Panel>
 
       <NotificationPrompt />
+
+      <CommandToolsStrip setActive={setActive} />
 
       {/* One market-intelligence module — full evidence/history on tap */}
       <OutlookModule outlook={homeOutlook} online={online} onOpen={() => { window.location.href = "/ai-market-outlook"; }} />
@@ -2145,16 +2149,52 @@ function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
   );
 }
 
+// ─── Command Center quick tools ───────────────────────────────────────────────
+function CommandToolsStrip({ setActive }) {
+  const items = [
+    [MessageCircle, "Support", "Talk to XauCloud", "support"],
+    [GraduationCap, "Learn", "Forex A–Z", "education"],
+    [Search, "Patterns", "Chart playbook", "patterns"],
+  ];
+  return (
+    <div className="grid grid-cols-3 gap-2" data-testid="command-tools-strip">
+      {items.map(([Icon, label, sub, id]) => (
+        <button key={id} onClick={() => setActive(id)}
+          className="no-select rounded-2xl bg-[#0C0D12] px-3 py-3 text-left transition active:scale-[0.98] hover:bg-white/[0.055]">
+          <span className="mb-2 flex h-8 w-8 items-center justify-center rounded-xl bg-gold-300/10 text-gold-300">
+            <Icon className="h-4 w-4" />
+          </span>
+          <div className="text-[12.5px] font-semibold">{label}</div>
+          <div className="mt-0.5 truncate text-[9.5px] text-white/35">{sub}</div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ─── More (native grouped hub) ──────────────────────────────────────────────
 function MorePage({ setActive, me, status, openNotifications, logout }) {
   const eaVer = status?.release?.public_display_name || "XauCloud";
   const updateAvailable = status?.release?.update_available;
   return (
     <div className="space-y-5" data-testid="more-page">
-      <div>
-        <h1 className="text-[1.6rem] font-black tracking-tight">More</h1>
-        <p className="mt-0.5 truncate text-[12.5px] text-white/45">{me?.full_name || me?.email || "Your account"}</p>
+      <div className="overflow-hidden rounded-[26px] bg-[radial-gradient(circle_at_top_right,rgba(243,201,105,0.16),transparent_38%),linear-gradient(145deg,#111218,#090A0E)] p-5">
+        <div className="font-mono text-[9px] uppercase tracking-[0.24em] text-gold-300/60">Command Center</div>
+        <div className="mt-2 flex items-end justify-between gap-4">
+          <div>
+            <h1 className="text-[1.65rem] font-black tracking-tight">More control. Less friction.</h1>
+            <p className="mt-1 max-w-md text-[12px] leading-5 text-white/45">
+              Support, learning, market-pattern reference and account tools in one place.
+            </p>
+          </div>
+          <div className="hidden rounded-2xl bg-gold-300 px-3 py-2 text-center text-black sm:block">
+            <div className="font-mono text-[9px] uppercase">Build</div>
+            <div className="text-[11px] font-black">{eaVer}</div>
+          </div>
+        </div>
       </div>
+
+      <CommandToolsStrip setActive={setActive} />
 
       <UI.ListGroup label="Account">
         <UI.ListRow icon={KeyRound} label="License" sub="Key, MT5 binding, EA download" onClick={() => setActive("license")} />
@@ -2164,13 +2204,14 @@ function MorePage({ setActive, me, status, openNotifications, logout }) {
       <UI.ListGroup label="Trading">
         <UI.ListRow icon={SlidersHorizontal} label="Bot Control" sub="Bot on/off & Prop Firm protection" onClick={() => setActive("control")} />
         <UI.ListRow icon={Brain} label="AI Brain" sub="Decisions, ML state, blocks" onClick={() => setActive("intelligence")} />
+        <UI.ListRow icon={Search} label="Pattern Scanner" sub="Real EA context + professional pattern playbook" onClick={() => setActive("patterns")} />
         <UI.ListRow icon={LineChart} label="Market Outlook" sub="Signals, evidence, history" onClick={() => { window.location.href = "/ai-market-outlook"; }} last />
       </UI.ListGroup>
 
-      <UI.ListGroup label="Learn">
-        <UI.ListRow icon={GraduationCap} label="Education Center" sub="How XauCloud works, in plain English" onClick={() => setActive("education")} />
-        <UI.ListRow icon={Rocket} label="Installation Guide" sub="Set up the EA on MetaTrader 5" onClick={() => setActive("education")} />
-        <UI.ListRow icon={HelpCircle} label="FAQ" sub="Common questions answered" onClick={() => setActive("education")} last />
+      <UI.ListGroup label="Learn & Support">
+        <UI.ListRow icon={GraduationCap} label="Forex Academy" sub="Beginner to advanced — complete trading curriculum" onClick={() => setActive("education")} />
+        <UI.ListRow icon={MessageCircle} label="Support Center" sub="Create a ticket and talk with XauCloud support" onClick={() => setActive("support")} />
+        <UI.ListRow icon={HelpCircle} label="FAQ" sub="Trading, XauCloud and account questions" onClick={() => setActive("education")} last />
       </UI.ListGroup>
 
       <UI.ListGroup label="App">
@@ -2188,162 +2229,682 @@ function MorePage({ setActive, me, status, openNotifications, logout }) {
   );
 }
 
-// ─── Education Center ────────────────────────────────────────────────────────
-// Plain-English learning hub. Real content, native drill-down (list → topic),
-// no giant single article. FAQ answers the real questions customers ask.
-const EDU_TOPICS = [
+// ─── Support Center ──────────────────────────────────────────────────────────
+const SUPPORT_CATEGORIES = [
+  ["account", "Account"],
+  ["license", "License"],
+  ["payment", "Payment"],
+  ["installation", "Installation"],
+  ["trading", "Trading"],
+  ["technical", "Technical"],
+  ["education", "Education"],
+  ["other", "Other"],
+];
+
+function SupportStatus({ status }) {
+  const raw = String(status || "open").toLowerCase();
+  const cls = raw === "closed"
+    ? "bg-white/[0.06] text-white/45"
+    : raw.includes("waiting")
+      ? "bg-gold-300/10 text-gold-200"
+      : "bg-emerald-400/10 text-emerald-300";
+  return <span className={`rounded-full px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] ${cls}`}>{raw.replaceAll("_", " ")}</span>;
+}
+
+function SupportCenterPage({ setActive, me }) {
+  const [tickets, setTickets] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [loadingTickets, setLoadingTickets] = useState(true);
+  const [newOpen, setNewOpen] = useState(false);
+  const [subject, setSubject] = useState("");
+  const [category, setCategory] = useState("technical");
+  const [message, setMessage] = useState("");
+  const [replyText, setReplyText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  const loadTickets = useCallback(async () => {
+    try {
+      const r = await commandAxios.get("/cloud/support/tickets");
+      setTickets(r.data?.tickets || []);
+    } catch (e) {
+      setNotice(e.response?.data?.detail || "Support is temporarily unavailable.");
+    } finally {
+      setLoadingTickets(false);
+    }
+  }, []);
+
+  useEffect(() => { loadTickets(); }, [loadTickets]);
+
+  const openTicket = async (id) => {
+    setSelectedId(id); setNotice("");
+    try {
+      const r = await commandAxios.get(`/cloud/support/tickets/${encodeURIComponent(id)}`);
+      setSelected(r.data?.ticket || null);
+    } catch (e) {
+      setNotice(e.response?.data?.detail || "Could not load this ticket.");
+    }
+  };
+
+  const submitTicket = async () => {
+    if (!subject.trim() || !message.trim() || busy) return;
+    setBusy(true); setNotice("");
+    try {
+      const r = await commandAxios.post("/cloud/support/tickets", {
+        subject: subject.trim(), category, message: message.trim(),
+      });
+      const t = r.data?.ticket;
+      setSubject(""); setMessage(""); setNewOpen(false);
+      await loadTickets();
+      if (t?.id) await openTicket(t.id);
+      setNotice("Ticket created. XauCloud support can now see it.");
+    } catch (e) {
+      setNotice(e.response?.data?.detail || "Could not create the ticket.");
+    } finally { setBusy(false); }
+  };
+
+  const sendReply = async () => {
+    if (!selectedId || !replyText.trim() || busy) return;
+    setBusy(true); setNotice("");
+    try {
+      const r = await commandAxios.post(`/cloud/support/tickets/${encodeURIComponent(selectedId)}/reply`, {
+        message: replyText.trim(),
+      });
+      setSelected(r.data?.ticket || selected);
+      setReplyText("");
+      await loadTickets();
+    } catch (e) {
+      setNotice(e.response?.data?.detail || "Could not send your reply.");
+    } finally { setBusy(false); }
+  };
+
+  if (selected) {
+    return (
+      <div className="space-y-4" data-testid="support-ticket-detail">
+        <button onClick={() => { setSelected(null); setSelectedId(null); }} className="no-select inline-flex items-center gap-1.5 text-[13px] font-semibold text-white/55 hover:text-white">
+          <ArrowLeft className="h-4 w-4" /> Support Center
+        </button>
+
+        <div className="rounded-[24px] bg-[#0C0D12] p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-white/30">{selected.id}</div>
+              <h1 className="mt-1 text-[1.2rem] font-black tracking-tight">{selected.subject}</h1>
+              <div className="mt-1 text-[11px] text-white/35">{selected.category} · updated {relativeTime(selected.updated_at)}</div>
+            </div>
+            <SupportStatus status={selected.status} />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          {(selected.messages || []).map((m, i) => {
+            const mine = m.author_type === "customer";
+            return (
+              <div key={m.id || i} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+                <div className={`max-w-[88%] rounded-[20px] px-4 py-3 ${mine ? "bg-gold-300 text-black" : "bg-[#0C0D12] text-white"}`}>
+                  <div className={`mb-1 font-mono text-[8px] uppercase tracking-[0.14em] ${mine ? "text-black/45" : "text-white/30"}`}>
+                    {mine ? "You" : "XauCloud Support"} · {relativeTime(m.created_at)}
+                  </div>
+                  <p className={`whitespace-pre-wrap text-[12.5px] leading-5 ${mine ? "text-black/85" : "text-white/70"}`}>{m.body}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <AK.Panel className="p-3">
+          <textarea value={replyText} onChange={(e) => setReplyText(e.target.value)} maxLength={5000}
+            placeholder="Reply to support…"
+            className="min-h-[88px] w-full resize-none bg-transparent px-1 text-[13px] leading-5 text-white outline-none placeholder:text-white/25" />
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <span className="text-[9px] text-white/25">{replyText.length}/5000</span>
+            <AK.Button size="sm" onClick={sendReply} disabled={busy || !replyText.trim()}>
+              {busy ? "Sending…" : "Send reply"}
+            </AK.Button>
+          </div>
+        </AK.Panel>
+        {notice && <div className="rounded-xl bg-white/[0.04] px-3 py-2 text-[11px] text-white/55">{notice}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5" data-testid="support-center-page">
+      <button onClick={() => setActive("more")} className="no-select inline-flex items-center gap-1.5 text-[13px] font-semibold text-white/55 hover:text-white">
+        <ArrowLeft className="h-4 w-4" /> More
+      </button>
+
+      <div className="rounded-[26px] bg-[radial-gradient(circle_at_top_right,rgba(243,201,105,0.16),transparent_42%),#0C0D12] p-5">
+        <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gold-300/12 text-gold-300">
+          <MessageCircle className="h-5 w-5" />
+        </span>
+        <h1 className="mt-4 text-[1.55rem] font-black tracking-tight">Support Center</h1>
+        <p className="mt-1 text-[12.5px] leading-5 text-white/45">
+          Tell us what happened. Your ticket is available to XauCloud support and the controlled Admin assistant — without exposing your password, tokens or private credentials.
+        </p>
+        <button onClick={() => setNewOpen((v) => !v)} className="mt-4 rounded-xl bg-gold-300 px-4 py-2.5 text-[12px] font-black text-black">
+          {newOpen ? "Cancel" : "New support ticket"}
+        </button>
+      </div>
+
+      {newOpen && (
+        <AK.Panel className="p-4">
+          <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-white/35">Create ticket</div>
+          <input value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={160}
+            placeholder="What do you need help with?"
+            className="mt-3 w-full rounded-xl bg-white/[0.04] px-3 py-3 text-[13px] text-white outline-none placeholder:text-white/25 focus:ring-1 focus:ring-gold-300/40" />
+          <div className="mt-3 flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+            {SUPPORT_CATEGORIES.map(([id, label]) => (
+              <button key={id} onClick={() => setCategory(id)}
+                className={`flex-none rounded-full px-3 py-1.5 text-[10px] font-semibold ${category === id ? "bg-gold-300 text-black" : "bg-white/[0.05] text-white/45"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <textarea value={message} onChange={(e) => setMessage(e.target.value)} maxLength={5000}
+            placeholder="Explain what happened, what you expected, and any error you saw."
+            className="mt-3 min-h-[120px] w-full resize-none rounded-xl bg-white/[0.04] px-3 py-3 text-[13px] leading-5 text-white outline-none placeholder:text-white/25 focus:ring-1 focus:ring-gold-300/40" />
+          <AK.Button className="mt-3 w-full" onClick={submitTicket} disabled={busy || !subject.trim() || !message.trim()}>
+            {busy ? "Creating…" : "Create ticket"}
+          </AK.Button>
+        </AK.Panel>
+      )}
+
+      {notice && <div className="rounded-xl bg-white/[0.04] px-3 py-2 text-[11px] text-white/55">{notice}</div>}
+
+      <UI.SectionLabel className="px-1">Your tickets</UI.SectionLabel>
+      {loadingTickets ? (
+        <AK.Panel className="p-5"><div className="animate-pulse text-[12px] text-white/35">Loading support…</div></AK.Panel>
+      ) : tickets.length ? (
+        <div className="overflow-hidden rounded-2xl bg-[#0C0D12]">
+          {tickets.map((t, i) => (
+            <button key={t.id} onClick={() => openTicket(t.id)}
+              className={`no-select flex w-full items-center gap-3 px-4 py-3.5 text-left transition hover:bg-white/[0.035] ${i ? "border-t border-white/[0.055]" : ""}`}>
+              <span className="flex h-9 w-9 flex-none items-center justify-center rounded-xl bg-white/[0.05] text-gold-300">
+                <MessageCircle className="h-4 w-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] font-semibold">{t.subject}</div>
+                <div className="mt-0.5 truncate text-[10px] text-white/35">{t.category} · {relativeTime(t.updated_at)}</div>
+              </div>
+              <SupportStatus status={t.status} />
+              <ChevronRight className="h-4 w-4 flex-none text-white/20" />
+            </button>
+          ))}
+        </div>
+      ) : (
+        <AK.Panel><AK.Empty icon={MessageCircle} title="No support tickets" body="When you need us, create a ticket here. Your conversation stays attached to your XauCloud account." /></AK.Panel>
+      )}
+
+      <p className="text-center text-[10px] leading-4 text-white/25">
+        Never send passwords, API keys, recovery codes or payment-card details in a support ticket.
+      </p>
+    </div>
+  );
+}
+
+// ─── Forex Academy ───────────────────────────────────────────────────────────
+const FOREX_CURRICULUM = [
   {
-    id: "start", icon: GraduationCap, title: "Getting Started", sub: "What XauCloud is and how it works",
+    id: "foundation", level: "01 · Beginner", icon: GraduationCap, title: "Forex Foundations", sub: "What the market is, who trades it, and why prices move",
     sections: [
-      { h: "What is XauCloud?", body: "XauCloud is an automated Gold (XAUUSD) trading system for MetaTrader 5. A licensed Expert Advisor (EA) runs on your MT5 terminal and trades Gold for you, while this Command Center lets you watch and control it from your phone." },
-      { h: "What does the EA do?", body: "The EA continuously studies Gold, waits for a high-quality setup, sizes the trade to your account risk, and then manages the position — moving to protect profit and closing when the move is done. No martingale, no grid." },
-      { h: "What does Command Center do?", body: "It shows your bot's status, equity, today's P&L, the current AI Market Outlook, any live setup, and your open position — and lets you pause or resume new trades safely." },
-      { h: "What happens after I install?", body: "Once the EA is attached to XAUUSD and your license is linked, its heartbeat appears here within seconds and live data starts streaming. If it doesn't, check the Installation Guide." },
+      ["What forex actually is", "Foreign exchange is the global market where one currency is exchanged for another. Prices move because banks, funds, companies, governments and traders continuously change what they are willing to buy and sell."],
+      ["Currency pairs", "A pair compares two currencies. In EURUSD, EUR is the base and USD is the quote. If EURUSD rises, one euro buys more dollars. Gold is commonly quoted as XAUUSD — the value of one ounce of gold in US dollars."],
+      ["Why markets move", "Price responds to changing expectations about interest rates, inflation, growth, risk, liquidity and positioning. Technical patterns matter because they summarize what buyers and sellers are doing — not because a shape magically predicts the future."],
+      ["Your first rule", "Treat trading as risk management first and prediction second. You can be wrong often and still survive if losses are small; one oversized loss can erase weeks of good decisions."],
     ],
   },
   {
-    id: "install", icon: Rocket, title: "Installing XauCloud", sub: "Step-by-step MT5 setup",
-    steps: [
-      "Get a Windows VPS so the EA can run 24/7 (recommended).",
-      "Install MetaTrader 5 on the VPS.",
-      "Log in to your broker trading account in MT5.",
-      "Download the latest XauCloud EA from the License screen.",
-      "In MT5, open File → Open Data Folder, then MQL5 → Experts.",
-      "Copy the XauCloud .ex5 file into the Experts folder.",
-      "Restart MT5 (or refresh the Navigator's Expert Advisors).",
-      "Enable Algo Trading in the MT5 toolbar.",
-      "Drag XauCloud onto an XAUUSD chart.",
-      "Enter your license PIN (your activation key) in the EA inputs.",
-      "Confirm the bot shows Connected here in Command Center.",
+    id: "quotes", level: "02 · Beginner", icon: Gauge, title: "Quotes, Pips & Lots", sub: "Read price correctly before risking money",
+    sections: [
+      ["Bid and ask", "You sell at the bid and buy at the ask. The difference is the spread — an immediate transaction cost. Fast markets and illiquid periods can widen it."],
+      ["Pips and points", "A pip is a standardized unit of price movement. Brokers may display extra decimal points, so always learn your symbol's contract specification instead of assuming every instrument uses the same point value."],
+      ["Lot size", "Position size controls how much money each price movement is worth. A stop distance means nothing without lot size; risk comes from both together."],
+      ["Contract specs matter", "Gold contract size, tick value, minimum lot and margin can differ by broker. Check MT5 Symbol Specification before translating a setup into money risk."],
     ],
   },
   {
-    id: "trades", icon: LineChart, title: "Understanding Trades", sub: "How it decides, why it waits",
+    id: "orders", level: "03 · Beginner", icon: Target, title: "Orders & Execution", sub: "Market, limit, stop, stop-loss and take-profit",
     sections: [
-      { h: "How it searches for trades", body: "XauCloud looks for evidence that a real move is starting — trend, structure, location and confirmation all have to line up. It is not a trend-follower that jumps on any move." },
-      { h: "What blockers are", body: "Blockers are safety rules that skip a setup that looks risky — e.g. an entry that is too late, or an opposite position still open. A skipped trade is the system protecting you, not a malfunction." },
-      { h: "Why a winning trade may close early", body: "Profit protection can bank a strong gain before the maximum target if the move shows signs of stalling. Locking real profit beats holding for a target that may never arrive." },
-      { h: "Why it may not trade for hours", body: "Gold isn't always in a high-quality setup. No trade is a valid, deliberate decision. More trades does not mean better results." },
+      ["Market orders", "A market order asks to trade now at the best available price. During volatility the fill can differ from the price you saw — this is slippage."],
+      ["Limit orders", "A buy limit sits below current price and a sell limit above. Limits seek a better price but may never fill."],
+      ["Stop orders", "A buy stop sits above current price and a sell stop below. They are often used for breakout participation, but false breaks and slippage are real risks."],
+      ["SL and TP", "A stop-loss defines where the trade thesis is invalidated. A take-profit is a planned exit. Place them because the market structure requires them, then size the trade to that distance — not the other way around."],
     ],
   },
   {
-    id: "pips", icon: Gauge, title: "Pips & Gold Moves", sub: "How results are measured",
+    id: "margin", level: "04 · Beginner", icon: ShieldCheck, title: "Leverage, Margin & Liquidation Risk", sub: "Understand the amplifier before using it",
     sections: [
-      { h: "Pips of risk", body: "Results are shown in pips of the trade's own risk distance. Roughly, 10 XauCloud pips ≈ 1 Gold move in the display convention." },
-      { h: "Protected movement", body: "Once a trade is in decent profit, a protected floor follows the move up so a winner rarely turns into a loss." },
-      { h: "Targets", body: "The system aims to let strong moves run while protecting profit along the way. An extraordinary run is capped only by a very high safety ceiling — the intelligent exits almost always close first." },
+      ["Leverage", "Leverage lets you control more market exposure than your deposited cash. It magnifies both gains and losses; it does not improve the quality of a setup."],
+      ["Margin", "Margin is collateral reserved to keep leveraged positions open. Free margin falls as positions lose or as you add exposure."],
+      ["Margin calls", "If equity falls too far, a broker can restrict or close positions. Never build a strategy that depends on being allowed unlimited room to recover."],
+      ["Professional mindset", "Choose position size from your acceptable loss at the stop, then check margin. Never choose the biggest lot your broker permits."],
     ],
   },
   {
-    id: "outlook", icon: Activity, title: "Market Outlook", sub: "Signals, confidence, results",
+    id: "risk", level: "05 · Core Skill", icon: ShieldCheck, title: "Risk Management", sub: "The skill that keeps you in the game",
     sections: [
-      { h: "Buy / Sell signal", body: "A directional view with a confidence score, an entry, a stop loss, and targets. It reflects what the intelligence currently sees on Gold." },
-      { h: "Tracking, Win, Loss", body: "After a signal is live it is tracked to an outcome: Win (green), Loss (red), or still Tracking (gold). No Valid Outlook means there simply isn't a quality setup right now." },
-      { h: "It still follows the rules", body: "A Market Outlook signal must still comply with the EA's configured execution rules and owner blockers — the Outlook doesn't bypass safety." },
+      ["Risk per trade", "Define the maximum account percentage or cash amount you can lose if the stop is hit. Consistency matters more than chasing a large win."],
+      ["R-multiples", "1R is the amount you planned to risk. A +2R winner makes twice that risk; a -1R loss loses the planned risk. R lets you compare trades independent of lot size."],
+      ["Drawdown", "Drawdown measures decline from a previous equity peak. Recovery gets mathematically harder as drawdown deepens, which is why preventing large losses matters."],
+      ["Correlated risk", "Several trades can be one hidden bet. If instruments respond to the same USD move, total portfolio risk can be much larger than the sum of labels suggests."],
+      ["Risk of ruin", "No setup has a 100% win rate. A position size that cannot survive a normal losing streak is too large, even if the recent backtest looked excellent."],
     ],
   },
   {
-    id: "risk", icon: ShieldCheck, title: "Risk & Protection", sub: "How your profit is protected",
+    id: "structure", level: "06 · Core Skill", icon: LineChart, title: "Market Structure", sub: "Higher highs, lower lows, breaks and transitions",
     sections: [
-      { h: "Profit floor & ratchet", body: "Once a trade reaches meaningful profit, a floor locks in a minimum and ratchets upward toward the peak as the move continues." },
-      { h: "Giveback & runner logic", body: "If a trade gives back too much of its peak, or the move structure fails, the system exits and keeps the gain instead of round-tripping." },
-      { h: "The safety ceiling", body: "There is a very high maximum-profit ceiling as a final backstop. In practice the intelligent exits almost always close a trade long before it — the ceiling exists only so an extraordinary trade is never literally unlimited." },
-      { h: "No-loss-close philosophy", body: "The system is built to protect capital first and avoid turning managed winners into losers." },
+      ["Trend structure", "Uptrends tend to print higher highs and higher lows; downtrends lower highs and lower lows. Structure is evidence, not a guarantee."],
+      ["Break of structure", "A meaningful break occurs when price decisively moves through a structural swing. A wick alone can be a liquidity probe rather than confirmation."],
+      ["Change of character", "When the market stops behaving like its prior trend, a transition may be starting. Wait for follow-through before treating every countertrend move as a reversal."],
+      ["Context beats labels", "A bullish structure break directly into major resistance is different from the same break after a clean base with room to move."],
     ],
   },
   {
-    id: "control", icon: SlidersHorizontal, title: "Bot Control", sub: "Turning the bot on and off",
+    id: "sr", level: "07 · Core Skill", icon: Target, title: "Support, Resistance & Liquidity", sub: "Where reactions become more likely",
     sections: [
-      { h: "Bot On", body: "New valid trades may be opened using the normal evidence engine, blockers and risk rules. Turning it on never forces an immediate trade." },
-      { h: "Bot Off", body: "No new automatic trades open. Crucially, any position already open stays fully protected and managed — stop-loss, profit floor and runner logic keep running until it closes naturally. Bot Off means 'don't open new trades', never 'abandon my open trade'." },
+      ["Zones, not laser lines", "Support and resistance are usually areas where order flow changed before. Treat them as zones with tolerance, not exact prices that must hold to the pip."],
+      ["Liquidity", "Stops and pending orders cluster around obvious highs, lows and range edges. Price can sweep these areas before choosing direction."],
+      ["Role reversal", "Broken resistance can become support and broken support can become resistance, especially when a retest is accepted."],
+      ["Confluence", "A level becomes more useful when structure, trend, session timing and risk-to-reward also support the trade."],
+    ],
+  },
+  {
+    id: "candles", level: "08 · Core Skill", icon: Activity, title: "Candlesticks & Price Action", sub: "Read what happened inside each bar",
+    sections: [
+      ["Body and wick", "The body shows the open-to-close move; wicks show extremes rejected or revisited. A long wick is meaningful only relative to nearby structure and recent volatility."],
+      ["Engulfing bars", "An engulfing candle can signal decisive order flow when it appears at a meaningful location. In the middle of random chop, it is just another candle."],
+      ["Pin bars", "A pin bar shows rejection: price explored one side and closed away from it. Confirmation and location determine whether that rejection is useful."],
+      ["Inside bars", "An inside bar represents compression. Breakouts can expand quickly, but both sides may be swept first, so define invalidation before entry."],
+    ],
+  },
+  {
+    id: "patterns", level: "09 · Core Skill", icon: Search, title: "Chart Patterns", sub: "Reversals, continuations and failed patterns",
+    sections: [
+      ["Patterns are behavior", "A pattern is a visual shorthand for repeated order-flow behavior. The best question is not 'what shape is this?' but 'who is trapped, who is defending, and where is invalidation?'"],
+      ["Reversal families", "Double tops/bottoms, head-and-shoulders and failed breakouts matter most after an extended move and near a meaningful level."],
+      ["Continuation families", "Flags, pennants and tight consolidations can pause a strong move before continuation. Quality falls when the impulse into the pattern was weak."],
+      ["Failure is information", "A textbook pattern that breaks the wrong way can create an even stronger move because traders positioned for the obvious outcome are forced to exit."],
+    ],
+  },
+  {
+    id: "indicators", level: "10 · Intermediate", icon: Gauge, title: "Indicators Without Indicator Addiction", sub: "Trend, momentum and volatility tools",
+    sections: [
+      ["Moving averages", "Moving averages smooth price and can describe trend direction or dynamic zones. They lag by design and should not replace price structure."],
+      ["RSI", "RSI measures momentum, not automatic reversal. 'Overbought' can stay overbought through a strong trend."],
+      ["ATR", "Average True Range estimates recent volatility. It is useful for comparing stop distance and expected movement across different market regimes."],
+      ["Use fewer tools", "Several indicators derived from the same price data can create fake confluence. Know what each tool measures and avoid counting the same evidence multiple times."],
+    ],
+  },
+  {
+    id: "timeframes", level: "11 · Intermediate", icon: LineChart, title: "Multi-Timeframe Analysis", sub: "Align context, setup and execution",
+    sections: [
+      ["Top-down thinking", "Use a higher timeframe for broad structure, a working timeframe for the setup, and a lower timeframe only when it genuinely improves execution."],
+      ["Avoid timeframe shopping", "If you keep switching charts until one agrees with your bias, you are not doing multi-timeframe analysis — you are searching for confirmation."],
+      ["Conflict is normal", "A lower-timeframe uptrend can exist inside a higher-timeframe downtrend. Decide which timeframe defines your trade thesis before entering."],
+    ],
+  },
+  {
+    id: "sessions", level: "12 · Intermediate", icon: Clock3, title: "Sessions, News & Volatility", sub: "When liquidity and event risk change",
+    sections: [
+      ["Trading sessions", "London and New York typically bring deeper liquidity to major FX pairs and gold. Session opens can create both genuine expansion and stop-clearing volatility."],
+      ["Economic news", "Rate decisions, CPI, jobs data and central-bank communication can move markets violently. Technical levels may slip or gap during high-impact releases."],
+      ["Gold drivers", "Gold often responds to real yields, USD direction, inflation expectations, risk sentiment and geopolitics. Relationships can weaken or reverse in different regimes."],
+      ["Do not predict headlines", "Your edge should not depend on correctly guessing a number before release. Decide whether your system trades, reduces risk or stands aside around scheduled news."],
+    ],
+  },
+  {
+    id: "xau", level: "13 · Intermediate", icon: Flame, title: "Trading Gold (XAUUSD)", sub: "Why gold behaves differently from major FX pairs",
+    sections: [
+      ["Gold moves fast", "XAUUSD can travel large distances quickly and can reverse sharply. Stops, lot size and broker tick values deserve extra attention."],
+      ["Liquidity sweeps", "Gold frequently probes obvious highs and lows before expanding. Entering purely because a level was touched can be expensive."],
+      ["Macro sensitivity", "USD moves, yields, inflation expectations and risk events can dominate technical setups. Context can change in minutes."],
+      ["Respect the spread", "Around rollover and major news, gold spreads can widen significantly. A strategy tested on ideal fills may perform very differently live."],
+    ],
+  },
+  {
+    id: "strategy", level: "14 · Intermediate", icon: Brain, title: "Building a Trading Strategy", sub: "Turn ideas into explicit rules",
+    sections: [
+      ["Define the setup", "Write down market condition, location, trigger, invalidation and target. If two traders cannot apply the rule consistently, it is not defined enough."],
+      ["Separate signal and sizing", "The setup decides whether a trade exists. Risk management decides how large it may be. Do not increase size because you 'feel' more confident."],
+      ["Define no-trade conditions", "Knowing when not to trade is part of the strategy: late entries, poor liquidity, excessive spread, news risk, weak structure or insufficient reward."],
+      ["Measure expectancy", "Expectancy combines win rate and average win/loss. A high win rate with occasional huge losses can still be a bad system."],
+    ],
+  },
+  {
+    id: "execution", level: "15 · Intermediate", icon: Target, title: "Entries, Stops & Targets", sub: "Translate an idea into an executable plan",
+    sections: [
+      ["Entry location", "Good entries balance confirmation with remaining room. Waiting too long can turn a correct idea into poor risk-to-reward."],
+      ["Stop placement", "Place the stop where the thesis is invalid, then size down if the stop is wide. Tightening a stop only to fit a larger lot is backwards."],
+      ["Targets", "Targets can use structure, liquidity, volatility or R-multiples. A target should have a reason, not just a round profit number."],
+      ["Partial exits", "Scaling out can reduce variance but also reduce average winner size. Test the rule instead of assuming partial profit is always superior."],
+    ],
+  },
+  {
+    id: "management", level: "16 · Advanced", icon: ShieldCheck, title: "Trade Management", sub: "Break-even, trailing, scaling and exits",
+    sections: [
+      ["Break-even is not free", "Moving a stop to entry removes downside on that trade but can also convert normal retests into premature exits."],
+      ["Trailing stops", "A trailing method should match market structure or volatility. A trail that is too tight can destroy a trend-following edge."],
+      ["Let winners breathe", "The goal is not to protect every floating dollar. The goal is to protect the strategy's long-term expectancy."],
+      ["Exit reasons", "Log whether exits were planned, structural, protective or emotional. Mixing discretionary exits with rule-based exits makes performance hard to diagnose."],
+    ],
+  },
+  {
+    id: "psychology", level: "17 · Advanced", icon: Brain, title: "Trading Psychology", sub: "Process, discipline and emotional control",
+    sections: [
+      ["FOMO", "Fear of missing out usually appears after price has already moved. Missing a trade is cheaper than entering a bad one."],
+      ["Revenge trading", "After a loss, the desire to immediately win it back changes decision quality. A predefined cooldown rule can protect you from yourself."],
+      ["Outcome bias", "A good trade can lose and a bad trade can win. Judge whether you followed your process before judging the P&L."],
+      ["Boredom", "Many trading mistakes happen because nothing is happening. Professional behavior includes doing nothing when there is no edge."],
+    ],
+  },
+  {
+    id: "journal", level: "18 · Advanced", icon: BookOpen, title: "Journaling & Statistics", sub: "Learn from your own evidence",
+    sections: [
+      ["What to record", "Capture setup type, market regime, entry reason, stop, target, result, screenshot and whether every rule was followed."],
+      ["Sample size", "Five wins are not proof of an edge and five losses are not proof a strategy is broken. Evaluate enough trades to include normal variance."],
+      ["Key metrics", "Track expectancy, average R, win rate, profit factor, drawdown, losing streaks and performance by setup or regime."],
+      ["Review mistakes separately", "Separate strategy losses from execution mistakes. Otherwise you may change a good system to solve a discipline problem."],
+    ],
+  },
+  {
+    id: "backtest", level: "19 · Advanced", icon: History, title: "Backtesting & Forward Testing", sub: "Prove an idea before trusting it",
+    sections: [
+      ["Avoid hindsight", "Define rules before scrolling through history. If the rule changes every time a losing example appears, the test is not valid."],
+      ["Include costs", "Spread, commission, slippage and realistic fill assumptions matter. Tiny theoretical edges can disappear after costs."],
+      ["Out-of-sample", "Build on one period and validate on another. If performance exists only in the data used to invent the rules, it may be overfit."],
+      ["Forward test", "Demo or very small live testing shows how the system behaves with real-time decisions, latency and emotions."],
+    ],
+  },
+  {
+    id: "prop", level: "20 · Advanced", icon: ShieldCheck, title: "Prop Firm Risk", sub: "Daily loss, total drawdown and rule-aware trading",
+    sections: [
+      ["Read the actual rules", "Different firms calculate daily drawdown, trailing loss and equity limits differently. Never rely on a generic interpretation."],
+      ["Use a buffer", "Do not trade exactly against the firm's loss threshold. Fees, floating P&L and calculation timing can create accidental breaches."],
+      ["Consistency", "A challenge is a risk-management exercise before it is a profit target. Oversizing to finish faster often reduces the probability of completion."],
+    ],
+  },
+  {
+    id: "xaucloud", level: "21 · XauCloud", icon: Bot, title: "Using XauCloud Professionally", sub: "Understand what automation can — and cannot — do",
+    sections: [
+      ["Automation is not certainty", "XauCloud can execute a defined process consistently, but no trading system can guarantee profit or eliminate market risk."],
+      ["Bot On / Off", "Bot Off stops new automatic entries while existing positions remain managed. Turning Bot On allows normal qualified entries again; it never forces an immediate trade."],
+      ["Market Outlook", "Outlook is evidence and context, not permission to abandon risk rules. Execution still follows XauCloud's blockers and configured risk controls."],
+      ["Use the data", "Review Analytics, Activity, AI Brain and the Pattern Scanner to understand what the system is seeing rather than judging it from one trade."],
     ],
   },
 ];
 
-const EDU_FAQ = [
-  ["Why hasn't the bot traded today?", "Gold may not have offered a high-quality setup. No trade is a deliberate, valid decision — the system waits for quality rather than forcing activity."],
-  ["Why was a trade skipped?", "A safety blocker rejected it — e.g. the entry was too late, or an opposite position was still open. Skipping a risky setup is protection working as intended."],
-  ["Can I close a trade myself?", "Yes. In MT5 you can always close manually, and Command Center's Bot Control has safe command options. The EA keeps managing anything it opened."],
-  ["Will Bot Off close my current trade?", "No. Bot Off only stops new entries. Your open position stays protected and managed until it closes on its own."],
-  ["Why did a profitable trade close before the target?", "Profit protection banked the gain because the move showed signs of stalling. Locking real profit is preferred over holding for a target that might not arrive."],
-  ["What happens if my VPS or terminal disconnects?", "Command Center will show Offline and stop showing live data as current. Once the EA reconnects, its heartbeat and data resume automatically."],
-  ["How do I update the EA?", "When an update is available, the License screen shows it. Download the latest .ex5 and replace the old file in your MT5 Experts folder."],
-  ["How do I contact support?", "Use the Support options in More, or reach out via the contact details on xaucloud.io."],
+const FOREX_FAQ = [
+  ["How much money do I need to start?", "There is no universal minimum. Start with an amount small enough that your planned percentage risk produces a position size your broker supports. Learning on demo first is often the better choice."],
+  ["What is a good win rate?", "Win rate alone is meaningless. A 40% system can be excellent if winners are much larger than losers; a 90% system can be dangerous if rare losses are enormous."],
+  ["How much should I risk per trade?", "There is no number that fits everyone. The right risk is small enough to survive normal losing streaks and remain inside your personal or prop-firm drawdown limits."],
+  ["Are indicators bad?", "No. Indicators are tools derived from market data. Problems begin when several correlated indicators are treated as independent confirmation or used without understanding what they measure."],
+  ["Can chart patterns guarantee a move?", "No. Patterns organize probabilities and invalidation. They fail regularly, which is why location, confirmation and risk management matter."],
+  ["Should I trade news?", "Only if your strategy was designed and tested for news conditions. Spreads, slippage and volatility can change dramatically around releases."],
+  ["Is gold harder than forex?", "Gold is not automatically harder, but it is often faster and more volatile. Position sizing and execution discipline are especially important."],
+  ["Can an EA guarantee profit?", "No. Automation can improve consistency and remove some emotional mistakes, but market uncertainty and loss remain real."],
 ];
 
 function EducationPage({ setActive }) {
   const [topicId, setTopicId] = useState(null);
-  const [faqOpen, setFaqOpen] = useState(false);
-  const topic = EDU_TOPICS.find((t) => t.id === topicId);
+  const [faqOpen, setFaqOpen] = useState(null);
+  const [query, setQuery] = useState("");
+  const [completed, setCompleted] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("xaucloud_edu_completed") || "[]"); } catch { return []; }
+  });
+  const topic = FOREX_CURRICULUM.find((t) => t.id === topicId);
+
+  const toggleComplete = (id) => {
+    const next = completed.includes(id) ? completed.filter((x) => x !== id) : [...completed, id];
+    setCompleted(next);
+    try { localStorage.setItem("xaucloud_edu_completed", JSON.stringify(next)); } catch {}
+  };
 
   if (topic) {
+    const done = completed.includes(topic.id);
     return (
       <div className="space-y-4" data-testid="education-topic">
         <button onClick={() => setTopicId(null)} className="no-select inline-flex items-center gap-1.5 text-[13px] font-semibold text-white/55 hover:text-white">
-          <ArrowLeft className="h-4 w-4" /> Education
+          <ArrowLeft className="h-4 w-4" /> Forex Academy
         </button>
-        <div className="flex items-center gap-2.5">
-          <span className="rounded-xl border border-gold-300/20 bg-gold-300/10 p-2.5"><topic.icon className="h-5 w-5 text-gold-300" /></span>
-          <h1 className="text-[1.4rem] font-black tracking-tight">{topic.title}</h1>
-        </div>
-        {topic.steps ? (
-          <UI.Card>
-            <ol className="space-y-3">
-              {topic.steps.map((s, i) => (
-                <li key={i} className="flex gap-3">
-                  <span className="nums flex h-6 w-6 flex-none items-center justify-center rounded-full bg-gold-300 text-[12px] font-black text-black">{i + 1}</span>
-                  <span className="pt-0.5 text-[13px] leading-5 text-white/75">{s}</span>
-                </li>
-              ))}
-            </ol>
-          </UI.Card>
-        ) : (
-          <div className="space-y-3">
-            {topic.sections.map((s) => (
-              <UI.Card key={s.h}>
-                <div className="text-[14px] font-semibold">{s.h}</div>
-                <p className="mt-1.5 text-[12.5px] leading-5 text-white/55">{s.body}</p>
-              </UI.Card>
-            ))}
+        <div className="rounded-[26px] bg-[radial-gradient(circle_at_top_right,rgba(243,201,105,0.13),transparent_42%),#0C0D12] p-5">
+          <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-gold-300/60">{topic.level}</div>
+          <div className="mt-3 flex items-center gap-3">
+            <span className="rounded-xl bg-gold-300/10 p-2.5"><topic.icon className="h-5 w-5 text-gold-300" /></span>
+            <div>
+              <h1 className="text-[1.35rem] font-black tracking-tight">{topic.title}</h1>
+              <p className="mt-0.5 text-[11.5px] text-white/40">{topic.sub}</p>
+            </div>
           </div>
-        )}
+        </div>
+        <div className="space-y-3">
+          {topic.sections.map(([h, body]) => (
+            <AK.Panel key={h} className="p-4">
+              <div className="text-[14px] font-semibold">{h}</div>
+              <p className="mt-1.5 text-[12.5px] leading-5 text-white/55">{body}</p>
+            </AK.Panel>
+          ))}
+        </div>
+        <button onClick={() => toggleComplete(topic.id)}
+          className={`w-full rounded-2xl py-3 text-[12px] font-black ${done ? "bg-emerald-400/12 text-emerald-300" : "bg-gold-300 text-black"}`}>
+          {done ? "✓ Completed — tap to undo" : "Mark lesson complete"}
+        </button>
+        <p className="text-center text-[9.5px] leading-4 text-white/25">
+          Education only. Examples explain market mechanics and risk; they are not personalized financial advice or guarantees.
+        </p>
       </div>
     );
   }
+
+  const q = query.trim().toLowerCase();
+  const filtered = FOREX_CURRICULUM.filter((t) => !q || `${t.title} ${t.sub} ${t.level} ${t.sections.flat().join(" ")}`.toLowerCase().includes(q));
+  const progress = Math.round((completed.length / FOREX_CURRICULUM.length) * 100);
 
   return (
     <div className="space-y-5" data-testid="education-page">
       <button onClick={() => setActive("more")} className="no-select inline-flex items-center gap-1.5 text-[13px] font-semibold text-white/55 hover:text-white">
         <ArrowLeft className="h-4 w-4" /> More
       </button>
-      <div>
-        <h1 className="text-[1.6rem] font-black tracking-tight">Education Center</h1>
-        <p className="mt-0.5 text-[12.5px] text-white/45">Understand exactly what you bought — in plain English.</p>
+
+      <div className="rounded-[28px] bg-[radial-gradient(circle_at_85%_10%,rgba(243,201,105,0.18),transparent_38%),linear-gradient(145deg,#111218,#090A0E)] p-5">
+        <div className="font-mono text-[9px] uppercase tracking-[0.24em] text-gold-300/65">XauCloud Forex Academy</div>
+        <h1 className="mt-2 text-[1.7rem] font-black tracking-tight">Learn trading from zero to professional process.</h1>
+        <p className="mt-2 max-w-lg text-[12.5px] leading-5 text-white/45">
+          Market mechanics, price action, risk, psychology, testing, gold and automation — organized as a real learning path instead of random tips.
+        </p>
+        <div className="mt-4">
+          <div className="flex items-center justify-between text-[9px] font-mono uppercase tracking-[0.15em] text-white/35">
+            <span>Your progress</span><span>{completed.length}/{FOREX_CURRICULUM.length} · {progress}%</span>
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/[0.06]"><div className="h-full bg-gold-300" style={{ width: `${progress}%` }} /></div>
+        </div>
       </div>
 
-      <UI.ListGroup label="Topics">
-        {EDU_TOPICS.map((t, i) => (
-          <UI.ListRow key={t.id} icon={t.icon} label={t.title} sub={t.sub} onClick={() => setTopicId(t.id)} last={i === EDU_TOPICS.length - 1} />
-        ))}
-      </UI.ListGroup>
+      <div className="flex items-center gap-2 rounded-2xl bg-[#0C0D12] px-3">
+        <Search className="h-4 w-4 flex-none text-white/25" />
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search pips, risk, patterns, psychology…"
+          className="min-w-0 flex-1 bg-transparent py-3 text-[12px] text-white outline-none placeholder:text-white/25" />
+      </div>
 
       <div>
-        <UI.SectionLabel className="mb-2 px-1">FAQ</UI.SectionLabel>
+        <UI.SectionLabel className="mb-2 px-1">Curriculum · {filtered.length} lessons</UI.SectionLabel>
+        <div className="overflow-hidden rounded-2xl bg-[#0C0D12]">
+          {filtered.map((t, i) => {
+            const done = completed.includes(t.id);
+            return (
+              <button key={t.id} onClick={() => setTopicId(t.id)}
+                className={`no-select flex w-full items-center gap-3 px-4 py-3.5 text-left transition hover:bg-white/[0.035] ${i ? "border-t border-white/[0.055]" : ""}`}>
+                <span className={`flex h-9 w-9 flex-none items-center justify-center rounded-xl ${done ? "bg-emerald-400/10 text-emerald-300" : "bg-gold-300/10 text-gold-300"}`}>
+                  {done ? <CheckCircle2 className="h-4 w-4" /> : <t.icon className="h-4 w-4" />}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-mono text-[8px] uppercase tracking-[0.15em] text-white/25">{t.level}</div>
+                  <div className="mt-0.5 truncate text-[13px] font-semibold">{t.title}</div>
+                  <div className="mt-0.5 truncate text-[10px] text-white/35">{t.sub}</div>
+                </div>
+                <ChevronRight className="h-4 w-4 flex-none text-white/20" />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <UI.SectionLabel className="mb-2 px-1">Trading FAQ</UI.SectionLabel>
         <div className="space-y-2">
-          {EDU_FAQ.map(([q, a], i) => {
+          {FOREX_FAQ.map(([question, answer], i) => {
             const open = faqOpen === i;
             return (
-              <div key={i} className="overflow-hidden rounded-2xl border border-white/[0.07] bg-panel">
-                <button onClick={() => setFaqOpen(open ? null : i)} className="no-select flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
-                  <span className="text-[13px] font-semibold">{q}</span>
-                  <ChevronDown className={`h-4 w-4 flex-none text-white/35 transition ${open ? "rotate-180" : ""}`} />
+              <div key={question} className="overflow-hidden rounded-2xl bg-[#0C0D12]">
+                <button onClick={() => setFaqOpen(open ? null : i)} className="no-select flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left">
+                  <span className="text-[12.5px] font-semibold">{question}</span>
+                  <ChevronDown className={`h-4 w-4 flex-none text-white/30 transition ${open ? "rotate-180" : ""}`} />
                 </button>
-                {open && <p className="px-4 pb-4 text-[12.5px] leading-5 text-white/55">{a}</p>}
+                {open && <p className="border-t border-white/[0.05] px-4 py-3 text-[12px] leading-5 text-white/50">{answer}</p>}
               </div>
             );
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Pattern Scanner / playbook ──────────────────────────────────────────────
+const PATTERN_LIBRARY = [
+  ["Double Bottom", "Reversal", "bullish", "Two defended lows near the same zone after a decline.", ["Decline or bearish context before pattern", "Second low rejects instead of accelerating lower", "Neckline / intervening swing breaks", "Room exists before major resistance"]],
+  ["Double Top", "Reversal", "bearish", "Two rejected highs near the same zone after an advance.", ["Advance before pattern", "Second high fails to continue", "Intervening swing low breaks", "Room exists before major support"]],
+  ["Head & Shoulders", "Reversal", "bearish", "Three-peak distribution where the middle peak extends furthest.", ["Prior uptrend", "Right shoulder shows weaker continuation", "Neckline has clear structure", "Break or retest confirms rather than anticipating"]],
+  ["Inverse H&S", "Reversal", "bullish", "Three-trough accumulation where the middle trough extends furthest.", ["Prior downtrend", "Right shoulder holds higher", "Neckline is identifiable", "Break/retest confirms"]],
+  ["Bull Flag", "Continuation", "bullish", "Strong impulse up followed by controlled downward/sideways pause.", ["Impulse is strong", "Pullback is orderly and smaller than impulse", "Structure does not fully reverse", "Breakout has space to continue"]],
+  ["Bear Flag", "Continuation", "bearish", "Strong impulse down followed by controlled upward/sideways pause.", ["Impulse is strong", "Retracement is corrective", "Structure stays broadly bearish", "Breakdown has room"]],
+  ["Ascending Triangle", "Compression", "bullish", "Flat resistance with progressively higher lows.", ["Repeated resistance tests", "Higher lows are genuine", "Compression does not become random chop", "Wait for acceptance above resistance"]],
+  ["Descending Triangle", "Compression", "bearish", "Flat support with progressively lower highs.", ["Repeated support tests", "Lower highs show pressure", "Compression remains organized", "Wait for acceptance below support"]],
+  ["Symmetrical Triangle", "Compression", "neutral", "Lower highs and higher lows compress volatility.", ["Both boundaries converge", "Volume/volatility often contracts", "Direction is not assumed in advance", "Breakout needs confirmation and invalidation"]],
+  ["Rising Wedge", "Exhaustion", "bearish", "Price rises inside narrowing boundaries while momentum often weakens.", ["Prior rise or mature rally", "Both boundaries slope upward", "Progress is slowing", "Break of lower boundary confirms"]],
+  ["Falling Wedge", "Exhaustion", "bullish", "Price falls inside narrowing boundaries while downside momentum often weakens.", ["Prior decline or mature selloff", "Both boundaries slope downward", "Downside progress is slowing", "Upper-boundary break confirms"]],
+  ["Break & Retest", "Structure", "neutral", "Price breaks a meaningful level, returns, then accepts the new side.", ["Level was meaningful before break", "Break has conviction", "Retest holds the new side", "Entry still has sensible invalidation and reward"]],
+  ["Engulfing Rejection", "Candlestick", "neutral", "A strong candle consumes the prior body at a meaningful level.", ["Occurs at useful structure", "Candle closes with intent", "Not entering after an already exhausted move", "Risk is defined beyond invalidation"]],
+  ["Pin-Bar Rejection", "Candlestick", "neutral", "Long wick shows an attempted move was rejected.", ["Wick rejects meaningful liquidity/structure", "Close returns into accepted area", "Follow-through supports rejection", "Do not treat every long wick as a signal"]],
+];
+
+function PatternScannerPage({ setActive, events, heartbeat }) {
+  const [selected, setSelected] = useState(null);
+  const [filter, setFilter] = useState("All");
+  const [query, setQuery] = useState("");
+
+  const livePatternEvent = (events || []).find((e) => {
+    const d = e?.details || {};
+    return Boolean(d.pattern || d.pattern_name || d.setup_pattern || d.chart_pattern || e.pattern);
+  });
+  const livePattern = livePatternEvent
+    ? String(livePatternEvent?.details?.pattern || livePatternEvent?.details?.pattern_name || livePatternEvent?.details?.setup_pattern || livePatternEvent?.details?.chart_pattern || livePatternEvent?.pattern)
+    : null;
+  const liveDecision = livePatternEvent ? String(livePatternEvent?.details?.decision || livePatternEvent?.decision || livePatternEvent?.message || "") : "";
+  const symbol = heartbeat?.symbol || "XAUUSD";
+  const timeframe = heartbeat?.timeframe || "M10";
+  const categories = ["All", ...new Set(PATTERN_LIBRARY.map((p) => p[1]))];
+  const q = query.trim().toLowerCase();
+  const rows = PATTERN_LIBRARY.filter((p) => (filter === "All" || p[1] === filter) && (!q || `${p[0]} ${p[1]} ${p[3]} ${p[4].join(" ")}`.toLowerCase().includes(q)));
+
+  if (selected) {
+    const p = PATTERN_LIBRARY.find((x) => x[0] === selected);
+    if (!p) return null;
+    return (
+      <div className="space-y-4">
+        <button onClick={() => setSelected(null)} className="no-select inline-flex items-center gap-1.5 text-[13px] font-semibold text-white/55 hover:text-white">
+          <ArrowLeft className="h-4 w-4" /> Pattern Scanner
+        </button>
+        <div className="rounded-[26px] bg-[radial-gradient(circle_at_top_right,rgba(243,201,105,0.16),transparent_42%),#0C0D12] p-5">
+          <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-gold-300/60">{p[1]} pattern</div>
+          <h1 className="mt-2 text-[1.5rem] font-black">{p[0]}</h1>
+          <p className="mt-2 text-[12.5px] leading-5 text-white/50">{p[3]}</p>
+        </div>
+        <AK.Panel className="p-4">
+          <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-white/30">Professional checklist</div>
+          <div className="mt-3 space-y-3">
+            {p[4].map((item, i) => (
+              <div key={item} className="flex gap-3">
+                <span className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-gold-300/10 font-mono text-[10px] font-bold text-gold-300">{i + 1}</span>
+                <p className="pt-0.5 text-[12px] leading-5 text-white/55">{item}</p>
+              </div>
+            ))}
+          </div>
+        </AK.Panel>
+        <AK.Panel className="p-4">
+          <div className="text-[13px] font-semibold">Invalidation matters more than the name</div>
+          <p className="mt-1.5 text-[11.5px] leading-5 text-white/45">
+            A pattern is not a guaranteed forecast. Define what would prove the setup wrong, size the position from that invalidation, and demand enough room for the trade to make sense after spread and slippage.
+          </p>
+        </AK.Panel>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5" data-testid="pattern-scanner-page">
+      <button onClick={() => setActive("more")} className="no-select inline-flex items-center gap-1.5 text-[13px] font-semibold text-white/55 hover:text-white">
+        <ArrowLeft className="h-4 w-4" /> More
+      </button>
+
+      <div className="rounded-[28px] bg-[radial-gradient(circle_at_85%_10%,rgba(243,201,105,0.18),transparent_38%),linear-gradient(145deg,#111218,#090A0E)] p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="font-mono text-[9px] uppercase tracking-[0.24em] text-gold-300/65">Pattern Scanner</div>
+            <h1 className="mt-2 text-[1.6rem] font-black tracking-tight">{symbol} · {timeframe}</h1>
+            <p className="mt-1 text-[12px] leading-5 text-white/45">Live XauCloud context when the EA reports a pattern, plus a complete chart-pattern playbook.</p>
+          </div>
+          <span className={`mt-1 h-2.5 w-2.5 rounded-full ${livePattern ? "bg-emerald-400 animate-pulse" : "bg-white/20"}`} />
+        </div>
+        <div className="mt-4 rounded-2xl bg-black/20 p-4">
+          <div className="font-mono text-[8px] uppercase tracking-[0.15em] text-white/25">EA-confirmed live pattern</div>
+          {livePattern ? (
+            <>
+              <div className="mt-1.5 text-[15px] font-black text-emerald-300">{livePattern}</div>
+              <div className="mt-1 text-[10.5px] text-white/40">{liveDecision || "Pattern context reported by the connected EA"} · {relativeTime(livePatternEvent?.ts)}</div>
+            </>
+          ) : (
+            <>
+              <div className="mt-1.5 text-[14px] font-semibold">No confirmed pattern right now</div>
+              <div className="mt-1 text-[10.5px] leading-4 text-white/35">We do not invent detections in the browser. A live label appears only when the connected EA/backend reports one.</div>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 rounded-2xl bg-[#0C0D12] px-3">
+        <Search className="h-4 w-4 flex-none text-white/25" />
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search patterns…"
+          className="min-w-0 flex-1 bg-transparent py-3 text-[12px] text-white outline-none placeholder:text-white/25" />
+      </div>
+      <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+        {categories.map((c) => (
+          <button key={c} onClick={() => setFilter(c)}
+            className={`flex-none rounded-full px-3 py-1.5 text-[10px] font-semibold ${filter === c ? "bg-gold-300 text-black" : "bg-white/[0.05] text-white/45"}`}>
+            {c}
+          </button>
+        ))}
+      </div>
+
+      <div className="overflow-hidden rounded-2xl bg-[#0C0D12]">
+        {rows.map((p, i) => (
+          <button key={p[0]} onClick={() => setSelected(p[0])}
+            className={`no-select flex w-full items-center gap-3 px-4 py-3.5 text-left transition hover:bg-white/[0.035] ${i ? "border-t border-white/[0.055]" : ""}`}>
+            <span className="flex h-9 w-9 flex-none items-center justify-center rounded-xl bg-gold-300/10 text-gold-300"><LineChart className="h-4 w-4" /></span>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-semibold">{p[0]}</div>
+              <div className="mt-0.5 truncate text-[10px] text-white/35">{p[1]} · {p[3]}</div>
+            </div>
+            <ChevronRight className="h-4 w-4 flex-none text-white/20" />
+          </button>
+        ))}
+      </div>
+
+      <p className="text-center text-[9.5px] leading-4 text-white/25">
+        Educational scanner. Live detections are shown only when reported by XauCloud; pattern examples are not trade signals or guarantees.
+      </p>
     </div>
   );
 }

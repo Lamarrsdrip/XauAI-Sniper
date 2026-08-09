@@ -20,6 +20,7 @@ import { registerMlRoutes } from "./routes/ml.js";
 import { registerSmartRoutes } from "./routes/smart.js";
 import { registerJournalRoutes } from "./routes/journal.js";
 import { registerCloudAuthRoutes } from "./routes/cloud/auth.js";
+import { registerCloudSupportRoutes } from "./routes/cloud/support.js";
 import { registerTradingUniverseRoutes } from "./routes/cloud/tradingUniverse.js";
 import { registerCloudActivityRoutes } from "./routes/cloud/activity.js";
 import { registerCloudReservationRoutes } from "./routes/cloud/reservation.js";
@@ -189,6 +190,7 @@ async function main(): Promise<void> {
       await registerSmartRoutes(api);
       await registerJournalRoutes(api);
       await registerCloudAuthRoutes(api);
+      await registerCloudSupportRoutes(api);
       await registerTradingUniverseRoutes(api);
       await registerCloudActivityRoutes(api);
       await registerCloudReservationRoutes(api);
