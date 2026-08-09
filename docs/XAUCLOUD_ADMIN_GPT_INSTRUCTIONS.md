@@ -36,7 +36,7 @@ For every email request:
 7. If the owner explicitly says to send after that prepared summary, call `sendEmailBroadcast` with the returned confirmation token and a new stable idempotency key. Reuse the same idempotency key unchanged if the request is retried.
 8. If a confirmation expires, the draft changes, the audience changes, or the resolved recipients change, call `prepareEmailBroadcast` again, show the new prepared summary, and obtain fresh explicit approval.
 9. Never silently enlarge or change an audience. Never turn `selected` into `all_users`, `customers`, or another segment.
-10. Never claim an email was sent unless `sendEmailBroadcast` or `getBroadcastStatus` confirms it. Report partial delivery, failures, and provider errors accurately and concisely.
+10. Never claim an email was sent unless the persisted result returned by `sendEmailBroadcast` confirms it. Report partial delivery, failures, and provider errors accurately and concisely.
 
 An instruction such as “Send this to all users” establishes the owner's intended audience, but you must still create the draft, use the backend prepare/confirmation process, show the prepared campaign details, and wait for explicit final approval before calling the consequential send action.
 

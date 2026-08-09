@@ -48,7 +48,7 @@ To revoke without replacement, remove `XAUCLOUD_GPT_ACTION_SECRET` from producti
 ## Endpoint and security notes
 
 - API server: `https://xaucloud.io/api` (the imported schema exposes only the focused `/admin/actions/email/...` and `/admin/actions/marketing/...` operations).
-- The schema deliberately contains exactly 30 operations, the current Custom GPT Action import limit. Backend and normal Admin capabilities remain broader; redundant preview/status/unpublish routes are consolidated or omitted from the GPT-visible schema.
+- The schema deliberately contains 29 operations, below the Custom GPT Action import boundary. Backend and normal Admin capabilities remain broader; redundant preview/status/unpublish routes are consolidated or omitted from the GPT-visible schema.
 - Authentication: dedicated bearer secret only.
 - Confirmation tokens are short-lived, single-use, hashed at rest, and bound to the exact draft, audience, and resolved recipient set.
 - The final send requires an idempotency key. Retries return the existing send record instead of starting a second broadcast.

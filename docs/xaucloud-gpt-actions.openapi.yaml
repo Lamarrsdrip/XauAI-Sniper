@@ -161,21 +161,6 @@ paths:
               schema: { $ref: "#/components/schemas/BroadcastStatus" }
         "409":
           description: Draft, audience, recipients, or confirmation state changed; prepare again and obtain fresh approval.
-  /admin/actions/email/broadcasts/{id}:
-    get:
-      operationId: getBroadcastStatus
-      summary: Get the backend-confirmed status of a GPT-initiated broadcast
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string, maxLength: 100 }
-      responses:
-        "200":
-          description: Current persisted result from the normal XauCloud email history.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/BroadcastStatus" }
   /admin/actions/marketing/context:
     get:
       operationId: getMarketingContext
