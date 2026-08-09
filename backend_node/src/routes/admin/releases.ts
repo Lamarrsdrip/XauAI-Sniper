@@ -174,11 +174,9 @@ export async function registerAdminReleasesRoutes(app: FastifyInstance): Promise
   // GET /admin/download/ea-master -- server.py:2570. Admin-only: serves the
   // FULL master MQ5 source with agent token intact. Never exposed publicly.
   app.get("/admin/download/ea-master", { preHandler: requireAdmin }, async (_request, reply) => {
-    const p = path.join(EA_CODE_DIR, "XAUUSD_AI_Sniper_EA.mq5");
+    const p = path.join(EA_CODE_DIR, "XauCloud.io.mq5");
     if (!existsSync(p)) return reply.code(404).send();
-    const src = await readFile(p, "utf8");
-    const meta = getEaMeta(src, "XAUUSD_AI_Sniper_EA_MASTER");
-    return reply.header("Content-Disposition", `attachment; filename="${meta.filename}"`).type("application/octet-stream").send(await readFile(p));
+    return reply.header("Content-Disposition", 'attachment; filename="XauCloud.io.mq5"').type("application/octet-stream").send(await readFile(p));
   });
 
   // GET /admin/download/xauindex-master -- server.py:2610

@@ -1867,7 +1867,7 @@ function EaDownloadCard({ hasLicense, release }) {
 
   const available = info?.available !== false;
   const version = info?.version || "Published release";
-  const filename = info?.filename || `XauCloud-${String(version).replace(/^v/i, "")}.ex5`;
+  const filename = info?.filename || "XauCloud.io.ex5";
   const updateAvailable = release?.update_available;
 
   const requestSignedUrl = async () => {
@@ -1927,7 +1927,7 @@ function EaDownloadCard({ hasLicense, release }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="font-mono text-[13px] font-bold text-white/85">{loading ? "Loading release info…" : `${version}${info?.edition ? ` · ${info.edition}` : ""}`}</div>
-          <p className="mt-1 text-[12px] leading-5 text-white/45">Signed, license-gated compiled .ex5. Operator cloud tokens and fanout settings are stripped before download.</p>
+          <p className="mt-1 text-[12px] leading-5 text-white/45">License-gated XauCloud.io.ex5 production build. The server verifies its SHA-256 checksum before every download.</p>
         </div>
         {!loading && (
           <span className={`flex-none rounded-full px-2.5 py-1 font-mono text-[10px] font-black uppercase tracking-widest ${info?.stable ? "bg-emerald-300 text-[#06110c]" : "bg-gold-300/80 text-[#1a1400]"}`}>

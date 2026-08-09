@@ -120,7 +120,7 @@ export default function InstallationSection({ data }) {
                 <h5 className="text-sm font-bold mb-2">Strategy Tester Setup</h5>
                 <ol className="text-sm text-muted-foreground space-y-1.5 list-decimal list-inside">
                   <li>Open Strategy Tester (Ctrl+R)</li>
-                  <li>Select XAUUSD_AI_Sniper_EA</li>
+                  <li>Select XauCloud.io</li>
                   <li>Set symbol: XAUUSD</li>
                   <li>Open an XAUUSD M10 chart and confirm the selected Decision Mode in the journal</li>
                   <li>Select date range (min 6 months)</li>

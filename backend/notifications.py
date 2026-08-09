@@ -186,10 +186,10 @@ def _build_payload(doc: Dict, event: str) -> Dict:
             body = f"Signal {signal_time} closed negative within 60 minutes · entry {entry} · last {hit_price} · {result_text}"
     elif event == "OUTLOOK_PUBLISHED":
         if direction in ("NO_VALID_OUTLOOK", "NEUTRAL", "RANGE", "TRANSITION"):
-            title = "XAU AI Sniper — Hourly Outlook"
+            title = "XauCloud — Hourly Outlook"
             body = f"No trade right now. Market regime: {doc.get('market_regime', direction)}. Evidence strength: {doc.get('evidence_strength_pct', 0)}%"
         else:
-            title = "XAU AI Sniper — Hourly Outlook"
+            title = "XauCloud — Hourly Outlook"
             body = (f"{direction} outlook · {confidence}% confidence\n"
                    f"Entry: {doc.get('preferred_entry_zone_low')}–{doc.get('preferred_entry_zone_high')}\n"
                    f"SL: {doc.get('suggested_sl')} | TP1: {doc.get('tp1_price')} TP2: {doc.get('tp2_price')} TP3: {doc.get('tp3_price')}")
@@ -227,7 +227,7 @@ def _build_payload(doc: Dict, event: str) -> Dict:
         late_text = " after its 60-minute deadline" if timed_out else ""
         body = f"Signal {signal_time} hit SL{late_text} at {event_at} · entry {entry} · hit {hit_price} · R {achieved_r}"
     else:
-        title = "XAU AI Sniper"
+        title = "XauCloud"
         body = event
 
     return {"title": title, "body": body, "deep_link": deep_link, "outlook_id": doc.get("id"), "event": event}
@@ -452,7 +452,7 @@ async def _send_onesignal(user_id: str, payload: Dict) -> tuple:
         "app_id": cfg["app_id"],
         "include_aliases": {"external_id": [user_id]},
         "target_channel": "push",
-        "headings": {"en": payload.get("title", "XAU AI Sniper")},
+        "headings": {"en": payload.get("title", "XauCloud")},
         "contents": {"en": payload.get("body", "")},
         "data": {
             "deep_link": payload.get("deep_link", ""),
@@ -1090,7 +1090,7 @@ async def send_test_notification(user_id: str) -> Dict:
         return {"status": "NO_DEVICE", "message": "No complete registered device subscription exists for this user."}
 
     payload = {
-        "title": "XAU AI Sniper Test",
+        "title": "XauCloud Test",
         "body": "Phone alerts are working.",
         "deep_link": "/ai-market-outlook",
         "outlook_id": None,

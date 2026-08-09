@@ -21,7 +21,9 @@ describe("Gold Replay section contract", () => {
     expect(section).toContain("summary.profit_factor");
     expect(section).toContain("summary.total_gold_moves");
     expect(section).toContain("summary.total_pips");
-    expect(section).toContain("summary.max_equity_drawdown_pct");
+    expect(section).toContain("summary.equity_relative_drawdown_pct");
+    expect(section).toContain("summary.max_balance_drawdown_pct");
+    expect(section).toContain("summary.max_balance_drawdown_usd");
     expect(section).toContain("summary.total_trades");
     expect(section).toContain("summary.wins");
     expect(section).toContain("summary.losses");

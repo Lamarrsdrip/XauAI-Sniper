@@ -9,6 +9,7 @@ export async function sendPinEmail(toEmail: string, buyerName: string, pin: stri
   const b = await emailBranding();
   const release = await currentEaRelease();
   const versionText = release ? release.version : "your Command Center dashboard";
+  const filenameText = release ? String(release["customer_filename"] ?? "XauCloud.io.ex5") : "XauCloud.io.ex5";
   const supportLine = b.support_email
     ? `<a href="mailto:${b.support_email}" style="color:#D4AF37;text-decoration:none;">${b.support_email}</a>`
     : "your Command Center Support button";
@@ -16,7 +17,7 @@ export async function sendPinEmail(toEmail: string, buyerName: string, pin: stri
   const steps = [
     emailStep(1, "Download MetaTrader 5", `If you don't already have it installed, grab the free official app. <a href="${b.mt5_download_url}" style="color:#D4AF37;">Download MT5 &rarr;</a>`),
     emailStep(2, "Connect or purchase a VPS (optional)", "A VPS keeps MetaTrader 5 running 24/7 so XauCloud can trade around the clock, even when your computer is off."),
-    emailStep(3, "Download the latest XauCloud", `Sign in to Command Center to get the current verified build (${versionText}).`),
+    emailStep(3, "Download XauCloud.io", `Sign in to Command Center to get the current verified build (${versionText}), delivered as <strong>${filenameText}</strong>.`),
     emailStep(4, "Copy the EA into your Experts folder", "In MetaTrader 5: File &rarr; Open Data Folder &rarr; MQL5 &rarr; Experts. Paste the downloaded file there."),
     emailStep(5, "Restart MetaTrader 5", "So it picks up the new Expert Advisor."),
     emailStep(6, "Open an XAUUSD chart", "Attach XauCloud to the chart from the Navigator panel."),

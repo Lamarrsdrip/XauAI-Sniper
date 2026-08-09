@@ -816,6 +816,7 @@ async def send_pin_email(to_email: str, buyer_name: str, pin: str):
     b = await _email_branding()
     release = _current_ea_release()
     version_text = release["version"] if release else "your Command Center dashboard"
+    filename_text = release.get("customer_filename", "XauCloud.io.ex5") if release else "XauCloud.io.ex5"
     support_line = (
         f'<a href="mailto:{b["support_email"]}" style="color:#D4AF37;text-decoration:none;">{b["support_email"]}</a>'
         if b["support_email"] else "your Command Center Support button"
@@ -824,7 +825,7 @@ async def send_pin_email(to_email: str, buyer_name: str, pin: str):
     steps = "".join([
         _email_step(1, "Download MetaTrader 5", f'If you don\'t already have it installed, grab the free official app. <a href="{b["mt5_download_url"]}" style="color:#D4AF37;">Download MT5 &rarr;</a>'),
         _email_step(2, "Connect or purchase a VPS (optional)", "A VPS keeps MetaTrader 5 running 24/7 so XauCloud can trade around the clock, even when your computer is off."),
-        _email_step(3, "Download the latest XauCloud", f'Sign in to Command Center to get the current verified build ({version_text}).'),
+        _email_step(3, "Download XauCloud.io", f'Sign in to Command Center to get the current verified build ({version_text}), delivered as <strong>{filename_text}</strong>.'),
         _email_step(4, "Copy the EA into your Experts folder", "In MetaTrader 5: File &rarr; Open Data Folder &rarr; MQL5 &rarr; Experts. Paste the downloaded file there."),
         _email_step(5, "Restart MetaTrader 5", "So it picks up the new Expert Advisor."),
         _email_step(6, "Open an XAUUSD chart", "Attach XauCloud to the chart from the Navigator panel."),
@@ -2572,13 +2573,11 @@ async def admin_download_ea_master():
     """Admin-only: serves the FULL master MQ5 SOURCE with agent token intact.
     Never expose publicly -- this is the only place the raw source is ever
     served, and only to an authenticated admin."""
-    p = ROOT_DIR / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
+    p = ROOT_DIR / "ea_code" / "XauCloud.io.mq5"
     if not p.exists(): raise HTTPException(status_code=404)
-    src = p.read_text(encoding="utf-8", errors="ignore")
-    meta = _get_ea_meta(src, filename_prefix="XAUUSD_AI_Sniper_EA_MASTER")
     return FileResponse(
         path=str(p),
-        filename=meta["filename"],
+        filename="XauCloud.io.mq5",
         media_type="application/octet-stream",
     )
 
@@ -3014,7 +3013,7 @@ async def get_how_it_works():
 @api_router.get("/docs/setup-guide")
 async def get_setup_guide():
     version = (_current_ea_release() or {}).get("version", "current release")
-    return {"title":f"XauCloud {version} Setup Guide","intro":"Install only the verified compiled EX5 and confirm the running inputs before enabling trading.","steps":[{"step":1,"title":"Prepare MT5 Demo","instructions":["Install your broker's MT5 terminal","Sign in to a demo account","Confirm the broker's exact XAUUSD symbol and trading specification"],"tip":"Do not begin with a real-money account."},{"step":2,"title":"Download Verified EX5","instructions":["Sign in to Command Center","Link the active license",f"Download {version} compiled EX5","Compare the displayed checksum with the release manifest"],"tip":"Customers do not need MQ5 source or MetaEditor compilation."},{"step":3,"title":"Install the EA","instructions":["MT5: File > Open Data Folder","Open MQL5 > Experts","Copy the verified EX5","Refresh Expert Advisors in Navigator"],"tip":"Keep older builds clearly separated."},{"step":4,"title":"Open Gold Chart","instructions":["Open your broker's XAUUSD chart","Set the chart to M10","Confirm live prices and normal broker spread"],"tip":"M10 is the primary evidence timeframe."},{"step":5,"title":"Attach and Review Inputs","instructions":["Drag XAUUSD_AI_Sniper_EA onto the chart","Enter the license PIN","Confirm Decision Mode shows M10 legacy","Confirm risk, magic number, server URL, and structural SL settings"],"tip":"This release runs M10 legacy decision mode only; there is no M30 mode to select."},{"step":6,"title":"Verify Journal","instructions":["Confirm the exact EA version and build hash","Confirm the active Decision Mode","Confirm license and indicator readiness","Confirm there is no older EA attached to another XAUUSD chart"],"tip":"The file name alone does not prove the running version."},{"step":7,"title":"Enable on Demo","instructions":["Enable Allow Algo Trading","Turn the MT5 Algo Trading button on","Watch heartbeat and Command Center status","Verify broker send/modify/close behavior on demo"],"tip":"Move to live only after owner approval and broker-specific evidence."}],"important_notes":["No profit is guaranteed.","The configured 10% risk is high and can produce large losses.","Keep MT5 and connectivity monitored.","Never share your PIN.","Mac and VPS must use the same approved artifact and intentional Decision Mode."]}
+    return {"title":f"XauCloud {version} Setup Guide","intro":"Install only the verified compiled EX5 and confirm the running inputs before enabling trading.","steps":[{"step":1,"title":"Prepare MT5 Demo","instructions":["Install your broker's MT5 terminal","Sign in to a demo account","Confirm the broker's exact XAUUSD symbol and trading specification"],"tip":"Do not begin with a real-money account."},{"step":2,"title":"Download Verified EX5","instructions":["Sign in to Command Center","Link the active license",f"Download {version} compiled EX5","Compare the displayed checksum with the release manifest"],"tip":"Customers do not need MQ5 source or MetaEditor compilation."},{"step":3,"title":"Install the EA","instructions":["MT5: File > Open Data Folder","Open MQL5 > Experts","Copy the verified EX5","Refresh Expert Advisors in Navigator"],"tip":"Keep older builds clearly separated."},{"step":4,"title":"Open Gold Chart","instructions":["Open your broker's XAUUSD chart","Set the chart to M10","Confirm live prices and normal broker spread"],"tip":"M10 is the primary evidence timeframe."},{"step":5,"title":"Attach and Review Inputs","instructions":["Drag XauCloud.io onto the chart","Enter the license PIN","Confirm Decision Mode shows M10 legacy","Confirm risk, magic number, server URL, and stop-loss settings"],"tip":"This release runs M10 legacy decision mode only; there is no M30 mode to select."},{"step":6,"title":"Verify Journal","instructions":["Confirm the exact EA version and build hash","Confirm the active Decision Mode","Confirm license and indicator readiness","Confirm there is no older EA attached to another XAUUSD chart"],"tip":"The file name alone does not prove the running version."},{"step":7,"title":"Enable on Demo","instructions":["Enable Allow Algo Trading","Turn the MT5 Algo Trading button on","Watch heartbeat and Command Center status","Verify broker send/modify/close behavior on demo"],"tip":"Move to live only after owner approval and broker-specific evidence."}],"important_notes":["No profit is guaranteed.","The configured 10% risk is high and can produce large losses.","Keep MT5 and connectivity monitored.","Never share your PIN.","Mac and VPS must use the same approved artifact and intentional Decision Mode."]}
 
 @api_router.get("/docs/video-guide")
 async def get_video_guide():

@@ -7,8 +7,8 @@ import { ChartLineUp, Coin, Gauge, Target, TrendDown } from "@phosphor-icons/rea
 // checked-in snapshot generated directly from a real MetaTrader 5 Strategy
 // Tester report -- the production EA replayed against real historical
 // XAUUSD tick data (100% real ticks, not modeled/simulated). Refreshed
-// manually (monthly) by re-running the actual MT5 Strategy Tester -- never
-// computed or estimated here. See audits/xaucloud/30day_gold_replay_20260805/
+// manually by re-running the actual MT5 Strategy Tester -- never computed
+// or estimated here. See audits/xaucloud/production_promotion_20260809/
 // for the original MT5-generated report this snapshot was built from.
 
 const fmt = (v, digits = 1) => (v == null || Number.isNaN(Number(v)) ? "--" : Number(v).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits }));
@@ -83,7 +83,7 @@ export default function GoldReplaySection({ api }) {
           </h2>
           {meta && (
             <p className="mt-3 max-w-2xl text-[13px] leading-5 text-white/45">
-              {meta.symbol} {meta.timeframe}, {shortDate(meta.period_start)} – {shortDate(meta.period_end)}. Real MetaTrader 5 Strategy Tester replay against real historical tick data ({meta.history_quality}, {meta.ticks?.toLocaleString()} ticks) -- not a simulation. {meta.update_cadence}
+              {meta.symbol} {meta.timeframe}, {shortDate(meta.period_start)} – {shortDate(meta.period_end)}. MetaTrader 5 Strategy Tester replay against real historical tick data ({meta.history_quality}, {meta.ticks?.toLocaleString()} ticks). {meta.update_cadence}
             </p>
           )}
         </div>
@@ -101,18 +101,19 @@ export default function GoldReplaySection({ api }) {
         )}
 
         {summary && (
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-5" data-testid="gold-replay-totals">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6" data-testid="gold-replay-totals">
             <StatCard icon={ChartLineUp} label="Net Profit" value={signed(summary.net_profit_usd, 2)} tone={summary.net_profit_usd >= 0 ? "green" : "red"} />
             <StatCard icon={Target} label="Profit Factor" value={fmt(summary.profit_factor, 2)} tone="neutral" />
-            <StatCard icon={Coin} label="Total Gold Moves" value={signed(summary.total_gold_moves, 2)} tone={summary.total_gold_moves >= 0 ? "green" : "red"} />
-            <StatCard icon={Gauge} label="Total Pips" value={signed(summary.total_pips)} tone={summary.total_pips >= 0 ? "green" : "red"} />
-            <StatCard icon={TrendDown} label="Max Drawdown" value={`${fmt(summary.max_equity_drawdown_pct, 2)}%`} tone="red" />
+            <StatCard icon={Coin} label="Total Trades" value={fmt(summary.total_trades, 0)} tone="neutral" />
+            <StatCard icon={Gauge} label="Wins / Losses" value={`${summary.wins}W / ${summary.losses}L`} tone="neutral" />
+            <StatCard icon={Target} label="Win Rate" value={`${fmt(summary.win_rate_pct, 2)}%`} tone="green" />
+            <StatCard icon={TrendDown} label="Equity Relative DD" value={`${fmt(summary.equity_relative_drawdown_pct, 2)}%`} tone="red" />
           </div>
         )}
 
         {summary && (
           <p className="mt-3 font-mono text-[11px] text-white/40">
-            {summary.total_trades} trades · {summary.wins}W / {summary.losses}L ({fmt(summary.win_rate_pct, 1)}% win rate)
+            Verified price movement: {signed(summary.total_gold_moves, 2)} Gold · {signed(summary.total_pips)} pips. Balance maximal drawdown: ${fmt(summary.max_balance_drawdown_usd, 2)} ({fmt(summary.max_balance_drawdown_pct, 2)}%).
           </p>
         )}
 

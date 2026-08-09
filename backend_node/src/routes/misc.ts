@@ -188,7 +188,7 @@ export async function registerMiscRoutes(app: FastifyInstance): Promise<void> {
         {
           step: 5,
           title: "Attach and Review Inputs",
-          instructions: ["Drag XAUUSD_AI_Sniper_EA onto the chart", "Enter the license PIN", "Confirm Decision Mode shows M10 legacy", "Confirm risk, magic number, server URL, and structural SL settings"],
+          instructions: ["Drag XauCloud.io onto the chart", "Enter the license PIN", "Confirm Decision Mode shows M10 legacy", "Confirm risk, magic number, server URL, and stop-loss settings"],
           tip: "This release runs M10 legacy decision mode only; there is no M30 mode to select.",
         },
         {

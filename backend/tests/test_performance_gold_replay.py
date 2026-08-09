@@ -41,6 +41,13 @@ def test_snapshot_file_exists_and_is_real_looking():
     assert data["meta"]["history_quality"] == "100% real ticks"
     assert data["summary"]["total_trades"] == len(data["trades"])
     assert data["summary"]["wins"] + data["summary"]["losses"] <= data["summary"]["total_trades"]
+    assert data["summary"]["net_profit_usd"] == 9968.01
+    assert data["summary"]["profit_factor"] == 2.12
+    assert data["summary"]["total_trades"] == 44
+    assert data["summary"]["wins"] == 31
+    assert data["summary"]["losses"] == 13
+    assert data["summary"]["equity_relative_drawdown_pct"] == 16.21
+    assert data["summary"]["max_balance_drawdown_pct"] == 13.35
 
 
 def test_endpoint_returns_the_snapshot_with_ok_status():
