@@ -71,19 +71,6 @@ paths:
                 - { $ref: '#/components/schemas/Confirmation' }
                 - { $ref: '#/components/schemas/Reason' }
       responses: { '200': { description: Executed } }
-  /admin/actions/ops/users/{id}/enable/prepare:
-    post:
-      operationId: prepareEnableUser
-      summary: Prepare re-enabling a disabled user.
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
-      responses: { '200': { description: Prepared } }
-  /admin/actions/ops/users/{id}/enable:
-    post:
-      operationId: enableUser
-      summary: Re-enable a user after explicit approval.
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Confirmation' } } } }
-      responses: { '200': { description: Executed } }
   /admin/actions/ops/licenses:
     get:
       operationId: listLicenses
@@ -98,40 +85,6 @@ paths:
       summary: Get license status and audited history without exposing the full PIN by default.
       parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
       responses: { '200': { description: OK } }
-  /admin/actions/ops/licenses/{id}/activate/prepare:
-    post:
-      operationId: prepareActivateLicense
-      summary: Prepare license activation.
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
-      responses: { '200': { description: Prepared } }
-  /admin/actions/ops/licenses/{id}/activate:
-    post:
-      operationId: activateLicense
-      summary: Activate a license after explicit approval.
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Confirmation' } } } }
-      responses: { '200': { description: Executed } }
-  /admin/actions/ops/licenses/{id}/deactivate/prepare:
-    post:
-      operationId: prepareDeactivateLicense
-      summary: Prepare license deactivation.
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Reason' } } } }
-      responses: { '200': { description: Prepared } }
-  /admin/actions/ops/licenses/{id}/deactivate:
-    post:
-      operationId: deactivateLicense
-      summary: Deactivate a license after explicit approval.
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              allOf:
-                - { $ref: '#/components/schemas/Confirmation' }
-                - { $ref: '#/components/schemas/Reason' }
-      responses: { '200': { description: Executed } }
   /admin/actions/ops/licenses/{id}/transfer/prepare:
     post:
       operationId: prepareTransferLicense
@@ -246,19 +199,6 @@ paths:
       parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Confirmation' } } } }
       responses: { '200': { description: Published } }
-  /admin/actions/ops/email/templates/{id}/rollback/prepare:
-    post:
-      operationId: prepareTransactionalTemplateRollback
-      summary: Prepare rollback to the previous published transactional template version.
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
-      responses: { '200': { description: Prepared } }
-  /admin/actions/ops/email/templates/{id}/rollback:
-    post:
-      operationId: rollbackTransactionalTemplate
-      summary: Roll back the transactional template after explicit approval.
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Confirmation' } } } }
-      responses: { '200': { description: Rolled back } }
   /admin/actions/ops/email/deliveries:
     get:
       operationId: searchEmailDeliveries
@@ -270,21 +210,10 @@ paths:
       operationId: getSystemHealth
       summary: Get readiness and a real database ping separately from the liveness health endpoint.
       responses: { '200': { description: OK } }
-  /admin/actions/ops/system/integrations:
-    get:
-      operationId: getIntegrationHealth
-      summary: Check sanitized email, push, payment and database integration configuration without secrets.
-      responses: { '200': { description: OK } }
   /admin/actions/ops/system/errors:
     get:
       operationId: getRecentErrors
       summary: Get recent sanitized runtime errors captured by the current process.
-      parameters: [ { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } } ]
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/system/warnings:
-    get:
-      operationId: getRecentWarnings
-      summary: Get recent sanitized runtime warnings captured by the current process.
       parameters: [ { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } } ]
       responses: { '200': { description: OK } }
   /admin/actions/ops/system/traces/{id}:
@@ -293,17 +222,6 @@ paths:
       summary: Explain a request/correlation ID using sanitized action audits and diagnostics.
       parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
       responses: { '200': { description: Trace } }
-  /admin/actions/ops/system/deployment:
-    get:
-      operationId: getDeploymentInfo
-      summary: Get Node/environment/release/startup information without deployment credentials.
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/audit:
-    get:
-      operationId: getAuditLogs
-      summary: Get recent GPT Admin audit events.
-      parameters: [ { name: limit, in: query, schema: { type: integer, default: 100, maximum: 200 } } ]
-      responses: { '200': { description: OK } }
   /admin/actions/ops/replays:
     get:
       operationId: listReplays
@@ -324,109 +242,19 @@ paths:
         - { name: offset, in: query, schema: { type: integer, default: 0 } }
         - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 100 } }
       responses: { '200': { description: OK } }
-  /admin/actions/ops/replays/{id}/trades/{tradeId}:
-    get:
-      operationId: getReplayTrade
-      summary: Get one historical replay trade.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-        - { name: tradeId, in: path, required: true, schema: { type: string } }
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/performance:
-    get:
-      operationId: getPublishedPerformance
-      summary: Get the currently published historical replay/performance summary.
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/releases:
-    get:
-      operationId: listReleases
-      summary: List EA releases and current version metadata.
-      responses: { '200': { description: OK } }
   /admin/actions/ops/releases/production:
     get:
       operationId: getProductionRelease
       summary: Get current production EA release summary.
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/bot/status:
-    get:
-      operationId: getBotStatus
-      summary: Get latest bot heartbeat/status only. Does not execute trades.
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/bot/instances:
-    get:
-      operationId: getConnectedInstances
-      summary: Get latest heartbeat per connected license/instance.
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/command-center/health:
-    get:
-      operationId: getCommandCenterHealth
-      summary: Get user count, push subscriptions, frontend version if exposed and latest bot heartbeat.
       responses: { '200': { description: OK } }
   /admin/actions/ops/analytics/dashboard:
     get:
       operationId: getDashboardMetrics
       summary: Get aggregate registrations, licenses, orders and revenue.
       responses: { '200': { description: OK } }
-  /admin/actions/ops/analytics/email:
-    get:
-      operationId: getEmailPerformance
-      summary: Get aggregate/sanitized email delivery performance available from current logs.
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/website/homepage:
-    get:
-      operationId: getHomepageContent
-      summary: Inspect currently published controlled homepage marketing slots.
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/website/pricing:
-    get:
-      operationId: getPricingContent
-      summary: Inspect current price configured by XauCloud.
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/website/performance:
-    get:
-      operationId: getPerformancePageContent
-      summary: Inspect data driving the current performance presentation.
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/website/announcements:
-    get:
-      operationId: getLiveAnnouncement
-      summary: Inspect published Command Center announcements.
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/website/landing-pages/{id}:
-    get:
-      operationId: getLandingPageContent
-      summary: Inspect one controlled landing page by id or slug.
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
-      responses: { '200': { description: OK } }
   /admin/actions/ops/support/tickets:
     get:
       operationId: listSupportTickets
       summary: List support tickets if the support ticket collection exists. Returns unavailable rather than inventing tickets.
       parameters: [ { name: limit, in: query, schema: { type: integer, default: 25, maximum: 100 } } ]
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/support/tickets/{id}:
-    get:
-      operationId: getSupportTicket
-      summary: Get a sanitized support ticket.
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
-      responses: { '200': { description: OK } }
-  /admin/actions/ops/support/tickets/{id}/reply-drafts:
-    post:
-      operationId: createSupportReplyDraft
-      summary: Create a support reply draft only. This route does not send it.
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [body]
-              properties: { body: { type: string, maxLength: 10000 } }
-      responses: { '200': { description: Draft saved } }
-  /admin/actions/ops/notifications:
-    get:
-      operationId: listNotifications
-      summary: Inspect existing push delivery and announcement history. Use the existing marketing Action tools for draft/preview/prepare/send.
-      parameters: [ { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } } ]
       responses: { '200': { description: OK } }
