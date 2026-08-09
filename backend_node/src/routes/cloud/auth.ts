@@ -101,6 +101,10 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
       await db.collection("login_audit_log").insertOne({ id: randomUUID(), email, ip, ok: false, role: "cloud_user", ts: new Date() });
       return reply.code(401).send({ detail: "Invalid email or password" });
     }
+    if (u["disabled_at"]) {
+      await db.collection("login_audit_log").insertOne({ id: randomUUID(), email: u["email"], ip, ok: false, role: "cloud_user", ts: new Date(), stage: "account_disabled" });
+      return reply.code(403).send({ detail: "Account disabled. Contact XauCloud support." });
+    }
     await db.collection("login_audit_log").insertOne({ id: randomUUID(), email: u["email"], ip, ok: true, role: "cloud_user", ts: new Date() });
     await db.collection("cloud_users").updateOne({ id: u["id"] }, { $set: { last_login_at: new Date().toISOString() } });
 

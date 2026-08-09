@@ -3,9 +3,12 @@ import { env } from "../env.js";
 import { sendEmail } from "./email.js";
 import { adminNotifyRow, emailBranding, emailLinkButton, emailStep, notifyAdmin, TELEGRAM_SUPPORT_URL } from "./emailBranding.js";
 import { currentEaRelease } from "./releaseManifest.js";
+import { publishedTransactionalRender } from "./adminOpsControl.js";
 
 /** Port of server.py:803 `send_pin_email` -- fulfillment/onboarding email. */
 export async function sendPinEmail(toEmail: string, buyerName: string, pin: string): Promise<boolean> {
+  const override = await publishedTransactionalRender("license_delivery", { buyer_name: buyerName, first_name: buyerName, buyer_email: toEmail, account_email: toEmail, license_pin: pin });
+  if (override) return sendEmail(toEmail, String(override["subject"]), String(override["html"]), { text: String(override["text"] ?? "") });
   const b = await emailBranding();
   const release = await currentEaRelease();
   const versionText = release ? release.version : "your Command Center dashboard";
@@ -125,6 +128,8 @@ export interface BankTransferOrder {
 
 /** Port of server.py:939 `send_bank_transfer_instructions_email`. */
 export async function sendBankTransferInstructionsEmail(toEmail: string, buyerName: string, order: BankTransferOrder): Promise<boolean> {
+  const override = await publishedTransactionalRender("bank_transfer_instructions", { buyer_name: buyerName, first_name: buyerName, buyer_email: toEmail, account_email: toEmail, amount: order.amount_formatted, bank_name: order.bank_name, account_name: order.account_name, account_number: order.account_number, reference: order.reference, expires_at: order.expires_at });
+  if (override) return sendEmail(toEmail, String(override["subject"]), String(override["html"]), { text: String(override["text"] ?? "") });
   const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
 <h2 style="color:#B8860B;">XauCloud - Bank Transfer Instructions</h2>
 <p>Hello ${buyerName || "Trader"},</p>
@@ -146,6 +151,8 @@ export async function sendBankTransferInstructionsEmail(toEmail: string, buyerNa
 
 /** Port of server.py:963 `send_bank_transfer_rejected_email`. */
 export async function sendBankTransferRejectedEmail(toEmail: string, buyerName: string, reference: string, reason: string): Promise<boolean> {
+  const override = await publishedTransactionalRender("bank_transfer_rejected", { buyer_name: buyerName, first_name: buyerName, buyer_email: toEmail, account_email: toEmail, reference, reason });
+  if (override) return sendEmail(toEmail, String(override["subject"]), String(override["html"]), { text: String(override["text"] ?? "") });
   const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
 <h2 style="color:#B8860B;">XauCloud - Bank Transfer Not Approved</h2>
 <p>Hello ${buyerName || "Trader"},</p>

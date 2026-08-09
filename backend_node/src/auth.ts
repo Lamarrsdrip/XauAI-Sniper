@@ -105,6 +105,7 @@ export async function requireCloudUser(request: FastifyRequest, reply: FastifyRe
       { projection: { _id: 0, password_hash: 0 } },
     );
     if (!user) return void reply.code(401).send({ detail: "User not found" });
+    if (user["disabled_at"]) return void reply.code(403).send({ detail: "Account disabled. Contact XauCloud support." });
     (request as FastifyRequest & { cloudUser?: Record<string, unknown> }).cloudUser = user;
   } catch (err) {
     if (err instanceof jwt.TokenExpiredError) {

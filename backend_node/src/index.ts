@@ -7,7 +7,7 @@ import cookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
 import { ZodError } from "zod";
 import { env, IS_PRODUCTION } from "./env.js";
-import { connectDb, closeDb } from "./db.js";
+import { connectDb, closeDb, getDb } from "./db.js";
 import { AuthError } from "./auth.js";
 import { LicenseError } from "./services/license.js";
 import { registerApiHealthRoutes, registerRootHealthRoute } from "./routes/health.js";
@@ -42,6 +42,7 @@ import { registerAdminAccountRoutes } from "./routes/admin/account.js";
 import { registerAdminEmailRoutes } from "./routes/admin/email.js";
 import { ensureGptEmailActionIndexes, registerGptEmailActionRoutes } from "./routes/admin/gptEmailActions.js";
 import { ensureMarketingActionInfrastructure, registerMarketingActionRoutes } from "./routes/admin/marketingActions.js";
+import { ensureAdminOpsInfrastructure, registerAdminOpsActionRoutes } from "./routes/admin/adminOpsActions.js";
 import { registerAdminReleasesRoutes } from "./routes/admin/releases.js";
 import { registerDownloadRoutes } from "./routes/downloads.js";
 import { registerPerformanceRoutes } from "./routes/performance.js";
@@ -55,6 +56,7 @@ import { trackOutlookLifecycleTick } from "./services/marketOutlookTick.js";
 import { enqueueIfActionable } from "./services/outlookExecution.js";
 import { runStartupTasks } from "./services/startup.js";
 import { isApplicationReady, markApplicationReady, readinessSnapshot, runReadinessStep } from "./services/readiness.js";
+import { recordDiagnostic } from "./services/diagnostics.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -89,8 +91,9 @@ app.setErrorHandler((error, request, reply) => {
   if (error instanceof LeaseHttpError) {
     return reply.code(error.statusCode).send({ detail: error.detail });
   }
+  recordDiagnostic("error", "http", error, { route: request.url.split("?", 1)[0], requestId: request.id });
   request.log.error(error);
-  return reply.code(500).send({ detail: "Internal server error" });
+  return reply.code(500).send({ detail: "Internal server error", correlation_id: request.id });
 });
 
 async function main(): Promise<void> {
@@ -98,6 +101,7 @@ async function main(): Promise<void> {
   // Keep the health endpoints available during initialization, but fail all
   // application traffic closed until the database and indexes are ready.
   app.addHook("onRequest", async (request, reply) => {
+    reply.header("x-xaucloud-correlation-id", request.id);
     const pathName = request.url.split("?", 1)[0];
     if (!isApplicationReady() && pathName !== "/health" && pathName !== "/api/health" && pathName !== "/api/readiness") {
       const readiness = readinessSnapshot();
@@ -106,6 +110,18 @@ async function main(): Promise<void> {
         readiness: { state: readiness.state, pending_dependencies: readiness.pending_dependencies, failed_dependencies: readiness.failed_dependencies },
       });
     }
+  });
+
+  app.addHook("onResponse", async (request, reply) => {
+    const route = request.url.split("?", 1)[0] ?? "";
+    if (!route.startsWith("/api/admin/actions/")) return;
+    try {
+      await getDb().collection("admin_action_request_trace").insertOne({
+        id: `trace-${request.id}`, request_id: request.id, correlation_id: request.id, route, method: request.method,
+        status_code: reply.statusCode, result: reply.statusCode < 400 ? "success" : "error", at: new Date().toISOString(),
+        action: String((request.routeOptions.config as unknown as Record<string, unknown>)?.["gptActionName"] ?? request.routeOptions.url ?? route),
+      });
+    } catch { /* DB may still be starting; readiness endpoint remains authoritative. */ }
   });
 
   // Capture the raw request body alongside Fastify's normal JSON parsing --
@@ -194,6 +210,7 @@ async function main(): Promise<void> {
       await registerAdminEmailRoutes(api);
       await api.register(registerGptEmailActionRoutes);
       await registerMarketingActionRoutes(api);
+      await api.register(registerAdminOpsActionRoutes);
       await registerAdminReleasesRoutes(api);
       await registerDownloadRoutes(api);
       await registerPerformanceRoutes(api);
@@ -273,6 +290,7 @@ async function main(): Promise<void> {
   await runReadinessStep("startup_tasks", () => runStartupTasks(app.log), 45_000);
   await runReadinessStep("gpt_email_actions", () => ensureGptEmailActionIndexes(), 30_000);
   await runReadinessStep("marketing_actions", () => ensureMarketingActionInfrastructure(), 45_000);
+  await runReadinessStep("admin_ops_actions", () => ensureAdminOpsInfrastructure(), 30_000);
   markApplicationReady();
   app.log.info({ readiness: readinessSnapshot() }, "XauCloud startup initialization complete");
 
