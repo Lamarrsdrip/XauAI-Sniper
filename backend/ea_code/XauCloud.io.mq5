@@ -33430,10 +33430,11 @@ void SavePatterns()
          jp += StringFormat("{\"d\":%d,\"ed\":%.4f,\"r\":%.1f,\"a\":%.2f,\"h\":%d,\"dw\":%d,\"rg\":%d,\"st\":%d,\"w\":%d,\"p\":%.2f,\"sig\":\"%s\"}",
             patterns[i].direction, patterns[i].emaDiff, patterns[i].rsi, patterns[i].atr,
             patterns[i].hour, patterns[i].dayOfWeek, patterns[i].regime, patterns[i].setupType,
-            patterns[i].wasWinner ? 1 : 0, patterns[i].profit, patterns[i].signature);
+            patterns[i].wasWinner ? 1 : 0, patterns[i].profit, BotMonitorJsonSafe(patterns[i].signature, 240));
       }
       jp += "]";
-      string body = StringFormat("{\"pin\":\"%s\",\"account_id\":\"%I64d\",\"symbol\":\"%s\",\"patterns\":%s}", InpLicensePIN, AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), jp);
+      string body = StringFormat("{\"pin\":\"%s\",\"account_id\":\"%I64d\",\"symbol\":\"%s\",\"patterns\":%s}",
+         BotMonitorJsonSafe(InpLicensePIN, 64), AccountInfoInteger(ACCOUNT_LOGIN), BotMonitorJsonSafe(Symbol(), 32), jp);
       char pd[], res[]; string rh;
       StringToCharArray(body, pd, 0, StringLen(body));
       WebRequest("POST", url, headers, 10000, pd, res, rh);
@@ -44267,9 +44268,10 @@ string BotMonitorJsonSafe(string s, int maxLen)
 {
    StringReplace(s, "\\", "/");
    StringReplace(s, "\"", "'");
-   StringReplace(s, "\r", " ");
-   StringReplace(s, "\n", " ");
-   StringReplace(s, "\t", " ");
+   // JSON strings cannot contain any raw ASCII control character. Pattern
+   // signatures are learned text, so sanitize the complete control range.
+   for(int i = 0; i < StringLen(s); i++)
+      if(StringGetCharacter(s, i) < 32) StringSetCharacter(s, i, ' ');
    StringReplace(s, "—", "-");
    StringReplace(s, "–", "-");
    StringReplace(s, "→", "->");

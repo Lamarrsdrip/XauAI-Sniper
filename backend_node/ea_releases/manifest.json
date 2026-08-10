@@ -29,13 +29,13 @@
       "version": "v6.26.3",
       "edition": "Pattern Intelligence + BREAKOUT_UP/BREAKOUT_DOWN V4 audited production promotion (v6.26.3 lineage)",
       "source_lineage": "v6.26.3",
-      "source_sha256": "57e3e7d12bc40386ceac94d1a38955d3637bcc4d285f95f0c3078b98c8263252",
-      "build_timestamp": "2026-08-10T16:51:57Z",
-      "compiler_result": "0 errors, 0 warnings, 59290 ms elapsed (MetaEditor64.exe via Wine; full-date daily resets; Mac and VPS hash-verified)",
+      "source_sha256": "194cf62655e5d76afd43f73892b7183c27bd0bfbb92da58ea0ed08f87b6275ba",
+      "build_timestamp": "2026-08-10T20:00:24Z",
+      "compiler_result": "0 errors, 0 warnings, 36102 ms elapsed (MetaEditor64.exe via Wine; JSON-safe ML pattern-save payload)",
       "ex5_filename": "XauCloud.io.ex5",
-      "ex5_sha256": "94a06cf4faebf0233290d54af0f7d90868388bf5827c83d9c65f22bc544995fe",
+      "ex5_sha256": "d3b877594c7b68f612d133078dfeed95dbfcf79c10de3148b2e816b37a1968bc",
       "customer_filename": "XauCloud.io.ex5",
-      "release_notes": "Production XauCloud.io v6.26.3 build. Keeps the audited Pattern Intelligence + BREAKOUT_UP/BREAKOUT_DOWN V4 trading lineage and Outlook explicit-SL/expiry fixes. Adds EA-confirmed Pattern Scanner telemetry and deduplicated pattern notifications, modern plain-English customer push notifications, clearer MT5 WebRequest setup diagnostics, and customer experience cleanup. Trading authority remains in the existing canonical EA pipeline.",
+      "release_notes": "Production XauCloud.io v6.26.3 build. Keeps the audited Pattern Intelligence + BREAKOUT_UP/BREAKOUT_DOWN V4 trading lineage and Outlook explicit-SL/expiry fixes. ML pattern-save JSON now sanitizes all raw control characters in learned signatures before posting. Trading authority remains in the existing canonical EA pipeline.",
       "stable_status": true
     }
   }

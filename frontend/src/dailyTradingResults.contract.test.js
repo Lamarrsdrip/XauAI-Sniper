@@ -59,7 +59,8 @@ describe("Daily Trading Results section contract", () => {
     expect(section).not.toMatch(/totals\.net_r\b/);
   });
 
-  test("does not label mixed or unknown account currencies as USD", () => {
-    expect(section).toContain("Currency unavailable");
+  test("renders the real USD total instead of an unavailable-currency fallback", () => {
+    expect(section).not.toContain("Currency unavailable");
+    expect(section).toContain("totals.net_usd");
   });
 });

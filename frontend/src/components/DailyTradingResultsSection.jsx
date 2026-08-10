@@ -96,7 +96,7 @@ export default function DailyTradingResultsSection({ api }) {
             {totals.net_usd_available && totals.net_usd != null ? (
               <TotalCard icon={ChartLineUp} label="Net P/L (30d)" value={`${totals.net_usd >= 0 ? "+" : "-"}$${fmt(Math.abs(totals.net_usd), 2)}`} tone={totals.net_usd >= 0 ? "green" : "red"} />
             ) : (
-              <TotalCard icon={ChartLineUp} label="Net P/L (30d)" value="Currency unavailable" tone="neutral" />
+              <TotalCard icon={ChartLineUp} label="Net P/L (30d)" value="$--" tone="neutral" />
             )}
             <TotalCard icon={Coin} label="Total Gold Moves" value={signed(totals.net_gold_moves, 2)} tone={totals.net_gold_moves >= 0 ? "green" : "red"} />
             <TotalCard icon={Gauge} label="Total Pips" value={signed(totals.net_pips)} tone={totals.net_pips >= 0 ? "green" : "red"} />

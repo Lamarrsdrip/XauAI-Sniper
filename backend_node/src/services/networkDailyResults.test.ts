@@ -102,4 +102,10 @@ describe("network-wide Daily Trading Results", () => {
     expect(result.totals.net_usd).toBeNull();
     expect(result.totals.net_usd_available).toBe(false);
   });
+
+  test("keeps legacy journal profit visible as USD when the old currency field is absent", () => {
+    const result = buildNetworkDailyResults([closedTrade({ account_currency: undefined, profit: 42.5 })], 30, NOW);
+    expect(result.totals.net_usd).toBe(42.5);
+    expect(result.totals.net_usd_available).toBe(true);
+  });
 });

@@ -140,8 +140,12 @@ export function buildNetworkDailyResults(
     else day.breakeven += 1;
     day.accounts.add(account);
     allAccounts.add(account);
+    // Legacy authenticated journal rows predate account_currency. Their
+    // recorded profit field is the same USD account-profit used by the
+    // existing performance feed, so preserve that value instead of hiding it.
+    // An explicitly non-USD account still cannot be honestly aggregated as USD.
     const currency = String(trade["account_currency"] ?? trade["deposit_currency"] ?? "").trim().toUpperCase();
-    if (currency !== "USD") {
+    if (currency && currency !== "USD") {
       allTradesUsd = false;
       day.net_usd_available = false;
     }
