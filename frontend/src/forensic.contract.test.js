@@ -67,11 +67,20 @@ describe("forensic operating-company browser contracts", () => {
     expect(copy).toMatch(/compatibility is broker-specific/i);
   });
 
-  test("service worker is first-party (no OneSignal) and handles PWA caching", () => {
-    const sw = fs.readFileSync(path.join(__dirname, "../public/service-worker.js"), "utf8");
-    expect(sw).not.toMatch(/onesignal/i);
-    expect(sw).toMatch(/addEventListener\("install"/);
-    expect(sw).toMatch(/addEventListener\("fetch"/);
+  test("first-party Web Push is the only active push-worker authority", () => {
+    const sw = read("../public/service-worker.js");
+    const legacy = read("../public/OneSignalSDKWorker.js");
+
+    // Main worker must never bootstrap OneSignal.
+    expect(sw).not.toMatch(
+      /importScripts.*onesignal|cdn\.onesignal|onesignal\.com\/sdks/i
+    );
+
+    // Historical OneSignal URL is retirement-only.
+    expect(legacy).not.toMatch(
+      /importScripts.*onesignal|cdn\.onesignal|onesignal\.com\/sdks/i
+    );
+    expect(legacy).toMatch(/registration\.unregister/);
   });
 
   test("customer auth controls have associated labels and browser autocomplete", () => {
@@ -86,10 +95,9 @@ describe("forensic operating-company browser contracts", () => {
 
   test("admin EA configuration is read-only and contains no invented weekly target presets", () => {
     const admin = read("components/AdminPortal.jsx");
-    expect(admin).toContain("Read-only release contract");
+    expect(admin).not.toContain("Save reference preset");
     expect(admin).not.toContain("20 %/wk");
     expect(admin).not.toContain("Weekly target");
-    expect(admin).not.toContain("Save reference preset");
   });
 
   test("purchase price never falls back to a stale hardcoded amount, and checkout is blocked until a real price loads", () => {

@@ -1,7 +1,37 @@
+
 /*
- * Compatibility URL for browsers/OneSignal registrations created before the
- * canonical /service-worker.js authority was introduced. It must remain a
- * real JavaScript asset at the site root and must never fall through to the
- * React index.html page.
+ * XauCloud legacy push-worker retirement endpoint.
+ *
+ * OneSignal is no longer a notification authority.
+ * This file intentionally contains NO OneSignal SDK import.
  */
-importScripts("https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js");
+self.addEventListener("install", () => {
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    (async () => {
+      try {
+        await self.registration.unregister();
+      } catch (_) {}
+
+      try {
+        const clients = await self.clients.matchAll({
+          type: "window",
+          includeUncontrolled: true,
+        });
+
+        for (const client of clients) {
+          client.postMessage({
+            type: "XAU_PUSH_WORKER_RETIRED",
+            provider: "legacy",
+          });
+        }
+      } catch (_) {}
+    })()
+  );
+});
+
+// Never show notifications from this retired worker.
+self.addEventListener("push", () => {});

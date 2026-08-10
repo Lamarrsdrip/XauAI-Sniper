@@ -3,29 +3,32 @@ import { getDb } from "../db.js";
 import { env } from "../env.js";
 import { getSettings } from "./settings.js";
 import { NAMESPACE_URL, uuidV5 } from "./uuidV5.js";
-import { sendWebPushToUser } from "./webPush.js";
+import { sendWebPushToUser, getVapidPublicKey } from "./webPush.js";
 import { buildResultConversion } from "./marketOutlookCore.js";
 
-/** Port of backend/notifications.py -- push notification dispatch via OneSignal. */
+/** Customer notification dispatch. First-party VAPID Web Push is the only delivery authority. */
 
 const ONESIGNAL_API_URL = "https://api.onesignal.com/notifications";
 
-async function onesignalConfig(): Promise<{ app_id: string; api_key: string }> {
-  const s = await getSettings();
+/**
+ * Legacy API-name compatibility.
+ *
+ * Some routes still call getOnesignalStatus/getOnesignalAppId, but OneSignal
+ * is no longer a push authority. Report the real first-party VAPID state.
+ */
+export async function getOnesignalStatus(): Promise<Record<string, unknown>> {
+  const publicKey = await getVapidPublicKey();
+  const configured = Boolean(publicKey);
   return {
-    app_id: String(s["onesignal_app_id"] ?? "").trim(),
-    api_key: String(s["onesignal_api_key"] ?? "").trim(),
+    configured,
+    provider: "FIRST_PARTY_WEB_PUSH",
+    app_id: "",
+    initialization_state: configured ? "READY" : "NOT_CONFIGURED",
   };
 }
 
-export async function getOnesignalStatus(): Promise<Record<string, unknown>> {
-  const cfg = await onesignalConfig();
-  const configured = Boolean(cfg.app_id && cfg.api_key);
-  return { configured, app_id: configured ? cfg.app_id : "", initialization_state: configured ? "READY" : "NOT_CONFIGURED" };
-}
-
 export async function getOnesignalAppId(): Promise<string> {
-  return (await onesignalConfig()).app_id;
+  return "";
 }
 
 const TIER_RANK: Record<string, number> = { OFF: 0, HOURLY_ONLY: 1, HOURLY_PLUS_RESULTS: 2, ALL_UPDATES: 3 };
@@ -159,15 +162,17 @@ function buildPayload(doc: Record<string, unknown>, event: string): Record<strin
 }
 
 export const SERVER_NOT_CONFIGURED = "SERVER_NOT_CONFIGURED";
-export const NO_ACTIVE_ONESIGNAL_RECIPIENT = "NO_ACTIVE_ONESIGNAL_RECIPIENT";
-export const NO_DEVICE_REGISTERED = NO_ACTIVE_ONESIGNAL_RECIPIENT;
+export const NO_ACTIVE_WEB_PUSH_RECIPIENT = "NO_ACTIVE_WEB_PUSH_RECIPIENT";
+export const NO_DEVICE_REGISTERED = NO_ACTIVE_WEB_PUSH_RECIPIENT;
+// Compatibility alias for older callers/log readers. It is NOT a provider.
+export const NO_ACTIVE_ONESIGNAL_RECIPIENT = NO_ACTIVE_WEB_PUSH_RECIPIENT;
 export const AUTHENTICATION_FAILED = "AUTHENTICATION_FAILED";
 export const INVALID_PAYLOAD = "INVALID_PAYLOAD";
 export const TEMPORARY_DELIVERY_FAILURE = "TEMPORARY_DELIVERY_FAILURE";
 export const UNKNOWN_FAILURE = "UNKNOWN_FAILURE";
 export const RETRYABLE_FAILURES = new Set([SERVER_NOT_CONFIGURED, AUTHENTICATION_FAILED, INVALID_PAYLOAD, TEMPORARY_DELIVERY_FAILURE, UNKNOWN_FAILURE]);
 
-export const REGISTRATION_VERSION = "onesignal-web-v16-device-v1";
+export const REGISTRATION_VERSION = "xaucloud-first-party-web-push-v1";
 
 function cleanText(value: unknown, limit = 240): string {
   return String(value ?? "").trim().slice(0, limit);
@@ -308,13 +313,25 @@ export async function deactivateDeviceRegistration(authenticatedUserId: string, 
 }
 
 export async function completeActiveDevices(userId: string): Promise<Record<string, unknown>[]> {
-  const rows = await getDb()
-    .collection("cloud_push_subscriptions")
-    .find({ user_id: userId, active: true, opted_in: true }, { projection: { _id: 0 } })
-    .sort({ last_seen_at: -1 })
+  // First-party Web Push is the only notification authority.
+  // Do NOT gate VAPID delivery on legacy OneSignal registration records.
+  return await getDb()
+    .collection("web_push_subscriptions")
+    .find(
+      { user_id: String(userId) },
+      {
+        projection: {
+          _id: 0,
+          endpoint: 1,
+          user_id: 1,
+          updated_at: 1,
+          created_at: 1,
+        },
+      },
+    )
+    .sort({ updated_at: -1 })
     .limit(100)
     .toArray();
-  return rows.filter((row) => deviceIsComplete(row));
 }
 
 export async function countCompleteActiveDevices(userId: string): Promise<number> {
@@ -441,10 +458,16 @@ async function sendUserPush(userId: string, payload: Record<string, unknown>): P
       title: String(payload["title"] ?? "XauCloud"),
       body: String(payload["body"] ?? ""),
       deep_link: String(payload["deep_link"] ?? (payload["outlook_id"] ? "/ai-market-outlook" : "/command/dashboard")),
+      tag: String(
+        payload["notification_key"] ??
+        payload["tag"] ??
+        payload["event"] ??
+        "xaucloud"
+      ),
       category: String(payload["category"] ?? notificationCategory(String(payload["event"] ?? ""))),
     });
     if (sent > 0) return { ok: true, failureClass: null, provider: { channel: "web_push", sent } };
-    return { ok: false, failureClass: NO_ACTIVE_ONESIGNAL_RECIPIENT, provider: { channel: "web_push", sent: 0 } };
+    return { ok: false, failureClass: NO_ACTIVE_WEB_PUSH_RECIPIENT, provider: { channel: "web_push", sent: 0 } };
   } catch {
     return { ok: false, failureClass: TEMPORARY_DELIVERY_FAILURE, provider: { channel: "web_push", error: "send_failed" } };
   }
@@ -654,6 +677,15 @@ function fmtNumber(value: unknown, digits = 2): string | null {
 }
 
 /** Port of notifications.py:637 `_build_automated_trade_payload`. */
+
+function canonicalClosedTradeNotificationKey(
+  account: string,
+  ticket: string,
+  userId: string,
+): string {
+  return `TRADE_CLOSED:${String(account).trim()}:${String(ticket).trim()}:${String(userId).trim()}`;
+}
+
 function buildAutomatedTradePayload(doc: Record<string, unknown>): Record<string, unknown> {
   const result = (doc["automated_trade_result"] as Record<string, unknown> | undefined) ?? {};
   const outcome = String(result["result"] ?? "");
@@ -692,31 +724,85 @@ export async function sendAutomatedTradeResultNotification(doc: Record<string, u
     const account = String(doc["account"] ?? "");
     const outlookId = String(doc["id"] ?? "");
     const event = "AUTOMATED_TRADE_RESULT";
+    const result =
+      (doc["automated_trade_result"] as Record<string, unknown> | undefined) ?? {};
+
+    const ticket = cleanText(
+      result["ticket"] ??
+      result["position_id"] ??
+      result["position_ticket"] ??
+      doc["ticket"],
+      80,
+    );
+
     const prefsRows = await notificationPrefsForAccount(account);
     let sent = 0;
+
     for (const prefs of prefsRows) {
       const userId = String(prefs["user_id"] ?? "");
       const tier = String(prefs["tier"] ?? "OFF");
       const requiredTier = EVENT_MIN_TIER[event] ?? "HOURLY_PLUS_RESULTS";
+
       if ((TIER_RANK[tier] ?? 0) < (TIER_RANK[requiredTier] ?? 99)) continue;
       if (categoryMuted(prefs, notificationCategory(event))) continue;
 
-      const idemKey = idempotencyKey(outlookId, event, userId);
-      const already = await db.collection("cloud_notification_log").findOne({ idempotency_key: idemKey });
-      if (already && (already["delivery_status"] === "SENT" || !RETRYABLE_FAILURES.has(String(already["failure_reason"])))) continue;
+      // Ticket exists -> this and TRADE_CLOSED are the SAME customer event.
+      // Outlook identity is only a fallback for legacy rows lacking a ticket.
+      const idemKey = ticket
+        ? canonicalClosedTradeNotificationKey(account, ticket, userId)
+        : idempotencyKey(outlookId, event, userId);
+
+      const already = await db
+        .collection("cloud_notification_log")
+        .findOne({ idempotency_key: idemKey });
+
+      if (already) {
+        const status = String(already["delivery_status"] ?? "");
+        const failure = String(already["failure_reason"] ?? "");
+
+        if (status === "SENT" || status === "NO_DEVICE") continue;
+        if (status === "FAILED" && !RETRYABLE_FAILURES.has(failure)) continue;
+
+        if (status === "PENDING") {
+          const scheduled = new Date(String(already["scheduled_time"] ?? ""));
+          if (
+            !Number.isNaN(scheduled.getTime()) &&
+            Date.now() - scheduled.getTime() < 2 * 60_000
+          ) {
+            continue;
+          }
+        }
+      }
 
       const payload = buildAutomatedTradePayload(doc);
+
+      // Same semantic identity is passed to the browser Service Worker so the
+      // browser can collapse a duplicate even if two deliveries race.
+      payload["notification_key"] = idemKey;
+      payload["tag"] = idemKey;
+      payload["ticket"] = ticket;
+      payload["category"] = "TRADES";
+
       const devices = await completeActiveDevices(userId);
+      const nowIso = new Date().toISOString();
+
       const logEntry: Record<string, unknown> = {
         id: already?.["id"] ?? randomUUID(),
         idempotency_key: idemKey,
         user_id: userId,
-        outlook_id: outlookId,
-        notification_type: event,
-        category: notificationCategory(event),
+        outlook_id: outlookId || null,
+        account,
+        ticket: ticket || null,
+
+        // With a broker ticket this is semantically one TRADE_CLOSED event,
+        // regardless of which internal pipeline observed the closure first.
+        notification_type: ticket ? "TRADE_CLOSED" : event,
+
+        source_event: event,
+        category: "TRADES",
         title: payload["title"],
         body: payload["body"],
-        scheduled_time: already?.["scheduled_time"] ?? new Date().toISOString(),
+        scheduled_time: already?.["scheduled_time"] ?? nowIso,
         sent_time: null,
         delivery_status: "PENDING",
         opened_time: null,
@@ -725,29 +811,54 @@ export async function sendAutomatedTradeResultNotification(doc: Record<string, u
         retry_count: Number(already?.["retry_count"] ?? 0),
         failure_reason: null,
       };
+
+      // Claim the canonical event BEFORE push delivery. The unique
+      // idempotency index means another worker/path cannot deliver it too.
+      if (!already) {
+        try {
+          await db
+            .collection("cloud_notification_log")
+            .insertOne({ ...logEntry });
+        } catch {
+          continue;
+        }
+      }
+
       if (devices.length === 0) {
         logEntry["delivery_status"] = "NO_DEVICE";
         logEntry["failure_reason"] = "SUBSCRIPTION_MISSING";
       } else {
-        const { ok, failureClass, provider } = await sendUserPush(userId, payload);
+        const { ok, failureClass, provider } =
+          await sendUserPush(userId, payload);
+
         Object.assign(logEntry, {
           sent_time: new Date().toISOString(),
           delivery_status: ok ? "SENT" : "FAILED",
-          failure_reason: ok ? null : (failureClass ?? UNKNOWN_FAILURE),
+          failure_reason: ok
+            ? null
+            : (failureClass ?? UNKNOWN_FAILURE),
           provider_http_status: provider["http_status"],
           provider_message_id: provider["message_id"],
           provider_errors: provider["errors"],
           provider_warnings: provider["warnings"],
         });
+
         if (ok) sent += 1;
       }
+
       if (already) {
-        logEntry["retry_count"] = Number(already["retry_count"] ?? 0) + 1;
-        await db.collection("cloud_notification_log").updateOne({ idempotency_key: idemKey }, { $set: logEntry });
-      } else {
-        await db.collection("cloud_notification_log").insertOne({ ...logEntry });
+        logEntry["retry_count"] =
+          Number(already["retry_count"] ?? 0) + 1;
       }
+
+      await db
+        .collection("cloud_notification_log")
+        .updateOne(
+          { idempotency_key: idemKey },
+          { $set: logEntry },
+        );
     }
+
     return sent;
   } catch {
     return null;
@@ -1082,7 +1193,10 @@ export async function sendTradeActivityNotification(activity: Record<string, unk
       if (!userId || (TIER_RANK[String(prefs["tier"] ?? "OFF")] ?? 0) < TIER_RANK["ALL_UPDATES"]!) continue;
       if (categoryMuted(prefs, notificationCategory(event))) continue;
 
-      const idemKey = `${event}:${account}:${symbol}:${ticket}:${userId}`;
+      const idemKey =
+        event === "TRADE_CLOSED"
+          ? canonicalClosedTradeNotificationKey(account, ticket, userId)
+          : `${event}:${account}:${symbol}:${ticket}:${userId}`;
       const already = await db.collection("cloud_notification_log").findOne({ idempotency_key: idemKey });
       if (already) {
         const status = String(already["delivery_status"] ?? "");
@@ -1133,7 +1247,9 @@ export async function sendTradeActivityNotification(activity: Record<string, unk
         logEntry["delivery_status"] = "NO_DEVICE";
         logEntry["failure_reason"] = "SUBSCRIPTION_MISSING";
       } else {
-        payload["notification_key"] = `${idemKey}:provider`;
+        payload["notification_key"] = idemKey;
+        payload["tag"] = idemKey;
+        payload["category"] = notificationCategory(event);
         const { ok, failureClass, provider } = await sendUserPush(userId, payload);
         Object.assign(logEntry, {
           sent_time: new Date().toISOString(),

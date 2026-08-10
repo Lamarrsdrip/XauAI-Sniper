@@ -1,11 +1,11 @@
 /**
  * XAU AI Sniper Command Center — Service Worker
  * ------------------------------------------------------------
- * Network-first PWA worker with OneSignal Web Push v16 imported into the
+
  * same root-scope worker. The page can query the worker to distinguish a
  * healthy PWA worker from a PWA worker whose OneSignal import failed.
  */
-// OneSignal removed. Push is first-party (VAPID) via the dedicated /push-sw.js
+
 // worker at the /push/ scope. This worker handles PWA caching only.
 const WORKER_VERSION = "xaucloud-pwa-v2-firstparty-push";
 const CACHE_NAME = "xauai-cloud-v" + Date.now();
@@ -84,4 +84,75 @@ self.addEventListener("message", (event) => {
   }
 });
 
-// Push and notificationclick events are owned by OneSignal's imported worker.
+
+// ── XauCloud first-party Web Push ────────────────────────────────────────────
+// Push delivery is owned directly by XauCloud's VAPID Web Push backend.
+// No third-party push SDK or service-worker authority is used.
+
+self.addEventListener("push", (event) => {
+  let data = {};
+
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch (_) {
+    try {
+      data = { body: event.data ? event.data.text() : "" };
+    } catch (_) {
+      data = {};
+    }
+  }
+
+  const title = data.title || "XauCloud";
+  const options = {
+    body: data.body || "Open XauCloud for the latest update.",
+    icon: "/favicon.ico",
+    badge: "/favicon.ico",
+    tag: data.tag || data.category || "xaucloud",
+    renotify: false,
+    data: {
+      deep_link: data.deep_link || "/command/dashboard",
+      category: data.category || "SYSTEM",
+    },
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(title, options)
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+
+  const deepLink =
+    event.notification?.data?.deep_link || "/command/dashboard";
+
+  event.waitUntil(
+    (async () => {
+      const windows = await clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+
+      for (const client of windows) {
+        try {
+          const url = new URL(client.url);
+          const target = new URL(deepLink, url.origin);
+
+          if (url.origin === target.origin) {
+            await client.focus();
+
+            if ("navigate" in client) {
+              await client.navigate(target.href);
+            }
+
+            return;
+          }
+        } catch (_) {}
+      }
+
+      if (clients.openWindow) {
+        await clients.openWindow(deepLink);
+      }
+    })()
+  );
+});

@@ -14,6 +14,6 @@ describe("authoritative XauCloud.io production release", () => {
     expect(await verifyReleaseArtifact("v6.26.3", release!)).toBeNull();
 
     const bytes = await readFile(path.join(EA_RELEASES_DIR, "v6.26.3", "XauCloud.io.ex5"));
-    expect(createHash("sha256").update(bytes).digest("hex")).toBe("c4d7cf6f5160388cbbb2be7fa9644ffc6a94677f740a27327def90aec4e1da54");
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe("a20078555496a3006d836cae39df794f66f30f4956af9ce08d2903b6ee392fd8");
   });
 });

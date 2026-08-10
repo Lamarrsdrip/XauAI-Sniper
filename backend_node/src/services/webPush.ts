@@ -2,13 +2,9 @@ import { getDb } from "../db.js";
 import { getSettings } from "./settings.js";
 
 // ── First-party Web Push (VAPID) ──────────────────────────────────────────────
-// Additive, fail-safe replacement path for OneSignal. Self-managed VAPID keys
-// (generated once, persisted in admin_settings — same pattern as other
-// self-managed secrets). Everything here is best-effort: it lazy-loads the
-// web-push module so a deploy that hasn't reinstalled deps can never crash
-// backend startup, and every send is wrapped so it can never break the
-// existing notification dispatch. OneSignal remains the proven path until this
-// is verified on real devices.
+// XauCloud owns push delivery directly through the Web Push protocol.
+// No third-party push provider is an authority in this module.
+// Delivery is best-effort and dead browser subscriptions are pruned automatically.
 
 let _wp: any = null;
 let _wpTried = false;

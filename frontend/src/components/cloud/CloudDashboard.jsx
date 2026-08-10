@@ -80,8 +80,41 @@ const DEFAULT_PROP = {
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+const brokerBrand = (server="") => {
+  const raw = String(server || "").trim();
+  if (!raw) return "";
+
+  const cleaned = raw
+    .replace(/[-_.\\s]*(?:MT[45])?[-_.\\s]*(?:DEMO|TRIAL|LIVE|REAL|PRACTICE)\\d*.*$/i, "")
+    .replace(/[-_.\\s]+MT[45](?:[-_.\\s]*\\d+)?$/i, "")
+    .replace(/[-_.\\s]+(?:DEMO|TRIAL|LIVE|REAL|PRACTICE)\\d*.*$/i, "")
+    .trim();
+
+  return cleaned || raw;
+};
+
 const money = (v) => Number(v||0).toLocaleString("en-US",{style:"currency",currency:"USD",maximumFractionDigits:2});
 const pct   = (v) => `${Number(v||0).toFixed(2)}%`;
+
+const brokerDisplayName = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  // Customer UI shows the broker identity only.
+  // Keep the original broker_server value untouched in telemetry/backend.
+  // Examples:
+  // Exness-MT5Trial9 -> Exness
+  // Exness-MT5Real12 -> Exness
+  // ICMarkets-Live03 -> ICMarkets
+  // Pepperstone-Demo -> Pepperstone
+  const cleaned = raw
+    .replace(/(?:[-_\s]*MT[45])?[-_\s]*(?:Trial|Real|Demo|Live)\d*$/i, "")
+    .replace(/[-_\s]+$/g, "")
+    .trim();
+
+  return cleaned || raw;
+};
+
 const relativeTime = (iso) => {
   if (!iso) return "never";
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
