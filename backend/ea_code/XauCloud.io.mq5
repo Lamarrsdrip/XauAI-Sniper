@@ -1971,6 +1971,8 @@
 // the missed-entry measurement, the Outlook thesis snapshot) references the
 // same single constant instead of each hardcoding 1.20 separately.
 #define XAU_SL_WIDENING_FACTOR 1.20
+// Hard broker-stop ceiling for every normal and Outlook execution.
+#define XAU_MAX_GOLD_SL_MOVE 10.0
 
 // v6.25.1 owner directive 2026-07-17 -- canonical final-1R-distance
 // authority. Every module that needs "1R" (0.30R missed-move, smart post-
@@ -10091,6 +10093,33 @@ double XAU_NormalizeToTick(double price)
    return NormalizeDouble(normalized, digits);
 }
 
+// Rounding must not turn a compliant max-$10 stop into a wider one.
+double XAU_NormalizeGoldStopTowardEntry(double price, int direction)
+{
+   double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+   double point    = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   int    digits   = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   if(tickSize <= 0.0) tickSize = point;
+   if(tickSize <= 0.0) return NormalizeDouble(price, digits);
+
+   double normalized = (direction == 1)
+                     ? MathCeil(price / tickSize - 0.000000001) * tickSize
+                     : MathFloor(price / tickSize + 0.000000001) * tickSize;
+   return NormalizeDouble(normalized, digits);
+}
+
+// Canonical actual-execution rule: retain narrower stops, cap wider stops.
+double XAU_ClampGoldStopToMaxDistance(double referencePrice, double proposedSL, int direction)
+{
+   if(referencePrice <= 0.0 || proposedSL <= 0.0 || (direction != 1 && direction != -1))
+      return 0.0;
+   double boundary = direction == 1 ? referencePrice - XAU_MAX_GOLD_SL_MOVE
+                                    : referencePrice + XAU_MAX_GOLD_SL_MOVE;
+   double capped   = direction == 1 ? MathMax(proposedSL, boundary)
+                                    : MathMin(proposedSL, boundary);
+   return XAU_NormalizeGoldStopTowardEntry(capped, direction);
+}
+
 bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curPrice, string logTag)
 {
    // v6.25.9 owner directive -- broker SL writes are deny-by-default. The
@@ -10167,6 +10196,16 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       if(newSL < minAllowedSL) newSL = minAllowedSL;
    }
    newSL = XAU_NormalizeToTick(newSL);
+
+   // No owner-authorized later modification may widen beyond $10 from fill.
+   if(!PositionSelectByTicket(ticket)) return false;
+   double actualEntry = PositionGetDouble(POSITION_PRICE_OPEN);
+   double cappedSL = XAU_ClampGoldStopToMaxDistance(actualEntry, newSL, isBuy ? 1 : -1);
+   if(cappedSL <= 0.0) return false;
+   if(MathAbs(cappedSL - newSL) > MathMax(point * 0.1, 0.000001))
+      PrintFormat("GOLD_SL_MAX_CAP_APPLIED | ticket=%I64u | entry=%.5f | requestedSL=%.5f | effectiveSL=%.5f | authority=%s",
+                  ticket, actualEntry, newSL, cappedSL, logTag);
+   newSL = cappedSL;
 
    // Every legacy trail/BE/AI/transition authority converges here. Once the
    // immutable campaign owner floor is active, no caller may submit a worse SL.
@@ -22484,7 +22523,7 @@ double XAU_FixedGoldMoveSLPrice(double referencePrice, int direction, int digits
 {
    double dist = InpStopLossGoldMove;
    double slPrice = (direction == 1) ? referencePrice - dist : referencePrice + dist;
-   return NormalizeDouble(slPrice, digits);
+   return XAU_ClampGoldStopToMaxDistance(referencePrice, slPrice, direction);
 }
 
 // Broker-constraint awareness only (never silently widens/alters the
@@ -23520,22 +23559,17 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    XAU_FinalRiskGeometry finalGeometry;
    if(explicitSL > 0.0)
    {
-      // --- AUTHORITATIVE OUTLOOK SL (owner directive 2026-08-08, item 3) ---
-      // A Market Outlook signal supplied this exact stop. Do NOT recompute it
-      // structurally and do NOT widen it. Validate only that it sits on the
-      // correct side of the REAL execution price and respects the broker stop
-      // level; if not, skip the trade (never invent, relocate, or widen a
-      // stop). slDist below is the distance from the actual entry price to
-      // this stop, so the unchanged lot-sizing math further down derives the
-      // correct volume for the configured risk even though price may have
-      // moved during the 2-3 minute delay.
-      bool outlookSideOk = (signal == 1) ? (explicitSL < price - minDist)
-                                         : (explicitSL > price + minDist);
+      // Outlook uses the same actual broker-stop rule as normal trades:
+      // narrower invalidations survive; wider stops are capped at $10.
+      double requestedOutlookSL = explicitSL;
+      sl = XAU_ClampGoldStopToMaxDistance(price, requestedOutlookSL, signal);
+      bool outlookSideOk = (signal == 1) ? (sl < price - minDist)
+                                         : (sl > price + minDist);
       if(!outlookSideOk)
       {
          g_lastOpenTradeFailureReason = StringFormat(
             "OUTLOOK_SL_INVALID_AT_EXECUTION sl=%.2f price=%.2f minStopDist=%.2f",
-            explicitSL, price, minDist);
+            requestedOutlookSL, price, minDist);
          PrintFormat("OUTLOOK_SL_REJECT | %s", g_lastOpenTradeFailureReason);
          BotMonitorExecutionFunnel("EXECUTION_FUNNEL", "BLOCK", "OutlookSL",
                                    signal, funnelSetup, funnelGrade, funnelScore,
@@ -23545,14 +23579,11 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                    reason, price);
          return false;
       }
-      slDist = MathAbs(price - explicitSL);
-      sl = XAU_NormalizeToTick(explicitSL);
+      slDist = MathAbs(price - sl);
       tp = NormalizeDouble(signal == 1 ? price + slDist * tpM : price - slDist * tpM, digits);
       g_latestDecisionSnapshot.slSource = SL_M5_SWING_INVALIDATION;
-      PrintFormat("OUTLOOK_SL_APPLIED | signal=%s outlookSL=%.2f execPrice=%.2f slDist=%.2f (authoritative, not widened)",
-                  signal==1?"BUY":"SELL", sl, price, slDist);
-      // Authoritative Outlook SL is NEVER widened: raw == final == the exact stop,
-      // so downstream 1R geometry uses this distance verbatim.
+      PrintFormat("OUTLOOK_SL_APPLIED | signal=%s requestedSL=%.2f effectiveSL=%.2f execPrice=%.2f slDist=%.2f rule=MAX_10_GOLD_MOVE",
+                  signal==1?"BUY":"SELL", requestedOutlookSL, sl, price, slDist);
       rawStructuralSL = sl;
       rawSLDistance   = slDist;
       finalGeometry.structuralDistance         = slDist;
@@ -24321,7 +24352,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    }
    else
    {
-      PrintFormat("OUTLOOK_SL_PRESERVED_PRE_SEND | side=%s | entry=%.2f | explicitSL=%.2f | lot=%.4f | normalFixedSLBypassed=true",
+      PrintFormat("OUTLOOK_SL_CAPPED_PRE_SEND | side=%s | entry=%.2f | effectiveSL=%.2f | lot=%.4f | rule=MAX_10_GOLD_MOVE",
                   signal == 1 ? "BUY" : "SELL", price, sl, lots);
    }
    PrintFormat("OWNER_RISK_POLICY | structural_sl_r=1.00 | configured_risk_pct=%.2f | stop_distance=%.5f | lots=%.4f | expected_risk_usd=%.2f",
@@ -24506,7 +24537,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       // post-fill safety pass would silently convert an Outlook trade back
       // into a normal fixed-stop trade after a correct initial request.
       double confirmedOwnerSL = (explicitSL > 0.0)
-                              ? XAU_NormalizeToTick(explicitSL)
+                              ? XAU_ClampGoldStopToMaxDistance(confirmedOpen, explicitSL, signal)
                               : XAU_FixedGoldMoveSLPrice(confirmedOpen, signal, digits);
       double brokerCurPrice = signal == 1 ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
                                           : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
@@ -44385,7 +44416,9 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
    if(structEntry > 0.0 && structSlDist > 0.0)
    {
       rawStructSl = thesisDir == 1 ? structEntry - rawStructSlDist : structEntry + rawStructSlDist;
-      structSl  = thesisDir == 1 ? structEntry - structSlDist          : structEntry + structSlDist;
+      double requestedStructSl = thesisDir == 1 ? structEntry - structSlDist : structEntry + structSlDist;
+      structSl  = XAU_ClampGoldStopToMaxDistance(structEntry, requestedStructSl, thesisDir);
+      structSlDist = MathAbs(structEntry - structSl);
       structTp1 = thesisDir == 1 ? structEntry + structSlDist * 1.0    : structEntry - structSlDist * 1.0;
       structTp2 = thesisDir == 1 ? structEntry + structSlDist * 2.0    : structEntry - structSlDist * 2.0;
       structTp3 = thesisDir == 1 ? structEntry + structSlDist * MathMax(1.0, roomPips) : structEntry - structSlDist * MathMax(1.0, roomPips);
@@ -44829,6 +44862,7 @@ void XAU_ProcessPendingOutlook()
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    long   stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
    double minDist = stopLevel * point;
+   outlookSL = XAU_ClampGoldStopToMaxDistance(price, outlookSL, dir);
 
    string skipReason = "";
    // Keep the original server generation time for provenance, but measure
@@ -44865,8 +44899,8 @@ void XAU_ProcessPendingOutlook()
       return;
    }
 
-   // Fire through the authoritative engine with the exact Outlook SL.
-   string reason = StringFormat("OUTLOOK_SIGNAL_OPEN signalId=%s (delayed %ds, authoritative SL %.2f)",
+   // Fire through the canonical engine; it re-caps against the actual fill.
+   string reason = StringFormat("OUTLOOK_SIGNAL_OPEN signalId=%s (delayed %ds, max-$10 SL %.2f)",
                                 signalId, g_pendingOutlook.delaySeconds, outlookSL);
    double atrNow = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
    bool opened = OpenTrade(dir, atrNow, reason, 1.0, true, outlookSL);
@@ -45121,13 +45155,27 @@ void BotMonitorPollCommands()
       else
       {
          int oDelaySec = (int)MathRound(XAU_EffectiveEntryDelaySeconds());
+         double oReferencePrice = oEntryRef > 0.0 ? oEntryRef
+                                                   : (oDir == 1 ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+                                                                : SymbolInfoDouble(Symbol(), SYMBOL_BID));
+         double oEffectiveSL = XAU_ClampGoldStopToMaxDistance(oReferencePrice, oSL, oDir);
+         if(oEffectiveSL <= 0.0)
+         {
+            status = "FAILED";
+            result = "OUTLOOK_SIGNAL_OPEN_REJECTED_INVALID_STOP_REFERENCE";
+            g_lastRemoteCommandState = action + ": " + result;
+            Print("BOT-COMMAND ", status, " ", action, " - ", result);
+            BotMonitorActivity("REMOTE_COMMAND_" + status, "ERROR", g_lastRemoteCommandState);
+            BotMonitorAckCommand(commandId, status, result);
+            return;
+         }
          datetime oGenTime = XAU_ParseIsoToDatetime(oGenRaw);
          if(oGenTime <= 0) oGenTime = TimeCurrent();
          g_pendingOutlook.active        = true;
          g_pendingOutlook.signalId      = oSignalId;
          g_pendingOutlook.commandId     = commandId;
          g_pendingOutlook.dir           = oDir;
-         g_pendingOutlook.outlookSL     = oSL;
+         g_pendingOutlook.outlookSL     = oEffectiveSL;
          g_pendingOutlook.entryRef      = oEntryRef;
          g_pendingOutlook.chaseLimit    = oChase;
          g_pendingOutlook.generatedTime = oGenTime;
@@ -45136,7 +45184,7 @@ void BotMonitorPollCommands()
          g_pendingOutlook.delaySeconds  = oDelaySec;
          status = "ACKED";
          result = StringFormat("OUTLOOK_ARMED signalId=%s dir=%s sl=%.2f delaySec=%d fireAt=%s",
-                               oSignalId, oDir == 1 ? "BUY" : "SELL", oSL, oDelaySec,
+                               oSignalId, oDir == 1 ? "BUY" : "SELL", oEffectiveSL, oDelaySec,
                                TimeToString(g_pendingOutlook.armTime, TIME_DATE | TIME_SECONDS));
          Print("OUTLOOK_TRACE ARMED | ", result);
       }

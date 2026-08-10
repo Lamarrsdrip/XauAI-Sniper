@@ -63,11 +63,11 @@ def test_breakout_up_and_down_use_normal_canonical_pipeline():
 def test_outlook_explicit_sl_cannot_fall_through_to_normal_fixed_sl():
     open_trade = section("bool OpenTrade(", "void LogExit(")
     assert "if(explicitSL > 0.0)" in open_trade
-    assert "sl = XAU_NormalizeToTick(explicitSL);" in open_trade
+    assert "sl = XAU_ClampGoldStopToMaxDistance(price, requestedOutlookSL, signal);" in open_trade
     assert "if(explicitSL <= 0.0)" in open_trade
-    assert "OUTLOOK_SL_PRESERVED_PRE_SEND" in open_trade
+    assert "OUTLOOK_SL_CAPPED_PRE_SEND" in open_trade
     assert "double confirmedOwnerSL = (explicitSL > 0.0)" in open_trade
-    assert "? XAU_NormalizeToTick(explicitSL)" in open_trade
+    assert "? XAU_ClampGoldStopToMaxDistance(confirmedOpen, explicitSL, signal)" in open_trade
     assert "OUTLOOK_SL_INVALID_AT_EXECUTION" in open_trade
 
 

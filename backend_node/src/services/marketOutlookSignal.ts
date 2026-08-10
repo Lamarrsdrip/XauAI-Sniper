@@ -9,6 +9,7 @@ import {
   OUTLOOK_EVALUATION_MINUTES,
   OUTLOOK_HORIZON_HOURS,
   OUTLOOK_SYMBOL,
+  clampGoldStopToMaxDistance,
   SIGNAL_INFORMATIONAL,
   SIGNAL_TRACKING,
   XAUCLOUD_R_UNIT_GOLD_MOVES,
@@ -317,12 +318,13 @@ export async function generateOutlookForAccount(opts: {
     const eaStructSl = Number(thesis["structural_sl"] ?? 0) || 0;
     const eaAtr = Number(thesis["atr_m5"] ?? 0) || 0;
     if (eaStructEntry > 0 && eaStructSl > 0 && eaAtr > 0) {
+      const effectiveSl = clampGoldStopToMaxDistance(eaStructEntry, eaStructSl, effectiveDirection);
       zone = {
         preferred_entry_zone_low: Math.round(Math.min(eaStructEntry, eaStructEntry - eaAtr * 0.15) * 100) / 100,
         preferred_entry_zone_high: Math.round(Math.max(eaStructEntry, eaStructEntry + eaAtr * 0.15) * 100) / 100,
         chase_limit: Math.round((eaStructEntry + (effectiveDirection === 1 ? eaAtr * 0.5 : -eaAtr * 0.5)) * 100) / 100,
-        invalidation_price: Math.round(eaStructSl * 100) / 100,
-        suggested_sl: Math.round(eaStructSl * 100) / 100,
+        invalidation_price: effectiveSl,
+        suggested_sl: effectiveSl,
         tp1_price: Math.round((Number(thesis["tp1_price"] ?? 0) || 0) * 100) / 100,
         tp1_r: 1.0,
         tp2_price: Math.round((Number(thesis["tp2_price"] ?? 0) || 0) * 100) / 100,

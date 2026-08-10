@@ -55,7 +55,8 @@ def source() -> str:
 # SELL -> entry + move, rounded to `digits`.
 # ---------------------------------------------------------------------------
 def fixed_sl_price(entry: float, direction: int, move: float, digits: int = 2) -> float:
-    raw = entry - move if direction == 1 else entry + move
+    effective_move = min(move, 10.0)
+    raw = entry - effective_move if direction == 1 else entry + effective_move
     return round(raw, digits)
 
 
@@ -69,16 +70,16 @@ class WorkedExampleArithmeticTests(unittest.TestCase):
         self.assertEqual(fixed_sl_price(4000.0, -1, 10.0), 4010.0)
 
     def test_buy_move15(self):
-        self.assertEqual(fixed_sl_price(4000.0, 1, 15.0), 3985.0)
+        self.assertEqual(fixed_sl_price(4000.0, 1, 15.0), 3990.0)
 
     def test_sell_move15(self):
-        self.assertEqual(fixed_sl_price(4000.0, -1, 15.0), 4015.0)
+        self.assertEqual(fixed_sl_price(4000.0, -1, 15.0), 4010.0)
 
     def test_buy_move20(self):
-        self.assertEqual(fixed_sl_price(4000.0, 1, 20.0), 3980.0)
+        self.assertEqual(fixed_sl_price(4000.0, 1, 20.0), 3990.0)
 
     def test_sell_move20(self):
-        self.assertEqual(fixed_sl_price(4000.0, -1, 20.0), 4020.0)
+        self.assertEqual(fixed_sl_price(4000.0, -1, 20.0), 4010.0)
 
 
 class OwnerClarificationSeparationTests(unittest.TestCase):
@@ -110,7 +111,7 @@ class OwnerClarificationSeparationTests(unittest.TestCase):
         # move==internal_r, so assert the two source distances are in fact
         # different in this worked example, which is the whole point of it).
         self.assertNotEqual(internal_r_distance, configured_stop_gold_move)
-        wrong_sl_if_r_redefined = fixed_sl_price(entry, 1, internal_r_distance)
+        wrong_sl_if_r_redefined = entry - internal_r_distance
         self.assertEqual(wrong_sl_if_r_redefined, 3985.0)
         self.assertNotEqual(actual_broker_sl, wrong_sl_if_r_redefined)
 
@@ -186,7 +187,8 @@ class SourceImplementationTests(unittest.TestCase):
 
     def test_confirmed_open_reconciliation_uses_fixed_function(self):
         src = source()
-        self.assertIn("double confirmedOwnerSL = XAU_FixedGoldMoveSLPrice(confirmedOpen, signal, digits);", src)
+        self.assertIn("? XAU_ClampGoldStopToMaxDistance(confirmedOpen, explicitSL, signal)", src)
+        self.assertIn(": XAU_FixedGoldMoveSLPrice(confirmedOpen, signal, digits);", src)
         self.assertIn("double expectedPyramidSL=XAU_FixedGoldMoveSLPrice(pyLiveOpen,isBuy?1:-1,digits);", src)
 
     def test_manage_positions_reads_internal_r_from_campaign_not_live_broker_sl(self):

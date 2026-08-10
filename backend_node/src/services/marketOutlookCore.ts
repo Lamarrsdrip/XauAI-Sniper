@@ -12,6 +12,7 @@ export const ROOM_COLLAPSE_R = 0.3;
 
 export const XAUCLOUD_PIPS_PER_GOLD_MOVE = 10;
 export const XAUCLOUD_R_UNIT_GOLD_MOVES = 10.0;
+export const XAUCLOUD_MAX_EXECUTION_SL_GOLD_MOVES = 10.0;
 export const XAUCLOUD_TP1_GOLD_MOVES = 5.0;
 export const XAUCLOUD_TP2_GOLD_MOVES = 10.0;
 export const BREAK_EVEN_R_TOLERANCE = 0.05;
@@ -20,6 +21,14 @@ export interface ResultConversion {
   result_r: number | null;
   result_gold_moves: number | null;
   result_pips: number | null;
+}
+
+/** Mirrors the EA's customer-visible/effective Outlook stop ceiling. */
+export function clampGoldStopToMaxDistance(entry: number, proposedSl: number, direction: number): number {
+  if (!Number.isFinite(entry) || !Number.isFinite(proposedSl) || entry <= 0 || proposedSl <= 0 || ![1, -1].includes(direction)) return 0;
+  const boundary = direction === 1 ? entry - XAUCLOUD_MAX_EXECUTION_SL_GOLD_MOVES : entry + XAUCLOUD_MAX_EXECUTION_SL_GOLD_MOVES;
+  const capped = direction === 1 ? Math.max(proposedSl, boundary) : Math.min(proposedSl, boundary);
+  return Math.round(capped * 100) / 100;
 }
 
 /** Port of market_outlook.py:108 `build_result_conversion` -- THE single authoritative XauCloud result-conversion function. */

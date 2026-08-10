@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { LlmChat } from "./llmClient.js";
 import { env } from "../env.js";
 import { aiBudgetAllows, recordAiCost } from "./aiCostBudget.js";
-import { OUTLOOK_SYMBOL } from "./marketOutlookCore.js";
+import { OUTLOOK_SYMBOL, clampGoldStopToMaxDistance } from "./marketOutlookCore.js";
 
 export interface ConfidenceComponents {
   trend_alignment: number;
@@ -122,6 +122,7 @@ export function computeZoneAndTargets(direction: number, currentPrice: number, t
   }
 
   const midEntry = Math.round(((zoneLow + zoneHigh) / 2) * 100) / 100;
+  sl = clampGoldStopToMaxDistance(midEntry, sl, direction);
   let riskDist = Math.abs(midEntry - sl);
   if (riskDist <= 0) riskDist = atr;
 

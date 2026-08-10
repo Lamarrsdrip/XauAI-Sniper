@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { MongoServerError } from "mongodb";
 import { getDb } from "../db.js";
+import { clampGoldStopToMaxDistance } from "./marketOutlookCore.js";
 
 /**
  * Port of backend/outlook_execution.py -- Phase 2 integration layer that
@@ -22,11 +23,13 @@ export async function enqueueIfActionable(doc: Record<string, unknown> | null): 
   // (owner directive 2026-08-08 — items 2 & 3). The EA still recalculates lot
   // size from the ACTUAL execution price → this SL, and skips if the SL is no
   // longer valid at fire time. sl is the signal's suggested/invalidation stop.
-  const outlookSl = Number(doc["suggested_sl"] ?? doc["invalidation_price"] ?? doc["final_structural_sl"] ?? 0) || 0;
+  const requestedOutlookSl = Number(doc["suggested_sl"] ?? doc["invalidation_price"] ?? doc["final_structural_sl"] ?? 0) || 0;
   const entryLow = Number(doc["preferred_entry_zone_low"] ?? 0) || 0;
   const entryHigh = Number(doc["preferred_entry_zone_high"] ?? 0) || 0;
   const entryRef = entryLow > 0 && entryHigh > 0 ? Math.round(((entryLow + entryHigh) / 2) * 100) / 100 : 0;
+  const outlookSl = clampGoldStopToMaxDistance(entryRef, requestedOutlookSl, direction === "BUY" ? 1 : -1);
   const chaseLimit = Number(doc["chase_limit"] ?? 0) || 0;
+  if (!outlookSl) return null;
 
   const db = getDb();
   const commandId = randomUUID();
