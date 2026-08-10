@@ -154,7 +154,7 @@
       "version": "v6.26.3",
       "edition": "Pattern Intelligence + BREAKOUT_UP/BREAKOUT_DOWN V4 audited production promotion (v6.26.3 lineage)",
       "source_lineage": "v6.26.3",
-      "source_sha256": "8d4de0d89ba0508f7f49b0768d6420a466f55a88f608863c7dff3e24e15bf776",
+      "source_sha256": "847bccb54b07acdad9b1530ca7626c8893482240d995a41ead544002fcc491bf",
       "build_timestamp": "2026-08-10T04:16:24Z",
       "compiler_result": "0 errors, 0 warnings, 34743 ms elapsed (MetaEditor64.exe via Wine; customer UX, pattern telemetry and WebRequest diagnostics production build)",
       "ex5_filename": "XauCloud.io.ex5",
