@@ -96,6 +96,16 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
   const indexReport: string[] = [];
   indexReport.push(await tryIndex("cloud_users.email: unique", () => db.collection("cloud_users").createIndex("email", { unique: true })));
   indexReport.push(await tryIndex("pin_licenses.pin: unique", () => db.collection("pin_licenses").createIndex("pin", { unique: true })));
+  indexReport.push(
+    await tryIndex("trade_journal.trade_identity: unique sparse", () =>
+      db.collection("trade_journal").createIndex("trade_identity", { unique: true, sparse: true }),
+    ),
+  );
+  indexReport.push(
+    await tryIndex("trade_journal.closed_at network results", () =>
+      db.collection("trade_journal").createIndex({ closed_at: -1, account_login: 1, ticket: 1 }),
+    ),
+  );
   indexReport.push(await tryIndex("admin_email_drafts.id: unique", () => db.collection("admin_email_drafts").createIndex("id", { unique: true })));
   indexReport.push(await tryIndex("admin_email_templates.id: unique", () => db.collection("admin_email_templates").createIndex("id", { unique: true })));
   indexReport.push(await tryIndex("admin_email_log.at", () => db.collection("admin_email_log").createIndex({ at: -1 })));

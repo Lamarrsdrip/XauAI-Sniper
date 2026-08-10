@@ -3,6 +3,7 @@ import { getDb } from "../../db.js";
 import { requireCloudUser } from "../../auth.js";
 import { getUserLicense } from "../../services/commandLicense.js";
 import { buildResultConversion } from "../../services/marketOutlookCore.js";
+import { dedupeByTradeIdentity, isEligibleTrade } from "../../services/performanceEngine.js";
 
 const MINIMUM_VERIFIED_TRADES_FOR_ANALYTICS = 5;
 
@@ -45,12 +46,15 @@ export async function registerCloudPerformanceAnalyticsRoutes(app: FastifyInstan
     if (!lic || !lic["pin"]) return reply.code(404).send({ detail: "No active license linked to this account." });
     const licenseId = String(lic["id"] ?? "");
 
-    const trades = await getDb()
+    const rawTrades = await getDb()
       .collection("trade_journal")
       .find({ license_id: licenseId, has_rich_ledger_data: true }, { projection: { _id: 0 } })
       .sort({ closed_at: 1 })
       .limit(5000)
       .toArray();
+    const trades = dedupeByTradeIdentity(
+      rawTrades.filter((trade) => isEligibleTrade(trade) && Number(trade["closed_at"] ?? 0) > 0),
+    );
     const total = trades.length;
 
     if (total < MINIMUM_VERIFIED_TRADES_FOR_ANALYTICS) {

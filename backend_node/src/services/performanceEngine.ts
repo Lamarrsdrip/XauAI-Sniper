@@ -29,14 +29,19 @@ export function isEligibleTrade(trade: Record<string, unknown>): boolean {
   return true;
 }
 
-/** Port of performance_engine.py:76 `dedupe_by_ticket` -- first-seen report per ticket wins (caller pre-sorts by opened_at ascending). */
-export function dedupeByTicket(trades: Record<string, unknown>[]): Record<string, unknown>[] {
-  const seen = new Set<unknown>();
+/** MT5 ticket numbers are unique only inside one trading account. */
+export function canonicalTradeIdentity(trade: Record<string, unknown>): string {
+  return JSON.stringify([String(trade["account_login"] ?? "").trim(), String(trade["ticket"] ?? "").trim()]);
+}
+
+/** First-seen report per account+ticket wins; cross-account ticket collisions remain distinct trades. */
+export function dedupeByTradeIdentity(trades: Record<string, unknown>[]): Record<string, unknown>[] {
+  const seen = new Set<string>();
   const result: Record<string, unknown>[] = [];
   for (const t of trades) {
-    const ticket = t["ticket"];
-    if (seen.has(ticket)) continue;
-    seen.add(ticket);
+    const identity = canonicalTradeIdentity(t);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     result.push(t);
   }
   return result;

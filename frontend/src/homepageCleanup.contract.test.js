@@ -31,5 +31,7 @@ describe("XauCloud customer surface cleanup contract", () => {
     expect(dashboard).not.toContain("Live · Acct");
     expect(dashboard).toContain("brokerBrand");
     expect(dashboard).toContain("heartbeat.broker_server");
+    expect(dashboard).not.toMatch(/\{heartbeat\.broker_server\s*\|\|/);
+    expect(dashboard).toContain("brokerBrand(heartbeat.broker_server)");
   });
 });

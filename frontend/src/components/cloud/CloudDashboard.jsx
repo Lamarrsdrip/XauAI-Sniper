@@ -18,6 +18,7 @@ import { API } from "@/lib/api";
 import * as UI from "@/lib/ui";
 import * as AK from "@/lib/appkit";
 import { webPushSupported, webPushStatus, enableWebPush, disableWebPush, testWebPush } from "@/lib/webpush";
+import { brokerBrand } from "@/lib/brokerDisplay";
 
 // Map the legacy tone vocabulary used by helpers below (green/red/amber/blue/
 // violet) onto the XauCloud design-system tones so screens read consistently.
@@ -80,40 +81,8 @@ const DEFAULT_PROP = {
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-const brokerBrand = (server="") => {
-  const raw = String(server || "").trim();
-  if (!raw) return "";
-
-  const cleaned = raw
-    .replace(/[-_.\\s]*(?:MT[45])?[-_.\\s]*(?:DEMO|TRIAL|LIVE|REAL|PRACTICE)\\d*.*$/i, "")
-    .replace(/[-_.\\s]+MT[45](?:[-_.\\s]*\\d+)?$/i, "")
-    .replace(/[-_.\\s]+(?:DEMO|TRIAL|LIVE|REAL|PRACTICE)\\d*.*$/i, "")
-    .trim();
-
-  return cleaned || raw;
-};
-
 const money = (v) => Number(v||0).toLocaleString("en-US",{style:"currency",currency:"USD",maximumFractionDigits:2});
 const pct   = (v) => `${Number(v||0).toFixed(2)}%`;
-
-const brokerDisplayName = (value) => {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-
-  // Customer UI shows the broker identity only.
-  // Keep the original broker_server value untouched in telemetry/backend.
-  // Examples:
-  // Exness-MT5Trial9 -> Exness
-  // Exness-MT5Real12 -> Exness
-  // ICMarkets-Live03 -> ICMarkets
-  // Pepperstone-Demo -> Pepperstone
-  const cleaned = raw
-    .replace(/(?:[-_\s]*MT[45])?[-_\s]*(?:Trial|Real|Demo|Live)\d*$/i, "")
-    .replace(/[-_\s]+$/g, "")
-    .trim();
-
-  return cleaned || raw;
-};
 
 const relativeTime = (iso) => {
   if (!iso) return "never";
@@ -1130,7 +1099,7 @@ function AccountStrip({ heartbeat, status, online, onClick }) {
       <span className={AK.cx("h-[7px] w-[7px] flex-none rounded-full", online ? "bg-profit" : "bg-white/30")} style={online ? { boxShadow: "0 0 0 3px rgba(47,211,160,.14)" } : undefined} />
       <span className="min-w-0 flex-1 truncate text-[12.5px] text-white/50">
         {online
-          ? <>Live · <b className="font-semibold text-white/80">Acct {heartbeat.account_number || "—"}</b> · {heartbeat.broker_server || "Broker"} · {heartbeat.symbol || "XAUUSD"} · {tf}</>
+          ? <>Live · <b className="font-semibold text-white/80">Acct {heartbeat.account_number || "—"}</b> · {brokerBrand(heartbeat.broker_server) || "Broker"} · {heartbeat.symbol || "XAUUSD"} · {tf}</>
           : <>Offline · <b className="font-semibold text-white/70">Waiting for EA heartbeat</b></>}
       </span>
       <ChevronRight className="h-4 w-4 flex-none text-white/25" />
@@ -2055,7 +2024,7 @@ function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, comm
             {info?.license_id && <CopyBtn value={info.license_id} label="Copy ID" />}
           </div>
         </div>
-        <Metric label="MT5 binding"    value={info?.account_binding||heartbeat.account_number||"Not bound"} detail={heartbeat.broker_server||"Waiting for EA"} icon={TerminalSquare} tone={heartbeat.account_number?"green":"amber"} />
+        <Metric label="MT5 binding"    value={info?.account_binding||heartbeat.account_number||"Not bound"} detail={brokerBrand(heartbeat.broker_server)||"Waiting for EA"} icon={TerminalSquare} tone={heartbeat.account_number?"green":"amber"} />
         <Metric label="VPS binding"    value={info?.vps_binding||"Not bound"} detail="Optional" icon={Wifi} tone="blue" />
         <Metric label="XauCloud version" value={status?.release?.public_display_name||"Waiting"}
           detail={status?.release?.update_available ? `Update available · latest ${status.release.latest_version}` : `Heartbeat ${relativeTime(heartbeat.last_heartbeat||heartbeat.ts)}`}
@@ -2128,7 +2097,7 @@ function SettingsPage({ me, heartbeat, licenseInfo, logout, status }) {
           <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
             <div className={MONO_LABEL}>Connected EA</div>
             <div className="mt-2 text-[14px] font-semibold">{heartbeat.ea_version ? (status?.release?.public_display_name || "XauCloud") : "No EA heartbeat yet"}</div>
-            <div className="mt-0.5 text-[12px] text-white/40">{heartbeat.broker_server||"Broker waiting"}</div>
+            <div className="mt-0.5 text-[12px] text-white/40">{brokerBrand(heartbeat.broker_server)||"Broker waiting"}</div>
           </div>
           <button onClick={logout} className="w-full rounded-xl border border-red-400/20 bg-red-500/[0.06] px-4 py-3 text-[13px] font-semibold text-red-300 hover:bg-red-500/[0.1] transition">
             Log out

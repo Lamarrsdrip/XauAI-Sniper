@@ -33,8 +33,15 @@ describe("Daily Trading Results section contract", () => {
 
   test("honest empty/unavailable/error states, no fabricated fallback data", () => {
     expect(section).toContain("temporarily unavailable");
-    expect(section).toMatch(/No reporting period has started yet/);
     expect(section).toMatch(/No closed trades in the last 30 days yet/);
+  });
+
+  test("describes the network-wide source without exposing account identifiers", () => {
+    expect(section).toContain("reported by XauCloud EAs across connected accounts");
+    expect(section).toContain("data.account_count");
+    expect(section).toContain("day.account_count");
+    expect(section).not.toContain("account_login");
+    expect(section).not.toContain("license_id");
   });
 
   test("first-party disclaimer is present, matching the rest of the site's real-performance pages", () => {

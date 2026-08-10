@@ -5,6 +5,7 @@ import { normalizeLicenseKey, resolveMonitorLicense } from "../services/license.
 import { rateLimit } from "../auth.js";
 import { TradeJournalEntrySchema, WeeklyReportEntrySchema } from "../models/journal.js";
 import { reconcileTradeJournalEntry } from "../services/automatedTradeReconciliation.js";
+import { canonicalTradeIdentity } from "../services/performanceEngine.js";
 
 /** Port of Python's `datetime.now(timezone.utc).strftime("%Y-W%W")` -- Monday-first week number, week 0 = days before the year's first Monday. */
 function pythonYearWeek(date: Date): string {
@@ -43,7 +44,24 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
       doc["created_ts"] = Date.now() / 1000;
       doc["win_rate"] = entry.total_trades > 0 ? Math.round((entry.wins / entry.total_trades) * 1000) / 10 : 0;
       doc["has_rich_ledger_data"] = entry.ticket > 0;
-      await db.collection("trade_journal").insertOne({ ...doc });
+      doc["trade_identity"] = canonicalTradeIdentity(doc);
+      let journalWrite;
+      try {
+        journalWrite = await db.collection("trade_journal").updateOne(
+          { trade_identity: doc["trade_identity"] },
+          { $setOnInsert: doc },
+          { upsert: true },
+        );
+      } catch (error) {
+        // Concurrent retries can race between the upsert lookup and insert;
+        // the unique identity index makes the loser an idempotent success.
+        if ((error as { code?: number }).code === 11000) return { status: "ok", duplicate: true };
+        throw error;
+      }
+
+      // A retried close report is already persisted and reconciled. Keep the
+      // endpoint idempotently successful without repeating side effects.
+      if (journalWrite.upsertedCount === 0) return { status: "ok", duplicate: true };
 
       if (entry.signature) {
         try {

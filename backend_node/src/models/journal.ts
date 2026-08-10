@@ -7,6 +7,8 @@ export const TradeJournalEntrySchema = z.object({
   direction: z.string().optional().default(""),
   result: z.string().optional().default(""),
   price: z.number().optional().default(0),
+  exit_price: z.number().optional().default(0),
+  close_price: z.number().optional().default(0),
   profit: z.number().optional().default(0),
   lots: z.number().optional().default(0),
   hour: z.number().optional().default(0),

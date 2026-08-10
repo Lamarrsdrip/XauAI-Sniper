@@ -6,7 +6,7 @@ import {
   DEFAULT_MINIMUM_SAMPLE,
   buildRecentTrades,
   computePeriodStats,
-  dedupeByTicket,
+  dedupeByTradeIdentity,
   isEligibleTrade,
   periodStatsToDict,
 } from "./performanceEngine.js";
@@ -65,7 +65,7 @@ export async function fetchPeriodTrades(period: PerformancePeriod): Promise<Reco
     .limit(20000)
     .toArray();
   const eligible = raw.filter((t) => isEligibleTrade(t));
-  return dedupeByTicket(eligible);
+  return dedupeByTradeIdentity(eligible);
 }
 
 /** Port of server.py:2693 `_period_summary_dict`. */

@@ -39,7 +39,7 @@ function DayRow({ day }) {
       <div className="min-w-0">
         <div className="font-mono text-[12px] font-bold text-white/85">{shortDate(day.date)}</div>
         <div className="mt-0.5 font-mono text-[10px] text-white/35">
-          {day.trades} trade{day.trades === 1 ? "" : "s"} · {day.wins}W / {day.losses}L{day.breakeven ? ` / ${day.breakeven}BE` : ""}
+          {day.trades} trade{day.trades === 1 ? "" : "s"} · {day.wins}W / {day.losses}L{day.breakeven ? ` / ${day.breakeven}BE` : ""} · {day.account_count} acct{day.account_count === 1 ? "" : "s"}
         </div>
       </div>
       <div className={`flex-none text-right font-mono text-[12px] font-bold ${positive ? "text-emerald-300" : "text-rose-300"}`}>
@@ -76,19 +76,18 @@ export default function DailyTradingResultsSection({ api }) {
             XauCloud Daily Trading Results
           </h2>
           <p className="mt-3 max-w-2xl text-[13px] leading-5 text-white/45">
-            Real closed trades from the automated EA, grouped by day, in pips and Gold moves. First-party trading records, not independently verified.
+            Real closed trades reported by XauCloud EAs across connected accounts, grouped by day in pips and Gold moves. First-party trading records, not independently verified.
           </p>
+          {data?.status === "ok" && (
+            <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.14em] text-gold-200/55">
+              Aggregated from {data.account_count || 0} connected XauCloud account{data.account_count === 1 ? "" : "s"}
+            </p>
+          )}
         </div>
 
         {error && !data && (
           <div className="rounded-[20px] border border-white/[0.08] bg-white/[0.03] p-6 text-[13px] text-white/45">
             Trading results temporarily unavailable.
-          </div>
-        )}
-
-        {data?.status === "unavailable" && (
-          <div className="rounded-[20px] border border-white/[0.08] bg-white/[0.03] p-6 text-[13px] text-white/45">
-            No reporting period has started yet. Check back soon.
           </div>
         )}
 
