@@ -154,13 +154,13 @@
       "version": "v6.26.3",
       "edition": "Pattern Intelligence + BREAKOUT_UP/BREAKOUT_DOWN V4 audited production promotion (v6.26.3 lineage)",
       "source_lineage": "v6.26.3",
-      "source_sha256": "d9f88e626d908b97885c869049a72cffa09adfb89d5749b7c9ce91ac27366d2d",
-      "build_timestamp": "2026-08-09T02:34:00Z",
-      "compiler_result": "0 errors, 0 warnings, 43379 ms elapsed (MetaEditor64.exe via Wine, isolated MT5 sandbox; Outlook explicit-SL preservation fix)",
+      "source_sha256": "8d4de0d89ba0508f7f49b0768d6420a466f55a88f608863c7dff3e24e15bf776",
+      "build_timestamp": "2026-08-10T02:26:56Z",
+      "compiler_result": "0 errors, 0 warnings (MetaEditor64.exe via Wine; Outlook execution-expiry window now starts from EA approval/arming time)",
       "ex5_filename": "XauCloud.io.ex5",
-      "ex5_sha256": "c4d7cf6f5160388cbbb2be7fa9644ffc6a94677f740a27327def90aec4e1da54",
+      "ex5_sha256": "b8b052c055f75b2a9b84d72d751c3c33b28b7600f4c6e294e5c25ea8d8421caa",
       "customer_filename": "XauCloud.io.ex5",
-      "release_notes": "Promotes the tested v6.26.3-derived Pattern Intelligence + BREAKOUT_UP/BREAKOUT_DOWN V4 audited build under the production XauCloud.io identity. Pattern evidence participates in canonical M10 candidate direction and native setup competition; breakout candidates continue through the existing confirmation, timing, direction-exclusivity, risk, broker-stop and execution gates. Fixes a proven v6.26.3 Outlook execution bug where the already-validated, signal-supplied explicit Outlook stop-loss was overwritten by the normal-trade fixed stop immediately before OrderSend and during post-fill reconciliation; Outlook now retains its own normalized explicit stop, while invalid explicit stops remain rejected. Customer download filename is XauCloud.io.ex5.",
+      "release_notes": "Promotes the tested v6.26.3-derived Pattern Intelligence + BREAKOUT_UP/BREAKOUT_DOWN V4 audited build under the production XauCloud.io identity. Pattern evidence participates in canonical M10 candidate direction and native setup competition; breakout candidates continue through the existing confirmation, timing, direction-exclusivity, risk, broker-stop and execution gates. Fixes a proven v6.26.3 Outlook execution bug where the already-validated, signal-supplied explicit Outlook stop-loss was overwritten by the normal-trade fixed stop immediately before OrderSend and during post-fill reconciliation; Outlook now retains its own normalized explicit stop, while invalid explicit stops remain rejected. Customer download filename is XauCloud.io.ex5. Fixes Outlook SIGNAL_EXPIRED false skips caused by aging the local execution window from the original server generation timestamp; the EA now preserves that timestamp for audit while measuring the armed execution expiry from local approval time.",
       "stable_status": true
     }
   }

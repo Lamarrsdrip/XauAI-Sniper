@@ -44758,8 +44758,16 @@ void XAU_ProcessPendingOutlook()
    double minDist = stopLevel * point;
 
    string skipReason = "";
-   if(TimeCurrent() > g_pendingOutlook.generatedTime + g_pendingOutlook.delaySeconds + 300)
-      skipReason = "SIGNAL_EXPIRED";                          // too late / signal aged out
+   // Keep the original server generation time for provenance, but measure
+   // the EA's local execution-expiry window from the moment this terminal
+   // actually approved/armed the Outlook command.
+   datetime executionWindowStart =
+      (g_pendingOutlook.approvedTime > 0)
+         ? g_pendingOutlook.approvedTime
+         : g_pendingOutlook.generatedTime;
+
+   if(TimeCurrent() > executionWindowStart + g_pendingOutlook.delaySeconds + 300)
+      skipReason = "SIGNAL_EXPIRED";                          // local armed window genuinely aged out
    else if(SymbolInfoInteger(Symbol(), SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_DISABLED)
       skipReason = "MARKET_NOT_TRADEABLE";
    else if(bid <= 0.0 || ask <= 0.0)
