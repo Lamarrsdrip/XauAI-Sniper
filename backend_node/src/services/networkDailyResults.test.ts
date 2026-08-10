@@ -18,6 +18,7 @@ function closedTrade(overrides: Record<string, unknown> = {}): Record<string, un
     opened_at: Date.parse("2026-08-05T09:00:00Z") / 1000,
     closed_at: Date.parse("2026-08-05T10:00:00Z") / 1000,
     direction: "BUY",
+    account_currency: "USD",
     entry_price: 4000,
     price: 4010,
     profit: 50,
@@ -87,11 +88,18 @@ describe("network-wide Daily Trading Results", () => {
       net_pips: 130,
       net_r: 1.3,
       net_usd: 65.5,
+      net_usd_available: true,
     });
     const publicJson = JSON.stringify(result);
     expect(publicJson).not.toContain("account_login");
     expect(publicJson).not.toContain("license_id");
     expect(publicJson).not.toContain("private-license");
     expect(publicJson).not.toContain('"A"');
+  });
+
+  test("suppresses the network USD total when any trade currency is unknown or non-USD", () => {
+    const result = buildNetworkDailyResults([closedTrade(), closedTrade({ account_login: "B", ticket: 124, account_currency: "EUR" })], 30, NOW);
+    expect(result.totals.net_usd).toBeNull();
+    expect(result.totals.net_usd_available).toBe(false);
   });
 });

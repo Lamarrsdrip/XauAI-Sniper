@@ -33,6 +33,9 @@ export const TradeJournalEntrySchema = z.object({
   campaign_id: z.string().optional().default(""),
   ea_version: z.string().optional().default(""),
   account_login: z.string().optional().default(""),
+  // MT5 deposit currency is authoritative only when reported by the EA.
+  // Older rows remain intentionally unknown rather than guessed as USD.
+  account_currency: z.string().optional().default(""),
   exit_reason: z.string().optional().default(""),
   exit_owner: z.string().optional().default(""),
   family: z.string().optional().default(""),

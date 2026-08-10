@@ -13389,10 +13389,18 @@ bool IsInStreakPause()
 //+------------------------------------------------------------------+
 //| DAILY LOSS COUNTER & DRAWDOWN RECOVERY MODE                      |
 //+------------------------------------------------------------------+
+// Full broker/server calendar identity. Never compare only day-of-month:
+// Jul 9 and Aug 9 are different trading days, including after restart.
+int XAU_BrokerDateKey(datetime when)
+{
+   MqlDateTime dt;
+   TimeToStruct(when, dt);
+   return dt.year * 10000 + dt.mon * 100 + dt.day;
+}
+
 void UpdateDrawdownState(bool wasLoss)
 {
-   MqlDateTime dtNow, dtLast; TimeCurrent(dtNow); TimeToStruct(todayLossResetDay, dtLast);
-   if(dtNow.day != dtLast.day)
+   if(XAU_BrokerDateKey(TimeCurrent()) != XAU_BrokerDateKey(todayLossResetDay))
    {
       todayLossCount = 0;
       todayLossResetDay = TimeCurrent();
@@ -13609,10 +13617,7 @@ void XAU_CreateReentryState(bool wasSLHitExact)
    // this comparison; UpdateDrawdownState remains the sole owner of
    // todayLossResetDay and still performs its own full daily reset moments
    // later (idempotent -- it will find the counter already at 0).
-   MqlDateTime dtNowReentry, dtLastReentry;
-   TimeCurrent(dtNowReentry);
-   TimeToStruct(todayLossResetDay, dtLastReentry);
-   if(dtNowReentry.day != dtLastReentry.day)
+   if(XAU_BrokerDateKey(TimeCurrent()) != XAU_BrokerDateKey(todayLossResetDay))
       todayReEntryCount = 0;
 
    if(todayReEntryCount >= InpMaxReEntriesPerDay)
@@ -20569,10 +20574,9 @@ void OnTick()
    }
 
    // Daily/weekly resets
-   MqlDateTime dtNow, dtLast, dtWeek;
+   MqlDateTime dtNow, dtWeek;
    TimeCurrent(dtNow);
-   TimeToStruct(lastDayReset, dtLast);
-   if(dtNow.day != dtLast.day)
+   if(XAU_BrokerDateKey(TimeCurrent()) != XAU_BrokerDateKey(lastDayReset))
    {
       dailyStartEquity = accInfo.Equity();
       ResetPropFirmDailyBaseline();
@@ -22084,9 +22088,9 @@ void OnTick()
       }
       // v6.3.9: write forward-test report at 23:59 server time (once per day)
       MqlDateTime dtNow; TimeCurrent(dtNow);
-      if(dtNow.hour == 23 && dtNow.min == 59 && dtNow.day != g_ftReport_LastWriteDay)
+      if(dtNow.hour == 23 && dtNow.min == 59 && XAU_BrokerDateKey(TimeCurrent()) != g_ftReport_LastWriteDay)
       {
-         g_ftReport_LastWriteDay = dtNow.day;
+         g_ftReport_LastWriteDay = XAU_BrokerDateKey(TimeCurrent());
          WriteForwardTestReport();
       }
    }
@@ -45612,13 +45616,13 @@ void LogTradeToServer(string result2, double price, double profit, double lots, 
       "\"signature\":\"%s\",\"setup\":\"%s\",\"regime\":\"%s\","
       "\"ticket\":%I64u,\"entry_price\":%.2f,\"opened_at\":%I64d,\"closed_at\":%I64d,"
       "\"commission\":%.2f,\"swap\":%.2f,\"original_risk_usd\":%.2f,\"final_r\":%.4f,\"mae_r\":%.4f,\"mfe_r\":%.4f,"
-      "\"campaign_id\":\"%I64d\",\"ea_version\":\"%s\",\"account_login\":\"%I64d\","
+      "\"campaign_id\":\"%I64d\",\"ea_version\":\"%s\",\"account_login\":\"%I64d\",\"account_currency\":\"%s\","
       "\"exit_reason\":\"%s\",\"exit_owner\":\"%s\",\"family\":\"%s\"}",
       InpLicensePIN, Symbol(), dir, result2, price, profit, lots, dt.hour, dt.day_of_week, totalTrades, wins, losses, accInfo.Balance(),
       lastSignalSignature, lastSignalSetup, RegimeName(),
       ticket, entryPrice, (long)openedAt, (long)TimeCurrent(),
       commission, swap, riskUSD, finalPips, maePips, mfePips,
-      campaignId, XAUAI_EA_VERSION, AccountInfoInteger(ACCOUNT_LOGIN),
+      campaignId, XAUAI_EA_VERSION, AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_CURRENCY),
       BotMonitorJsonSafe(exitReason, 220), BotMonitorJsonSafe(exitOwner, 40), family);
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));

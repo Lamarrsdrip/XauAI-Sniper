@@ -103,7 +103,12 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
   );
   indexReport.push(
     await tryIndex("trade_journal.closed_at network results", () =>
-      db.collection("trade_journal").createIndex({ closed_at: -1, account_login: 1, ticket: 1 }),
+      db.collection("trade_journal").createIndex({ has_rich_ledger_data: 1, closed_at: -1, account_login: 1, ticket: 1 }),
+    ),
+  );
+  indexReport.push(
+    await tryIndex("trade_journal.opened_at performance periods", () =>
+      db.collection("trade_journal").createIndex({ has_rich_ledger_data: 1, opened_at: 1, account_login: 1, ea_version: 1, symbol: 1 }),
     ),
   );
   indexReport.push(await tryIndex("admin_email_drafts.id: unique", () => db.collection("admin_email_drafts").createIndex("id", { unique: true })));

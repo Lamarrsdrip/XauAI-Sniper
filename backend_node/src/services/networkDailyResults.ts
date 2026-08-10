@@ -13,7 +13,8 @@ export interface DailyResultBucket {
   net_pips: number;
   net_gold_moves: number;
   net_r: number;
-  net_usd: number;
+  net_usd: number | null;
+  net_usd_available: boolean;
 }
 
 export interface NetworkDailyResults {
@@ -32,7 +33,8 @@ export interface NetworkDailyResults {
     net_pips: number;
     net_gold_moves: number;
     net_r: number;
-    net_usd: number;
+    net_usd: number | null;
+    net_usd_available: boolean;
   };
 }
 
@@ -91,6 +93,7 @@ export function buildNetworkDailyResults(
   type InternalBucket = DailyResultBucket & { accounts: Set<string> };
   const byDay = new Map<string, InternalBucket>();
   const allAccounts = new Set<string>();
+  let allTradesUsd = true;
 
   for (const trade of trades) {
     const closedAt = Number(trade["closed_at"]);
@@ -125,6 +128,7 @@ export function buildNetworkDailyResults(
         net_gold_moves: 0,
         net_r: 0,
         net_usd: 0,
+        net_usd_available: true,
         accounts: new Set<string>(),
       };
       byDay.set(dateStr, day);
@@ -136,15 +140,20 @@ export function buildNetworkDailyResults(
     else day.breakeven += 1;
     day.accounts.add(account);
     allAccounts.add(account);
+    const currency = String(trade["account_currency"] ?? trade["deposit_currency"] ?? "").trim().toUpperCase();
+    if (currency !== "USD") {
+      allTradesUsd = false;
+      day.net_usd_available = false;
+    }
     if (conversion.result_pips !== null) day.net_pips = round1(day.net_pips + conversion.result_pips);
     if (conversion.result_gold_moves !== null) day.net_gold_moves = round2(day.net_gold_moves + conversion.result_gold_moves);
     if (conversion.result_r !== null) day.net_r = round2(day.net_r + conversion.result_r);
-    day.net_usd = round2(day.net_usd + netResult(trade));
+    if (day.net_usd_available && day.net_usd !== null) day.net_usd = round2(day.net_usd + netResult(trade));
   }
 
   const days = [...byDay.values()]
     .sort((a, b) => b.date.localeCompare(a.date))
-    .map(({ accounts, ...day }) => ({ ...day, account_count: accounts.size }));
+    .map(({ accounts, ...day }) => ({ ...day, account_count: accounts.size, net_usd: day.net_usd_available ? day.net_usd : null }));
   const totals = {
     trades: days.reduce((sum, day) => sum + day.trades, 0),
     wins: days.reduce((sum, day) => sum + day.wins, 0),
@@ -154,7 +163,8 @@ export function buildNetworkDailyResults(
     net_pips: round2(days.reduce((sum, day) => sum + day.net_pips, 0)),
     net_gold_moves: round2(days.reduce((sum, day) => sum + day.net_gold_moves, 0)),
     net_r: round2(days.reduce((sum, day) => sum + day.net_r, 0)),
-    net_usd: round2(days.reduce((sum, day) => sum + day.net_usd, 0)),
+    net_usd: allTradesUsd ? round2(days.reduce((sum, day) => sum + Number(day.net_usd ?? 0), 0)) : null,
+    net_usd_available: allTradesUsd,
   };
 
   return {
@@ -191,6 +201,8 @@ export async function getNetworkDailyResults(requestedDays: number, nowUnix = Da
         profit: 1,
         commission: 1,
         swap: 1,
+        account_currency: 1,
+        deposit_currency: 1,
       },
     })
     .sort({ closed_at: 1, opened_at: 1, created_ts: 1 })

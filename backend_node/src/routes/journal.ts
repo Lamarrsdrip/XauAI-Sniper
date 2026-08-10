@@ -5,7 +5,13 @@ import { normalizeLicenseKey, resolveMonitorLicense } from "../services/license.
 import { rateLimit } from "../auth.js";
 import { TradeJournalEntrySchema, WeeklyReportEntrySchema } from "../models/journal.js";
 import { reconcileTradeJournalEntry } from "../services/automatedTradeReconciliation.js";
-import { canonicalTradeIdentity } from "../services/performanceEngine.js";
+import { canonicalTradeIdentity, classifyTrade, dedupeByTradeIdentity, netResult } from "../services/performanceEngine.js";
+
+export const MAX_JOURNAL_TRADES_PAGE_SIZE = 200;
+
+export function clampJournalTradesLimit(limit: number): number {
+  return Math.max(1, Math.min(Math.trunc(limit), MAX_JOURNAL_TRADES_PAGE_SIZE));
+}
 
 /** Port of Python's `datetime.now(timezone.utc).strftime("%Y-W%W")` -- Monday-first week number, week 0 = days before the year's first Monday. */
 function pythonYearWeek(date: Date): string {
@@ -44,19 +50,24 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
       doc["created_ts"] = Date.now() / 1000;
       doc["win_rate"] = entry.total_trades > 0 ? Math.round((entry.wins / entry.total_trades) * 1000) / 10 : 0;
       doc["has_rich_ledger_data"] = entry.ticket > 0;
-      doc["trade_identity"] = canonicalTradeIdentity(doc);
-      let journalWrite;
-      try {
-        journalWrite = await db.collection("trade_journal").updateOne(
-          { trade_identity: doc["trade_identity"] },
-          { $setOnInsert: doc },
-          { upsert: true },
-        );
-      } catch (error) {
-        // Concurrent retries can race between the upsert lookup and insert;
-        // the unique identity index makes the loser an idempotent success.
-        if ((error as { code?: number }).code === 11000) return { status: "ok", duplicate: true };
-        throw error;
+      const isClosedTrade = Boolean(doc["has_rich_ledger_data"]) && Number(doc["closed_at"] ?? 0) > 0;
+      if (isClosedTrade) doc["trade_identity"] = canonicalTradeIdentity(doc);
+      let journalWrite: { upsertedCount: number } = { upsertedCount: 1 };
+      if (isClosedTrade) {
+        try {
+          journalWrite = await db.collection("trade_journal").updateOne(
+            { trade_identity: doc["trade_identity"] },
+            { $setOnInsert: doc },
+            { upsert: true },
+          );
+        } catch (error) {
+          // Concurrent retries can race; the unique account+ticket identity
+          // makes the loser an idempotent success.
+          if ((error as { code?: number }).code === 11000) return { status: "ok", duplicate: true };
+          throw error;
+        }
+      } else {
+        await db.collection("trade_journal").insertOne(doc);
       }
 
       // A retried close report is already persisted and reconciled. Keep the
@@ -85,8 +96,19 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
       // within seconds of MT5 reporting the close (rather than waiting for
       // the hourly Outlook job). Strictly best-effort: never affects this
       // endpoint's own success response.
-      if (doc["has_rich_ledger_data"] && Number(doc["closed_at"] ?? 0) > 0) {
-        await reconcileTradeJournalEntry(doc);
+      if (isClosedTrade) {
+        // Reconcile the canonical stored row, never the untrusted request
+        // object. Reconciliation is explicitly best-effort: once the write
+        // succeeds, this endpoint must remain successful for EA retries.
+        try {
+          const stored = await db.collection("trade_journal").findOne(
+            { trade_identity: doc["trade_identity"] },
+            { projection: { _id: 0 } },
+          );
+          if (stored) await reconcileTradeJournalEntry(stored);
+        } catch {
+          request.log.warn("journal reconciliation failed after a persisted trade");
+        }
       }
 
       return { status: "ok" };
@@ -103,20 +125,26 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
       const db = getDb();
       const journal = db.collection("trade_journal");
       const query = { $or: [{ license_id: lic?.["id"] ?? "" }, { pin: normalizeLicenseKey(q.pin) }] };
-      const trades = await journal.find(query, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(q.limit).toArray();
-      const total = await journal.countDocuments(query);
-      const winTrades = await journal.countDocuments({ ...query, result: "WIN" });
-      const lossTrades = await journal.countDocuments({ ...query, result: "LOSS" });
-      const totalProfit = trades.reduce((s, t) => s + Number(t["profit"] ?? 0), 0);
+      // Limit is pagination only. Every summary value below is computed from
+      // the complete canonical account-scoped journal dataset.
+      const canonical = dedupeByTradeIdentity(
+        await journal.find(query, { projection: { _id: 0 } }).sort({ created_at: -1 }).toArray(),
+      );
+      const trades = canonical.slice(0, clampJournalTradesLimit(q.limit));
+      const total = canonical.length;
+      const outcomes = canonical.map((trade) => classifyTrade(trade));
+      const winTrades = outcomes.filter((outcome) => outcome === "WIN").length;
+      const lossTrades = outcomes.filter((outcome) => outcome === "LOSS").length;
+      const breakEvenTrades = outcomes.filter((outcome) => outcome === "BE").length;
+      const totalProfit = canonical.reduce((sum, trade) => sum + netResult(trade), 0);
 
       const hourStats: Record<number, { wins: number; losses: number; profit: number }> = {};
-      const allTrades = await journal.find(query, { projection: { _id: 0, hour: 1, profit: 1, result: 1 } }).limit(500).toArray();
-      for (const t of allTrades) {
+      for (const t of canonical) {
         const h = Number(t["hour"] ?? 0);
         hourStats[h] ??= { wins: 0, losses: 0, profit: 0 };
-        hourStats[h].profit += Number(t["profit"] ?? 0);
-        if (t["result"] === "WIN") hourStats[h].wins += 1;
-        else hourStats[h].losses += 1;
+        hourStats[h].profit += netResult(t);
+        if (classifyTrade(t) === "WIN") hourStats[h].wins += 1;
+        else if (classifyTrade(t) === "LOSS") hourStats[h].losses += 1;
       }
       const hourKeys = Object.keys(hourStats).map(Number);
       const bestHour = hourKeys.length ? hourKeys.reduce((best, h) => (hourStats[h]!.profit > hourStats[best]!.profit ? h : best)) : 0;
@@ -127,6 +155,7 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
         total,
         wins: winTrades,
         losses: lossTrades,
+        break_even: breakEvenTrades,
         win_rate: total > 0 ? Math.round((winTrades / total) * 1000) / 10 : 0,
         total_profit: Math.round(totalProfit * 100) / 100,
         best_hour: bestHour,

@@ -19,6 +19,7 @@ describe("Daily Trading Results section contract", () => {
 
   test("every rendered stat/day field maps to a real API field", () => {
     expect(section).toContain("totals.net_usd");
+    expect(section).toContain("totals.net_usd_available");
     expect(section).toContain("totals.net_gold_moves");
     expect(section).toContain("totals.net_pips");
     expect(section).toContain("totals.trades");
@@ -56,5 +57,9 @@ describe("Daily Trading Results section contract", () => {
     expect(section).not.toContain("Net R");
     expect(section).not.toMatch(/\+"R"/);
     expect(section).not.toMatch(/totals\.net_r\b/);
+  });
+
+  test("does not label mixed or unknown account currencies as USD", () => {
+    expect(section).toContain("Currency unavailable");
   });
 });

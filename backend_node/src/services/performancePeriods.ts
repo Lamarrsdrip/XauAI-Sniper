@@ -62,7 +62,6 @@ export async function fetchPeriodTrades(period: PerformancePeriod): Promise<Reco
     .collection("trade_journal")
     .find(query, { projection: { _id: 0 } })
     .sort({ opened_at: 1 })
-    .limit(20000)
     .toArray();
   const eligible = raw.filter((t) => isEligibleTrade(t));
   return dedupeByTradeIdentity(eligible);
