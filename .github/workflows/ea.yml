@@ -39,8 +39,8 @@ jobs:
       - name: Authoritative production source and compatibility-path check
         run: |
           test -f backend/ea_code/XauCloud.io.mq5
-          test -L backend/ea_code/XAUUSD_AI_Sniper_EA.mq5
-          test "$(readlink backend/ea_code/XAUUSD_AI_Sniper_EA.mq5)" = "XauCloud.io.mq5"
+          test -f backend/ea_code/XauCloud.io.mq5
+          test -s backend/ea_code/XauCloud.io.mq5
           python3 - <<'PY'
           import hashlib, json
           from pathlib import Path

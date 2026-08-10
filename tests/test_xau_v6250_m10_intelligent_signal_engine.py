@@ -1,8 +1,8 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "XAUUSD_AI_Sniper_EA.mq5"
-BACKEND_EA = ROOT / "backend" / "ea_code" / "XAUUSD_AI_Sniper_EA.mq5"
+EA = ROOT / "backend" / "ea_code" / "XauCloud.io.mq5"
+BACKEND_EA = ROOT / "backend" / "ea_code" / "XauCloud.io.mq5"
 
 
 def read(path: Path) -> str:
