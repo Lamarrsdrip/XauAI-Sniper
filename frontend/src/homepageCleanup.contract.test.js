@@ -34,4 +34,15 @@ describe("XauCloud customer surface cleanup contract", () => {
     expect(dashboard).not.toMatch(/\{heartbeat\.broker_server\s*\|\|/);
     expect(dashboard).toContain("brokerBrand(heartbeat.broker_server)");
   });
+
+  test("mobile roadmap uses generated high-contrast text utilities", () => {
+    const roadmap = fs.readFileSync(
+      path.join(root, "components", "ComingSoonAppsSection.jsx"),
+      "utf8"
+    );
+
+    expect(roadmap).not.toMatch(/text-white\/(58|65|72|82|84)/);
+    expect(roadmap).toContain("text-white/90");
+    expect(roadmap).toContain("text-white/80");
+  });
 });
