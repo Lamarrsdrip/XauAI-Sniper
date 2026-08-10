@@ -361,6 +361,114 @@ async function marketOpenAndBotConnected(account: string, now: Date = new Date()
 }
 
 /** Port of notifications.py:563 `send_outlook_notification`. */
+/**
+ * Resolve notification preferences from the customer's CURRENT active
+ * license/MT5 ownership instead of trusting prefs.account alone.
+ *
+ * A preference row may have been created before MT5 was linked, leaving
+ * account="" or an old account value. Existing tier, mute and device
+ * preferences remain authoritative; only the account association self-heals.
+ */
+async function notificationPrefsForAccount(account: string): Promise<Record<string, unknown>[]> {
+  const db = getDb();
+  const normalizedAccount = String(account ?? "").trim();
+  if (!normalizedAccount) return [];
+
+  const byUser = new Map<string, Record<string, unknown>>();
+
+  // Keep existing correctly-linked rows.
+  const direct = await db
+    .collection("cloud_notification_prefs")
+    .find({ account: normalizedAccount }, { projection: { _id: 0 } })
+    .toArray();
+
+  for (const row of direct) {
+    const userId = String(row["user_id"] ?? "").trim();
+    if (userId) byUser.set(userId, row as Record<string, unknown>);
+  }
+
+  // Resolve the canonical owner(s) from the active license.
+  const accountNumber = Number(normalizedAccount);
+  const accountCandidates: Array<string | number> = [normalizedAccount];
+  if (Number.isFinite(accountNumber)) accountCandidates.push(accountNumber);
+
+  const licenses = await db
+    .collection("pin_licenses")
+    .find(
+      {
+        mt5_account: { $in: accountCandidates },
+        is_active: true,
+      },
+      {
+        projection: {
+          _id: 0,
+          pin: 1,
+          buyer_email: 1,
+          mt5_account: 1,
+        },
+      },
+    )
+    .toArray();
+
+  for (const license of licenses) {
+    const pin = String(license["pin"] ?? "").trim();
+    const email = String(license["buyer_email"] ?? "").toLowerCase().trim();
+
+    const ownerQueries: Record<string, unknown>[] = [];
+
+    if (pin) {
+      ownerQueries.push(
+        { license_key: pin },
+        { command_license_key: pin },
+      );
+    }
+
+    if (email) ownerQueries.push({ email });
+
+    if (ownerQueries.length === 0) continue;
+
+    const users = await db
+      .collection("cloud_users")
+      .find(
+        { $or: ownerQueries },
+        { projection: { _id: 0, id: 1 } },
+      )
+      .toArray();
+
+    for (const user of users) {
+      const userId = String(user["id"] ?? "").trim();
+      if (!userId || byUser.has(userId)) continue;
+
+      const prefs = await db
+        .collection("cloud_notification_prefs")
+        .findOne(
+          { user_id: userId },
+          { projection: { _id: 0 } },
+        );
+
+      // The customer has never enabled notification preferences.
+      if (!prefs) continue;
+
+      byUser.set(userId, prefs as Record<string, unknown>);
+
+      // Self-heal only the account linkage. Never change tier/mutes/devices.
+      if (String(prefs["account"] ?? "").trim() !== normalizedAccount) {
+        await db.collection("cloud_notification_prefs").updateOne(
+          { user_id: userId },
+          {
+            $set: {
+              account: normalizedAccount,
+              updated_at: new Date().toISOString(),
+            },
+          },
+        );
+      }
+    }
+  }
+
+  return [...byUser.values()];
+}
+
 export async function sendOutlookNotification(doc: Record<string, unknown>, event: string, minTier: string): Promise<number | null> {
   try {
     const db = getDb();
@@ -370,9 +478,9 @@ export async function sendOutlookNotification(doc: Record<string, unknown>, even
     const [allowed] = await marketOpenAndBotConnected(account);
     if (!allowed) return null;
 
-    const prefsCursor = db.collection("cloud_notification_prefs").find({ account });
+    const prefsRows = await notificationPrefsForAccount(account);
     let sent = 0;
-    for await (const prefs of prefsCursor) {
+    for (const prefs of prefsRows) {
       const userId = String(prefs["user_id"] ?? "");
       const tier = String(prefs["tier"] ?? "OFF");
       const requiredTier = EVENT_MIN_TIER[event] ?? minTier;
@@ -477,9 +585,9 @@ export async function sendAutomatedTradeResultNotification(doc: Record<string, u
     const account = String(doc["account"] ?? "");
     const outlookId = String(doc["id"] ?? "");
     const event = "AUTOMATED_TRADE_RESULT";
-    const prefsCursor = db.collection("cloud_notification_prefs").find({ account });
+    const prefsRows = await notificationPrefsForAccount(account);
     let sent = 0;
-    for await (const prefs of prefsCursor) {
+    for (const prefs of prefsRows) {
       const userId = String(prefs["user_id"] ?? "");
       const tier = String(prefs["tier"] ?? "OFF");
       const requiredTier = EVENT_MIN_TIER[event] ?? "HOURLY_PLUS_RESULTS";
@@ -679,9 +787,9 @@ export async function sendTradeActivityNotification(activity: Record<string, unk
     const account = String(activity["account"] ?? "");
     const symbol = String(activity["symbol"] ?? activityValue(activity, "symbol") ?? "XAUUSD");
     const ticket = String(activityValue(activity, "ticket", "position_id", "position_ticket") ?? "");
-    const prefsCursor = db.collection("cloud_notification_prefs").find({ account });
+    const prefsRows = await notificationPrefsForAccount(account);
     let sent = 0;
-    for await (const prefs of prefsCursor) {
+    for (const prefs of prefsRows) {
       const userId = String(prefs["user_id"] ?? "");
       if (!userId || (TIER_RANK[String(prefs["tier"] ?? "OFF")] ?? 0) < TIER_RANK["ALL_UPDATES"]!) continue;
       if (categoryMuted(prefs, notificationCategory(event))) continue;

@@ -44328,8 +44328,20 @@ void XAU_ProcessPendingOutlook()
    double minDist = stopLevel * point;
 
    string skipReason = "";
-   if(TimeCurrent() > g_pendingOutlook.generatedTime + g_pendingOutlook.delaySeconds + 300)
-      skipReason = "SIGNAL_EXPIRED";                          // too late / signal aged out
+   // The server signal timestamp is provenance, not the start of the EA's
+   // local confirmation window. A valid command may arrive after transport /
+   // polling delay, so expiring from generatedTime can consume the mandatory
+   // 120-180s confirmation window before the EA has had a chance to act.
+   //
+   // Keep generatedTime for audit, but measure local execution expiry from
+   // approvedTime (the moment this EA accepted/armed the command).
+   datetime executionWindowStart =
+      (g_pendingOutlook.approvedTime > 0)
+         ? g_pendingOutlook.approvedTime
+         : g_pendingOutlook.generatedTime;
+
+   if(TimeCurrent() > executionWindowStart + g_pendingOutlook.delaySeconds + 300)
+      skipReason = "SIGNAL_EXPIRED";                          // local armed window genuinely aged out
    else if(SymbolInfoInteger(Symbol(), SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_DISABLED)
       skipReason = "MARKET_NOT_TRADEABLE";
    else if(bid <= 0.0 || ask <= 0.0)
