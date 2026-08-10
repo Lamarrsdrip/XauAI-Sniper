@@ -50,6 +50,19 @@
     text-size-adjust: 100%;
     overscroll-behavior-y: none;
   }
+
+  /* Keep controls app-like without blocking the page's normal pan/scroll. */
+  button, a, input, select, textarea, [role="button"] {
+    touch-action: manipulation;
+  }
+
+  /* Safari zooms the page when a form control's computed type is below 16px.
+     Limit this to phone-sized viewports so desktop form typography is unchanged. */
+  @media (max-width: 767px) {
+    input, textarea, select, [contenteditable="true"] {
+      font-size: 16px !important;
+    }
+  }
 }
 
 @layer base {
