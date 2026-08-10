@@ -39,6 +39,7 @@ const EVENT_MIN_TIER: Record<string, string> = {
   TP3_HIT: "HOURLY_PLUS_RESULTS",
   SL_HIT: "HOURLY_PLUS_RESULTS",
   AUTOMATED_TRADE_RESULT: "HOURLY_PLUS_RESULTS",
+  PATTERN_CONFIRMED: "ALL_UPDATES",
 };
 
 export const NOTIFICATION_CATEGORIES = ["TRADES", "MARKET_OUTLOOK", "SIGNALS", "LICENSE", "BOT_UPDATES", "PAYMENTS", "MARKETING", "SYSTEM", "SUPPORT"];
@@ -54,6 +55,7 @@ const EVENT_CATEGORY: Record<string, string> = {
   TRADE_OPENED: "TRADES",
   TRADE_CLOSED: "TRADES",
   AUTOMATED_TRADE_RESULT: "TRADES",
+  PATTERN_CONFIRMED: "SIGNALS",
 };
 
 export function notificationCategory(event: string): string {
@@ -328,7 +330,112 @@ interface SendResult {
 // OneSignal has been removed as the push provider. Every push now routes
 // through the app's own first-party Web Push (VAPID) subscriptions. Kept the
 // SendResult shape so all existing callers are unchanged.
+
+/**
+ * Customer-facing push copy normalizer.
+ *
+ * Engineering diagnostics remain in cloud_bot_activity / cloud_notification_log.
+ * Phones receive short, plain-English messages instead of internal codes,
+ * ISO timestamps, module names and broker implementation details.
+ */
+function modernizeCustomerPush(input: Record<string, unknown>): Record<string, unknown> {
+  const payload: Record<string, unknown> = { ...input };
+  const event = String(payload["event"] ?? "").toUpperCase();
+
+  let title = cleanText(payload["title"], 180);
+  let body = cleanText(payload["body"], 420);
+
+  // Product language.
+  title = title
+    .replace(/\bXAUUSD\b/gi, "Gold")
+    .replace(/\bautomated trade\b/gi, "trade")
+    .replace(/\bPARTIAL PROFIT\b/gi, "finished in profit")
+    .replace(/\bBREAK[- ]?EVEN\b/gi, "finished near entry");
+
+  if (event === "TIMEOUT_60M") {
+    if (/profit/i.test(title)) {
+      title = "🟢 Gold outlook finished in profit";
+    } else if (/break/i.test(title)) {
+      title = "⚪ Gold outlook finished near entry";
+    } else {
+      title = "🔴 Gold outlook finished lower";
+    }
+  } else if (event === "TP1_HIT") {
+    title = "🎯 Gold outlook reached Target 1";
+  } else if (event === "TP2_HIT") {
+    title = "🎯 Gold outlook reached Target 2";
+  } else if (event === "TP3_HIT") {
+    title = "🏆 Gold outlook reached Target 3";
+  } else if (event === "SL_HIT") {
+    title = "🛡️ Gold outlook reached its Stop Loss";
+  } else if (event === "OUTLOOK_PUBLISHED") {
+    title = "📊 New Gold market outlook";
+  } else if (event === "PATTERN_CONFIRMED") {
+    // Pattern dispatcher already supplies its final customer title.
+  } else if (event === "TRADE_OPENED") {
+    title = title
+      .replace(/\bGold opened\b/i, "Gold trade opened")
+      .replace(/\bopened$/i, "trade opened");
+  } else if (event === "TRADE_CLOSED" || event === "AUTOMATED_TRADE_RESULT") {
+    title = title
+      .replace(/\bclosed in profit\b/i, "closed in profit")
+      .replace(/\bclosed at a loss\b/i, "closed at a loss");
+  }
+
+  // Never expose raw machine timestamps on a phone notification.
+  body = body.replace(
+    /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b/g,
+    "",
+  );
+
+  // Internal close / risk codes -> customer language.
+  body = body
+    .replace(/\bBROKER_SL\b/gi, "Closed by Stop Loss")
+    .replace(/\bBROKER_TP\b/gi, "Closed at Take Profit")
+    .replace(/\bSL_MOD:[A-Z0-9_|:.-]+\b/gi, "Stop Loss protected the trade")
+    .replace(/\bOWNER_INITIAL_1R_HARD_STOP\b/gi, "Initial protective Stop Loss")
+    .replace(/\bOWNER_[A-Z0-9_|:.-]+\b/gi, "XauCloud risk protection")
+    .replace(/\b[A-Z]+_MOD:[A-Z0-9_|:.-]+\b/gi, "XauCloud trade protection");
+
+  // Ticket IDs belong in Command Center activity/history, not lock-screen copy.
+  body = body.replace(/\s*[·|]\s*Ticket\s+[A-Za-z0-9_-]+/gi, "");
+  body = body.replace(/\bTicket\s+[A-Za-z0-9_-]+\b/gi, "");
+
+  // Customers understand pips directly; don't stack internal R / Gold-move
+  // conversion labels into a small lock-screen notification.
+  body = body.replace(
+    /\s*\/\s*[+-]?\d+(?:\.\d+)?\s*Gold moves?/gi,
+    "",
+  );
+  body = body.replace(
+    /\s*\/\s*[+-]?\d+(?:\.\d+)?R\b/gi,
+    "",
+  );
+
+  // Human-readable labels.
+  body = body
+    .replace(/\bP\/L\b/g, "Result")
+    .replace(/\bSL\b/g, "Stop")
+    .replace(/\bTP1\b/g, "Target 1")
+    .replace(/\bTP2\b/g, "Target 2")
+    .replace(/\bTP3\b/g, "Target 3");
+
+  // Clean separators left behind after removing diagnostics.
+  body = body
+    .replace(/\s*·\s*·\s*/g, " · ")
+    .replace(/\s*\|\s*\|\s*/g, " · ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[\s·|.-]+|[\s·|.-]+$/g, "")
+    .trim();
+
+  payload["title"] = title || "XauCloud";
+  payload["body"] = body || "Open XauCloud for the latest update.";
+
+  return payload;
+}
+
 async function sendUserPush(userId: string, payload: Record<string, unknown>): Promise<SendResult> {
+  payload = modernizeCustomerPush(payload);
   try {
     const sent = await sendWebPushToUser(String(userId), {
       title: String(payload["title"] ?? "XauCloud"),
@@ -777,6 +884,187 @@ export function buildTradeNotificationPayload(activity: Record<string, unknown>,
     notification_key: notificationKey,
   };
 }
+
+
+/**
+ * Push a confirmed, EA-reported chart pattern.
+ *
+ * Important: this function NEVER detects patterns itself. The EA remains the
+ * pattern authority. This consumes telemetry from the existing audited engine.
+ */
+export async function sendPatternActivityNotification(
+  activity: Record<string, unknown>,
+): Promise<number | null> {
+  try {
+    const details =
+      (activity["details"] as Record<string, unknown> | undefined) ?? {};
+
+    const eventType = String(activity["event_type"] ?? "").toUpperCase();
+    const patternName = cleanText(
+      details["pattern_name"] ?? activity["pattern_name"],
+      120,
+    );
+
+    if (!patternName || !eventType.includes("PATTERN")) return 0;
+
+    const account = cleanText(activity["account"], 80);
+    if (!account) return 0;
+
+    const symbol = cleanText(
+      details["pattern_symbol"] ?? activity["symbol"] ?? "XAUUSD",
+      32,
+    );
+
+    const timeframe = cleanText(
+      details["pattern_timeframe"] ?? details["timeframe"] ?? "M10",
+      16,
+    );
+
+    const rawDirection = cleanText(
+      details["pattern_direction"] ??
+        details["signal_direction"] ??
+        details["market_bias"],
+      24,
+    ).toUpperCase();
+
+    const direction =
+      /BUY|BULL|UP/.test(rawDirection)
+        ? "BULLISH"
+        : /SELL|BEAR|DOWN/.test(rawDirection)
+          ? "BEARISH"
+          : "NEUTRAL";
+
+    const scoreRaw = Number(
+      details["pattern_score"] ??
+        details["score"] ??
+        activity["score"],
+    );
+
+    const score = Number.isFinite(scoreRaw) ? scoreRaw : null;
+
+    const icon =
+      direction === "BULLISH" ? "📈" :
+      direction === "BEARISH" ? "📉" :
+      "🔎";
+
+    const directionText =
+      direction === "NEUTRAL" ? "" : ` • ${direction.toLowerCase()}`;
+
+    const title = `${icon} Gold pattern confirmed`;
+
+    const bodyParts = [
+      `${patternName}`,
+      `Gold ${timeframe}`,
+    ];
+
+    if (directionText) {
+      bodyParts.push(direction.toLowerCase());
+    }
+
+    if (score !== null) {
+      bodyParts.push(`strength ${Math.round(score)}`);
+    }
+
+    const payload: Record<string, unknown> = {
+      title,
+      body: bodyParts.join(" • "),
+      deep_link: "/command",
+      event: "PATTERN_CONFIRMED",
+      pattern_name: patternName,
+    };
+
+    const db = getDb();
+    const prefsRows = await notificationPrefsForAccount(account);
+    let sent = 0;
+
+    const patternKey =
+      `${account}:${symbol}:${timeframe}:${patternName}:${direction}`;
+
+    const duplicateCutoff =
+      new Date(Date.now() - 30 * 60_000).toISOString();
+
+    for (const prefs of prefsRows) {
+      const userId = String(prefs["user_id"] ?? "");
+      if (!userId) continue;
+
+      if (
+        (TIER_RANK[String(prefs["tier"] ?? "OFF")] ?? 0) <
+        TIER_RANK["ALL_UPDATES"]!
+      ) {
+        continue;
+      }
+
+      if (categoryMuted(prefs, "SIGNALS")) continue;
+
+      // Same confirmed pattern should not buzz the phone every tick.
+      const recent = await db.collection("cloud_notification_log").findOne({
+        user_id: userId,
+        notification_type: "PATTERN_CONFIRMED",
+        pattern_key: patternKey,
+        sent_time: { $gte: duplicateCutoff },
+      });
+
+      if (recent) continue;
+
+      const devices = await completeActiveDevices(userId);
+      const nowIso = new Date().toISOString();
+
+      const logEntry: Record<string, unknown> = {
+        id: randomUUID(),
+        idempotency_key:
+          `PATTERN_CONFIRMED:${String(activity["id"] ?? randomUUID())}:${userId}`,
+        user_id: userId,
+        account,
+        symbol,
+        pattern_key: patternKey,
+        notification_type: "PATTERN_CONFIRMED",
+        category: "SIGNALS",
+        title: payload["title"],
+        body: payload["body"],
+        scheduled_time: nowIso,
+        sent_time: null,
+        delivery_status: "PENDING",
+        opened_time: null,
+        read_at: null,
+        device_count: devices.length,
+        retry_count: 0,
+        failure_reason: null,
+      };
+
+      if (devices.length === 0) {
+        logEntry["delivery_status"] = "NO_DEVICE";
+        logEntry["failure_reason"] = "SUBSCRIPTION_MISSING";
+      } else {
+        const { ok, failureClass, provider } =
+          await sendUserPush(userId, payload);
+
+        Object.assign(logEntry, {
+          sent_time: new Date().toISOString(),
+          delivery_status: ok ? "SENT" : "FAILED",
+          failure_reason:
+            ok ? null : (failureClass ?? UNKNOWN_FAILURE),
+          provider_http_status: provider["http_status"],
+          provider_message_id: provider["message_id"],
+          provider_errors: provider["errors"],
+          provider_warnings: provider["warnings"],
+        });
+
+        if (ok) sent += 1;
+      }
+
+      try {
+        await db.collection("cloud_notification_log").insertOne(logEntry);
+      } catch {
+        // Another worker may already have delivered this activity.
+      }
+    }
+
+    return sent;
+  } catch {
+    return null;
+  }
+}
+
 
 /** Port of notifications.py:906 `send_trade_activity_notification`. */
 export async function sendTradeActivityNotification(activity: Record<string, unknown>): Promise<number | null> {

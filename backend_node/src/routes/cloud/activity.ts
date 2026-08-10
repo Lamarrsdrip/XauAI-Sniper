@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { getDb } from "../../db.js";
 import { normalizeLicenseKey, resolveMonitorLicense } from "../../services/license.js";
 import { storeBotActivity } from "../../services/botActivity.js";
-import { sendTradeActivityNotification } from "../../services/notifications.js";
+import { sendPatternActivityNotification, sendTradeActivityNotification } from "../../services/notifications.js";
 import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
 import { trackOutlookLifecycleTick } from "../../services/marketOutlookTick.js";
 import { publishM10SignalFromActivity } from "../../services/marketOutlookPublish.js";
@@ -29,6 +29,51 @@ export async function registerCloudActivityRoutes(app: FastifyInstance): Promise
       details["license_id"] = lic?.["id"] ?? "";
     }
 
+    // Production EA pattern telemetry:
+    // PATTERN_CONFIRMED|name=...|score=...|timeframe=M10|symbol=XAUUSD
+    //
+    // Parsing lives here so Pattern Scanner receives structured fields while
+    // the EA can continue using the existing BotMonitorActivity transport.
+    if (String(req.event_type ?? "").toUpperCase().includes("PATTERN")) {
+      const patternFields: Record<string, string> = {};
+
+      for (const token of String(req.message ?? "").split("|").slice(1)) {
+        const eq = token.indexOf("=");
+        if (eq <= 0) continue;
+
+        const key = token.slice(0, eq).trim();
+        const value = token.slice(eq + 1).trim();
+
+        if (key && value) patternFields[key] = value;
+      }
+
+      if (patternFields["name"] && !details["pattern_name"]) {
+        details["pattern_name"] = patternFields["name"];
+      }
+
+      if (patternFields["timeframe"] && !details["pattern_timeframe"]) {
+        details["pattern_timeframe"] = patternFields["timeframe"];
+      }
+
+      if (patternFields["symbol"] && !details["pattern_symbol"]) {
+        details["pattern_symbol"] = patternFields["symbol"];
+      }
+
+      if (patternFields["direction"] && !details["pattern_direction"]) {
+        details["pattern_direction"] = patternFields["direction"];
+      }
+
+      const patternScore = Number(patternFields["score"]);
+      if (
+        Number.isFinite(patternScore) &&
+        details["pattern_score"] == null
+      ) {
+        details["pattern_score"] = patternScore;
+      }
+
+      details["pattern_confirmed"] = true;
+    }
+
     const doc = await storeBotActivity(req.event_type, req.severity, req.message, req.account || "", req.symbol || "", details);
 
     const db = getDb();
@@ -43,6 +88,7 @@ export async function registerCloudActivityRoutes(app: FastifyInstance): Promise
     void (async () => {
       try {
         await sendTradeActivityNotification(doc);
+        await sendPatternActivityNotification(doc);
       } catch {
         /* best-effort, matches Python's logged-but-swallowed exception */
       }

@@ -20374,6 +20374,78 @@ int XAU_ExecutionGapAtClose(datetime closeTime,datetime &firstAvailableTick)
    return 0;
 }
 
+
+// -----------------------------------------------------------------------------
+// Customer Pattern Scanner telemetry.
+//
+// IMPORTANT:
+// - Does NOT detect patterns independently.
+// - Does NOT place trades.
+// - Does NOT change pattern scores.
+// - Does NOT bypass the canonical M10 pipeline.
+//
+// It reports only a pattern-style setup that has already survived the
+// production setup scoring/selection path.
+// -----------------------------------------------------------------------------
+void XAU_ReportConfirmedPattern(string setupName,double setupScore)
+{
+   if(StringLen(setupName)<2 || setupScore<=0.0)
+      return;
+
+   string upper=setupName;
+   StringToUpper(upper);
+
+   bool looksLikePattern=
+      StringFind(upper,"PATTERN")>=0 ||
+      StringFind(upper,"DOUBLE")>=0 ||
+      StringFind(upper,"HEAD")>=0 ||
+      StringFind(upper,"SHOULDER")>=0 ||
+      StringFind(upper,"TRIANGLE")>=0 ||
+      StringFind(upper,"WEDGE")>=0 ||
+      StringFind(upper,"FLAG")>=0 ||
+      StringFind(upper,"PENNANT")>=0 ||
+      StringFind(upper,"CHANNEL")>=0 ||
+      StringFind(upper,"BREAKOUT")>=0;
+
+   if(!looksLikePattern)
+      return;
+
+   datetime patternBar=iTime(Symbol(),PERIOD_M10,0);
+
+   static string lastPatternKey="";
+   static datetime lastPatternSent=0;
+
+   string key=
+      upper+"|"+
+      TimeToString(patternBar,TIME_DATE|TIME_MINUTES);
+
+   // Same pattern on the same M10 bar must never spam the customer.
+   if(key==lastPatternKey && (TimeCurrent()-lastPatternSent)<3600)
+      return;
+
+   string safeName=setupName;
+   StringReplace(safeName,"|","/");
+
+   string msg=StringFormat(
+      "PATTERN_CONFIRMED|name=%s|score=%.1f|timeframe=M10|symbol=%s",
+      safeName,
+      setupScore,
+      Symbol()
+   );
+
+   BotMonitorActivity(
+      "PATTERN_CONFIRMED",
+      "AI",
+      msg
+   );
+
+   lastPatternKey=key;
+   lastPatternSent=TimeCurrent();
+
+   Print("PATTERN SCANNER | ",msg);
+}
+
+
 void OnTick()
 {
    XAU_ObserveExecutionTick();
@@ -21480,6 +21552,7 @@ void OnTick()
    int signal = resumeFrozenPrimaryCandidate
                 ? g_latestDecisionSnapshot.signalDirection
                 : ScoreSetups(setupScore, setupName);
+   XAU_ReportConfirmedPattern(setupName,setupScore);
 
    // v6.23.1 dedicated early-reversal candidate. At >=70% the engine is
    // already searching; at >=80% a compact, persistent closed-bar package
@@ -44658,7 +44731,7 @@ void BotMonitorHeartbeat()
    {
       int errCode = GetLastError();
       string responseBody = CharArrayToString(res);
-      Print("BOT-MONITOR heartbeat POST failed url=", InpCloudURL, "/api/cloud/monitor/heartbeat",
+      Print("XAUCLOUD CONNECTION FAILED | Heartbeat cannot reach xaucloud.io. MT5 setup: Tools > Options > Expert Advisors > Allow WebRequest for https://xaucloud.io | heartbeat POST failed url=", InpCloudURL, "/api/cloud/monitor/heartbeat",
             " http=", code, " err=", errCode, " consecutiveFails=", g_cloudConsecutiveFails + 1,
             " pin=", BotMonitorJsonSafe(InpLicensePIN, 32),
             " account=", (string)AccountInfoInteger(ACCOUNT_LOGIN),
@@ -44852,7 +44925,7 @@ void BotMonitorPollCommands()
       {
          int errCode = GetLastError();
          string responseBody = CharArrayToString(res);
-         Print("BOT-COMMAND pending GET failed url=", pendingUrl,
+         Print("XAUCLOUD CONNECTION FAILED | Command Center cannot reach xaucloud.io. MT5 setup: Tools > Options > Expert Advisors > Allow WebRequest for https://xaucloud.io | pending GET failed url=", pendingUrl,
                " http=", code, " err=", errCode, " consecutiveFails=", g_cloudConsecutiveFails + 1,
                " response=", BotMonitorJsonSafe(responseBody, 360));
          XAU_CloudRecordFailure("BOT-COMMAND", code, errCode);

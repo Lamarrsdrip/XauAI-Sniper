@@ -64,7 +64,7 @@ export async function registerCloudMonitorStatusRoutes(app: FastifyInstance): Pr
       let msg = "BOT OFFLINE / NO HEARTBEAT";
       if (lic && !hb) {
         msg =
-          "License linked, but no EA heartbeat has reached this server yet. Check InpLicensePIN, InpCloudURL, MT5 WebRequest allowed URL, and that the new EA version is attached.";
+          "License linked, but XauCloud has not received an EA heartbeat yet. In MT5 open Tools > Options > Expert Advisors, enable Allow WebRequest and add https://xaucloud.io. Then confirm Algo Trading is enabled and the latest XauCloud EA is attached.";
       }
       alerts.push({ severity: "CRITICAL", type: "BOT_OFFLINE_NO_HEARTBEAT", message: msg });
     }
