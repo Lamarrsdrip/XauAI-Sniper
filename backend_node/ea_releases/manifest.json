@@ -43,6 +43,8 @@
       "edition": "XauCloud-Pips: first-touch +50-pip smart profit management",
       "source_lineage": "v6.26.3 safeguarded production source",
       "source_commit": "1064a902d5a1b7d0d974c3e23a12b711a9e8f6dc",
+      "source_filename": "XauCloud-Pips.mq5",
+      "source_sha256": "b9433be6f6d70bec85c60b317a6990d6336f7dc3820072382e0f8c8677919506",
       "build_timestamp": "2026-08-11T09:09:00Z",
       "compiler_result": "0 errors, 0 warnings, 58229 ms elapsed (MetaEditor64.exe via Wine; static smart-profit contract passed)",
       "ex5_filename": "XauCloud-Pips.ex5",

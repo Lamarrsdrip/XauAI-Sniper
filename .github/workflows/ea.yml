@@ -38,20 +38,21 @@ jobs:
       # NOT COVERED block below for what it deliberately does not claim.
       - name: Authoritative production source and compatibility-path check
         run: |
-          test -f backend/ea_code/XauCloud.io.mq5
-          test -f backend/ea_code/XauCloud.io.mq5
-          test -s backend/ea_code/XauCloud.io.mq5
+          test -d backend/ea_code
           python3 - <<'PY'
           import hashlib, json
           from pathlib import Path
 
-          source = Path("backend/ea_code/XauCloud.io.mq5")
           manifest = json.loads(Path("backend/ea_releases/manifest.json").read_text())
           current = manifest["current_version"]
-          expected = manifest["releases"][current]["source_sha256"]
+          release = manifest["releases"][current]
+          source_name = release.get("source_filename", "XauCloud.io.mq5")
+          source = Path("backend/ea_code") / source_name
+          assert source.name == source_name and source.is_file(), f"invalid production source: {source_name}"
+          expected = release["source_sha256"]
           actual = hashlib.sha256(source.read_bytes()).hexdigest()
           assert actual == expected, f"production source hash mismatch: {actual} != {expected}"
-          print(f"XauCloud.io.mq5 matches manifest source_sha256={actual}")
+          print(f"{source_name} matches manifest source_sha256={actual}")
           PY
 
       - name: Current production-audit regression suite
