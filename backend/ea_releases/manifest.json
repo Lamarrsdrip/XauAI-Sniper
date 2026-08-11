@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.26.3",
+  "current_version": "v6.27.0",
   "internal_codename": "XauCloud_m10_private_vps_ai",
   "production_branch": "XauCloud_m10_private_vps_ai",
   "production_branch_source_commit": "8498c47eefec0e3cba71ec0c3bb5967feb0de096",
@@ -161,6 +161,19 @@
       "ex5_sha256": "d3b877594c7b68f612d133078dfeed95dbfcf79c10de3148b2e816b37a1968bc",
       "customer_filename": "XauCloud.io.ex5",
       "release_notes": "Production XauCloud.io v6.26.3 build. Keeps the audited Pattern Intelligence + BREAKOUT_UP/BREAKOUT_DOWN V4 trading lineage and Outlook explicit-SL/expiry fixes. ML pattern-save JSON now sanitizes all raw control characters in learned signatures before posting. Trading authority remains in the existing canonical EA pipeline.",
+      "stable_status": true
+    },
+    "v6.27.0": {
+      "version": "v6.27.0",
+      "edition": "XauCloud-Pips: first-touch +50-pip smart profit management",
+      "source_lineage": "v6.26.3 safeguarded production source",
+      "source_commit": "1064a902d5a1b7d0d974c3e23a12b711a9e8f6dc",
+      "build_timestamp": "2026-08-11T09:09:00Z",
+      "compiler_result": "0 errors, 0 warnings, 58229 ms elapsed (MetaEditor64.exe via Wine; static smart-profit contract passed)",
+      "ex5_filename": "XauCloud-Pips.ex5",
+      "ex5_sha256": "9677b5b1a8f68d583698a44d24f154f6b6fe80e9a38452d49b00faa104adf4be",
+      "customer_filename": "XauCloud-Pips.ex5",
+      "release_notes": "New isolated XauCloud-Pips build. Current production safeguards remain: $10 maximum Gold-move SL cap, Outlook explicit SL and locally approved expiry, broker Y/M/D reset, control-character-safe ML JSON, account_currency journal payload, and Pattern Scanner telemetry. GENERAL trades activate at the genuine first +50 XauCloud-pip touch (+$5 Gold movement) and protect max(+50, 70% of peak) with a monotonic broker stop floor; there is no ten-minute forced exit. Pyramid and Breakout keep their dedicated exit owners. XauCloud.io v6.26.3 remains available unchanged.",
       "stable_status": true
     }
   }
