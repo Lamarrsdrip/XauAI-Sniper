@@ -2,11 +2,43 @@ import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 import { getDb } from "../db.js";
 import { env } from "../env.js";
-import { publishedTransactionalRender } from "./adminOpsControl.js";
+import { publishedTransactionalRender, renderTransactional } from "./adminOpsControl.js";
 import { sendEmailDetailed } from "./email.js";
+import { BUILT_IN_EMAIL_TEMPLATES, type EmailDocument } from "./emailCampaign.js";
 
 type Row = Record<string, unknown>;
 const JWT_ALGORITHM = "HS256" as const;
+type TransactionalTemplateId = "welcome" | "account_verification" | "password_reset";
+
+const verificationDocument: EmailDocument = {
+  version: 1,
+  theme: { width: 640, background: "#FFFFFF", contentBackground: "#FFFFFF", accent: "#D6B35A", radius: 10, spacing: "normal" },
+  blocks: [
+    { id: "verify-hero", type: "hero", badge: "Account verification", title: "Verify your XauCloud email", subtitle: "Confirm your account securely to keep your Command Center details protected." },
+    { id: "verify-copy", type: "text", html: "<p>Hi {{first_name}},</p><p>Please verify the email address connected to your XauCloud account.</p>" },
+    { id: "verify-cta", type: "button", text: "VERIFY EMAIL", url: "{{verify_url}}", style: "gold" },
+    { id: "verify-note", type: "callout", title: "Secure link", text: "This verification link expires in 24 hours and can be used once.", tone: "gold" },
+  ],
+};
+
+const passwordResetDocument: EmailDocument = {
+  version: 1,
+  theme: { width: 640, background: "#FFFFFF", contentBackground: "#FFFFFF", accent: "#D6B35A", radius: 10, spacing: "normal" },
+  blocks: [
+    { id: "reset-hero", type: "hero", badge: "Password reset", title: "Reset your XauCloud password", subtitle: "Use the secure link below to choose a new password." },
+    { id: "reset-copy", type: "text", html: "<p>Hi {{first_name}},</p><p>If you requested a password reset, continue below. If not, you can safely ignore this email.</p>" },
+    { id: "reset-cta", type: "button", text: "RESET PASSWORD", url: "{{reset_url}}", style: "gold" },
+    { id: "reset-note", type: "callout", title: "Secure link", text: "This reset link expires in 30 minutes and can be used once.", tone: "gold" },
+  ],
+};
+
+function defaultDocument(templateId: TransactionalTemplateId): EmailDocument {
+  if (templateId === "welcome") {
+    const welcome = BUILT_IN_EMAIL_TEMPLATES.find((template) => template.id === "welcome");
+    if (welcome) return welcome.document;
+  }
+  return templateId === "account_verification" ? verificationDocument : passwordResetDocument;
+}
 
 function safeUser(user: Row): { id: string; email: string; name: string } {
   return {
@@ -23,6 +55,7 @@ async function logDelivery(input: {
   source: string;
   ok: boolean;
   error?: string;
+  event_key?: string;
 }): Promise<string> {
   const id = `tx-${randomUUID()}`;
   await getDb().collection("admin_email_log").insertOne({
@@ -34,6 +67,7 @@ async function logDelivery(input: {
     related_user_id: input.user_id,
     context_ref: { kind: input.template_id, user_id: input.user_id },
     original_event_id: `event-${randomUUID()}`,
+    ...(input.event_key ? { event_key: input.event_key } : {}),
     status: input.ok ? "sent" : "failed",
     failed: input.ok ? 0 : 1,
     provider_response_summary: input.error ? String(input.error).slice(0, 240) : "accepted",
@@ -43,6 +77,31 @@ async function logDelivery(input: {
     at: new Date().toISOString(),
   });
   return id;
+}
+
+async function claimOneTimeDelivery(eventKey: string, templateId: TransactionalTemplateId, user: { id: string; email: string }): Promise<boolean> {
+  try {
+    await getDb().collection("transactional_email_events").insertOne({
+      id: `tx-event-${randomUUID()}`,
+      event_key: eventKey,
+      template_id: templateId,
+      user_id: user.id,
+      canonical_recipient: user.email,
+      status: "claimed",
+      created_at: new Date().toISOString(),
+    });
+    return true;
+  } catch (error) {
+    if (Number((error as { code?: unknown })?.code) === 11000) return false;
+    throw error;
+  }
+}
+
+async function completeOneTimeDelivery(eventKey: string, accepted: boolean): Promise<void> {
+  await getDb().collection("transactional_email_events").updateOne(
+    { event_key: eventKey },
+    { $set: { status: accepted ? "sent" : "failed", completed_at: new Date().toISOString() } },
+  );
 }
 
 function emailVerificationToken(userId: string, jti: string): string {
@@ -60,7 +119,7 @@ export function passwordResetToken(userId: string, jti: string): string {
 }
 
 async function renderOrFallback(
-  templateId: "welcome" | "account_verification" | "password_reset",
+  templateId: TransactionalTemplateId,
   context: Record<string, string>,
   fallbackSubject: string,
   fallbackHtml: string,
@@ -74,12 +133,18 @@ async function renderOrFallback(
       text: String(rendered["text"] ?? fallbackText),
     };
   }
-  return { subject: fallbackSubject, html: fallbackHtml, text: fallbackText };
+  const premiumRendered = await renderTransactional(defaultDocument(templateId), fallbackSubject, fallbackText, context);
+  return {
+    subject: fallbackSubject,
+    html: String(premiumRendered["html"] ?? fallbackHtml),
+    text: String(premiumRendered["text"] ?? fallbackText),
+  };
 }
 
-export async function sendWelcomeEmailForUser(user: Row, source = "account_signup"): Promise<Row> {
+export async function sendWelcomeEmailForUser(user: Row, source = "account_signup", eventKey?: string): Promise<Row> {
   const u = safeUser(user);
   if (!u.id || !u.email) throw Object.assign(new Error("User does not have a canonical account email."), { statusCode: 409 });
+  if (eventKey && !await claimOneTimeDelivery(eventKey, "welcome", u)) return { accepted: true, duplicate: true, template_id: "welcome" };
   const ctx = { first_name: u.name || "Trader", account_email: u.email };
   const content = await renderOrFallback(
     "welcome",
@@ -89,14 +154,16 @@ export async function sendWelcomeEmailForUser(user: Row, source = "account_signu
     `Welcome to XauCloud. Your Command Center account is ready.`,
   );
   const sent = await sendEmailDetailed(u.email, content.subject, content.html, { text: content.text });
-  const deliveryId = await logDelivery({ template_id: "welcome", user_id: u.id, email: u.email, source, ok: sent.ok, error: sent.error });
+  const deliveryId = await logDelivery({ template_id: "welcome", user_id: u.id, email: u.email, source, ok: sent.ok, error: sent.error, event_key: eventKey });
+  if (eventKey) await completeOneTimeDelivery(eventKey, sent.ok);
   return { accepted: sent.ok, delivery_id: deliveryId, template_id: "welcome" };
 }
 
-export async function sendVerificationEmailForUser(user: Row, source = "account_verification"): Promise<Row> {
+export async function sendVerificationEmailForUser(user: Row, source = "account_verification", eventKey?: string): Promise<Row> {
   const u = safeUser(user);
   if (!u.id || !u.email) throw Object.assign(new Error("User does not have a canonical account email."), { statusCode: 409 });
   if (Boolean(user["email_verified"] ?? user["verified"])) return { accepted: true, already_verified: true, template_id: "account_verification" };
+  if (eventKey && !await claimOneTimeDelivery(eventKey, "account_verification", u)) return { accepted: true, duplicate: true, template_id: "account_verification" };
 
   const jti = randomUUID();
   const token = emailVerificationToken(u.id, jti);
@@ -110,7 +177,8 @@ export async function sendVerificationEmailForUser(user: Row, source = "account_
     `Verify your XauCloud email: ${verifyUrl}`,
   );
   const sent = await sendEmailDetailed(u.email, content.subject, content.html, { text: content.text });
-  const deliveryId = await logDelivery({ template_id: "account_verification", user_id: u.id, email: u.email, source, ok: sent.ok, error: sent.error });
+  const deliveryId = await logDelivery({ template_id: "account_verification", user_id: u.id, email: u.email, source, ok: sent.ok, error: sent.error, event_key: eventKey });
+  if (eventKey) await completeOneTimeDelivery(eventKey, sent.ok);
   return { accepted: sent.ok, delivery_id: deliveryId, template_id: "account_verification" };
 }
 
@@ -134,6 +202,16 @@ export async function sendPasswordResetEmailForUser(user: Row, source = "passwor
   return { accepted: sent.ok, delivery_id: deliveryId, template_id: "password_reset" };
 }
 
+/** The signup route calls this once, after the account insert has succeeded. */
+export async function sendSignupTransactionalEmails(user: Row): Promise<Row[]> {
+  const u = safeUser(user);
+  if (!u.id) return [];
+  return Promise.all([
+    sendWelcomeEmailForUser(user, "account_signup", `account_created:${u.id}:welcome`),
+    sendVerificationEmailForUser(user, "account_signup", `account_created:${u.id}:account_verification`),
+  ]);
+}
+
 export async function verifyEmailToken(token: string): Promise<Row> {
   let payload: { sub: string; type: string; jti: string };
   try {
@@ -148,8 +226,6 @@ export async function verifyEmailToken(token: string): Promise<Row> {
   try {
     await db.collection("used_email_verification_tokens").insertOne({ jti: payload.jti, used_at: new Date() });
   } catch {
-    const user = await db.collection("cloud_users").findOne({ id: payload.sub }, { projection: { _id: 0, email: 1, email_verified: 1 } });
-    if (user?.["email_verified"]) return { ok: true, already_verified: true };
     throw Object.assign(new Error("This verification link has already been used."), { statusCode: 409 });
   }
 
@@ -159,6 +235,24 @@ export async function verifyEmailToken(token: string): Promise<Row> {
   );
   if (!result.matchedCount) throw Object.assign(new Error("Account no longer exists."), { statusCode: 404 });
   return { ok: true, verified: true };
+}
+
+/** Validates and atomically burns a reset token without ever logging it. */
+export async function consumePasswordResetToken(token: string): Promise<string> {
+  let payload: { sub: string; type: string; jti: string };
+  try {
+    payload = jwt.verify(token, env.JWT_SECRET, { algorithms: [JWT_ALGORITHM] }) as typeof payload;
+  } catch (error) {
+    if (error instanceof jwt.TokenExpiredError) throw Object.assign(new Error("Reset link has expired. Request a new one."), { statusCode: 400 });
+    throw Object.assign(new Error("Invalid reset link."), { statusCode: 400 });
+  }
+  if (payload.type !== "password_reset") throw Object.assign(new Error("Invalid reset link."), { statusCode: 400 });
+  try {
+    await getDb().collection("used_password_reset_tokens").insertOne({ jti: payload.jti, used_at: new Date() });
+  } catch {
+    throw Object.assign(new Error("This reset link has already been used."), { statusCode: 400 });
+  }
+  return payload.sub;
 }
 
 export async function retryCanonicalTransactionalDelivery(deliveryId: string): Promise<Row> {

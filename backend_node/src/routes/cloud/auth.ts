@@ -1,9 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { getDb } from "../../db.js";
-import { env } from "../../env.js";
 import {
   clientIp,
   createCloudToken,
@@ -16,12 +14,11 @@ import {
 import { getUserLicense, verifyCommandLicense } from "../../services/commandLicense.js";
 import {
   sendPasswordResetEmailForUser,
+  sendSignupTransactionalEmails,
   sendVerificationEmailForUser,
-  sendWelcomeEmailForUser,
+  consumePasswordResetToken,
   verifyEmailToken,
 } from "../../services/accountRecovery.js";
-
-const JWT_ALGORITHM = "HS256" as const;
 
 const CloudSignupSchema = z.object({
   email: z.string(),
@@ -85,10 +82,11 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
 
     const token = createCloudToken(uid, email, 0);
     setCloudSessionCookie(reply, token);
-    await Promise.allSettled([
-      sendWelcomeEmailForUser(doc, "account_signup"),
-      sendVerificationEmailForUser(doc, "account_signup"),
-    ]);
+    // Delivery is intentionally best-effort: an SMTP failure must never undo
+    // a successfully-created account. The service claims one durable event
+    // per template before send, so duplicate submits/retries cannot duplicate
+    // either signup email.
+    await Promise.allSettled([sendSignupTransactionalEmails(doc)]);
     const { password_hash: _ph, ...userOut } = doc;
     return { ok: true, user: userOut };
   });
@@ -176,27 +174,19 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
     const body = CloudResetPasswordSchema.parse(request.body);
     rateLimit(`reset_password_ip:${clientIp(request)}`, 10, 600);
 
-    let payload: { sub: string; type: string; jti: string };
-    try {
-      payload = jwt.verify(body.token, env.JWT_SECRET, { algorithms: [JWT_ALGORITHM] }) as typeof payload;
-    } catch (err) {
-      if (err instanceof jwt.TokenExpiredError) return reply.code(400).send({ detail: "Reset link has expired. Request a new one." });
-      return reply.code(400).send({ detail: "Invalid reset link." });
-    }
-    if (payload.type !== "password_reset") return reply.code(400).send({ detail: "Invalid reset link." });
-
-    const db = getDb();
-    try {
-      await db.collection("used_password_reset_tokens").insertOne({ jti: payload.jti, used_at: new Date() });
-    } catch {
-      return reply.code(400).send({ detail: "This reset link has already been used." });
-    }
-
     const strength = hasStrongPassword(body.new_password);
     if (!strength.ok) return reply.code(400).send({ detail: strength.error });
 
+    let userId: string;
+    try {
+      userId = await consumePasswordResetToken(body.token);
+    } catch (error) {
+      return reply.code(Number((error as { statusCode?: unknown }).statusCode ?? 400)).send({ detail: (error as Error).message });
+    }
+
+    const db = getDb();
     const result = await db.collection("cloud_users").updateOne(
-      { id: payload.sub },
+      { id: userId },
       { $set: { password_hash: await hashPassword(body.new_password), updated_at: new Date().toISOString() }, $inc: { session_version: 1 } },
     );
     if (result.matchedCount === 0) return reply.code(404).send({ detail: "Account no longer exists." });

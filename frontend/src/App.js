@@ -20,7 +20,7 @@ import PurchaseSuccessPage from "@/components/PurchaseSuccessPage";
 import AdminPortal from "@/components/AdminPortal";
 import Footer from "@/components/Footer";
 import CloudLanding from "@/components/cloud/CloudLanding";
-import { CloudSignup, CloudLogin } from "@/components/cloud/CloudAuth";
+import { CloudSignup, CloudLogin, CloudForgotPassword, CloudResetPassword } from "@/components/cloud/CloudAuth";
 import CloudDashboard from "@/components/cloud/CloudDashboard";
 import AIMarketOutlookPage from "@/pages/AIMarketOutlookPage";
 import LabsPage from "@/pages/LabsPage";
@@ -98,6 +98,8 @@ function App() {
           <Route path="/command" element={<CloudLanding />} />
           <Route path="/command/signup" element={<CloudSignup />} />
           <Route path="/command/login" element={<CloudLogin />} />
+          <Route path="/command/forgot-password" element={<CloudForgotPassword />} />
+          <Route path="/command/reset-password" element={<CloudResetPassword />} />
           <Route path="/command/dashboard" element={<><CommandCenterAnnouncements /><CloudDashboard /></>} />
           <Route path="/campaign/:slug" element={<CampaignLandingPage />} />
           <Route path="/ai-market-outlook" element={<AIMarketOutlookPage />} />
@@ -107,6 +109,8 @@ function App() {
           <Route path="/cloud" element={<Navigate to="/command" replace />} />
           <Route path="/cloud/signup" element={<Navigate to="/command/signup" replace />} />
           <Route path="/cloud/login" element={<Navigate to="/command/login" replace />} />
+          <Route path="/cloud/forgot-password" element={<Navigate to="/command/forgot-password" replace />} />
+          <Route path="/cloud/reset-password" element={<Navigate to="/command/reset-password" replace />} />
           <Route path="/cloud/dashboard" element={<Navigate to="/command/dashboard" replace />} />
           <Route path="/purchase/success" element={<PurchaseSuccessPage />} />
           <Route path="/purchase/cancel" element={<PurchaseCancelWrap />} />

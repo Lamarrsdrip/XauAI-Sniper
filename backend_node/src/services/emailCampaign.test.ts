@@ -98,4 +98,11 @@ describe("XauCloud email campaign renderer", () => {
   test("personalization never emits undefined for missing account data", () => {
     expect(personalize("Hi {{first_name}} / {{display_name}} / {{account_email}}", {})).toBe("Hi there / there / your account email");
   });
+
+  test("uses a pure-white readable shell for transactional email header and footer", () => {
+    const rendered = renderEmailCampaign({ version: 1, theme: { ...theme, background: "#FFFFFF" }, blocks: [{ id: "copy", type: "text", text: "Hello" }] }, {}, branding);
+    expect(rendered.html).toContain('background:#FFFFFF');
+    expect(rendered.html).toContain('color:#111114;">Xau');
+    expect(rendered.html).not.toContain('color:#FFFFFF;">Xau');
+  });
 });

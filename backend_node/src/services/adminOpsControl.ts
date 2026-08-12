@@ -243,6 +243,7 @@ export async function ensureAdminOpsInfrastructure(): Promise<void> {
     db.collection("used_email_verification_tokens").createIndex({ jti: 1 }, { unique: true }),
     db.collection("used_password_reset_tokens").createIndex({ jti: 1 }, { unique: true }),
     db.collection("admin_email_log").createIndex({ delivery_id: 1 }),
+    db.collection("transactional_email_events").createIndex({ event_key: 1 }, { unique: true }),
     db.collection("support_tickets").createIndex({ id: 1 }, { unique: true }),
   ]);
 }

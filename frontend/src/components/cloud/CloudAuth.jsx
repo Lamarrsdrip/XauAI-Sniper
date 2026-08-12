@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { RadioTower, Loader2 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
@@ -118,9 +118,66 @@ export function CloudLogin() {
           {loading ? "Logging in…" : "Log in →"}
         </button>
         <div className="text-sm text-center text-white/50">
+          <Link to="/command/forgot-password" className="text-[#D4AF37] hover:underline">Forgot password?</Link><br />
           Don't have an account? <Link to="/command/signup" className="text-[#D4AF37] hover:underline" data-testid="login-go-signup">Create account</Link>
         </div>
       </form>
     </AuthShell>
   );
+}
+
+export function CloudForgotPassword() {
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [err, setErr] = useState("");
+  const submit = async (e) => {
+    e.preventDefault(); setErr(""); setMessage(""); setLoading(true);
+    try {
+      const result = await cloudAxios.post("/cloud/auth/forgot-password", { email });
+      setMessage(result.data?.message || "If an account exists for that email, a reset link has been sent.");
+    } catch (e) { setErr(e.response?.data?.detail || "Unable to request a reset link."); }
+    finally { setLoading(false); }
+  };
+  return <AuthShell title="Reset your password" subtitle="Enter your account email and we’ll send a secure reset link.">
+    <form onSubmit={submit} className="space-y-4" data-testid="forgot-password-form">
+      <div><label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5" htmlFor="forgot-email">EMAIL</label><input id="forgot-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none" /></div>
+      {err && <div className="text-red-400 text-sm">{err}</div>}
+      {message && <div className="text-emerald-300 text-sm">{message}</div>}
+      <button type="submit" disabled={loading} className="w-full py-3 bg-[#D4AF37] text-black font-semibold rounded-xl hover:bg-[#E5C558] transition-colors disabled:opacity-50">{loading ? "Sending…" : "Send reset link"}</button>
+      <div className="text-sm text-center text-white/50"><Link to="/command/login" className="text-[#D4AF37] hover:underline">Back to login</Link></div>
+    </form>
+  </AuthShell>;
+}
+
+export function CloudResetPassword() {
+  const nav = useNavigate();
+  const [params] = useSearchParams();
+  const token = params.get("token") || "";
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [err, setErr] = useState("");
+  const submit = async (e) => {
+    e.preventDefault(); setErr(""); setMessage("");
+    if (!token) return setErr("This reset link is invalid or incomplete.");
+    if (password !== confirm) return setErr("Passwords do not match.");
+    setLoading(true);
+    try {
+      const result = await cloudAxios.post("/cloud/auth/reset-password", { token, new_password: password });
+      setMessage(result.data?.message || "Password updated. You can now log in.");
+      setTimeout(() => nav("/command/login"), 900);
+    } catch (e) { setErr(e.response?.data?.detail || "Unable to reset password."); }
+    finally { setLoading(false); }
+  };
+  return <AuthShell title="Choose a new password" subtitle="Use a strong password with at least one letter and one number.">
+    <form onSubmit={submit} className="space-y-4" data-testid="reset-password-form">
+      <div><label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5" htmlFor="reset-password">NEW PASSWORD</label><input id="reset-password" type="password" autoComplete="new-password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none" /></div>
+      <div><label className="block text-xs font-mono tracking-widest text-white/50 mb-1.5" htmlFor="reset-confirm">CONFIRM PASSWORD</label><input id="reset-confirm" type="password" autoComplete="new-password" required minLength={8} value={confirm} onChange={(e) => setConfirm(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:border-[#D4AF37] outline-none" /></div>
+      {err && <div className="text-red-400 text-sm">{err}</div>}
+      {message && <div className="text-emerald-300 text-sm">{message}</div>}
+      <button type="submit" disabled={loading || !token} className="w-full py-3 bg-[#D4AF37] text-black font-semibold rounded-xl hover:bg-[#E5C558] transition-colors disabled:opacity-50">{loading ? "Updating…" : "Update password"}</button>
+    </form>
+  </AuthShell>;
 }

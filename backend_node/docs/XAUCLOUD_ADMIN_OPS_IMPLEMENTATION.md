@@ -23,7 +23,7 @@ No arbitrary MongoDB query language is accepted from GPT calls. No shell/filesys
 - Automatic refunds: the repository does not contain a safe canonical refund execution service. Adding a fake or ad-hoc provider call would be unsafe.
 - Production EA rollout/rollback through GPT: the repository has release-manifest admin operations, but no complete deployment-orchestrator abstraction proving that an Action-triggered manifest change equals a safe production rollout. Read access is provided; existing manual/admin release workflow remains authoritative.
 - Server-side session reset: Command Center uses signed JWT cookies and does not persist revocable sessions. The user tool reports this limitation instead of pretending sessions can be reset.
-- Verification-email resend: the current cloud-account implementation has password reset but no genuine email-verification state machine.
+- None for account recovery: signup verification, verification resend, password reset, expiry and single-use tokens use the same canonical transactional delivery flow.
 - Support reply send/assign/close: there is no canonical support ticket delivery workflow in this backend. Draft/read tooling is provided only when support records actually exist.
 - Bounce/complaint/suppression provider APIs: current SMTP delivery does not expose a canonical provider webhook/data service for these reports.
 

@@ -114,6 +114,7 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
   indexReport.push(await tryIndex("admin_email_drafts.id: unique", () => db.collection("admin_email_drafts").createIndex("id", { unique: true })));
   indexReport.push(await tryIndex("admin_email_templates.id: unique", () => db.collection("admin_email_templates").createIndex("id", { unique: true })));
   indexReport.push(await tryIndex("admin_email_log.at", () => db.collection("admin_email_log").createIndex({ at: -1 })));
+  indexReport.push(await tryIndex("transactional_email_events.event_key: unique", () => db.collection("transactional_email_events").createIndex({ event_key: 1 }, { unique: true })));
   indexReport.push(
     await tryIndex("login_audit_log.ts: TTL(180d)", () => db.collection("login_audit_log").createIndex("ts", { expireAfterSeconds: 180 * 86400 })),
   );
