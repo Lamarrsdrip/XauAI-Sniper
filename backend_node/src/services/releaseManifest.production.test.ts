@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { currentEaRelease, EA_RELEASES_DIR, verifyReleaseArtifact } from "./releaseManifest.js";
 
-describe("authoritative XauCloud.io production release", () => {
+describe("authoritative current XauCloud production release", () => {
   test("manifest, download filename and exact EX5 bytes agree", async () => {
     const release = await currentEaRelease();
     expect(release).not.toBeNull();

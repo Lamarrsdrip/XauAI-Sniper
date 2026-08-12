@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,3 +37,19 @@ def test_final_retains_existing_smart_profit_and_broker_safety_contracts():
     assert "XAU_SmartProfitManage" in text
     assert "account_currency" in text
     assert "BotMonitorJsonSafe" in text
+
+
+def test_final_is_the_single_current_download_authority():
+    for manifest_path in (
+        ROOT / "backend" / "ea_releases" / "manifest.json",
+        ROOT / "backend_node" / "ea_releases" / "manifest.json",
+    ):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert manifest["current_version"] == "v6.27.1"
+        release = manifest["releases"]["v6.27.1"]
+        assert release["source_filename"] == "XauCloud-Final.mq5"
+        assert release["ex5_filename"] == "XauCloud-Final.ex5"
+        assert release["customer_filename"] == "XauCloud-Final.ex5"
+
+    dashboard = (ROOT / "frontend" / "src" / "components" / "cloud" / "CloudDashboard.jsx").read_text(encoding="utf-8")
+    assert 'info?.filename || "XauCloud-Final.ex5"' in dashboard
