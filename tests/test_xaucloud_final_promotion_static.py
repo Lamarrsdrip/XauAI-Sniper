@@ -53,3 +53,7 @@ def test_final_is_the_single_current_download_authority():
 
     dashboard = (ROOT / "frontend" / "src" / "components" / "cloud" / "CloudDashboard.jsx").read_text(encoding="utf-8")
     assert 'info?.filename || "XauCloud-Final.ex5"' in dashboard
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "backend/ea_code/XauCloud-Final.mq5" in readme
+    assert "XauCloud-Final.ex5" in readme

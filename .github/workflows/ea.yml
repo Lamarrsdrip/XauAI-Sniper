@@ -46,7 +46,7 @@ jobs:
           manifest = json.loads(Path("backend/ea_releases/manifest.json").read_text())
           current = manifest["current_version"]
           release = manifest["releases"][current]
-          source_name = release.get("source_filename", "XauCloud.io.mq5")
+          source_name = release.get("source_filename", "XauCloud-Final.mq5")
           source = Path("backend/ea_code") / source_name
           assert source.name == source_name and source.is_file(), f"invalid production source: {source_name}"
           expected = release["source_sha256"]

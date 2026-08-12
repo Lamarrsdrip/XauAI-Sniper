@@ -6,9 +6,9 @@ numbers, telemetry schemas, and deployment infrastructure remain the same
 system; compatibility identifiers are retained where changing them would
 break existing installations.
 
-The authoritative production source is `backend/ea_code/XauCloud.io.mq5`.
+The authoritative production source is `backend/ea_code/XauCloud-Final.mq5`.
 The authoritative customer artifact and its SHA-256 are selected by the EA
-release manifests; the current production filename is `XauCloud.io.ex5`.
+release manifests; the current production filename is `XauCloud-Final.ex5`.
 `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` is a compatibility symlink for
 historical tools and tests, not a second production source.
 
