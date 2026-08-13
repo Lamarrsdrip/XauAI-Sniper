@@ -12,7 +12,7 @@ export async function sendPinEmail(toEmail: string, buyerName: string, pin: stri
   const b = await emailBranding();
   const release = await currentEaRelease();
   const versionText = release ? release.version : "your Command Center dashboard";
-  const filenameText = release ? String(release["customer_filename"] ?? "XauCloud-Final.ex5") : "XauCloud-Final.ex5";
+  const filenameText = release ? String(release["customer_filename"] ?? "XauCloud-60pips.ex5") : "XauCloud-60pips.ex5";
   const supportLine = b.support_email
     ? `<a href="mailto:${b.support_email}" style="color:#D4AF37;text-decoration:none;">${b.support_email}</a>`
     : "your Command Center Support button";

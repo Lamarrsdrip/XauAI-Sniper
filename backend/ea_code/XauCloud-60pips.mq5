@@ -1947,8 +1947,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.273"
-#property description "XauCloud-Final fixed $10 broker SL and fixed +60-pip General exit test."
+#property version   "6.272"
+#property description "XAUCloud-60pips production build: fixed $10 broker SL, +60-pip profit floor, and Outlook recovery."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
 #property description "or fail closed; no silent downscaling. Real broker margin check."
@@ -2034,9 +2034,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "XauCloud-Final_FIXED10_60P_EXIT_ONLY_TEST_v6.27.3"
-#define XAUAI_EA_VERSION_NUM "6.273"
-#define XAUAI_BUILD_HASH "fixed10-60pip-exit-only-test-20260813"
+#define XAUAI_EA_VERSION "XAUCloud-60pips_v6.27.2"
+#define XAUAI_EA_VERSION_NUM "6.272"
+#define XAUAI_BUILD_HASH "xaucloud-60pips-production-20260813"
 
 // v6.26.0 owner directive (2026-08-05): permanent migration off the R
 // (risk-multiple) measurement system. Every internal exit/protection
@@ -2057,7 +2057,7 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 // display/threshold convention.
 #define XAUCLOUD_PIPS_PER_PRICE_UNIT 10.0
 #define XAUCLOUD_GOLDMOVES_PER_PRICE_UNIT 1.0
-#define XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS 0.50
+#define XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS 60.0
 #define XAU_COUNTER_EXCURSION_BUILD false
 #define XAU_TRADEBRAIN_VALIDATED_GLOBAL_SEED_AVAILABLE true
 #define XAU_TRADEBRAIN_SEED_SCHEMA "XAUAI_TRADEBRAIN_SEED_V1"
@@ -3121,7 +3121,7 @@ input group "=== GENERAL 10M EXTENSION PROTECTION (v6.25.28 owner exit rule, ind
 input bool   InpExtensionFloor15PipsEnabled     = false; // At extension start, immediately protect at least +0.15R (never weaker than whatever SL is already on the broker). Default OFF: the extension starts with only the wide original structural SL, exactly like the pre-v6.25.26 behavior. Owner-switchable.
 input bool   InpExtension70PctRatchetEnabled  = false; // While the extension is active, once peak R reaches +0.70R, ratchet the floor to 70% of peak (monotonic). Default OFF. Independent of the floor toggle above -- either, both, or neither can be on. Owner-switchable.
 
-input group "=== FIXED 60-PIP EXIT TEST ==="
+input group "=== FIXED 60-PIP PROFIT EXIT ==="
 input double InpFixed60PipExit                = 60.0;  // Exact General-position take-profit exit; 60 pips = $6.00 Gold move.
 
 input group "=== SMART EXIT 3-LAYER SYSTEM (v6.4.11) ==="
@@ -5442,7 +5442,7 @@ struct XAU_CampaignState
    double   basketProtectedFloorPips;
    bool     basketProtectionArmed;
    bool     basketCloseInProgress;
-   // FINAL_BASKET_050R audit repair: once an add has ever been confirmed,
+   // FINAL_BASKET_60_PIP repair: once an add has ever been confirmed,
    // basket ownership survives partial closes, netting merge and restart.
    bool     basketModeEverActivated;
    int      basketLogicalAdditionCount;
@@ -10286,7 +10286,7 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       (StringFind(logTag, "GENERAL_10M_EXTENSION_FLOOR_PROTECT") == 0) ||
       (StringFind(logTag, "GENERAL_10M_EXTENSION_RATCHET") == 0) ||
       (StringFind(logTag, "SMART_PROFIT_FLOOR") == 0) ||
-      (StringFind(logTag, "BASKET_050R_RESTORE_ORIGINAL_SL") == 0) ||
+      (StringFind(logTag, "BASKET_60_PIP_RESTORE_ORIGINAL_SL") == 0) ||
       (StringFind(logTag, "OWNER_R_EXIT_FLOOR") == 0) ||
       (StringFind(logTag, "PRIMARY_EXIT_FLOOR") == 0);
    if(!ownerModifyAuthority)
@@ -27815,7 +27815,7 @@ bool XAU_OwnerProtectedFloorAllowsClose(ulong ticket, string ctx)
 
    ulong positionId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
    int idx = XAU_RExit_FindIdx(positionId);
-   if(StringFind(ctx, "BASKET_050R_") == 0)
+   if(StringFind(ctx, "BASKET_60_PIP_") == 0)
       return true;
    if(StringFind(ctx, "OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0)
       return idx >= 0 && g_rExit[idx].ownerExitProfile == (int)OWNER_EXIT_GENERAL &&
@@ -27898,14 +27898,14 @@ bool XAU_OwnerProtectedFloorAllowsModify(ulong ticket, double proposedSL, string
    // The hard +0.50R basket authority must remove any per-leg profit floor
    // that existed before the pyramid/add was opened. It may move SL only to
    // the exact immutable original structural SL; it can never widen past it.
-   if(StringFind(ctx, "BASKET_050R_RESTORE_ORIGINAL_SL") == 0)
+   if(StringFind(ctx, "BASKET_60_PIP_RESTORE_ORIGINAL_SL") == 0)
    {
       double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
       double tolerance = MathMax(point * 2.0, 0.00001);
       bool exactOriginal = MathAbs(proposedSL - g_rExit[idx].originalStopLoss) <= tolerance;
       if(exactOriginal)
          return true;
-      PrintFormat("BASKET_050R_SL_RESTORE_FAILED | position_id=%I64u | stage=SL_RESTORE_PERMISSION | reason=NOT_EXACT_ORIGINAL_SL proposed=%.5f original=%.5f profile=%s",
+      PrintFormat("BASKET_60_PIP_SL_RESTORE_FAILED | position_id=%I64u | stage=SL_RESTORE_PERMISSION | reason=NOT_EXACT_ORIGINAL_SL proposed=%.5f original=%.5f profile=%s",
                   positionId, proposedSL, g_rExit[idx].originalStopLoss, XAU_OwnerExitProfileName(profile));
       return false;
    }
@@ -27960,7 +27960,7 @@ bool XAU_IsOwnerRExitApprovedCloseReason(string ctx)
           StringFind(ctx, "FIXED_60_PIP_EXIT") == 0 ||
           StringFind(ctx, "OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0 ||
           StringFind(ctx, "OWNER_R_EXIT_INITIAL_SL_UNCONFIRMED") == 0 ||
-          StringFind(ctx, "BASKET_050R_") == 0;
+          StringFind(ctx, "BASKET_60_PIP_") == 0;
 }
 
 bool XAU_ConfirmedGeneralDeadlineClose(ulong ticket,string ctx)
@@ -27988,7 +27988,7 @@ bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = fal
    int ownerIdx = XAU_RExit_FindIdx(ownerPositionId);
    bool deadlineClose = StringFind(ctx, "OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0;
    bool confirmedDeadlineClose=XAU_ConfirmedGeneralDeadlineClose(ticket,ctx);
-   bool hardBasketClose = StringFind(ctx, "BASKET_050R_") == 0;
+   bool hardBasketClose = StringFind(ctx, "BASKET_60_PIP_") == 0;
    bool initialStopIntegrity = StringFind(ctx, "OWNER_R_EXIT_INITIAL_SL_UNCONFIRMED") == 0;
    if(!externalManual && !deadlineClose && !hardBasketClose && !initialStopIntegrity && ownerIdx >= 0 &&
       XAU_General10MExtensionActive(ownerIdx))
@@ -29814,7 +29814,7 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
    datetime now = TimeCurrent();
    if(idx < 0 || idx >= ArraySize(g_rExit)) return false;
    bool deadlineClose = StringFind(reason, "OWNER_R_EXIT_GENERAL_10M_DEADLINE") == 0;
-   bool hardBasketClose = StringFind(reason, "BASKET_050R_") == 0;
+   bool hardBasketClose = StringFind(reason, "BASKET_60_PIP_") == 0;
    if(!XAU_IsOwnerRExitApprovedCloseReason(reason))
    {
       PrintFormat("OWNER_R_EXIT_CLOSE_REJECTED_LEGACY_AUTHORITY | ticket=%I64u | attempted_authority=%s | action=TELEMETRY_ONLY",
@@ -30110,10 +30110,10 @@ bool XAU_RestoreBasketLegOriginalProtection(ulong ticket, int idx, string &failu
    bool tpAlreadyRemoved = currentTP <= tolerance;
    if(!alreadyAtOriginal || !tpAlreadyRemoved)
    {
-      PrintFormat("BASKET_050R_SL_RESTORE_REQUEST | position_id=%I64u | ticket=%I64u | current_sl=%.5f | original_structural_sl=%.5f | current_tp=%.5f",
+      PrintFormat("BASKET_60_PIP_SL_RESTORE_REQUEST | position_id=%I64u | ticket=%I64u | current_sl=%.5f | original_structural_sl=%.5f | current_tp=%.5f",
                   g_rExit[idx].positionId, ticket, currentSL, originalSL, currentTP);
       bool accepted = SafeModifySL(ticket, originalSL, 0.0, isBuy, currentPrice,
-                                   "BASKET_050R_RESTORE_ORIGINAL_SL");
+                                   "BASKET_60_PIP_RESTORE_ORIGINAL_SL");
       if(!accepted)
       {
          failureReason = StringFormat("BROKER_MODIFY_REJECTED ret=%u err=%d", trade.ResultRetcode(), GetLastError());
@@ -30127,8 +30127,8 @@ bool XAU_RestoreBasketLegOriginalProtection(ulong ticket, int idx, string &failu
          failureReason = StringFormat("BROKER_REREAD_NOT_CONFIRMED actualSL=%.5f actualTP=%.5f", actualSL, actualTP);
          return false;
       }
-      PrintFormat("BASKET_050R_SL_RESTORE_CONFIRMED | position_id=%I64u | ticket=%I64u | original_structural_sl=%.5f | tp_removed=true",
-                  g_rExit[idx].positionId, ticket, originalSL);
+      PrintFormat("BASKET_60_PIP_SL_RESTORE_CONFIRMED | position_id=%I64u | ticket=%I64u | current_sl=%.5f | original_structural_sl=%.5f | tp_removed=true",
+                  g_rExit[idx].positionId, ticket, actualSL, originalSL);
    }
 
    // Basket mode owns every managed profit decision. Cancel any per-leg
@@ -30197,12 +30197,12 @@ void XAU_ActivateBasketModeImmediately(int direction)
       else
       {
          pending++;
-         PrintFormat("BASKET_050R_IMMEDIATE_ACTIVATION_RESTORE_PENDING | ticket=%I64u | reason=%s", tk, failure);
+         PrintFormat("BASKET_60_PIP_IMMEDIATE_ACTIVATION_RESTORE_PENDING | ticket=%I64u | reason=%s", tk, failure);
       }
    }
    XAU_CampaignBasketState_Save(true);
    XAU_RExit_SaveState(true);
-   PrintFormat("BASKET_050R_MODE_ACTIVATED | campaignId=%s | direction=%s | restored=%d | pending=%d | action=NO_INDIVIDUAL_TP_OR_MANAGED_PROFIT_CLOSE",
+   PrintFormat("BASKET_60_PIP_MODE_ACTIVATED | campaignId=%s | direction=%s | restored=%d | pending=%d | action=NO_INDIVIDUAL_TP_OR_MANAGED_PROFIT_CLOSE",
                XAU_CampaignIdText(g_campaign[slot].campaignId), direction==1?"BUY":"SELL", restored, pending);
 }
 
@@ -30217,14 +30217,14 @@ void XAU_UpdateCampaignBasketState(int direction)
    if(!campaignHasAdds)
       return;
 
-   // The persisted 0.50R armed state is the restart-safe close latch. Resume
+   // The persisted +60-pip armed state is the restart-safe close latch. Resume
    // closing even if current P/L moved after restart or only one leg remains.
    bool persistedHardCloseLatch = g_campaign[slot].basketProtectionArmed &&
                                   g_campaign[slot].basketProtectedFloorPips + 0.0000001 >= XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS;
    if(g_campaign[slot].basketCloseInProgress || persistedHardCloseLatch)
    {
       g_campaign[slot].basketCloseInProgress = true;
-      XAU_CloseCampaignBasketAtProtectedFloor(direction, "BASKET_050R_CLOSE_ALL_RETRY");
+      XAU_CloseCampaignBasketAtProtectedFloor(direction, "BASKET_60_PIP_CLOSE_ALL_RETRY");
       return;
    }
 
@@ -30232,7 +30232,7 @@ void XAU_UpdateCampaignBasketState(int direction)
    // never wait behind synchronous SL/TP restore requests.
    // Campaign target is based on total campaign P/L, not merely currently
    // floating legs. A leg that already closed cannot be forgotten, otherwise
-   // a prior loss could make a false +0.50R trigger.
+   // a prior loss could make a false +60-pip trigger.
    double basketOpenProfitMoney = 0.0;
    int found = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -30259,7 +30259,7 @@ void XAU_UpdateCampaignBasketState(int direction)
       if(TimeCurrent() - lastNoRLog[slot] >= 60)
       {
          lastNoRLog[slot] = TimeCurrent();
-         PrintFormat("BASKET_050R_EXIT_SKIPPED_NO_VALID_1R | slot=%d | dir=%s | campaignId=%s | reason=INITIAL_CORE_RISK_UNKNOWN",
+         PrintFormat("BASKET_60_PIP_EXIT_SKIPPED_NO_VALID_1R | slot=%d | dir=%s | campaignId=%s | reason=INITIAL_CORE_RISK_UNKNOWN",
                      slot, direction == 1 ? "BUY" : "SELL", XAU_CampaignIdText(g_campaign[slot].campaignId));
       }
       return;
@@ -30271,22 +30271,22 @@ void XAU_UpdateCampaignBasketState(int direction)
    // distance (g_campaign[slot].ownerEffectiveHardStopDistance -- the same
    // canonical per-campaign reference the extension subsystem already uses)
    // -- "how many pips of the campaign's own risk this basket's dollar P&L
-   // is equivalent to" -- genuinely anchored to a real price distance,
-   // never a bare multiplier of a dollar figure. XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS
-   // stays a pure fraction (0.50) for the dollar-target calc below, which
-   // needs no unit conversion; basketHardClosePips is the pips-scaled
-   // threshold used for the comparison/display further down.
+   // is equivalent to" -- genuinely anchored to a real price distance.
+   // The hard target itself is an actual +60-pip price-move floor, converted
+   // to money only for telemetry and the persisted close latch.
    double basketRiskDistancePips = g_campaign[slot].ownerEffectiveHardStopDistance * XAUCLOUD_PIPS_PER_PRICE_UNIT;
+   if(basketRiskDistancePips <= 0.0)
+      return; // Never manufacture a voluntary basket-profit close without real risk distance.
    double basketCurrentPips = (basketProfitMoney / g_campaign[slot].basketOneRMoney) * basketRiskDistancePips;
-   double basketHardClosePips = XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS * basketRiskDistancePips;
-   double basketTargetMoney = XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS * g_campaign[slot].basketOneRMoney;
+   double basketHardClosePips = XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS;
+   double basketTargetMoney = (basketHardClosePips / basketRiskDistancePips) * g_campaign[slot].basketOneRMoney;
 
    if(basketProfitMoney > g_campaign[slot].basketPeakProfitMoney)
    {
       g_campaign[slot].basketPeakProfitMoney = basketProfitMoney;
       g_campaign[slot].basketPeakPips = basketCurrentPips;
       g_campaignBasketStateDirty = true;
-      PrintFormat("BASKET_050R_PEAK_UPDATED | slot=%d | dir=%s | campaignId=%s | peakProfitMoney=%.2f | peakPips=%.3f",
+      PrintFormat("BASKET_60_PIP_PEAK_UPDATED | slot=%d | dir=%s | campaignId=%s | peakProfitMoney=%.2f | peakPips=%.3f",
                   slot, direction == 1 ? "BUY" : "SELL", XAU_CampaignIdText(g_campaign[slot].campaignId),
                   g_campaign[slot].basketPeakProfitMoney, g_campaign[slot].basketPeakPips);
    }
@@ -30302,14 +30302,14 @@ void XAU_UpdateCampaignBasketState(int direction)
       g_campaignBasketStateDirty = true;
       XAU_CampaignBasketState_Save(true);
 
-      PrintFormat("BASKET_050R_TARGET_REACHED | campaignId=%s | dir=%s | brokerPositions=%d | additions=%d | basketProfitMoney=%.2f | realizedPL=%.2f | openPL=%.2f | initialCoreOneRMoney=%.2f | basketPips=%.3f | targetR=%.2f | action=IMMEDIATE_CLOSE_ALL",
+      PrintFormat("BASKET_60_PIP_TARGET_REACHED | campaignId=%s | dir=%s | brokerPositions=%d | additions=%d | basketProfitMoney=%.2f | realizedPL=%.2f | openPL=%.2f | initialCoreOneRMoney=%.2f | basketPips=%.3f | targetPips=%.2f | action=IMMEDIATE_CLOSE_ALL",
                   XAU_CampaignIdText(g_campaign[slot].campaignId), direction == 1 ? "BUY" : "SELL",
                   found, g_campaign[slot].additionCount, basketProfitMoney, g_campaign[slot].realizedPL,
                   basketOpenProfitMoney, g_campaign[slot].basketOneRMoney, basketCurrentPips, XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS);
-      PrintFormat("BASKET_050R_CLOSE_ALL | campaignId=%s | originalCoreTicket=%I64u | targetMoney=%.2f | currentMoney=%.2f | noIndividualClose=true | noDelay=true",
+      PrintFormat("BASKET_60_PIP_CLOSE_ALL | campaignId=%s | originalCoreTicket=%I64u | targetMoney=%.2f | currentMoney=%.2f | noIndividualClose=true | noDelay=true",
                   XAU_CampaignIdText(g_campaign[slot].campaignId), g_campaign[slot].initialCoreTicket,
                   basketTargetMoney, basketProfitMoney);
-      XAU_CloseCampaignBasketAtProtectedFloor(direction, "BASKET_050R_HARD_TARGET");
+      XAU_CloseCampaignBasketAtProtectedFloor(direction, "BASKET_60_PIP_HARD_TARGET");
       return;
    }
 
@@ -30338,7 +30338,7 @@ void XAU_UpdateCampaignBasketState(int direction)
          if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 30)
          {
             g_rExit[idx].lastTelemetryLog = TimeCurrent();
-            PrintFormat("BASKET_050R_SL_RESTORE_PENDING | campaignId=%s | ticket=%I64u | reason=%s | action=RETRY_NEXT_TICK",
+            PrintFormat("BASKET_60_PIP_SL_RESTORE_PENDING | campaignId=%s | ticket=%I64u | reason=%s | action=RETRY_NEXT_TICK",
                         XAU_CampaignIdText(g_campaign[slot].campaignId), tk, restoreFailure);
          }
       }
@@ -30348,7 +30348,7 @@ void XAU_UpdateCampaignBasketState(int direction)
    if(TimeCurrent() - lastStateLog[slot] >= 30)
    {
       lastStateLog[slot] = TimeCurrent();
-      PrintFormat("BASKET_050R_STATE | campaignId=%s | brokerPositions=%d | cachedCampaignPositions=%d | additions=%d | basketProfitMoney=%.2f | initialCoreOneRMoney=%.2f | currentPips=%.3f | hardTargetPips=%.2f | hardTargetMoney=%.2f | originalProtectionConfirmed=%s | action=HOLD_AS_ONE_BASKET",
+      PrintFormat("BASKET_60_PIP_STATE | campaignId=%s | brokerPositions=%d | cachedCampaignPositions=%d | additions=%d | basketProfitMoney=%.2f | initialCoreOneRMoney=%.2f | currentPips=%.3f | hardTargetPips=%.2f | hardTargetMoney=%.2f | originalProtectionConfirmed=%s | action=HOLD_AS_ONE_BASKET",
                   XAU_CampaignIdText(g_campaign[slot].campaignId), found, g_campaign[slot].activePositionCount,
                   g_campaign[slot].additionCount, basketProfitMoney, g_campaign[slot].basketOneRMoney,
                   basketCurrentPips, XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS, basketTargetMoney,
@@ -30387,14 +30387,15 @@ string XAU_CampaignBasketDisplayJson(int direction)
    double basketRiskDistancePipsDisplay = g_campaign[slot].ownerEffectiveHardStopDistance * XAUCLOUD_PIPS_PER_PRICE_UNIT;
    double basketCurrentPips = g_campaign[slot].basketOneRMoney > 0.0
       ? (basketProfitMoney / g_campaign[slot].basketOneRMoney) * basketRiskDistancePipsDisplay : 0.0;
-   double basketHardClosePipsDisplay = XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS * basketRiskDistancePipsDisplay;
-   double hardTargetMoney = g_campaign[slot].basketOneRMoney * XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS;
+   double basketHardClosePipsDisplay = XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS;
+   double hardTargetMoney = (g_campaign[slot].basketOneRMoney > 0.0 && basketRiskDistancePipsDisplay > 0.0)
+      ? (basketHardClosePipsDisplay / basketRiskDistancePipsDisplay) * g_campaign[slot].basketOneRMoney : 0.0;
    string nextAction = g_campaign[slot].basketCloseInProgress
                        ? "CLOSING_ALL"
                        : (basketCurrentPips >= basketHardClosePipsDisplay ? "TRIGGER_CLOSE_ALL" : "HOLD_AS_ONE_BASKET");
 
    return StringFormat(
-      "{\"exit_mode\":\"HARD_BASKET_50_PIPS\",\"campaign_id\":\"%s\",\"core_ticket\":%I64u,\"position_count\":%d,"
+      "{\"exit_mode\":\"HARD_BASKET_60_PIPS\",\"campaign_id\":\"%s\",\"core_ticket\":%I64u,\"position_count\":%d,"
       "\"basket_one_r_money\":%.2f,\"basket_current_pl\":%.2f,\"basket_current_pips\":%.3f,\"basket_current_gold_moves\":%.3f,"
       "\"basket_peak_pl\":%.2f,\"basket_peak_pips\":%.3f,\"hard_close_target_pips\":%.2f,"
       "\"hard_close_target_money\":%.2f,\"close_latched\":%s,\"individual_profit_exits_suppressed\":true,\"next_action\":\"%s\"}",
@@ -30406,7 +30407,7 @@ string XAU_CampaignBasketDisplayJson(int direction)
 }
 
 //+------------------------------------------------------------------+
-//| Fixed-exit test owner. GENERAL positions either hit their broker |
+//| Fixed-exit owner. GENERAL positions either hit their broker      |
 //| $10 stop or are closed at the exact +60-pip target. No runner,   |
 //| giveback, profit floor, transition, or timer exit is permitted.  |
 //| Pyramid/Breakout keep their separate production ownership.       |
@@ -30498,7 +30499,7 @@ void XAU_RExitCoreLoop()
                             XAU_CampaignInternalRDistanceOrZero(isBuy ? 1 : -1));
       XAU_RExit_SyncNettingState(idx, isBuy, openPx, curSL, lots); // Fix 12: netting pyramid adds
 
-      // FINAL_BASKET_050R audit repair: basket ownership is checked BEFORE
+      // FINAL_BASKET_60_PIP repair: basket ownership is checked BEFORE
       // any old per-leg close retry. Cancel stale managed-profit close state
       // and extension state so a pre-existing request cannot close only CORE.
       if(basketModeActive)
@@ -30507,13 +30508,13 @@ void XAU_RExitCoreLoop()
          StringToUpper(pendingUpper);
          bool staleManagedClose = (g_rExit[idx].closeState == R_CLOSE_REQUESTED ||
                                    g_rExit[idx].closeState == R_CLOSE_PENDING_RETRY) &&
-                                  StringFind(pendingUpper, "BASKET_050R_") != 0 &&
+                                  StringFind(pendingUpper, "BASKET_60_PIP_") != 0 &&
                                   (StringFind(pendingUpper, "OWNER_R_EXIT_") == 0 ||
                                    StringFind(pendingUpper, "R_EXIT_") == 0 ||
                                    StringFind(pendingUpper, "TRANSITION_") == 0);
          if(staleManagedClose)
          {
-            PrintFormat("BASKET_050R_CANCEL_STALE_INDIVIDUAL_CLOSE | ticket=%I64u | oldReason=%s | action=BASKET_OWNS_CAMPAIGN",
+            PrintFormat("BASKET_60_PIP_CANCEL_STALE_INDIVIDUAL_CLOSE | ticket=%I64u | oldReason=%s | action=BASKET_OWNS_CAMPAIGN",
                         ticket, g_rExit[idx].pendingCloseReason);
             g_rExit[idx].closeState = R_CLOSE_NONE;
             g_rExit[idx].pendingCloseReason = "";
@@ -30524,12 +30525,12 @@ void XAU_RExitCoreLoop()
 
          string basketRestoreFailure = "";
          if(!XAU_RestoreBasketLegOriginalProtection(ticket, idx, basketRestoreFailure))
-            PrintFormat("BASKET_050R_PROTECTION_RESTORE_RETRY | ticket=%I64u | reason=%s", ticket, basketRestoreFailure);
+            PrintFormat("BASKET_60_PIP_PROTECTION_RESTORE_RETRY | ticket=%I64u | reason=%s", ticket, basketRestoreFailure);
 
          if(TimeCurrent() - g_rExit[idx].lastTelemetryLog >= 30)
          {
             g_rExit[idx].lastTelemetryLog = TimeCurrent();
-            PrintFormat("OWNER_R_EXIT_BASKET_050R_OWNS_CAMPAIGN | ticket=%I64u | direction=%s | campaignId=%s | additions=%d | individual_managed_exit=SUPPRESSED",
+            PrintFormat("OWNER_R_EXIT_BASKET_60_PIP_OWNS_CAMPAIGN | ticket=%I64u | direction=%s | campaignId=%s | additions=%d | individual_managed_exit=SUPPRESSED",
                         ticket, dirStr, XAU_CampaignIdText(g_campaign[campSlot].campaignId),
                         g_campaign[campSlot].additionCount);
          }
@@ -30581,7 +30582,7 @@ void XAU_RExitCoreLoop()
 
       double peakPips = g_rExit[idx].peakPips;
 
-      // This test owns GENERAL positions from entry: broker $10 SL or exactly
+      // This production owner manages GENERAL positions from entry: broker $10 SL or exactly
       // +60 pips, with all other General profit exits bypassed.
       if(XAU_Fixed60PipExitOnlyManage(idx, ticket, isBuy, currentPips))
          continue;

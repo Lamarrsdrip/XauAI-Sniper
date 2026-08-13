@@ -60,6 +60,7 @@ jobs:
           python -m pytest \
             tests/test_xaucloud_pattern_breakout_promotion.py \
             tests/test_utf16_tester_event_extractor.py \
+            tests/test_xau_outlook_missed_entry_recovery_contract.py \
             -v --tb=short
 
       - name: EX5 release artifact checksum verification

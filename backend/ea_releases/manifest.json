@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.27.1",
+  "current_version": "v6.27.2",
   "internal_codename": "XauCloud_m10_private_vps_ai",
   "production_branch": "XauCloud_m10_private_vps_ai",
   "production_branch_source_commit": "8498c47eefec0e3cba71ec0c3bb5967feb0de096",
@@ -191,6 +191,20 @@
       "ex5_sha256": "1fc82d17c7f2673461e89c722b745c976f4fcbc5a0e70220c4be81cc9d762ee0",
       "customer_filename": "XauCloud-Final.ex5",
       "release_notes": "Canonical promotion of the tested XauCloud-Pips_BASKET_DIR_LOSS_BLOCK_REMOVED behavior. The same-direction floating basket-loss gate is retained as a compatibility no-op, so it has zero new-entry authority. Existing entry logic, smart-profit exits, SL cap, Outlook handling, pyramid ownership, risk settings, and magic numbers are unchanged. XauCloud.io remains an archival product and is not overwritten.",
+      "stable_status": true
+    },
+    "v6.27.2": {
+      "version": "v6.27.2",
+      "edition": "XAUCloud-60pips: fixed 60-pip profit exit and $10 Gold SL",
+      "source_lineage": "XauCloud-Final -> XauCloud-Final_FIXED10_60P_EXIT_ONLY_TEST -> Outlook missed-entry recovery",
+      "source_filename": "XauCloud-60pips.mq5",
+      "source_sha256": "e5146af7691d2023ef317331d3c4a0925bfb9f132139e105ebc634acc1a04d4a",
+      "build_timestamp": "2026-08-13T11:16:30Z",
+      "compiler_result": "0 errors, 0 warnings, 114464 ms elapsed (MetaEditor64.exe via Wine; production contracts passed)",
+      "ex5_filename": "XauCloud-60pips.ex5",
+      "ex5_sha256": "d5ae1a46984432314f09057e399b470d802687a3a77572aeacd2025438adc96c",
+      "customer_filename": "XauCloud-60pips.ex5",
+      "release_notes": "Production promotion of the XauCloud-Final-derived fixed-$10 / fixed-60-pip source. GENERAL and pyramid-basket voluntary profit closes share the fixed +60-pip authority; hard safety and loss exits remain authoritative. Outlook signals missed solely because the delayed price was extended retain their original one-hour thesis, wait for current safe timing, execute without a second delay, and persist/consume state across restart. Normal M10 entries, risk, SL construction, and pyramid entry logic remain unchanged.",
       "stable_status": true
     }
   }

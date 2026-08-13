@@ -2,7 +2,7 @@ from pathlib import Path
 import re
 
 
-SOURCE = Path(__file__).resolve().parents[1] / "backend/ea_code/XauCloud-Final_FIXED10_60P_EXIT_ONLY_TEST.mq5"
+SOURCE = Path(__file__).resolve().parents[1] / "backend/ea_code/XauCloud-60pips.mq5"
 
 
 def _source() -> str:
@@ -65,3 +65,14 @@ def test_normal_outlook_delay_and_canonical_open_path_remain():
     process = _function(_source(), "XAU_ProcessPendingOutlook")
     assert "if(TimeCurrent() < g_pendingOutlook.armTime) return" in process
     assert "OpenTrade(dir, atrNow, reason, 1.0, true, outlookSL)" in process
+
+
+def test_general_and_pyramid_profit_authorities_share_the_60_pip_floor():
+    source = _source()
+    general = _function(source, "XAU_Fixed60PipExitOnlyManage")
+    basket = _function(source, "XAU_UpdateCampaignBasketState")
+    assert "#define XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS 60.0" in source
+    assert "currentPips >= InpFixed60PipExit" in general
+    assert "double basketHardClosePips = XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS;" in basket
+    assert "XAU_PYRAMID_BASKET_HARD_CLOSE_PIPS * basketRiskDistancePips" not in basket
+    assert '"BASKET_60_PIP_HARD_TARGET"' in basket
