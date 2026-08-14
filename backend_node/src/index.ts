@@ -54,6 +54,8 @@ import { registerAdminMonthlyReportRoutes } from "./routes/admin/monthlyReport.j
 import { registerCloudPerformanceAnalyticsRoutes } from "./routes/cloud/performanceAnalytics.js";
 import { registerLocalAiRoutes } from "./routes/localAi.js";
 import { hourlyGenerationTick } from "./services/marketOutlookHourlyTick.js";
+import { registerFourHourOutlookRoutes } from "./routes/fourHourOutlook.js";
+import { fourHourOutlookLoop } from "./services/fourHourOutlookService.js";
 import { trackOutlookLifecycleTick } from "./services/marketOutlookTick.js";
 import { enqueueIfActionable } from "./services/outlookExecution.js";
 import { runStartupTasks } from "./services/startup.js";
@@ -223,6 +225,7 @@ async function main(): Promise<void> {
       await registerAdminMonthlyReportRoutes(api);
       await registerCloudPerformanceAnalyticsRoutes(api);
       await registerLocalAiRoutes(api);
+      await registerFourHourOutlookRoutes(api);
       // Every server.py + market_outlook_routes.py endpoint now has a
       // Node.js counterpart -- remaining work is Hostinger deployment +
       // the mandated Python-vs-Node regression pass.
@@ -300,6 +303,9 @@ async function main(): Promise<void> {
 
   void outlookHourlyLoop();
   void outlookLifecycleLoop();
+  // XauCloud 4H Outlook: display/notification-only manual-trader forecast.
+  // Fully isolated from execution -- reviews every 3 min, refreshes on 4h expiry.
+  void fourHourOutlookLoop({ info: (m) => app.log.info(m), warn: (m) => app.log.warn(m) });
 }
 
 process.on("SIGTERM", async () => {

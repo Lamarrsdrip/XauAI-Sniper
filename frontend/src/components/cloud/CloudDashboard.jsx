@@ -12,6 +12,7 @@ import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
 import AIThoughtFeed from "./AIThoughtFeed";
 import AIMarketOutlookCard from "./AIMarketOutlookCard";
+import FourHourOutlookCard from "./FourHourOutlookCard";
 import M10VsOutlookCard, { M10_DECISION_LABELS, M30_LIFECYCLE_LABELS, FRESHNESS_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
 import { API } from "@/lib/api";
@@ -1319,6 +1320,9 @@ function HomePage({ status, heartbeat, licenseInfo, online, equityPoints, events
       <AK.Panel><BotControlCard heartbeat={heartbeat} online={online} linked={linked} openTrades={openTrades} openCommand={openCommand} commands={commands} /></AK.Panel>
 
       <NotificationPrompt />
+
+      {/* XauCloud 4H Outlook — flagship manual-trader directional forecast */}
+      <FourHourOutlookCard />
 
       <CommandToolsStrip setActive={setActive} />
 
