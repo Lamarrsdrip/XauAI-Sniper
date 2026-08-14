@@ -13,8 +13,8 @@
  */
 import { randomUUID } from "node:crypto";
 import { getDb } from "../db.js";
-import { fetchXauOhlc, type OhlcFeed } from "./fourHourFeed.js";
-import { computeForecast, pipsOf, type EaContext, type ExistingOutlook, type FourHourForecast } from "./fourHourOutlookEngine.js";
+import { readMarketData } from "./fourHourFeed.js";
+import { computeForecast, pipsOf, type Direction, type FourHourForecast } from "./fourHourOutlookEngine.js";
 import { sendWebPushToUser } from "./webPush.js";
 
 const SYMBOL = "XAUUSD";
@@ -39,91 +39,23 @@ export interface FourHourDoc extends FourHourForecast {
   maePips: number;
 }
 
-/** Latest EA market intelligence (read-only) as forecast context. */
-async function readEaContext(): Promise<EaContext | null> {
-  const db = getDb();
-  const row = await db
-    .collection("cloud_bot_activity")
-    .findOne({ "details.market_thesis.live_bid": { $gt: 0 } }, { projection: { _id: 0, ts: 1, details: 1 }, sort: { ts: -1 } });
-  if (!row) return null;
-  const details = (row["details"] as Record<string, unknown>) ?? {};
-  const mt = (details["market_thesis"] as Record<string, unknown>) ?? {};
-  const m10 = (details["m10_signal"] as Record<string, unknown>) ?? {};
-  const ts = row["ts"] ? new Date(String(row["ts"])) : null;
-  const ageSeconds = ts && !Number.isNaN(ts.getTime()) ? (Date.now() - ts.getTime()) / 1000 : null;
-  return {
-    regime: strOr(details["regime"] ?? mt["direction"] ?? m10["trend_state"]),
-    trendHealth: numOr(mt["trend_health"]),
-    location: numOr(mt["location_quality"]),
-    exhaustion: numOr(mt["exhaustion_pct"]),
-    buyPressure: numOr(mt["buy_pressure"] ?? m10["buy_pressure"]),
-    sellPressure: numOr(mt["sell_pressure"] ?? m10["sell_pressure"]),
-    roomR: numOr(mt["remaining_room_r"]),
-    htfState: strOr(mt["htf_indicator_state"]),
-    m10Direction: strOr(m10["preferred_direction"]),
-    ageSeconds,
-  };
-}
+// ---- data-integrity gate: only publish on the EA's own genuine, fresh broker read ----
+const EA_STALE_SEC = 10 * 60; // if the newest EA evidence is older than this, the bot is offline -> degrade
+const GENUINE_SOURCE = "ea-stream(spot)";
 
-/** Existing short-term Outlook (read-only) as context evidence. */
-async function readExistingOutlook(): Promise<ExistingOutlook | null> {
-  const db = getDb();
-  const doc = await db
-    .collection("cloud_market_outlooks")
-    .findOne({ symbol: SYMBOL, primary_direction: { $in: ["BUY", "SELL", "NEUTRAL"] } }, { projection: { _id: 0, primary_direction: 1, confidence_pct: 1 }, sort: { generated_at: -1 } });
-  if (!doc) return null;
-  return { direction: strOr(doc["primary_direction"]), confidence: numOr(doc["confidence_pct"]) };
-}
-
-function strOr(v: unknown): string | undefined {
-  return v == null ? undefined : String(v);
-}
-function numOr(v: unknown): number | undefined {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : undefined;
-}
-
-// ---- data-integrity gate (2026-08): never publish on wrong/stale/mismatched pricing ----
-const MAX_CANDLE_AGE_SEC = 3 * 3600; // newest H1 bar must be < 3h old (gold trades ~23h/day)
-const BROKER_MAX_AGE_SEC = 20 * 60; // broker reference usable for cross-check only if < 20 min old
-const PRICE_TOLERANCE_USD = 12; // external SPOT must agree with broker XAUUSD within $12 -> rejects ~$40-60 futures basis
-
-/** XauCloud's own live broker XAUUSD mid (the market customers actually trade). */
-async function readBrokerXauPrice(): Promise<{ mid: number; ageSec: number } | null> {
-  const row = await getDb()
-    .collection("cloud_bot_activity")
-    .findOne(
-      { "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } },
-      { projection: { _id: 0, ts: 1, "details.market_thesis.live_bid": 1, "details.market_thesis.live_ask": 1 }, sort: { ts: -1 } },
-    );
-  if (!row) return null;
-  const mt = ((row["details"] as Record<string, unknown> | undefined)?.["market_thesis"] as Record<string, unknown> | undefined) ?? {};
-  const bid = Number(mt["live_bid"]);
-  const ask = Number(mt["live_ask"]);
-  if (!(bid > 0 && ask > 0)) return null;
-  const tsMs = row["ts"] ? new Date(String(row["ts"])).getTime() : NaN;
-  return { mid: (bid + ask) / 2, ageSec: Number.isFinite(tsMs) ? (Date.now() - tsMs) / 1000 : Infinity };
-}
-
-/** Reject a forecast when the market data is not genuine, fresh, complete, and consistent with the broker XAUUSD. */
-function validateFeed(feed: OhlcFeed | null, broker: { mid: number; ageSec: number } | null): { ok: boolean; reason: string } {
-  if (!feed) return { ok: false, reason: "NO_LIVE_SPOT_DATA" };
-  const ageSec = (Date.now() - new Date(feed.latestCandleTime).getTime()) / 1000;
-  if (!Number.isFinite(ageSec)) return { ok: false, reason: "INVALID_TIMESTAMP" };
-  if (feed.stale || ageSec > MAX_CANDLE_AGE_SEC) return { ok: false, reason: `STALE_CANDLES age=${Math.round(ageSec / 60)}m src=${feed.source}` };
-  if (feed.h1.length < 60 || feed.h4.length < 20) return { ok: false, reason: `INCOMPLETE_CANDLES h1=${feed.h1.length} h4=${feed.h4.length}` };
-  if (!(feed.spot >= 1000 && feed.spot <= 20000)) return { ok: false, reason: `PRICE_OUT_OF_RANGE spot=${feed.spot}` };
-  if (broker && broker.ageSec <= BROKER_MAX_AGE_SEC) {
-    const diff = Math.abs(feed.spot - broker.mid);
-    if (diff > PRICE_TOLERANCE_USD)
-      return { ok: false, reason: `PRICE_MISMATCH_VS_BROKER diff=$${diff.toFixed(1)} spot=${feed.spot.toFixed(1)} broker=${broker.mid.toFixed(1)} src=${feed.source}` };
-  }
+/** Reject a forecast when the bot's live data is missing, offline/stale, or thin. */
+function validateMarketData(md: import("./fourHourFeed.js").MarketData | null): { ok: boolean; reason: string } {
+  if (!md) return { ok: false, reason: "NO_EA_DATA" };
+  if (!Number.isFinite(md.ageSec) || md.ageSec > EA_STALE_SEC) return { ok: false, reason: `EA_OFFLINE_OR_STALE age=${Math.round(md.ageSec / 60)}m` };
+  if (md.snapshots.length < 3) return { ok: false, reason: `THIN_EVIDENCE snaps=${md.snapshots.length}` };
+  if (md.candlesH1.length < 6) return { ok: false, reason: `INSUFFICIENT_HISTORY h1=${md.candlesH1.length}` };
+  if (!(md.price >= 1000 && md.price <= 20000)) return { ok: false, reason: `PRICE_OUT_OF_RANGE price=${md.price}` };
   return { ok: true, reason: "" };
 }
 
-/** A genuine spot source name always carries "(spot)"; a legacy futures forecast never will. */
-function isSpotSource(src: unknown): boolean {
-  return /\(spot\)/i.test(String(src ?? ""));
+/** Only forecasts built from the EA's own genuine broker stream are ever served. */
+function isGenuineSource(src: unknown): boolean {
+  return String(src ?? "") === GENUINE_SOURCE;
 }
 
 function statusFromForecast(f: FourHourForecast): FourHourDoc["status"] {
@@ -239,31 +171,30 @@ function trackExcursion(doc: FourHourDoc, price: number): { mfePips: number; mae
  */
 export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
   const db = getDb();
-  const feed = await fetchXauOhlc();
-  const broker = await readBrokerXauPrice();
+  const md = await readMarketData();
   let current = await getCurrent();
 
-  // Purge any legacy futures-sourced forecast so the card never shows the wrong
-  // (~$40-60 high) prices from the retired GC=F futures feed.
-  if (current && !isSpotSource(current.dataSource)) {
+  // Purge any forecast not built from the EA's own genuine broker stream
+  // (e.g. retired external/futures-sourced docs) so the card never shows them.
+  if (current && !isGenuineSource(current.dataSource)) {
     await db.collection("four_hour_outlooks").deleteOne({ symbol: SYMBOL });
-    console.log(`MTI_PURGED_NON_SPOT_FORECAST src=${current.dataSource}`);
+    console.log(`MTI_PURGED_NON_GENUINE src=${current.dataSource}`);
     current = null;
   }
 
-  // Data-integrity gate: never publish on wrong/stale/incomplete/mismatched pricing.
-  const check = validateFeed(feed, broker);
+  // Data-integrity gate: only the bot's own genuine, fresh broker read publishes.
+  const check = validateMarketData(md);
   if (!check.ok) {
-    console.log(`MTI_DEGRADED reason=${check.reason}${broker ? "" : " broker_ref=unavailable"}`);
-    // A previously-published, genuinely-sourced, not-yet-expired forecast may
-    // keep showing; otherwise there is nothing valid to display (card degrades).
+    console.log(`MTI_DEGRADED reason=${check.reason}`);
+    // A previously-published, genuine, not-yet-expired forecast may keep
+    // showing; otherwise there is nothing valid to display (card degrades).
     if (current && new Date(current.expiresAt).getTime() > Date.now()) return current;
     return null;
   }
 
-  const validFeed = feed as OhlcFeed; // validated non-null + genuine spot above
-  const [ea, existing] = await Promise.all([readEaContext(), readExistingOutlook()]);
-  const forecast = computeForecast(validFeed, ea, existing);
+  const validMd = md!; // validated non-null above
+  const previousDir: Direction = (current?.direction as Direction) ?? "NEUTRAL";
+  const forecast = computeForecast(validMd, previousDir); // hysteresis -> stable long-horizon bias
   const now = new Date();
 
   if (!current) return publishNew(forecast, null, "INITIAL");
@@ -279,7 +210,7 @@ export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
   const priceBreachedInvalidation =
     current.direction !== "NEUTRAL" &&
     current.invalidation != null &&
-    ((current.direction === "BUY" && validFeed.spot < current.invalidation) || (current.direction === "SELL" && validFeed.spot > current.invalidation));
+    ((current.direction === "BUY" && validMd.price < current.invalidation) || (current.direction === "SELL" && validMd.price > current.invalidation));
   const directionFlip = forecast.direction !== current.direction && Math.abs(forecast.netScore) >= 30;
   const confidenceCollapse = current.direction !== "NEUTRAL" && current.confidence - forecast.confidence >= CONFIDENCE_COLLAPSE && forecast.confidence < 50;
 
@@ -287,13 +218,13 @@ export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
     const reason = priceBreachedInvalidation ? "INVALIDATION_BREACHED" : directionFlip ? "DIRECTION_FLIP" : "CONFIDENCE_COLLAPSE";
     if (priceBreachedInvalidation) {
       await db.collection("four_hour_outlooks").updateOne({ symbol: SYMBOL }, { $set: { status: "INVALIDATED" } });
-      console.log(`4H_OUTLOOK_INVALIDATED id=${current.id} reason=${reason} price=${validFeed.spot} inval=${current.invalidation}`);
+      console.log(`4H_OUTLOOK_INVALIDATED id=${current.id} reason=${reason} price=${validMd.price} inval=${current.invalidation}`);
     }
     return publishNew(forecast, current, reason);
   }
 
   // No material change: update review timestamps + excursion tracking only.
-  const { mfePips, maePips } = trackExcursion(current, validFeed.spot);
+  const { mfePips, maePips } = trackExcursion(current, validMd.price);
   await db.collection("four_hour_outlooks").updateOne(
     { symbol: SYMBOL },
     { $set: { lastReviewedAt: now.toISOString(), nextScheduledReviewAt: new Date(now.getTime() + REVIEW_INTERVAL_MS).toISOString(), currentPrice: forecast.currentPrice, mfePips, maePips } },
@@ -309,7 +240,7 @@ export async function markFourHourSeen(): Promise<void> {
 export async function getFourHourCurrent(): Promise<FourHourDoc | null> {
   const doc = await getCurrent();
   if (!doc) return null;
-  if (!isSpotSource(doc.dataSource)) return null; // never serve legacy futures data
+  if (!isGenuineSource(doc.dataSource)) return null; // never serve legacy futures data
   if (new Date(doc.expiresAt).getTime() <= Date.now()) return null; // expired -> card shows unavailable
   return doc;
 }
