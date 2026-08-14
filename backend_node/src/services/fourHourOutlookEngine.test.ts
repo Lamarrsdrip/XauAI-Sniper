@@ -20,7 +20,8 @@ function series(n: number, start: number, drift: number, amp: number, rangeHL: n
 }
 
 function feed(h4: Candle[], h1: Candle[]): OhlcFeed {
-  return { h4, h1, spot: h1[h1.length - 1]!.c, source: "test", fetchedAt: new Date().toISOString(), stale: false };
+  const newest = h1[h1.length - 1]!;
+  return { h4, h1, spot: newest.c, source: "test(spot)", fetchedAt: new Date().toISOString(), latestCandleTime: new Date(newest.t * 1000).toISOString(), stale: false };
 }
 
 describe("4H Outlook engine", () => {

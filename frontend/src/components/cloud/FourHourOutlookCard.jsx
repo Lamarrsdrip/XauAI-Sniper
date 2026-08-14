@@ -78,7 +78,7 @@ export default function FourHourOutlookCard() {
       <AK.Panel className="p-3.5">
         <Head isNew={false} />
         <div className="mt-2 text-[12.5px] text-white/45">
-          {state.loading ? "Loading 4H outlook…" : "4H Outlook temporarily unavailable — reconnecting to live Gold analysis."}
+          {state.loading ? "Loading market intelligence…" : "Manual Trading Intelligence temporarily unavailable — waiting for verified live XAUUSD data."}
         </div>
       </AK.Panel>
     );
@@ -141,7 +141,7 @@ export default function FourHourOutlookCard() {
       </AK.Panel>
 
       {/* expanded — bounded height + scroll so it never runs off a phone screen */}
-      <AK.Sheet open={open} onClose={() => setOpen(false)} title={`4H Outlook — ${o.direction}`}>
+      <AK.Sheet open={open} onClose={() => setOpen(false)} title={`Manual Trading Intelligence — ${o.direction}`}>
         <div className="max-h-[68vh] space-y-3 overflow-y-auto pb-1">
           <div className="grid grid-cols-2 gap-2">
             <Cell k="Expected move" v={isNeutral ? "—" : `${pips(o.expectedMovePips)} pips`} />
@@ -177,12 +177,15 @@ export default function FourHourOutlookCard() {
 
 function Head({ isNew }) {
   return (
-    <div className="flex items-center justify-between gap-2">
-      <div className="flex min-w-0 items-center gap-1.5">
-        <span className="text-[11.5px] font-bold tracking-wide text-white/80">4H OUTLOOK</span>
-        {isNew && <AK.Chip tone="gold">NEW</AK.Chip>}
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-[10.5px] font-bold uppercase tracking-[0.06em] text-white/80">Manual Trading Intelligence</span>
+          {isNew && <AK.Chip tone="gold">NEW</AK.Chip>}
+        </div>
+        <span className="flex-none rounded-md bg-gold-300/12 px-1.5 py-0.5 text-[9.5px] font-bold text-gold-300">4H</span>
       </div>
-      <span className="flex-none text-[9.5px] font-semibold uppercase tracking-[0.14em] text-white/30">Manual intel</span>
+      <div className="mt-0.5 text-[10px] text-white/35">4-Hour market intelligence · H1/H4</div>
     </div>
   );
 }

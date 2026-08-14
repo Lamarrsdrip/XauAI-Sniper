@@ -1321,9 +1321,6 @@ function HomePage({ status, heartbeat, licenseInfo, online, equityPoints, events
 
       <NotificationPrompt />
 
-      {/* XauCloud 4H Outlook — flagship manual-trader directional forecast */}
-      <FourHourOutlookCard />
-
       <CommandToolsStrip setActive={setActive} />
 
       {/* One market-intelligence module — full evidence/history on tap */}
@@ -1331,6 +1328,9 @@ function HomePage({ status, heartbeat, licenseInfo, online, equityPoints, events
 
       {/* M10 Signal Engine · Evidence — always on the dashboard (waiting state until a fresh reading) */}
       {linked && <M10SignalCard events={events} heartbeat={heartbeat} online={online} />}
+
+      {/* Manual Trading Intelligence (4H) — sits directly beneath the M10 Signal Engine */}
+      <FourHourOutlookCard />
 
       {/* Focused open-position module (only when a trade is live) */}
       <PositionModule linked={linked} online={online} onDetails={() => setActive("trading")} />

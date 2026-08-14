@@ -13,7 +13,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { getDb } from "../db.js";
-import { fetchXauOhlc } from "./fourHourFeed.js";
+import { fetchXauOhlc, type OhlcFeed } from "./fourHourFeed.js";
 import { computeForecast, pipsOf, type EaContext, type ExistingOutlook, type FourHourForecast } from "./fourHourOutlookEngine.js";
 import { sendWebPushToUser } from "./webPush.js";
 
@@ -83,6 +83,49 @@ function numOr(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+// ---- data-integrity gate (2026-08): never publish on wrong/stale/mismatched pricing ----
+const MAX_CANDLE_AGE_SEC = 3 * 3600; // newest H1 bar must be < 3h old (gold trades ~23h/day)
+const BROKER_MAX_AGE_SEC = 20 * 60; // broker reference usable for cross-check only if < 20 min old
+const PRICE_TOLERANCE_USD = 12; // external SPOT must agree with broker XAUUSD within $12 -> rejects ~$40-60 futures basis
+
+/** XauCloud's own live broker XAUUSD mid (the market customers actually trade). */
+async function readBrokerXauPrice(): Promise<{ mid: number; ageSec: number } | null> {
+  const row = await getDb()
+    .collection("cloud_bot_activity")
+    .findOne(
+      { "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } },
+      { projection: { _id: 0, ts: 1, "details.market_thesis.live_bid": 1, "details.market_thesis.live_ask": 1 }, sort: { ts: -1 } },
+    );
+  if (!row) return null;
+  const mt = ((row["details"] as Record<string, unknown> | undefined)?.["market_thesis"] as Record<string, unknown> | undefined) ?? {};
+  const bid = Number(mt["live_bid"]);
+  const ask = Number(mt["live_ask"]);
+  if (!(bid > 0 && ask > 0)) return null;
+  const tsMs = row["ts"] ? new Date(String(row["ts"])).getTime() : NaN;
+  return { mid: (bid + ask) / 2, ageSec: Number.isFinite(tsMs) ? (Date.now() - tsMs) / 1000 : Infinity };
+}
+
+/** Reject a forecast when the market data is not genuine, fresh, complete, and consistent with the broker XAUUSD. */
+function validateFeed(feed: OhlcFeed | null, broker: { mid: number; ageSec: number } | null): { ok: boolean; reason: string } {
+  if (!feed) return { ok: false, reason: "NO_LIVE_SPOT_DATA" };
+  const ageSec = (Date.now() - new Date(feed.latestCandleTime).getTime()) / 1000;
+  if (!Number.isFinite(ageSec)) return { ok: false, reason: "INVALID_TIMESTAMP" };
+  if (feed.stale || ageSec > MAX_CANDLE_AGE_SEC) return { ok: false, reason: `STALE_CANDLES age=${Math.round(ageSec / 60)}m src=${feed.source}` };
+  if (feed.h1.length < 60 || feed.h4.length < 20) return { ok: false, reason: `INCOMPLETE_CANDLES h1=${feed.h1.length} h4=${feed.h4.length}` };
+  if (!(feed.spot >= 1000 && feed.spot <= 20000)) return { ok: false, reason: `PRICE_OUT_OF_RANGE spot=${feed.spot}` };
+  if (broker && broker.ageSec <= BROKER_MAX_AGE_SEC) {
+    const diff = Math.abs(feed.spot - broker.mid);
+    if (diff > PRICE_TOLERANCE_USD)
+      return { ok: false, reason: `PRICE_MISMATCH_VS_BROKER diff=$${diff.toFixed(1)} spot=${feed.spot.toFixed(1)} broker=${broker.mid.toFixed(1)} src=${feed.source}` };
+  }
+  return { ok: true, reason: "" };
+}
+
+/** A genuine spot source name always carries "(spot)"; a legacy futures forecast never will. */
+function isSpotSource(src: unknown): boolean {
+  return /\(spot\)/i.test(String(src ?? ""));
+}
+
 function statusFromForecast(f: FourHourForecast): FourHourDoc["status"] {
   if (f.direction === "NEUTRAL" || f.qualification === "NO_QUALIFYING_OPPORTUNITY") return "NO_QUALIFYING_OPPORTUNITY";
   if (f.qualification === "WAIT_FOR_ENTRY") return "WAIT_FOR_ENTRY";
@@ -149,8 +192,8 @@ async function finalizeHistory(prev: FourHourDoc, reason: string): Promise<void>
 async function notifyChange(prev: FourHourDoc, next: FourHourDoc): Promise<void> {
   const db = getDb();
   const moveTxt = next.expectedMovePips ? `${next.expectedMovePips[0]}–${next.expectedMovePips[1]} pips` : "no qualifying move";
-  const title = "XauCloud 4H Outlook Changed";
-  const body = `${prev.direction} → ${next.direction} · ${next.confidence}% · ${moveTxt}`;
+  const title = "Manual Trading Intelligence changed";
+  const body = `4H bias ${prev.direction} → ${next.direction} · ${next.confidence}% · ${moveTxt}`;
   const subs = await db.collection("web_push_subscriptions").distinct("user_id");
   let sent = 0;
   for (const userId of subs) {
@@ -197,18 +240,30 @@ function trackExcursion(doc: FourHourDoc, price: number): { mfePips: number; mae
 export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
   const db = getDb();
   const feed = await fetchXauOhlc();
-  const current = await getCurrent();
+  const broker = await readBrokerXauPrice();
+  let current = await getCurrent();
 
-  if (!feed) {
-    if (!current) {
-      console.log("4H_OUTLOOK_NO_OPPORTUNITY reason=NO_LIVE_DATA");
-      return null;
-    }
-    return current; // keep last good; UI will show it (possibly stale)
+  // Purge any legacy futures-sourced forecast so the card never shows the wrong
+  // (~$40-60 high) prices from the retired GC=F futures feed.
+  if (current && !isSpotSource(current.dataSource)) {
+    await db.collection("four_hour_outlooks").deleteOne({ symbol: SYMBOL });
+    console.log(`MTI_PURGED_NON_SPOT_FORECAST src=${current.dataSource}`);
+    current = null;
   }
 
+  // Data-integrity gate: never publish on wrong/stale/incomplete/mismatched pricing.
+  const check = validateFeed(feed, broker);
+  if (!check.ok) {
+    console.log(`MTI_DEGRADED reason=${check.reason}${broker ? "" : " broker_ref=unavailable"}`);
+    // A previously-published, genuinely-sourced, not-yet-expired forecast may
+    // keep showing; otherwise there is nothing valid to display (card degrades).
+    if (current && new Date(current.expiresAt).getTime() > Date.now()) return current;
+    return null;
+  }
+
+  const validFeed = feed as OhlcFeed; // validated non-null + genuine spot above
   const [ea, existing] = await Promise.all([readEaContext(), readExistingOutlook()]);
-  const forecast = computeForecast(feed, ea, existing);
+  const forecast = computeForecast(validFeed, ea, existing);
   const now = new Date();
 
   if (!current) return publishNew(forecast, null, "INITIAL");
@@ -224,7 +279,7 @@ export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
   const priceBreachedInvalidation =
     current.direction !== "NEUTRAL" &&
     current.invalidation != null &&
-    ((current.direction === "BUY" && feed.spot < current.invalidation) || (current.direction === "SELL" && feed.spot > current.invalidation));
+    ((current.direction === "BUY" && validFeed.spot < current.invalidation) || (current.direction === "SELL" && validFeed.spot > current.invalidation));
   const directionFlip = forecast.direction !== current.direction && Math.abs(forecast.netScore) >= 30;
   const confidenceCollapse = current.direction !== "NEUTRAL" && current.confidence - forecast.confidence >= CONFIDENCE_COLLAPSE && forecast.confidence < 50;
 
@@ -232,13 +287,13 @@ export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
     const reason = priceBreachedInvalidation ? "INVALIDATION_BREACHED" : directionFlip ? "DIRECTION_FLIP" : "CONFIDENCE_COLLAPSE";
     if (priceBreachedInvalidation) {
       await db.collection("four_hour_outlooks").updateOne({ symbol: SYMBOL }, { $set: { status: "INVALIDATED" } });
-      console.log(`4H_OUTLOOK_INVALIDATED id=${current.id} reason=${reason} price=${feed.spot} inval=${current.invalidation}`);
+      console.log(`4H_OUTLOOK_INVALIDATED id=${current.id} reason=${reason} price=${validFeed.spot} inval=${current.invalidation}`);
     }
     return publishNew(forecast, current, reason);
   }
 
   // No material change: update review timestamps + excursion tracking only.
-  const { mfePips, maePips } = trackExcursion(current, feed.spot);
+  const { mfePips, maePips } = trackExcursion(current, validFeed.spot);
   await db.collection("four_hour_outlooks").updateOne(
     { symbol: SYMBOL },
     { $set: { lastReviewedAt: now.toISOString(), nextScheduledReviewAt: new Date(now.getTime() + REVIEW_INTERVAL_MS).toISOString(), currentPrice: forecast.currentPrice, mfePips, maePips } },
@@ -252,7 +307,11 @@ export async function markFourHourSeen(): Promise<void> {
 }
 
 export async function getFourHourCurrent(): Promise<FourHourDoc | null> {
-  return getCurrent();
+  const doc = await getCurrent();
+  if (!doc) return null;
+  if (!isSpotSource(doc.dataSource)) return null; // never serve legacy futures data
+  if (new Date(doc.expiresAt).getTime() <= Date.now()) return null; // expired -> card shows unavailable
+  return doc;
 }
 
 export async function getFourHourHistory(limit = 30): Promise<Record<string, unknown>[]> {

@@ -44,6 +44,12 @@ export const env = {
   XAUCLOUD_GPT_ACTION_SECRET: (process.env["XAUCLOUD_GPT_ACTION_SECRET"] ?? "").trim(),
   XAUCLOUD_GPT_ACTION_CONFIRMATION_TTL_SECONDS: Number(process.env["XAUCLOUD_GPT_ACTION_CONFIRMATION_TTL_SECONDS"] ?? "600"),
   EMERGENT_LLM_KEY: process.env["EMERGENT_LLM_KEY"] ?? "",
+  // Manual Trading Intelligence: free Twelve Data key for genuine SPOT XAU/USD
+  // H1/H4 candles (https://twelvedata.com/pricing). Optional -- when absent the
+  // feed falls back to keyless spot sources (Kraken/Binance PAXG) and, if none
+  // are reachable/valid, the feature degrades to "temporarily unavailable"
+  // rather than ever using futures or fabricated prices.
+  TWELVEDATA_API_KEY: (process.env["TWELVEDATA_API_KEY"] ?? "").trim(),
   AI_COST_DAILY_CALL_LIMIT: Number(process.env["AI_COST_DAILY_CALL_LIMIT"] ?? "0"),
   AI_COST_MIN_SECONDS: Number(process.env["AI_COST_MIN_SECONDS"] ?? "0"),
   AI_COST_CACHE_TTL_SECONDS: Number(process.env["AI_COST_CACHE_TTL_SECONDS"] ?? "0"),
