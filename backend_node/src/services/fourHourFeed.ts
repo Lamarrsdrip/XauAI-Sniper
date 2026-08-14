@@ -84,17 +84,38 @@ function buildCandles(px: { t: number; mid: number }[], bucketSec: number): Cand
   return Array.from(buckets.values()).sort((a, b) => a.t - b.t);
 }
 
-/** Read the EA's genuine broker-fed market data + evidence. Null when the EA is offline/stale. */
+// Narrow projection -- only the exact fields the engine reads, never the whole
+// (large) market_thesis/m10_signal objects. Keeps the query light on the host.
+const PROJECTION = {
+  _id: 0, ts: 1, account: 1,
+  "details.market_thesis.live_bid": 1, "details.market_thesis.live_ask": 1, "details.market_thesis.live_mid": 1,
+  "details.market_thesis.direction": 1, "details.market_thesis.buy_pressure": 1, "details.market_thesis.sell_pressure": 1,
+  "details.market_thesis.trend_health": 1, "details.market_thesis.location_quality": 1, "details.market_thesis.exhaustion_pct": 1,
+  "details.market_thesis.move_consumed_pct": 1, "details.market_thesis.remaining_room_r": 1, "details.market_thesis.atr_m5": 1,
+  "details.market_thesis.structural_sl": 1, "details.market_thesis.final_structural_sl": 1, "details.market_thesis.invalidated": 1,
+  "details.m10_signal.preferred_direction": 1, "details.m10_signal.buy_pressure": 1, "details.m10_signal.sell_pressure": 1,
+  "details.m10_signal.exhaustion_score": 1, "details.m10_signal.buy_room_r": 1, "details.m10_signal.sell_room_r": 1,
+  "details.m10_signal.structure_state": 1, "details.m10_signal.trend_state": 1,
+  "details.m10_signal.buy_case_score": 1, "details.m10_signal.sell_case_score": 1, "details.m10_signal.freshness_state": 1,
+} as const;
+
+/** Read the EA's genuine broker-fed market data + evidence. Null when the EA is offline/stale. Never throws. */
 export async function readMarketData(): Promise<MarketData | null> {
+  try {
+    return await readMarketDataInner();
+  } catch {
+    return null; // any failure -> degrade, never crash the review loop
+  }
+}
+
+async function readMarketDataInner(): Promise<MarketData | null> {
   const db = getDb();
   const sinceIso = new Date(Date.now() - WINDOW_HOURS * 3600_000).toISOString();
   const rows = await db
     .collection("cloud_bot_activity")
-    .find(
-      { ts: { $gte: sinceIso }, "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } },
-      { projection: { _id: 0, ts: 1, account: 1, "details.market_thesis": 1, "details.m10_signal": 1 } },
-    )
+    .find({ ts: { $gte: sinceIso }, "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } }, { projection: PROJECTION })
     .sort({ ts: 1 })
+    .limit(4000)
     .toArray();
   if (rows.length < 30) return null; // not enough genuine evidence to form a view
 
