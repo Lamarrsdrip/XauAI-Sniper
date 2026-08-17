@@ -33,6 +33,11 @@ describe("XauCloud Admin controlled gateway", () => {
     expect(schema).toContain("type: object");
   });
 
+  it("offers the operational admin overview through the GPT-facing diagnostics query", () => {
+    expect(schema).toContain("admin_overview");
+    expect(source).toContain('b.operation==="admin_overview"');
+  });
+
   it("keeps dangerous generic primitives out of the gateway", () => {
     expect(schema).not.toMatch(/operationId:\s*(executeSql|runShell|readFile|httpProxy|executeCode)/i);
     expect(source).not.toMatch(/child_process|execSync|spawnSync|eval\(|new Function\(/);
