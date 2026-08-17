@@ -26,6 +26,13 @@ describe("XauCloud Admin controlled gateway", () => {
     expect(ids).toHaveLength(30);
   });
 
+  it("exposes the structured document input required to create custom email drafts", () => {
+    expect(schema).toContain("document:");
+    expect(schema).toContain("required: [version, theme, blocks]");
+    expect(schema).toContain("blocks:");
+    expect(schema).toContain("type: object");
+  });
+
   it("keeps dangerous generic primitives out of the gateway", () => {
     expect(schema).not.toMatch(/operationId:\s*(executeSql|runShell|readFile|httpProxy|executeCode)/i);
     expect(source).not.toMatch(/child_process|execSync|spawnSync|eval\(|new Function\(/);

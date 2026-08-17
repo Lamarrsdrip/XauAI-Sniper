@@ -481,7 +481,73 @@ paths:
     post:
       operationId: manageCustomEmailDraft
       summary: Create, preview, or safely count a structured custom/marketing email audience. Never sends.
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [operation], properties: { operation: { type: string, enum: [create, preview, checkout_audience, live_performance] }, kind: { type: string, enum: [custom, marketing] }, draft_id: { type: string }, title: { type: string }, subject: { type: string }, preheader: { type: string }, recipient_mode: { type: string, enum: [single, selected, registered_users, active_customers, active_license_holders, eligible_prospects, pending_checkout] }, to: { type: string, format: email }, selected_recipients: { type: array, maxItems: 250, items: { type: string, format: email } }, document: { type: object } } } } } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation]
+              properties:
+                operation: { type: string, enum: [create, preview, checkout_audience, live_performance] }
+                kind: { type: string, enum: [custom, marketing], description: Required when operation is create. }
+                draft_id: { type: string, description: Required when operation is preview. }
+                title: { type: string, maxLength: 160, description: Required when operation is create. }
+                subject: { type: string, maxLength: 300, description: Required when operation is create. }
+                preheader: { type: string, maxLength: 300 }
+                recipient_mode: { type: string, enum: [single, selected, registered_users, active_customers, active_license_holders, eligible_prospects, pending_checkout], description: Required when operation is create. }
+                to: { type: string, format: email, description: Required for the single recipient mode. }
+                selected_recipients: { type: array, maxItems: 250, items: { type: string, format: email } }
+                document:
+                  type: object
+                  description: Required when operation is create. Structured customer email; raw HTML-only messages are rejected.
+                  required: [version, theme, blocks]
+                  additionalProperties: false
+                  properties:
+                    version: { type: integer, enum: [1] }
+                    theme:
+                      type: object
+                      additionalProperties: false
+                      properties:
+                        width: { type: integer, enum: [600, 640, 680] }
+                        background: { type: string, enum: ["#FFFFFF", "#08080A", "#111114", "#19191D", "#F5F0E1", "#D6B35A", "#B88716", "#25252A", "#8E8E97"] }
+                        contentBackground: { type: string, enum: ["#FFFFFF", "#08080A", "#111114", "#19191D", "#F5F0E1", "#D6B35A", "#B88716", "#25252A", "#8E8E97"] }
+                        accent: { type: string, enum: ["#D6B35A", "#B88716"] }
+                        radius: { type: integer, enum: [0, 6, 10, 14] }
+                        spacing: { type: string, enum: [compact, normal, spacious] }
+                    blocks:
+                      type: array
+                      minItems: 1
+                      maxItems: 100
+                      items:
+                        type: object
+                        additionalProperties: false
+                        required: [id, type]
+                        properties:
+                          id: { type: string, maxLength: 100 }
+                          type: { type: string, enum: [hero, announcement, text, heading, button, image, divider, spacer, callout, metrics, feature, steps, columns, section, risk, footer] }
+                          text: { type: string, maxLength: 10000 }
+                          html: { type: string, maxLength: 100000, description: Sanitized rich text only; scripts and unsafe links are removed. }
+                          title: { type: string, maxLength: 500 }
+                          subtitle: { type: string, maxLength: 2000 }
+                          badge: { type: string, maxLength: 80 }
+                          url: { type: string, maxLength: 2000 }
+                          alt: { type: string, maxLength: 500 }
+                          align: { type: string, enum: [left, center, right] }
+                          style: { type: string, enum: [gold, outline, dark] }
+                          fullWidth: { type: boolean }
+                          tone: { type: string, enum: [neutral, gold, warning] }
+                          background: { type: string }
+                          padding: { type: string, enum: [compact, normal, spacious] }
+                          items:
+                            type: array
+                            maxItems: 8
+                            items: { type: object, properties: { label: { type: string }, value: { type: string }, text: { type: string }, title: { type: string } }, required: [label] }
+                          columns:
+                            type: array
+                            minItems: 2
+                            maxItems: 2
+                            items: { type: object, properties: { title: { type: string }, text: { type: string }, html: { type: string } } }
       responses: { '200': { description: Draft, preview or aggregate audience count } }
   /admin/actions/gateway/custom-email/prepare:
     post:
