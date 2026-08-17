@@ -118,6 +118,11 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
   indexReport.push(await tryIndex("admin_custom_email_drafts.id: unique", () => db.collection("admin_custom_email_drafts").createIndex({ id: 1 }, { unique: true })));
   indexReport.push(await tryIndex("x_trade_posts.idempotency_key: unique", () => db.collection("x_trade_posts").createIndex({ idempotency_key: 1 }, { unique: true })));
   indexReport.push(await tryIndex("x_trade_posts.queue", () => db.collection("x_trade_posts").createIndex({ status: 1, next_attempt_at: 1, created_at: 1 })));
+  indexReport.push(await tryIndex("x_oauth_states.state_hash: unique+TTL", async () => {
+    await db.collection("x_oauth_states").createIndex({ state_hash: 1 }, { unique: true });
+    await db.collection("x_oauth_states").createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 });
+  }));
+  indexReport.push(await tryIndex("x_posting_credentials.id: unique", () => db.collection("x_posting_credentials").createIndex({ id: 1 }, { unique: true })));
   indexReport.push(
     await tryIndex("login_audit_log.ts: TTL(180d)", () => db.collection("login_audit_log").createIndex("ts", { expireAfterSeconds: 180 * 86400 })),
   );

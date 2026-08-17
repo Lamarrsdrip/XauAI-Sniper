@@ -4,19 +4,26 @@ Automatic trade posts are disabled by default and remain disabled until an
 administrator confirms `enable_auto` through the Admin gateway.
 
 In the X Developer Portal, create or select the XauCloud app, enable **User
-authentication settings**, and use OAuth 2.0 Authorization Code with PKCE for
-the X account that will publish. Request `tweet.read`, `tweet.write`, and
-`users.read`; request `offline.access` only if the organisation also implements
-and stores refresh-token rotation. Complete the consent flow as that publishing
-account, then store the resulting user access token only in the production
-secret manager as:
+authentication settings**, choose **Web App, Automated App or Bot**, and use
+OAuth 2.0 Authorization Code with PKCE. Its callback URL is:
 
 ```
-X_USER_ACCESS_TOKEN
+https://xaucloud.io/api/admin/x-posting/oauth/callback
 ```
 
-`X_ACCOUNT_USERNAME` is optional and only supplies a non-secret diagnostic
-label. Never put either value in source, logs, a prompt, or the client bundle.
+Request `tweet.read`, `tweet.write`, `users.read`, and `offline.access`. Store
+only the app credentials in the production secret manager:
+
+```
+X_OAUTH_CLIENT_ID
+X_OAUTH_CLIENT_SECRET
+```
+
+Then use **Admin → Comms → X Posting → Connect official X account**. The
+server performs the authorization-code exchange, encrypts the renewable user
+credentials at rest, and refreshes them; no user token is copied into a prompt,
+source file, or browser. `X_USER_ACCESS_TOKEN` remains a legacy server-only
+fallback only.
 
 The service publishes to `POST https://api.x.com/2/tweets` with the user token.
 Every final close is keyed by `account_login:ticket`, claimed atomically, and

@@ -6,7 +6,9 @@ describe("Admin X posting panel", () => {
   test("exposes the safe X Posting tab and never collects the OAuth token", () => {
     expect(portal).toContain('"xPosting", "X Posting"');
     expect(portal).toContain('/admin/x-posting');
-    expect(portal).toContain('X_USER_ACCESS_TOKEN');
+    expect(portal).toContain('/admin/x-posting/oauth/connect');
+    expect(portal).toContain('Connect official X account');
+    expect(portal).not.toContain('X_USER_ACCESS_TOKEN');
     expect(portal).not.toMatch(/setXUserAccessToken|name=["']x_user_access_token/i);
   });
 });

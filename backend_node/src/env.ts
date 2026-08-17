@@ -68,5 +68,8 @@ export const env = {
   PUBLIC_MARKET_FEED_API_KEY: (process.env["PUBLIC_MARKET_FEED_API_KEY"] ?? "").trim(),
   // OAuth 2.0 user-context token for the official XauCloud account. Never exposed by admin APIs.
   X_USER_ACCESS_TOKEN: (process.env["X_USER_ACCESS_TOKEN"] ?? "").trim(),
+  X_OAUTH_CLIENT_ID: (process.env["X_OAUTH_CLIENT_ID"] ?? "").trim(),
+  X_OAUTH_CLIENT_SECRET: (process.env["X_OAUTH_CLIENT_SECRET"] ?? "").trim(),
+  X_OAUTH_REDIRECT_URI: (process.env["X_OAUTH_REDIRECT_URI"] ?? "https://xaucloud.io/api/admin/x-posting/oauth/callback").trim(),
   X_ACCOUNT_USERNAME: (process.env["X_ACCOUNT_USERNAME"] ?? "").trim(),
 };
