@@ -14,13 +14,15 @@ const EXPECTED = [
   "querySupport","manageSupportDraft","prepareSupportAction","executeSupportAction","queryContentAndNotifications","manageContentDraft",
   "prepareContentAction","executeContentAction","queryReplaysReleases","prepareReplayReleaseAction","executeReplayReleaseAction",
   "queryDiagnosticsAuditAnalytics","getRequestTrace",
+  "manageCustomEmailDraft","prepareCustomEmailSend","sendCustomEmail",
+  "queryXPosting","prepareXTradePost","executeXTradePost",
 ];
 
-describe("XauCloud Admin 29-action gateway", () => {
-  it("publishes exactly 29 GPT operationIds", () => {
+describe("XauCloud Admin controlled gateway", () => {
+  it("publishes the documented GPT operationIds", () => {
     const ids = [...schema.matchAll(/operationId:\s*([A-Za-z0-9_-]+)/g)].map((m) => m[1]);
     expect(ids).toEqual(EXPECTED);
-    expect(new Set(ids).size).toBe(29);
+    expect(new Set(ids).size).toBe(EXPECTED.length);
   });
 
   it("keeps dangerous generic primitives out of the gateway", () => {

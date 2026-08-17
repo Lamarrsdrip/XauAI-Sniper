@@ -544,3 +544,40 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 160 }
       responses: { '200': { description: Trace } }
+
+  /admin/actions/gateway/custom-email/draft:
+    post:
+      operationId: manageCustomEmailDraft
+      summary: Create, preview, or safely count a structured custom/marketing email audience. Never sends.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [operation], properties: { operation: { type: string, enum: [create, preview, checkout_audience] }, kind: { type: string, enum: [custom, marketing] }, draft_id: { type: string }, title: { type: string }, subject: { type: string }, preheader: { type: string }, recipient_mode: { type: string, enum: [single, selected, registered_users, active_customers, active_license_holders, eligible_prospects, pending_checkout] }, to: { type: string, format: email }, selected_recipients: { type: array, maxItems: 250, items: { type: string, format: email } }, document: { type: object } } } } } }
+      responses: { '200': { description: Draft, preview or aggregate audience count } }
+  /admin/actions/gateway/custom-email/prepare:
+    post:
+      operationId: prepareCustomEmailSend
+      summary: Prepare a custom or marketing email test/send. Requires later explicit confirmation.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [draft_id, operation], properties: { draft_id: { type: string }, operation: { type: string, enum: [send, test] }, test_to: { type: string, format: email } } } } } }
+      responses: { '200': { description: Confirmation token and resolved recipient count } }
+  /admin/actions/gateway/custom-email/execute:
+    post:
+      operationId: sendCustomEmail
+      summary: Send only a prepared custom/marketing email with confirmation and idempotency key.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [draft_id, operation, confirmation_token, idempotency_key], properties: { draft_id: { type: string }, operation: { type: string, enum: [send, test] }, test_to: { type: string, format: email }, confirmation_token: { type: string }, idempotency_key: { type: string } } } } } }
+      responses: { '200': { description: Sanitized delivery outcome } }
+  /admin/actions/gateway/x-posting/query:
+    post:
+      operationId: queryXPosting
+      summary: Inspect sanitized X posting status, records, or preview a genuine final closed trade. Never posts.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [operation], properties: { operation: { type: string, enum: [status, list, preview] }, closed_trade_id: { type: string }, limit: { type: integer, maximum: 100 } } } } } }
+      responses: { '200': { description: X posting status or preview } }
+  /admin/actions/gateway/x-posting/prepare:
+    post:
+      operationId: prepareXTradePost
+      summary: Prepare one factual X trade post or an auto-posting setting change. Never executes.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [operation], properties: { operation: { type: string, enum: [post_trade, enable_auto, disable_auto] }, closed_trade_id: { type: string } } } } } }
+      responses: { '200': { description: Confirmation token } }
+  /admin/actions/gateway/x-posting/execute:
+    post:
+      operationId: executeXTradePost
+      summary: Execute a prepared X post or auto-posting change once with explicit confirmation.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [operation, confirmation_token, idempotency_key], properties: { operation: { type: string, enum: [post_trade, enable_auto, disable_auto] }, closed_trade_id: { type: string }, confirmation_token: { type: string }, idempotency_key: { type: string } } } } } }
+      responses: { '200': { description: Sanitized result } }

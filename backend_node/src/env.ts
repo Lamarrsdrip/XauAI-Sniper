@@ -66,4 +66,7 @@ export const env = {
   XAU_LOCAL_AI_GLOBAL_QUEUE_LIMIT: Number(process.env["XAU_LOCAL_AI_GLOBAL_QUEUE_LIMIT"] ?? "100"),
   XAU_LOCAL_AI_CONFIDENCE_THRESHOLD: Number(process.env["XAU_LOCAL_AI_CONFIDENCE_THRESHOLD"] ?? "70"),
   PUBLIC_MARKET_FEED_API_KEY: (process.env["PUBLIC_MARKET_FEED_API_KEY"] ?? "").trim(),
+  // OAuth 2.0 user-context token for the official XauCloud account. Never exposed by admin APIs.
+  X_USER_ACCESS_TOKEN: (process.env["X_USER_ACCESS_TOKEN"] ?? "").trim(),
+  X_ACCOUNT_USERNAME: (process.env["X_ACCOUNT_USERNAME"] ?? "").trim(),
 };

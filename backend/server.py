@@ -5553,7 +5553,40 @@ async def log_trade_journal(entry: TradeJournalEntry, request: Request):
         doc["created_ts"] = time.time()
         doc["win_rate"] = round(entry.wins / entry.total_trades * 100, 1) if entry.total_trades > 0 else 0
         doc["has_rich_ledger_data"] = entry.ticket > 0  # true only for v6.25.3+ EA reports
-        await db.trade_journal.insert_one(doc)
+        # One canonical public-post handoff. This is deliberately an enqueue,
+        # never an HTTP call: journal durability remains independent of X, and
+        # the Node worker owns retries/idempotency. Only final, rich closed
+        # records are eligible; auto posting is disabled unless an admin has
+        # explicitly enabled the server-side setting.
+        if doc["has_rich_ledger_data"] and entry.closed_at > 0 and entry.entry_price > 0 and entry.price > 0 and entry.direction.upper() in ("BUY", "SELL"):
+            doc["trade_identity"] = f"{entry.account_login}:{entry.ticket}"
+        try:
+            await db.trade_journal.insert_one(doc)
+        except DuplicateKeyError:
+            # Authenticated MT5 delivery is retryable.  A final-close retry
+            # must retain the already-durable journal record rather than turn
+            # into a client failure or create a second social-post candidate.
+            if not doc.get("trade_identity"):
+                raise
+            existing_doc = await db.trade_journal.find_one({"trade_identity": doc["trade_identity"]})
+            if not existing_doc:
+                raise
+            doc = existing_doc
+        if doc.get("trade_identity"):
+            try:
+                x_settings = await db.x_posting_settings.find_one({"id": "trade_posts"}, {"_id": 0})
+                if x_settings and x_settings.get("auto_post_enabled") is True:
+                    identity = doc["trade_identity"]
+                    await db.x_trade_posts.update_one(
+                        {"idempotency_key": f"x_trade_post:{identity}"},
+                        {"$setOnInsert": {
+                            "id": f"xpost-{uuid.uuid4()}", "idempotency_key": f"x_trade_post:{identity}",
+                            "closed_trade_id": identity, "trade": doc, "status": "queued", "retry_count": 0,
+                            "created_at": datetime.now(timezone.utc).isoformat(), "source": "journal_log_final_close",
+                        }}, upsert=True,
+                    )
+            except Exception as e:
+                logger.error(f"X trade-post enqueue error: {e}")
         # Also index into hive_signatures for fast aggregate lookup
         if entry.signature:
             try:

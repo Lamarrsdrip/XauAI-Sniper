@@ -59,6 +59,7 @@ import { fourHourOutlookLoop } from "./services/fourHourOutlookService.js";
 import { trackOutlookLifecycleTick } from "./services/marketOutlookTick.js";
 import { enqueueIfActionable } from "./services/outlookExecution.js";
 import { runStartupTasks } from "./services/startup.js";
+import { processQueuedXTradePosts } from "./services/xTradePosting.js";
 import { isApplicationReady, markApplicationReady, readinessSnapshot, runReadinessStep } from "./services/readiness.js";
 import { recordDiagnostic } from "./services/diagnostics.js";
 
@@ -295,6 +296,8 @@ async function main(): Promise<void> {
   // still returned 200 and gave no clue which step was pending.
   await runReadinessStep("database", () => connectDb(), 30_000);
   await runReadinessStep("startup_tasks", () => runStartupTasks(app.log), 45_000);
+  // Queue processing is inert until the explicitly-admin-enabled setting is true.
+  setInterval(() => { void processQueuedXTradePosts().catch((error) => app.log.warn({ error }, "[x-posting] queue processing failed")); }, 30_000).unref();
   await runReadinessStep("gpt_email_actions", () => ensureGptEmailActionIndexes(), 30_000);
   await runReadinessStep("marketing_actions", () => ensureMarketingActionInfrastructure(), 45_000);
   await runReadinessStep("admin_ops_actions", () => ensureAdminOpsInfrastructure(), 30_000);
