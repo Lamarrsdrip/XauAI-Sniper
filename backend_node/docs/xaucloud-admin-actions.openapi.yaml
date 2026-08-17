@@ -26,29 +26,6 @@ components:
         confirmation_token: { type: string, minLength: 20, maxLength: 300 }
         idempotency_key: { type: string, minLength: 8, maxLength: 128 }
 paths:
-  /admin/actions/gateway/capabilities:
-    get:
-      operationId: getAdminCapabilities
-      summary: Discover exact XauCloud Admin capabilities, availability and confirmation requirements.
-      responses: { '200': { description: OK } }
-
-  /admin/actions/gateway/customer360:
-    post:
-      operationId: getCustomer360
-      summary: Consolidated sanitized customer view from user, email, order or license identity.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                user_id: { type: string, maxLength: 160 }
-                email: { type: string, format: email, maxLength: 320 }
-                order_id: { type: string, maxLength: 160 }
-                license_id: { type: string, maxLength: 160 }
-      responses: { '200': { description: OK } }
-
   /admin/actions/gateway/customer-diagnose:
     post:
       operationId: diagnoseCustomerIssue
@@ -476,40 +453,6 @@ paths:
                 limit: { type: integer, minimum: 1, maximum: 100 }
       responses: { '200': { description: OK } }
 
-  /admin/actions/gateway/replays-releases/prepare:
-    post:
-      operationId: prepareReplayReleaseAction
-      summary: Prepare release promotion/rollback only if XauCloud has a verified automated release mechanism.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [operation, version]
-              properties:
-                operation: { type: string, enum: [promote_release, rollback_release] }
-                version: { type: string, maxLength: 160 }
-      responses: { '404': { description: Intentionally unavailable when no verified automated deployment primitive exists } }
-
-  /admin/actions/gateway/replays-releases/execute:
-    post:
-      operationId: executeReplayReleaseAction
-      summary: Execute only a previously prepared approved release operation. Unavailable without a verified deployment primitive.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [operation, version, confirmation_token, idempotency_key]
-              properties:
-                operation: { type: string, enum: [promote_release, rollback_release] }
-                version: { type: string, maxLength: 160 }
-                confirmation_token: { type: string, minLength: 20, maxLength: 300 }
-                idempotency_key: { type: string, minLength: 8, maxLength: 128 }
-      responses: { '404': { description: Intentionally unavailable when no verified deployment primitive exists } }
-
   /admin/actions/gateway/diagnostics/query:
     post:
       operationId: queryDiagnosticsAuditAnalytics
@@ -534,22 +477,11 @@ paths:
                 to: { type: string, format: date-time }
       responses: { '200': { description: OK } }
 
-  /admin/actions/gateway/request-trace/{id}:
-    get:
-      operationId: getRequestTrace
-      summary: Explain a request/correlation id using sanitized diagnostics and audit records.
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string, minLength: 1, maxLength: 160 }
-      responses: { '200': { description: Trace } }
-
   /admin/actions/gateway/custom-email/draft:
     post:
       operationId: manageCustomEmailDraft
       summary: Create, preview, or safely count a structured custom/marketing email audience. Never sends.
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [operation], properties: { operation: { type: string, enum: [create, preview, checkout_audience] }, kind: { type: string, enum: [custom, marketing] }, draft_id: { type: string }, title: { type: string }, subject: { type: string }, preheader: { type: string }, recipient_mode: { type: string, enum: [single, selected, registered_users, active_customers, active_license_holders, eligible_prospects, pending_checkout] }, to: { type: string, format: email }, selected_recipients: { type: array, maxItems: 250, items: { type: string, format: email } }, document: { type: object } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [operation], properties: { operation: { type: string, enum: [create, preview, checkout_audience, live_performance] }, kind: { type: string, enum: [custom, marketing] }, draft_id: { type: string }, title: { type: string }, subject: { type: string }, preheader: { type: string }, recipient_mode: { type: string, enum: [single, selected, registered_users, active_customers, active_license_holders, eligible_prospects, pending_checkout] }, to: { type: string, format: email }, selected_recipients: { type: array, maxItems: 250, items: { type: string, format: email } }, document: { type: object } } } } } }
       responses: { '200': { description: Draft, preview or aggregate audience count } }
   /admin/actions/gateway/custom-email/prepare:
     post:

@@ -193,7 +193,7 @@ export async function registerAdminGatewayActionRoutes(app: FastifyInstance): Pr
     try { await auditAdminAction(request, action, request.url.split("?",1)[0] ?? "", reply.statusCode < 400 ? "success" : "error", { status_code: reply.statusCode, permission: c["permission"] ?? "" }); } catch {}
   });
 
-  app.get("/admin/actions/gateway/capabilities", cfg("getAdminCapabilities","admin.read"), async () => ({ model:"xaucloud_admin_gateway_v1", action_count:29, security:{ bearer:true, arbitrary_db:false, shell:false, filesystem:false, unrestricted_http:false, consequential_prepare_confirm_execute:true }, groups: capabilityRows() }));
+  app.get("/admin/actions/gateway/capabilities", cfg("getAdminCapabilities","admin.read"), async () => ({ model:"xaucloud_admin_gateway_v1", action_count:30, security:{ bearer:true, arbitrary_db:false, shell:false, filesystem:false, unrestricted_http:false, consequential_prepare_confirm_execute:true }, groups: capabilityRows() }));
 
   app.post("/admin/actions/gateway/customer360", cfg("getCustomer360","admin.read"), async (request, reply) => { try { requireActionPermission("admin.read"); const body=z.object({user_id:Id.optional(),email:Email.optional(),order_id:Id.optional(),license_id:Id.optional()}).refine(v=>Boolean(v.user_id||v.email||v.order_id||v.license_id),"Provide at least one identifier.").parse(request.body); return await customer360(body); } catch(e){return structuredError(reply,e);} });
   app.post("/admin/actions/gateway/customer-diagnose", cfg("diagnoseCustomerIssue","admin.read"), async (request, reply) => {

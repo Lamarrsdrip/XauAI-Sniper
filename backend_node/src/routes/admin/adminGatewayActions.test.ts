@@ -8,12 +8,12 @@ const source = readFileSync(
 );
 
 const EXPECTED = [
-  "getAdminCapabilities","getCustomer360","diagnoseCustomerIssue","queryUsers","prepareUserAction","executeUserAction",
+  "diagnoseCustomerIssue","queryUsers","prepareUserAction","executeUserAction",
   "queryLicenses","prepareLicenseAction","executeLicenseAction","queryOrdersPayments","prepareOrderPaymentAction","executeOrderPaymentAction",
   "queryTransactionalEmail","manageTransactionalEmailDraft","prepareTransactionalEmailAction","executeTransactionalEmailAction",
   "querySupport","manageSupportDraft","prepareSupportAction","executeSupportAction","queryContentAndNotifications","manageContentDraft",
-  "prepareContentAction","executeContentAction","queryReplaysReleases","prepareReplayReleaseAction","executeReplayReleaseAction",
-  "queryDiagnosticsAuditAnalytics","getRequestTrace",
+  "prepareContentAction","executeContentAction","queryReplaysReleases",
+  "queryDiagnosticsAuditAnalytics",
   "manageCustomEmailDraft","prepareCustomEmailSend","sendCustomEmail",
   "queryXPosting","prepareXTradePost","executeXTradePost",
 ];
@@ -23,6 +23,7 @@ describe("XauCloud Admin controlled gateway", () => {
     const ids = [...schema.matchAll(/operationId:\s*([A-Za-z0-9_-]+)/g)].map((m) => m[1]);
     expect(ids).toEqual(EXPECTED);
     expect(new Set(ids).size).toBe(EXPECTED.length);
+    expect(ids).toHaveLength(30);
   });
 
   it("keeps dangerous generic primitives out of the gateway", () => {
