@@ -51,6 +51,7 @@ import { registerPerformanceRoutes } from "./routes/performance.js";
 import { registerAdminPerformancePeriodsRoutes } from "./routes/admin/performancePeriods.js";
 import { registerAdminOutlookAuditRoutes } from "./routes/admin/outlookAudit.js";
 import { registerAdminMonthlyReportRoutes } from "./routes/admin/monthlyReport.js";
+import { registerAdminXPostingRoutes } from "./routes/admin/xPosting.js";
 import { registerCloudPerformanceAnalyticsRoutes } from "./routes/cloud/performanceAnalytics.js";
 import { registerLocalAiRoutes } from "./routes/localAi.js";
 import { hourlyGenerationTick } from "./services/marketOutlookHourlyTick.js";
@@ -224,6 +225,7 @@ async function main(): Promise<void> {
       await registerAdminPerformancePeriodsRoutes(api);
       await registerAdminOutlookAuditRoutes(api);
       await registerAdminMonthlyReportRoutes(api);
+      await registerAdminXPostingRoutes(api);
       await registerCloudPerformanceAnalyticsRoutes(api);
       await registerLocalAiRoutes(api);
       await registerFourHourOutlookRoutes(api);

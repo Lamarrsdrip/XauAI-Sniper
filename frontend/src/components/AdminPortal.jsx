@@ -111,7 +111,7 @@ export default function AdminPortal({ api }) {
     { label: "Customers", tabs: [["pins", "Licenses", Key]] },
     { label: "Money",     tabs: [["transactions", "Payments", CurrencyNgn], ["bankTransfers", "Bank Transfers", Bank]] },
     { label: "Trading",   tabs: [["command", "Bot Ops", Pulse], ["performance", "Performance", TrendUp]] },
-    { label: "Comms",     tabs: [["marketing", "Marketing", Megaphone], ["notifications", "Notifications", Bell], ["email", "Email", Envelope]] },
+    { label: "Comms",     tabs: [["marketing", "Marketing", Megaphone], ["notifications", "Notifications", Bell], ["email", "Email", Envelope], ["xPosting", "X Posting", Megaphone]] },
     { label: "System",    tabs: [["settings", "Settings", GearSix], ["account", "Account", UserCircle]] },
   ];
   const ALL_TABS = NAV_GROUPS.flatMap((g) => g.tabs);
@@ -186,6 +186,7 @@ export default function AdminPortal({ api }) {
           {tab === "command"       && <CommandOpsTab    api={api} />}
           {tab === "notifications" && <NotificationsTab api={api} />}
           {tab === "email"         && <EmailComposer    api={api} />}
+          {tab === "xPosting"      && <XPostingTab      api={api} />}
           {tab === "marketing"     && <MarketingControl api={api} />}
           {tab === "performance"   && <PerformanceTab   api={api} />}
           {tab === "settings"      && <SettingsTab      api={api} />}
@@ -196,6 +197,38 @@ export default function AdminPortal({ api }) {
       </div>
     </div>
   );
+}
+
+function XPostingTab({ api }) {
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const load = useCallback(async () => {
+    try { const response = await ax.get(`${api}/admin/x-posting`); setStatus(response.data); }
+    catch { setMessage("Could not load X posting status."); }
+  }, [api]);
+  useEffect(() => { load(); }, [load]);
+  const setAuto = async (enabled) => {
+    if (!window.confirm(enabled ? "Enable automatic X posts for genuine closed trades?" : "Disable automatic X posts?")) return;
+    setBusy(true); setMessage("");
+    try { await ax.put(`${api}/admin/x-posting`, { auto_post_enabled: enabled, confirm: true }); await load(); setMessage(enabled ? "Automatic X posting enabled." : "Automatic X posting disabled."); }
+    catch (error) { setMessage(error.response?.data?.detail || "X posting setting could not be changed."); }
+    finally { setBusy(false); }
+  };
+  const configured = Boolean(status?.configured);
+  return <div className="max-w-2xl space-y-5" data-testid="admin-x-posting-tab">
+    <CardSection title="X trade posting">
+      <div className="space-y-4 text-[13px] text-white/55">
+        <div className="flex flex-wrap items-center gap-2"><Badge tone={configured ? "green" : "amber"}>{configured ? "X account configured" : "X account needs setup"}</Badge><Badge tone={status?.auto_post_enabled ? "green" : "neutral"}>{status?.auto_post_enabled ? "Automatic posting ON" : "Automatic posting OFF"}</Badge></div>
+        <p>Posts are created only from authenticated, final XauCloud trade-journal closes. Account numbers, licenses, balances and credentials are never posted.</p>
+        {!configured && <div className="rounded-xl border border-gold-300/20 bg-gold-300/[0.06] p-4 leading-6 text-gold-100/80"><strong className="text-gold-200">Setup required:</strong> In X Developer Portal enable OAuth user-context posting for the publishing account, then set its user token as <code className="font-mono text-gold-200">X_USER_ACCESS_TOKEN</code> in the production server environment and redeploy. The token cannot be entered or viewed in this dashboard.</div>}
+        {configured && <p>Publishing account: <span className="font-mono text-white/80">{status.account_username || "configured (username not supplied)"}</span></p>}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{[["Queued", status?.queue?.queued], ["Posting", status?.queue?.posting], ["Posted", status?.queue?.posted], ["Needs review", status?.queue?.failed]].map(([label, value]) => <div key={label} className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3"><div className={LABEL}>{label}</div><div className="mt-1 font-mono text-lg font-bold text-white">{value ?? "—"}</div></div>)}</div>
+        <div className="flex flex-wrap gap-2"><Btn disabled={busy || !configured || status?.auto_post_enabled} onClick={() => setAuto(true)}>Enable automatic posting</Btn><Btn variant="ghost" disabled={busy || !status?.auto_post_enabled} onClick={() => setAuto(false)}>Disable automatic posting</Btn></div>
+        {message && <p className="text-[12px] text-white/65">{message}</p>}
+      </div>
+    </CardSection>
+  </div>;
 }
 
 // ─── Login ────────────────────────────────────────────────────────────────────
