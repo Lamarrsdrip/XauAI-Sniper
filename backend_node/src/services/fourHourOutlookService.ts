@@ -14,12 +14,15 @@
 import { randomUUID } from "node:crypto";
 import { getDb } from "../db.js";
 import { readMarketData } from "./fourHourFeed.js";
-import { computeForecast, pipsOf, type Direction, type FourHourForecast, type ThesisState } from "./fourHourOutlookEngine.js";
+import { computeForecast, pipsOf, type Direction, type FourHourForecast, type ThesisState, type TradeOpportunity } from "./fourHourOutlookEngine.js";
 import { sendWebPushToUser } from "./webPush.js";
 
 const SYMBOL = "XAUUSD";
-const LIFETIME_MS = 4 * 3600 * 1000;
+// A thesis is multi-session. Individual opportunities are reviewed separately;
+// refreshing a clock every four hours must not turn one thesis into one trade.
+const LIFETIME_MS = 7 * 24 * 3600 * 1000;
 const REVIEW_INTERVAL_MS = 3 * 60 * 1000;
+const ENTRY_REENTRY_COOLDOWN_MS = 6 * 3600 * 1000;
 
 export interface FourHourDoc extends FourHourForecast {
   id: string;
@@ -39,6 +42,20 @@ export interface FourHourDoc extends FourHourForecast {
   mfePips: number;
   maePips: number;
   marketDataAt: string;
+  currentOpportunity: PersistedOpportunity | null;
+  entryCooldownUntil: string | null;
+  recentOpportunities?: PersistedOpportunity[];
+}
+
+export interface PersistedOpportunity extends TradeOpportunity {
+  id: string;
+  thesisId: string;
+  generatedAt: string;
+  generatedPrice: number;
+  status: "ACTIVE" | "T1_REACHED" | "INVALIDATED" | "EXPIRED";
+  mfePips: number;
+  maePips: number;
+  completedAt: string | null;
 }
 
 // ---- data-integrity gate: only publish on the EA's own genuine, fresh broker read ----
@@ -69,15 +86,42 @@ async function getCurrent(): Promise<FourHourDoc | null> {
   return (await getDb().collection("four_hour_outlooks").findOne({ symbol: SYMBOL }, { projection: { _id: 0 } })) as FourHourDoc | null;
 }
 
+function persistOpportunity(candidate: TradeOpportunity, thesisId: string, price: number): PersistedOpportunity {
+  return {
+    ...candidate, id: randomUUID(), thesisId, generatedAt: new Date().toISOString(), generatedPrice: price,
+    status: "ACTIVE", mfePips: 0, maePips: 0, completedAt: null,
+  };
+}
+
+async function insertOpportunity(opportunity: PersistedOpportunity): Promise<void> {
+  await getDb().collection("four_hour_trade_opportunities").insertOne(opportunity);
+}
+
+async function reviewOpportunity(opportunity: PersistedOpportunity | null, price: number): Promise<PersistedOpportunity | null> {
+  if (!opportunity || opportunity.status !== "ACTIVE") return opportunity;
+  const move = pipsOf(price - opportunity.generatedPrice) * (opportunity.direction === "SELL" ? -1 : 1);
+  const mfePips = Math.max(opportunity.mfePips, Math.round(move));
+  const maePips = Math.min(opportunity.maePips, Math.round(move));
+  let status: PersistedOpportunity["status"] = "ACTIVE";
+  if ((opportunity.direction === "BUY" && price <= opportunity.invalidation) || (opportunity.direction === "SELL" && price >= opportunity.invalidation)) status = "INVALIDATED";
+  else if ((opportunity.direction === "BUY" && price >= opportunity.targets[0]!.price) || (opportunity.direction === "SELL" && price <= opportunity.targets[0]!.price)) status = "T1_REACHED";
+  else if (Date.now() - new Date(opportunity.generatedAt).getTime() >= 24 * 3600 * 1000) status = "EXPIRED";
+  const next = { ...opportunity, mfePips, maePips, status, completedAt: status === "ACTIVE" ? null : new Date().toISOString() };
+  await getDb().collection("four_hour_trade_opportunities").updateOne({ id: opportunity.id }, { $set: next });
+  return next;
+}
+
 /** Build + persist a brand-new forecast, archive the outgoing one, notify on change. */
 async function publishNew(forecast: FourHourForecast, previous: FourHourDoc | null, changeEvent: string): Promise<FourHourDoc> {
   const db = getDb();
   const now = new Date();
   const nextReview = new Date(now.getTime() + REVIEW_INTERVAL_MS);
+  const thesisId = previous?.thesisId && previous.direction === forecast.direction ? previous.thesisId : randomUUID();
+  const currentOpportunity = forecast.opportunity ? persistOpportunity(forecast.opportunity, thesisId, forecast.currentPrice) : null;
   const doc: FourHourDoc = {
     ...forecast,
     id: randomUUID(),
-    thesisId: previous?.thesisId && previous.direction === forecast.direction ? previous.thesisId : randomUUID(),
+    thesisId,
     state: forecast.thesisStatus,
     symbol: SYMBOL,
     version: (previous?.version ?? 0) + 1,
@@ -93,11 +137,14 @@ async function publishNew(forecast: FourHourForecast, previous: FourHourDoc | nu
     mfePips: 0,
     maePips: 0,
     marketDataAt: new Date().toISOString(),
+    currentOpportunity,
+    entryCooldownUntil: null,
   };
 
   if (previous) await finalizeHistory(previous, "REPLACED");
   await db.collection("four_hour_outlooks").replaceOne({ symbol: SYMBOL }, doc, { upsert: true });
   await db.collection("four_hour_outlook_history").insertOne({ ...doc, historyId: randomUUID(), archivedAt: null, finalResult: null });
+  if (currentOpportunity) await insertOpportunity(currentOpportunity);
 
   const directionChanged = previous && previous.direction !== doc.direction;
   console.log(`4H_OUTLOOK_GENERATED symbol=${SYMBOL} dir=${doc.direction} status=${doc.status} conf=${doc.confidence} move=${JSON.stringify(doc.expectedMovePips)} event=${changeEvent} src=${doc.dataSource}${doc.dataStale ? " (stale)" : ""}`);
@@ -239,15 +286,25 @@ export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
     return publishNew(forecast, current, reason);
   }
 
-  // No material change: preserve the thesis ID/direction. Small candles can
-  // weaken confidence or change entry timing, never manufacture a new thesis.
+  // No material thesis change: small candles can alter an entry, never the
+  // HTF direction. A closed-H1 setup key is allowed to create a fresh entry
+  // only after the prior entry has resolved; this is explicit re-entry support.
   const { mfePips, maePips } = trackExcursion(current, validMd.price);
+  const reviewedOpportunity = await reviewOpportunity(current.currentOpportunity ?? null, validMd.price);
+  const opportunityJustResolved = current.currentOpportunity?.status === "ACTIVE" && reviewedOpportunity?.status !== "ACTIVE";
+  const entryCooldownUntil = opportunityJustResolved ? new Date(now.getTime() + ENTRY_REENTRY_COOLDOWN_MS).toISOString() : (current.entryCooldownUntil ?? null);
+  const cooldownElapsed = !entryCooldownUntil || new Date(entryCooldownUntil).getTime() <= now.getTime();
+  let currentOpportunity = reviewedOpportunity;
+  if (forecast.opportunity && cooldownElapsed && (!reviewedOpportunity || reviewedOpportunity.status !== "ACTIVE") && forecast.opportunity.setupKey !== reviewedOpportunity?.setupKey) {
+    currentOpportunity = persistOpportunity(forecast.opportunity, current.thesisId, forecast.currentPrice);
+    await insertOpportunity(currentOpportunity);
+  }
   const state: ThesisState = current.direction !== "NEUTRAL" && forecast.direction !== current.direction ? "WEAKENING" : forecast.thesisStatus;
   await db.collection("four_hour_outlooks").updateOne(
     { symbol: SYMBOL },
-    { $set: { lastReviewedAt: now.toISOString(), nextScheduledReviewAt: new Date(now.getTime() + REVIEW_INTERVAL_MS).toISOString(), currentPrice: forecast.currentPrice, marketDataAt: now.toISOString(), dataStale: false, dataStatus: validMd.dataStatus, state, confidence: forecast.confidence, evidence: forecast.evidence, reasoning: forecast.reasoning, entryTiming: forecast.entryTiming, htfScores: forecast.htfScores, mfePips, maePips } },
+    { $set: { lastReviewedAt: now.toISOString(), nextScheduledReviewAt: new Date(now.getTime() + REVIEW_INTERVAL_MS).toISOString(), currentPrice: forecast.currentPrice, marketDataAt: now.toISOString(), dataStale: false, dataStatus: validMd.dataStatus, state, confidence: forecast.confidence, evidence: forecast.evidence, reasoning: forecast.reasoning, entryTiming: forecast.entryTiming, qualification: forecast.qualification, preferredZone: forecast.preferredZone, expectedMovePips: forecast.expectedMovePips, targets: forecast.targets, directionalRunwayPips: forecast.directionalRunwayPips, rejectionReasons: forecast.rejectionReasons, opportunity: forecast.opportunity, currentOpportunity, entryCooldownUntil, htfScores: forecast.htfScores, mfePips, maePips } },
   );
-  return { ...current, lastReviewedAt: now.toISOString(), currentPrice: forecast.currentPrice, marketDataAt: now.toISOString(), dataStale: false, dataStatus: validMd.dataStatus, state, confidence: forecast.confidence, evidence: forecast.evidence, reasoning: forecast.reasoning, entryTiming: forecast.entryTiming, htfScores: forecast.htfScores, mfePips, maePips };
+  return { ...current, lastReviewedAt: now.toISOString(), currentPrice: forecast.currentPrice, marketDataAt: now.toISOString(), dataStale: false, dataStatus: validMd.dataStatus, state, confidence: forecast.confidence, evidence: forecast.evidence, reasoning: forecast.reasoning, entryTiming: forecast.entryTiming, qualification: forecast.qualification, preferredZone: forecast.preferredZone, expectedMovePips: forecast.expectedMovePips, targets: forecast.targets, directionalRunwayPips: forecast.directionalRunwayPips, rejectionReasons: forecast.rejectionReasons, opportunity: forecast.opportunity, currentOpportunity, entryCooldownUntil, htfScores: forecast.htfScores, mfePips, maePips };
 }
 
 /** Mark the current forecast as seen (clears the dashboard NEW badge). */
@@ -261,7 +318,9 @@ export async function getFourHourCurrent(): Promise<FourHourDoc | null> {
   if (!isGenuineSource(doc.dataSource)) return null; // never serve legacy futures data
   if (!doc.marketDataAt || Date.now() - new Date(doc.marketDataAt).getTime() > EA_STALE_SEC * 1000) return null;
   if (new Date(doc.expiresAt).getTime() <= Date.now()) return null; // expired -> card shows unavailable
-  return doc;
+  const recentOpportunities = await getDb().collection("four_hour_trade_opportunities")
+    .find({ thesisId: doc.thesisId }, { projection: { _id: 0 } }).sort({ generatedAt: -1 }).limit(8).toArray() as unknown as PersistedOpportunity[];
+  return { ...doc, currentOpportunity: doc.currentOpportunity ?? null, recentOpportunities };
 }
 
 export async function getFourHourHistory(limit = 30): Promise<Record<string, unknown>[]> {

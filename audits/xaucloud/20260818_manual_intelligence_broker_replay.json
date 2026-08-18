@@ -1,5 +1,5 @@
 {
-  "methodology": "No-lookahead D1/H4/H1 structural replay; closed bars only; M10/EA signals excluded from direction; outcome uses subsequent H1 bars only after the decision.",
+  "methodology": "No-lookahead D1/H4/H1 replay; closed bars only; D1/H4/H1 establish direction and H1 evaluates entries; M10/EA signals excluded; future H1 bars classify outcomes only.",
   "source": {
     "exported_at_utc": "2026-08-18T21:40:42.839500+00:00",
     "server": "Exness-MT5Trial9",
@@ -30,1502 +30,1731 @@
     "sha256": "f4d812cbd50ed95c5a649391be356510ff220fa518207a11d99778021050b6b3"
   },
   "window": {
-    "from_utc": "2026-07-19T16:00:00.000Z",
-    "to_utc": "2026-08-18T16:00:00.000Z"
+    "from_utc": "2026-07-19T20:00:00.000Z",
+    "to_utc": "2026-08-18T20:00:00.000Z"
   },
   "summary": {
-    "evaluations": 135,
-    "qualifying_signals": 4,
-    "direction_flips": 0,
-    "t1": 2,
-    "invalidated": 0,
-    "expired": 2
+    "evaluations": 505,
+    "htf_theses": 4,
+    "actionable_opportunities": 29,
+    "buy_opportunities": 18,
+    "sell_opportunities": 11,
+    "direction_flips": 3,
+    "false_flips": 0,
+    "t1": 28,
+    "t2": 19,
+    "t3": 14,
+    "invalidated": 1,
+    "expired": 0,
+    "average_favorable_excursion_pips": 97,
+    "average_adverse_excursion_pips": 117,
+    "average_opportunity_duration_hours": 2,
+    "major_moves": 21,
+    "major_moves_captured": 13,
+    "major_move_capture_rate_pct": 62
   },
-  "records": [
+  "rejection_funnel": {
+    "INSUFFICIENT_HTF_ALIGNMENT": 1,
+    "REGIME_UNCLEAR": 80,
+    "INSUFFICIENT_RUNWAY": 27,
+    "NO_ENTRY_CONFIRMATION": 340,
+    "REENTRY_COOLDOWN": 26,
+    "DUPLICATE_ACTIVE_OPPORTUNITY": 4
+  },
+  "rejection_combinations": {
+    "INSUFFICIENT_HTF_ALIGNMENT+INSUFFICIENT_RUNWAY+REGIME_UNCLEAR": 1,
+    "NO_ENTRY_CONFIRMATION": 340,
+    "REGIME_UNCLEAR": 79,
+    "REENTRY_COOLDOWN": 26,
+    "DUPLICATE_ACTIVE_OPPORTUNITY": 4,
+    "INSUFFICIENT_RUNWAY": 26
+  },
+  "major_moves": [
     {
-      "time_utc": "2026-07-20T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BEAR_TREND",
-      "confidence": 76,
-      "net_score": -40,
-      "runway_pips": null,
-      "outcome": null
+      "start_utc": "2026-07-19T20:00:00.000Z",
+      "end_utc": "2026-07-20T20:00:00.000Z",
+      "direction": "SELL",
+      "pips": 227,
+      "captured": true
     },
     {
-      "time_utc": "2026-07-20T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "start_utc": "2026-07-20T20:00:00.000Z",
+      "end_utc": "2026-07-21T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 776,
+      "captured": false
+    },
+    {
+      "start_utc": "2026-07-21T20:00:00.000Z",
+      "end_utc": "2026-07-22T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 749,
+      "captured": false
+    },
+    {
+      "start_utc": "2026-07-22T20:00:00.000Z",
+      "end_utc": "2026-07-23T20:00:00.000Z",
+      "direction": "SELL",
+      "pips": 898,
+      "captured": false
+    },
+    {
+      "start_utc": "2026-07-23T20:00:00.000Z",
+      "end_utc": "2026-07-24T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 276,
+      "captured": true
+    },
+    {
+      "start_utc": "2026-07-26T20:00:00.000Z",
+      "end_utc": "2026-07-27T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 570,
+      "captured": false
+    },
+    {
+      "start_utc": "2026-07-27T20:00:00.000Z",
+      "end_utc": "2026-07-28T20:00:00.000Z",
+      "direction": "SELL",
+      "pips": 608,
+      "captured": true
+    },
+    {
+      "start_utc": "2026-07-28T20:00:00.000Z",
+      "end_utc": "2026-07-29T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 800,
+      "captured": false
+    },
+    {
+      "start_utc": "2026-07-29T20:00:00.000Z",
+      "end_utc": "2026-07-30T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 674,
+      "captured": false
+    },
+    {
+      "start_utc": "2026-07-30T20:00:00.000Z",
+      "end_utc": "2026-07-31T20:00:00.000Z",
+      "direction": "SELL",
+      "pips": 866,
+      "captured": false
+    },
+    {
+      "start_utc": "2026-08-02T20:00:00.000Z",
+      "end_utc": "2026-08-03T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 310,
+      "captured": true
+    },
+    {
+      "start_utc": "2026-08-03T20:00:00.000Z",
+      "end_utc": "2026-08-04T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 410,
+      "captured": true
+    },
+    {
+      "start_utc": "2026-08-04T20:00:00.000Z",
+      "end_utc": "2026-08-05T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 1822,
+      "captured": true
+    },
+    {
+      "start_utc": "2026-08-05T20:00:00.000Z",
+      "end_utc": "2026-08-06T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 479,
+      "captured": true
+    },
+    {
+      "start_utc": "2026-08-06T20:00:00.000Z",
+      "end_utc": "2026-08-07T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 1124,
+      "captured": true
+    },
+    {
+      "start_utc": "2026-08-09T20:00:00.000Z",
+      "end_utc": "2026-08-10T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 462,
+      "captured": true
+    },
+    {
+      "start_utc": "2026-08-10T20:00:00.000Z",
+      "end_utc": "2026-08-11T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 414,
+      "captured": true
+    },
+    {
+      "start_utc": "2026-08-11T20:00:00.000Z",
+      "end_utc": "2026-08-12T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 666,
+      "captured": true
+    },
+    {
+      "start_utc": "2026-08-12T20:00:00.000Z",
+      "end_utc": "2026-08-13T20:00:00.000Z",
+      "direction": "SELL",
+      "pips": 638,
+      "captured": false
+    },
+    {
+      "start_utc": "2026-08-13T20:00:00.000Z",
+      "end_utc": "2026-08-14T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 418,
+      "captured": true
+    },
+    {
+      "start_utc": "2026-08-16T20:00:00.000Z",
+      "end_utc": "2026-08-17T20:00:00.000Z",
+      "direction": "BUY",
+      "pips": 515,
+      "captured": true
+    }
+  ],
+  "opportunities": [
+    {
+      "time_utc": "2026-07-20T06:00:00.000Z",
+      "direction": "SELL",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BEAR_PULLBACK",
-      "confidence": 36,
+      "confidence": 46,
       "net_score": -3,
-      "runway_pips": null,
-      "outcome": null
+      "runway_pips": 86,
+      "opportunity": {
+        "setupKey": "SELL:PULLBACK_CONTINUATION:1784523600",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "SELL",
+        "entryZone": [
+          4007.87,
+          4013.73
+        ],
+        "invalidation": 4089.55,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4005.4,
+            "pips": 34
+          },
+          {
+            "label": "T2",
+            "price": 4003.5,
+            "pips": 53
+          },
+          {
+            "label": "T3",
+            "price": 4001.95,
+            "pips": 69
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          69
+        ],
+        "confidence": 46,
+        "detectedAt": 1784523600
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 60,
+        "mae_pips": 29,
+        "duration_hours": 0,
+        "t2": true,
+        "t3": false
+      }
     },
     {
-      "time_utc": "2026-07-20T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 38,
-      "net_score": -12,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-20T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 38,
-      "net_score": -12,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-20T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 44,
-      "net_score": -34,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-20T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BEAR_TREND",
-      "confidence": 78,
-      "net_score": -45,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-21T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BEAR_TREND",
-      "confidence": 74,
-      "net_score": -36,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-21T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "time_utc": "2026-07-21T09:00:00.000Z",
+      "direction": "SELL",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BEAR_PULLBACK",
-      "confidence": 41,
-      "net_score": 22,
-      "runway_pips": null,
-      "outcome": null
+      "confidence": 52,
+      "net_score": 18,
+      "runway_pips": 77,
+      "opportunity": {
+        "setupKey": "SELL:PULLBACK_CONTINUATION:1784620800",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "SELL",
+        "entryZone": [
+          4061.78,
+          4067.08
+        ],
+        "invalidation": 4091.59,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4059.6,
+            "pips": 31
+          },
+          {
+            "label": "T2",
+            "price": 4057.92,
+            "pips": 47
+          },
+          {
+            "label": "T3",
+            "price": 4056.54,
+            "pips": 61
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          61
+        ],
+        "confidence": 52,
+        "detectedAt": 1784620800
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 84,
+        "mae_pips": 74,
+        "duration_hours": 2,
+        "t2": true,
+        "t3": true
+      }
     },
     {
-      "time_utc": "2026-07-21T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "time_utc": "2026-07-21T18:00:00.000Z",
+      "direction": "SELL",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BEAR_PULLBACK",
-      "confidence": 40,
-      "net_score": 19,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-21T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BEAR_PULLBACK",
-      "confidence": 36,
-      "net_score": 5,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-21T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BEAR_PULLBACK",
-      "confidence": 38,
-      "net_score": 10,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-21T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BEAR_PULLBACK",
-      "confidence": 41,
-      "net_score": 22,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-22T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 76,
-      "net_score": 40,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-22T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 83,
-      "net_score": 58,
-      "runway_pips": null,
-      "outcome": null
+      "confidence": 47,
+      "net_score": 6,
+      "runway_pips": 71,
+      "opportunity": {
+        "setupKey": "SELL:PULLBACK_CONTINUATION:1784653200",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "SELL",
+        "entryZone": [
+          4067.68,
+          4072.7
+        ],
+        "invalidation": 4091.78,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4065.67,
+            "pips": 29
+          },
+          {
+            "label": "T2",
+            "price": 4064.1,
+            "pips": 44
+          },
+          {
+            "label": "T3",
+            "price": 4062.81,
+            "pips": 57
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          57
+        ],
+        "confidence": 47,
+        "detectedAt": 1784653200
+      },
+      "rejection_reasons": [],
+      "outcome": "INVALIDATED",
+      "outcome_detail": {
+        "outcome": "INVALIDATED",
+        "mfe_pips": 10,
+        "mae_pips": 342,
+        "duration_hours": 6,
+        "t2": false,
+        "t3": false
+      }
     },
     {
       "time_utc": "2026-07-22T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "direction": "SELL",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BREAKOUT_CONFIRMED",
       "confidence": 75,
       "net_score": 38,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-22T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 44,
-      "net_score": 34,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-22T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 82,
-      "net_score": 54,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-22T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 75,
-      "net_score": 37,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-23T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 81,
-      "net_score": 53,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-23T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 80,
-      "net_score": 49,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-23T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 42,
-      "net_score": 26,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-23T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 40,
-      "net_score": 20,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-23T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BULL_PULLBACK",
-      "confidence": 35,
-      "net_score": 0,
-      "runway_pips": null,
-      "outcome": null
+      "runway_pips": 73,
+      "opportunity": {
+        "setupKey": "SELL:PULLBACK_CONTINUATION:1784703600",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "SELL",
+        "entryZone": [
+          4109.73,
+          4114.48
+        ],
+        "invalidation": 4149.18,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4107.61,
+            "pips": 29
+          },
+          {
+            "label": "T2",
+            "price": 4106,
+            "pips": 45
+          },
+          {
+            "label": "T3",
+            "price": 4104.69,
+            "pips": 58
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          58
+        ],
+        "confidence": 75,
+        "detectedAt": 1784703600
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 43,
+        "mae_pips": 240,
+        "duration_hours": 4,
+        "t2": false,
+        "t3": false
+      }
     },
     {
       "time_utc": "2026-07-23T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BULL_PULLBACK",
-      "confidence": 37,
+      "confidence": 47,
       "net_score": 6,
-      "runway_pips": null,
-      "outcome": null
+      "runway_pips": 115,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1784833200",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4045.17,
+          4050.83
+        ],
+        "invalidation": 3974.73,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4054.49,
+            "pips": 46
+          },
+          {
+            "label": "T2",
+            "price": 4057.02,
+            "pips": 71
+          },
+          {
+            "label": "T3",
+            "price": 4059.09,
+            "pips": 92
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          92
+        ],
+        "confidence": 47,
+        "detectedAt": 1784833200
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 90,
+        "mae_pips": 280,
+        "duration_hours": 12,
+        "t2": true,
+        "t3": false
+      }
     },
     {
-      "time_utc": "2026-07-24T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BEAR_TREND",
-      "confidence": 75,
-      "net_score": -37,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-24T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BEAR_TREND",
-      "confidence": 85,
-      "net_score": -62,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-24T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BEAR_TREND",
-      "confidence": 79,
-      "net_score": -47,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-24T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 43,
-      "net_score": -31,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-24T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 36,
-      "net_score": -5,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-24T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BEAR_TREND",
-      "confidence": 43,
-      "net_score": -31,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-25T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 42,
-      "net_score": -28,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-27T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 43,
-      "net_score": 32,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-27T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 76,
-      "net_score": 40,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-27T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 43,
-      "net_score": 32,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-27T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 43,
-      "net_score": 33,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-27T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 40,
-      "net_score": 19,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-27T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 42,
-      "net_score": 28,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-28T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 39,
-      "net_score": -15,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-28T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 80,
-      "net_score": -50,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-28T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 76,
-      "net_score": -39,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-28T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 80,
-      "net_score": -50,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-28T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 43,
-      "net_score": -31,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-28T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 76,
-      "net_score": -39,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-29T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 78,
-      "net_score": -46,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-29T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 77,
-      "net_score": -42,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-29T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 42,
-      "net_score": -26,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-29T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "time_utc": "2026-07-27T03:00:00.000Z",
+      "direction": "SELL",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BREAKOUT_FORMING",
       "confidence": 74,
-      "net_score": -36,
-      "runway_pips": null,
-      "outcome": null
+      "net_score": 34,
+      "runway_pips": 74,
+      "opportunity": {
+        "setupKey": "SELL:PULLBACK_CONTINUATION:1785117600",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "SELL",
+        "entryZone": [
+          4092.77,
+          4098.68
+        ],
+        "invalidation": 4172.81,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4090.79,
+            "pips": 30
+          },
+          {
+            "label": "T2",
+            "price": 4089.16,
+            "pips": 46
+          },
+          {
+            "label": "T3",
+            "price": 4087.83,
+            "pips": 59
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          59
+        ],
+        "confidence": 74,
+        "detectedAt": 1785117600
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 85,
+        "mae_pips": 21,
+        "duration_hours": 0,
+        "t2": true,
+        "t3": true
+      }
     },
     {
-      "time_utc": "2026-07-29T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "time_utc": "2026-07-27T13:00:00.000Z",
+      "direction": "SELL",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 80,
-      "net_score": -49,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-29T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 41,
-      "net_score": -22,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-30T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 41,
-      "net_score": 22,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-30T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "RANGE",
-      "confidence": 39,
-      "net_score": 15,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-30T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 39,
-      "net_score": -17,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-30T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 42,
-      "net_score": 28,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-30T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 43,
-      "net_score": 33,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-30T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 75,
-      "net_score": 37,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-31T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 76,
-      "net_score": 40,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-31T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 41,
+      "confidence": 69,
       "net_score": 23,
-      "runway_pips": null,
-      "outcome": null
+      "runway_pips": 72,
+      "opportunity": {
+        "setupKey": "SELL:BREAKOUT_RETEST:1785153600",
+        "family": "BREAKOUT_RETEST",
+        "direction": "SELL",
+        "entryZone": [
+          4082.97,
+          4087.78
+        ],
+        "invalidation": 4172.43,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4080.9,
+            "pips": 29
+          },
+          {
+            "label": "T2",
+            "price": 4079.32,
+            "pips": 44
+          },
+          {
+            "label": "T3",
+            "price": 4078.03,
+            "pips": 57
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          57
+        ],
+        "confidence": 73,
+        "detectedAt": 1785153600
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 134,
+        "mae_pips": 58,
+        "duration_hours": 0,
+        "t2": true,
+        "t3": true
+      }
     },
     {
-      "time_utc": "2026-07-31T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 35,
-      "net_score": 1,
-      "runway_pips": null,
-      "outcome": null
+      "time_utc": "2026-07-27T23:00:00.000Z",
+      "direction": "SELL",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
+      "regime": "BREAKOUT_CONFIRMED",
+      "confidence": 68,
+      "net_score": 21,
+      "runway_pips": 74,
+      "opportunity": {
+        "setupKey": "SELL:PULLBACK_CONTINUATION:1785189600",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "SELL",
+        "entryZone": [
+          4073.31,
+          4077.73
+        ],
+        "invalidation": 4172.13,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4071.09,
+            "pips": 30
+          },
+          {
+            "label": "T2",
+            "price": 4069.47,
+            "pips": 46
+          },
+          {
+            "label": "T3",
+            "price": 4068.14,
+            "pips": 59
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          59
+        ],
+        "confidence": 68,
+        "detectedAt": 1785189600
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 42,
+        "mae_pips": 11,
+        "duration_hours": 0,
+        "t2": false,
+        "t3": false
+      }
     },
     {
-      "time_utc": "2026-07-31T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 36,
-      "net_score": 5,
-      "runway_pips": null,
-      "outcome": null
+      "time_utc": "2026-07-28T10:00:00.000Z",
+      "direction": "SELL",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
+      "regime": "BREAKOUT_CONFIRMED",
+      "confidence": 77,
+      "net_score": -43,
+      "runway_pips": 198,
+      "opportunity": {
+        "setupKey": "SELL:BREAKOUT_RETEST:1785229200",
+        "family": "BREAKOUT_RETEST",
+        "direction": "SELL",
+        "entryZone": [
+          4022.78,
+          4027.11
+        ],
+        "invalidation": 4147.42,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4015.59,
+            "pips": 79
+          },
+          {
+            "label": "T2",
+            "price": 4011.24,
+            "pips": 123
+          },
+          {
+            "label": "T3",
+            "price": 4007.68,
+            "pips": 158
+          }
+        ],
+        "expectedMovePips": [
+          79,
+          158
+        ],
+        "confidence": 81,
+        "detectedAt": 1785229200
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 122,
+        "mae_pips": 146,
+        "duration_hours": 4,
+        "t2": false,
+        "t3": false
+      }
     },
     {
-      "time_utc": "2026-07-31T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 35,
-      "net_score": 1,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-07-31T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BULL_PULLBACK",
-      "confidence": 38,
-      "net_score": -11,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-01T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BEAR_TREND",
+      "time_utc": "2026-07-28T23:00:00.000Z",
+      "direction": "SELL",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
+      "regime": "BREAKOUT_CONFIRMED",
       "confidence": 76,
-      "net_score": -41,
-      "runway_pips": null,
-      "outcome": null
+      "net_score": -39,
+      "runway_pips": 71,
+      "opportunity": {
+        "setupKey": "SELL:PULLBACK_CONTINUATION:1785276000",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "SELL",
+        "entryZone": [
+          4017.51,
+          4022.75
+        ],
+        "invalidation": 4147.62,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4015.54,
+            "pips": 28
+          },
+          {
+            "label": "T2",
+            "price": 4013.99,
+            "pips": 44
+          },
+          {
+            "label": "T3",
+            "price": 4012.71,
+            "pips": 57
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          57
+        ],
+        "confidence": 76,
+        "detectedAt": 1785276000
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 34,
+        "mae_pips": 78,
+        "duration_hours": 0,
+        "t2": false,
+        "t3": false
+      }
     },
     {
-      "time_utc": "2026-08-03T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "RANGE",
-      "confidence": 36,
-      "net_score": 5,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-03T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "RANGE",
-      "confidence": 37,
-      "net_score": 6,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-03T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "time_utc": "2026-07-29T09:00:00.000Z",
+      "direction": "SELL",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BREAKOUT_FORMING",
-      "confidence": 38,
-      "net_score": -12,
-      "runway_pips": null,
-      "outcome": null
+      "confidence": 69,
+      "net_score": -23,
+      "runway_pips": 136,
+      "opportunity": {
+        "setupKey": "SELL:PULLBACK_CONTINUATION:1785312000",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "SELL",
+        "entryZone": [
+          4036.78,
+          4040.77
+        ],
+        "invalidation": 4122.69,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4032,
+            "pips": 54
+          },
+          {
+            "label": "T2",
+            "price": 4029.01,
+            "pips": 84
+          },
+          {
+            "label": "T3",
+            "price": 4026.57,
+            "pips": 109
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          109
+        ],
+        "confidence": 69,
+        "detectedAt": 1785312000
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 63,
+        "mae_pips": 10,
+        "duration_hours": 0,
+        "t2": false,
+        "t3": false
+      }
+    },
+    {
+      "time_utc": "2026-07-30T13:00:00.000Z",
+      "direction": "SELL",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
+      "regime": "BREAKOUT_FORMING",
+      "confidence": 72,
+      "net_score": 29,
+      "runway_pips": 73,
+      "opportunity": {
+        "setupKey": "SELL:PULLBACK_CONTINUATION:1785412800",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "SELL",
+        "entryZone": [
+          4067.5,
+          4074.45
+        ],
+        "invalidation": 4126,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4065.75,
+            "pips": 29
+          },
+          {
+            "label": "T2",
+            "price": 4064.15,
+            "pips": 45
+          },
+          {
+            "label": "T3",
+            "price": 4062.84,
+            "pips": 58
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          58
+        ],
+        "confidence": 72,
+        "detectedAt": 1785412800
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 37,
+        "mae_pips": 439,
+        "duration_hours": 0,
+        "t2": false,
+        "t3": false
+      }
+    },
+    {
+      "time_utc": "2026-07-31T05:00:00.000Z",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
+      "regime": "BREAKOUT_FORMING",
+      "confidence": 70,
+      "net_score": 24,
+      "runway_pips": 75,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1785470400",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4075.33,
+          4080.93
+        ],
+        "invalidation": 3986.01,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4082.99,
+            "pips": 30
+          },
+          {
+            "label": "T2",
+            "price": 4084.64,
+            "pips": 46
+          },
+          {
+            "label": "T3",
+            "price": 4085.99,
+            "pips": 60
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          60
+        ],
+        "confidence": 70,
+        "detectedAt": 1785470400
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 34,
+        "mae_pips": 67,
+        "duration_hours": 0,
+        "t2": false,
+        "t3": false
+      }
     },
     {
       "time_utc": "2026-08-03T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BREAKOUT_FORMING",
-      "confidence": 37,
+      "confidence": 48,
       "net_score": -8,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-03T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 40,
-      "net_score": -20,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-03T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 37,
-      "net_score": -9,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-04T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 39,
-      "net_score": -14,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-04T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 40,
-      "net_score": -18,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-04T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "RANGE",
-      "confidence": 36,
-      "net_score": 5,
-      "runway_pips": null,
-      "outcome": null
+      "runway_pips": 72,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1785754800",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4058.05,
+          4063.53
+        ],
+        "invalidation": 3988.94,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4065.51,
+            "pips": 29
+          },
+          {
+            "label": "T2",
+            "price": 4067.1,
+            "pips": 45
+          },
+          {
+            "label": "T3",
+            "price": 4068.41,
+            "pips": 58
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          58
+        ],
+        "confidence": 48,
+        "detectedAt": 1785754800
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 68,
+        "mae_pips": 437,
+        "duration_hours": 12,
+        "t2": true,
+        "t3": true
+      }
     },
     {
       "time_utc": "2026-08-04T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 42,
-      "net_score": 29,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-04T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 43,
-      "net_score": 30,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-04T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 41,
-      "net_score": 22,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-05T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 44,
-      "net_score": 34,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-05T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 84,
-      "net_score": 59,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-05T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 86,
-      "net_score": 66,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-05T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 87,
-      "net_score": 68,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-05T16:00:00.000Z",
-      "direction": "BUY",
-      "qualification": "WAIT_FOR_ENTRY",
-      "thesis_state": "PULLBACK_WITHIN_THESIS",
-      "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 86,
-      "net_score": 66,
-      "runway_pips": 324,
-      "outcome": "T1"
-    },
-    {
-      "time_utc": "2026-08-05T20:00:00.000Z",
       "direction": "BUY",
       "qualification": "ACTIVE",
       "thesis_state": "ACTIVE",
       "regime": "BREAKOUT_CONFIRMED",
-      "confidence": 83,
-      "net_score": 58,
-      "runway_pips": 184,
-      "outcome": "T1"
+      "confidence": 57,
+      "net_score": 29,
+      "runway_pips": 71,
+      "opportunity": {
+        "setupKey": "BUY:BREAKOUT_RETEST:1785841200",
+        "family": "BREAKOUT_RETEST",
+        "direction": "BUY",
+        "entryZone": [
+          4070.88,
+          4075.72
+        ],
+        "invalidation": 4012.71,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4077.75,
+            "pips": 28
+          },
+          {
+            "label": "T2",
+            "price": 4079.32,
+            "pips": 44
+          },
+          {
+            "label": "T3",
+            "price": 4080.59,
+            "pips": 57
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          57
+        ],
+        "confidence": 61,
+        "detectedAt": 1785841200
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 96,
+        "mae_pips": 141,
+        "duration_hours": 0,
+        "t2": true,
+        "t3": true
+      }
     },
     {
-      "time_utc": "2026-08-06T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 92,
-      "net_score": 91,
-      "runway_pips": null,
-      "outcome": null
+      "time_utc": "2026-08-05T01:00:00.000Z",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
+      "regime": "BREAKOUT_FORMING",
+      "confidence": 75,
+      "net_score": 37,
+      "runway_pips": 86,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1785888000",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4077.69,
+          4083.61
+        ],
+        "invalidation": 4012.47,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4086.04,
+            "pips": 34
+          },
+          {
+            "label": "T2",
+            "price": 4087.93,
+            "pips": 53
+          },
+          {
+            "label": "T3",
+            "price": 4089.47,
+            "pips": 68
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          68
+        ],
+        "confidence": 75,
+        "detectedAt": 1785888000
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 201,
+        "mae_pips": 50,
+        "duration_hours": 0,
+        "t2": true,
+        "t3": true
+      }
     },
     {
-      "time_utc": "2026-08-06T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "time_utc": "2026-08-06T06:00:00.000Z",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "STRONG_BULL_TREND",
       "confidence": 91,
       "net_score": 78,
-      "runway_pips": null,
-      "outcome": null
+      "runway_pips": 147,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1785992400",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4260.68,
+          4268.57
+        ],
+        "invalidation": 4009.23,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4273.15,
+            "pips": 59
+          },
+          {
+            "label": "T2",
+            "price": 4276.39,
+            "pips": 91
+          },
+          {
+            "label": "T3",
+            "price": 4279.04,
+            "pips": 118
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          118
+        ],
+        "confidence": 91,
+        "detectedAt": 1785992400
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 116,
+        "mae_pips": 180,
+        "duration_hours": 2,
+        "t2": true,
+        "t3": false
+      }
     },
     {
-      "time_utc": "2026-08-06T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 88,
-      "net_score": 71,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-06T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 88,
-      "net_score": 69,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-06T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 82,
-      "net_score": 54,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-06T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 82,
-      "net_score": 55,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-07T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 77,
-      "net_score": 43,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-07T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 79,
-      "net_score": 48,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-07T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 82,
-      "net_score": 54,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-07T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 87,
-      "net_score": 68,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-07T16:00:00.000Z",
+      "time_utc": "2026-08-06T18:00:00.000Z",
       "direction": "BUY",
       "qualification": "ACTIVE",
       "thesis_state": "ACTIVE",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 86,
-      "net_score": 64,
-      "runway_pips": 308,
-      "outcome": "EXPIRED"
-    },
-    {
-      "time_utc": "2026-08-07T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
       "regime": "STRONG_BULL_TREND",
       "confidence": 82,
       "net_score": 56,
-      "runway_pips": null,
-      "outcome": null
+      "runway_pips": 130,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1786035600",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4240.92,
+          4248.29
+        ],
+        "invalidation": 4008.41,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4252.27,
+            "pips": 52
+          },
+          {
+            "label": "T2",
+            "price": 4255.13,
+            "pips": 81
+          },
+          {
+            "label": "T3",
+            "price": 4257.47,
+            "pips": 104
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          104
+        ],
+        "confidence": 82,
+        "detectedAt": 1786035600
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 62,
+        "mae_pips": 142,
+        "duration_hours": 5,
+        "t2": false,
+        "t3": false
+      }
     },
     {
-      "time_utc": "2026-08-08T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 88,
-      "net_score": 69,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-10T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 85,
-      "net_score": 63,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-10T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 84,
-      "net_score": 59,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-10T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 86,
-      "net_score": 64,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-10T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 82,
-      "net_score": 54,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-10T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 84,
-      "net_score": 59,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-10T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 90,
-      "net_score": 75,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-11T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 92,
-      "net_score": 87,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-11T04:00:00.000Z",
+      "time_utc": "2026-08-07T06:00:00.000Z",
       "direction": "BUY",
       "qualification": "ACTIVE",
       "thesis_state": "ACTIVE",
       "regime": "STRONG_BULL_TREND",
-      "confidence": 92,
-      "net_score": 85,
-      "runway_pips": 183,
-      "outcome": "EXPIRED"
+      "confidence": 80,
+      "net_score": 50,
+      "runway_pips": 256,
+      "opportunity": {
+        "setupKey": "BUY:BREAKOUT_RETEST:1786078800",
+        "family": "BREAKOUT_RETEST",
+        "direction": "BUY",
+        "entryZone": [
+          4273.34,
+          4279.77
+        ],
+        "invalidation": 4008.75,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4288.93,
+            "pips": 102
+          },
+          {
+            "label": "T2",
+            "price": 4294.56,
+            "pips": 159
+          },
+          {
+            "label": "T3",
+            "price": 4299.17,
+            "pips": 205
+          }
+        ],
+        "expectedMovePips": [
+          102,
+          205
+        ],
+        "confidence": 84,
+        "detectedAt": 1786078800
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 201,
+        "mae_pips": 5,
+        "duration_hours": 0,
+        "t2": true,
+        "t3": false
+      }
     },
     {
-      "time_utc": "2026-08-11T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
+      "time_utc": "2026-08-10T05:00:00.000Z",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
+      "regime": "STRONG_BULL_TREND",
+      "confidence": 84,
+      "net_score": 61,
+      "runway_pips": 78,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1786334400",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4334.3,
+          4340.38
+        ],
+        "invalidation": 4062.12,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4342.49,
+            "pips": 31
+          },
+          {
+            "label": "T2",
+            "price": 4344.2,
+            "pips": 48
+          },
+          {
+            "label": "T3",
+            "price": 4345.61,
+            "pips": 62
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          62
+        ],
+        "confidence": 84,
+        "detectedAt": 1786334400
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 130,
+        "mae_pips": 79,
+        "duration_hours": 0,
+        "t2": true,
+        "t3": true
+      }
+    },
+    {
+      "time_utc": "2026-08-10T15:00:00.000Z",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
+      "regime": "STRONG_BULL_TREND",
       "confidence": 82,
       "net_score": 54,
-      "runway_pips": null,
-      "outcome": null
+      "runway_pips": 112,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1786370400",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4340.3,
+          4346.35
+        ],
+        "invalidation": 4062.1,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4349.82,
+            "pips": 45
+          },
+          {
+            "label": "T2",
+            "price": 4352.28,
+            "pips": 69
+          },
+          {
+            "label": "T3",
+            "price": 4354.3,
+            "pips": 90
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          90
+        ],
+        "confidence": 82,
+        "detectedAt": 1786370400
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 143,
+        "mae_pips": 23,
+        "duration_hours": 0,
+        "t2": true,
+        "t3": true
+      }
     },
     {
-      "time_utc": "2026-08-11T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 86,
-      "net_score": 66,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-11T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 88,
-      "net_score": 71,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-11T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "time_utc": "2026-08-11T09:00:00.000Z",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BREAKOUT_FORMING",
-      "confidence": 81,
-      "net_score": 52,
-      "runway_pips": null,
-      "outcome": null
+      "confidence": 82,
+      "net_score": 56,
+      "runway_pips": 165,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1786435200",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4363.03,
+          4370.31
+        ],
+        "invalidation": 4214.04,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4375.69,
+            "pips": 66
+          },
+          {
+            "label": "T2",
+            "price": 4379.32,
+            "pips": 102
+          },
+          {
+            "label": "T3",
+            "price": 4382.28,
+            "pips": 132
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          132
+        ],
+        "confidence": 82,
+        "detectedAt": 1786435200
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 136,
+        "mae_pips": 16,
+        "duration_hours": 1,
+        "t2": true,
+        "t3": true
+      }
     },
     {
-      "time_utc": "2026-08-12T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 76,
-      "net_score": 39,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-12T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "time_utc": "2026-08-12T19:00:00.000Z",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "STRONG_BULL_TREND",
       "confidence": 83,
       "net_score": 57,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-12T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 82,
-      "net_score": 55,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-12T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 85,
-      "net_score": 62,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-12T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 84,
-      "net_score": 59,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-12T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 82,
-      "net_score": 55,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-13T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 84,
-      "net_score": 59,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-13T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 80,
-      "net_score": 51,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-13T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 53,
-      "net_score": 19,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-13T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 76,
-      "net_score": 41,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-13T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BULL_PULLBACK",
-      "confidence": 53,
-      "net_score": 21,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-13T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BULL_PULLBACK",
-      "confidence": 46,
-      "net_score": 3,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-14T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BULL_PULLBACK",
-      "confidence": 48,
-      "net_score": -8,
-      "runway_pips": null,
-      "outcome": null
+      "runway_pips": 71,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1786557600",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4406.54,
+          4414.41
+        ],
+        "invalidation": 4220.39,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4415.96,
+            "pips": 29
+          },
+          {
+            "label": "T2",
+            "price": 4417.53,
+            "pips": 44
+          },
+          {
+            "label": "T3",
+            "price": 4418.81,
+            "pips": 57
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          57
+        ],
+        "confidence": 83,
+        "detectedAt": 1786557600
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 53,
+        "mae_pips": 49,
+        "duration_hours": 0,
+        "t2": true,
+        "t3": false
+      }
     },
     {
       "time_utc": "2026-08-14T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BULL_PULLBACK",
       "confidence": 53,
       "net_score": -21,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-14T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BULL_PULLBACK",
-      "confidence": 47,
-      "net_score": -6,
-      "runway_pips": null,
-      "outcome": null
+      "runway_pips": 86,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1786676400",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4317.49,
+          4324.49
+        ],
+        "invalidation": 4302.07,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4326.75,
+            "pips": 34
+          },
+          {
+            "label": "T2",
+            "price": 4328.63,
+            "pips": 53
+          },
+          {
+            "label": "T3",
+            "price": 4330.18,
+            "pips": 69
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          69
+        ],
+        "confidence": 53,
+        "detectedAt": 1786676400
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 47,
+        "mae_pips": 6,
+        "duration_hours": 0,
+        "t2": false,
+        "t3": false
+      }
     },
     {
       "time_utc": "2026-08-14T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BULL_PULLBACK",
       "confidence": 51,
       "net_score": 14,
-      "runway_pips": null,
-      "outcome": null
+      "runway_pips": 93,
+      "opportunity": {
+        "setupKey": "BUY:BREAKOUT_RETEST:1786705200",
+        "family": "BREAKOUT_RETEST",
+        "direction": "BUY",
+        "entryZone": [
+          4364.26,
+          4369.94
+        ],
+        "invalidation": 4302.14,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4372.71,
+            "pips": 37
+          },
+          {
+            "label": "T2",
+            "price": 4374.75,
+            "pips": 58
+          },
+          {
+            "label": "T3",
+            "price": 4376.43,
+            "pips": 74
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          74
+        ],
+        "confidence": 55,
+        "detectedAt": 1786705200
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 178,
+        "mae_pips": 35,
+        "duration_hours": 0,
+        "t2": true,
+        "t3": true
+      }
     },
     {
-      "time_utc": "2026-08-14T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 73,
-      "net_score": 33,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-14T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 72,
-      "net_score": 29,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-15T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 73,
-      "net_score": 33,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-17T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "time_utc": "2026-08-17T01:00:00.000Z",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BULL_PULLBACK",
-      "confidence": 47,
-      "net_score": 5,
-      "runway_pips": null,
-      "outcome": null
+      "confidence": 51,
+      "net_score": 15,
+      "runway_pips": 95,
+      "opportunity": {
+        "setupKey": "BUY:BREAKOUT_RETEST:1786924800",
+        "family": "BREAKOUT_RETEST",
+        "direction": "BUY",
+        "entryZone": [
+          4395.63,
+          4401.61
+        ],
+        "invalidation": 4303.13,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4404.42,
+            "pips": 38
+          },
+          {
+            "label": "T2",
+            "price": 4406.52,
+            "pips": 59
+          },
+          {
+            "label": "T3",
+            "price": 4408.23,
+            "pips": 76
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          76
+        ],
+        "confidence": 55,
+        "detectedAt": 1786924800
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 160,
+        "mae_pips": 88,
+        "duration_hours": 0,
+        "t2": true,
+        "t3": true
+      }
     },
     {
-      "time_utc": "2026-08-17T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "time_utc": "2026-08-17T14:00:00.000Z",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "STRONG_BULL_TREND",
-      "confidence": 80,
-      "net_score": 49,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-17T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 78,
-      "net_score": 46,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-17T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 77,
-      "net_score": 42,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-17T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 81,
-      "net_score": 53,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-17T20:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "STRONG_BULL_TREND",
-      "confidence": 79,
-      "net_score": 47,
-      "runway_pips": null,
-      "outcome": null
+      "confidence": 76,
+      "net_score": 41,
+      "runway_pips": 76,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1786971600",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4403.8,
+          4409.77
+        ],
+        "invalidation": 4303.47,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4411.8,
+            "pips": 30
+          },
+          {
+            "label": "T2",
+            "price": 4413.46,
+            "pips": 47
+          },
+          {
+            "label": "T3",
+            "price": 4414.82,
+            "pips": 60
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          60
+        ],
+        "confidence": 76,
+        "detectedAt": 1786971600
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 189,
+        "mae_pips": 50,
+        "duration_hours": 0,
+        "t2": true,
+        "t3": true
+      }
     },
     {
       "time_utc": "2026-08-18T00:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "STRONG_BULL_TREND",
       "confidence": 79,
       "net_score": 48,
-      "runway_pips": null,
-      "outcome": null
+      "runway_pips": 95,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1787007600",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4421.07,
+          4426.66
+        ],
+        "invalidation": 4303.64,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4429.55,
+            "pips": 38
+          },
+          {
+            "label": "T2",
+            "price": 4431.64,
+            "pips": 59
+          },
+          {
+            "label": "T3",
+            "price": 4433.36,
+            "pips": 76
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          76
+        ],
+        "confidence": 79,
+        "detectedAt": 1787007600
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 94,
+        "mae_pips": 69,
+        "duration_hours": 0,
+        "t2": true,
+        "t3": true
+      }
     },
     {
-      "time_utc": "2026-08-18T04:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "NO_CLEAR_REGIME",
-      "confidence": 66,
-      "net_score": 16,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-18T08:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BREAKOUT_FORMING",
-      "confidence": 70,
-      "net_score": 26,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-18T12:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
+      "time_utc": "2026-08-18T11:00:00.000Z",
+      "direction": "BUY",
+      "qualification": "ACTIVE",
+      "thesis_state": "ACTIVE",
       "regime": "BREAKOUT_FORMING",
       "confidence": 72,
-      "net_score": 29,
-      "runway_pips": null,
-      "outcome": null
-    },
-    {
-      "time_utc": "2026-08-18T16:00:00.000Z",
-      "direction": "NEUTRAL",
-      "qualification": "NO_QUALIFYING_OPPORTUNITY",
-      "thesis_state": "NO_SETUP",
-      "regime": "BULL_PULLBACK",
-      "confidence": 46,
-      "net_score": -2,
-      "runway_pips": null,
-      "outcome": null
+      "net_score": 31,
+      "runway_pips": 82,
+      "opportunity": {
+        "setupKey": "BUY:PULLBACK_CONTINUATION:1787047200",
+        "family": "PULLBACK_CONTINUATION",
+        "direction": "BUY",
+        "entryZone": [
+          4394.01,
+          4398.56
+        ],
+        "invalidation": 4303.74,
+        "targets": [
+          {
+            "label": "T1",
+            "price": 4401.08,
+            "pips": 33
+          },
+          {
+            "label": "T2",
+            "price": 4402.88,
+            "pips": 51
+          },
+          {
+            "label": "T3",
+            "price": 4404.35,
+            "pips": 66
+          }
+        ],
+        "expectedMovePips": [
+          70,
+          66
+        ],
+        "confidence": 72,
+        "detectedAt": 1787047200
+      },
+      "rejection_reasons": [],
+      "outcome": "T1",
+      "outcome_detail": {
+        "outcome": "T1",
+        "mfe_pips": 92,
+        "mae_pips": 220,
+        "duration_hours": 2,
+        "t2": true,
+        "t3": true
+      }
     }
   ]
 }

@@ -48,16 +48,20 @@ describe("Manual Trading Intelligence swing engine", () => {
     const r = computeForecast(m, "BUY");
     expect(r.direction).not.toBe("SELL");
   });
-  it("requires explicit opposing Daily/H4 structure before a held BUY may flip", () => {
-    const r = computeForecast(md("SELL"), "BUY");
+  it("requires explicit opposing Daily/H4/H1 structure before a held BUY may flip", () => {
+    const m = md("SELL");
+    m.candlesH1 = candles(100, 4300, -2, 3, 3600);
+    const r = computeForecast(m, "BUY");
     expect(r.opposingStructureConfirmed).toBe(true);
     expect(r.direction).toBe("SELL");
   });
-  it("never claims a signal without an actual opposing-structure runway", () => {
+  it("keeps a thesis but never claims an entry without an actual opposing-structure runway", () => {
     const m = md("BUY");
     for (const c of [...m.candlesH4, ...m.candlesD1]) c.h = Math.min(c.h, m.price - 1);
     const r = computeForecast(m, "NEUTRAL");
-    expect(r.direction).toBe("NEUTRAL");
+    expect(r.direction).toBe("BUY");
+    expect(r.opportunity).toBeNull();
+    expect(r.qualification).toBe("WAIT_FOR_ENTRY");
   });
   it("keeps the declared pip convention", () => expect(pipsOf(20)).toBeCloseTo(200));
 });

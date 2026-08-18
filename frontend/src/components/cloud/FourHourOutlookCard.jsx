@@ -55,6 +55,7 @@ export default function FourHourOutlookCard() {
   const d = DIR[o?.direction] || DIR.NEUTRAL;
   const status = STATUS[o?.status] || STATUS.NO_QUALIFYING_OPPORTUNITY;
   const isNeutral = !o || o.direction === "NEUTRAL";
+  const entry = o?.currentOpportunity || o?.opportunity || null;
   const isNew = !!o && o.seen === false && !seenRef.current;
   const changed = o?.changeEvent === "DIRECTION_FLIP" || o?.changeEvent === "INVALIDATION_BREACHED";
 
@@ -96,15 +97,15 @@ export default function FourHourOutlookCard() {
           </div>
         )}
 
-        {/* direction + confidence */}
+        {/* Stable HTF thesis — this remains visible even when no entry is safe. */}
         <div className="mt-2 flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
             <span className={AK.cx("flex h-7 w-7 flex-none items-center justify-center rounded-lg", d.bg)}>
               <Icon size={16} className={d.text} />
             </span>
             <div className="min-w-0">
-              <div className={AK.cx("truncate text-[1.15rem] font-black leading-none tracking-tight", d.text)}>{o.direction}</div>
-              <div className="mt-0.5 truncate text-[10.5px] text-white/40">{d.label} · 4H swing / multi-session</div>
+              <div className={AK.cx("truncate text-[1.15rem] font-black leading-none tracking-tight", d.text)}>{isNeutral ? "NO CLEAR THESIS" : o.direction + " — ACTIVE"}</div>
+              <div className="mt-0.5 truncate text-[10.5px] text-white/40">{d.label} HTF thesis · 4H swing / multi-session</div>
             </div>
           </div>
           <div className="flex-none text-right">
@@ -113,18 +114,27 @@ export default function FourHourOutlookCard() {
           </div>
         </div>
 
-        {/* one compact evidence line */}
+        <div className="mt-3 rounded-lg border border-white/[0.07] bg-white/[0.03] p-2.5">
+          <div className="text-[9.5px] font-bold uppercase tracking-wide text-white/40">Current trade opportunity</div>
+          {entry ? <>
+            <div className={AK.cx("mt-1 text-[13px] font-black", d.text)}>{entry.direction} {String(entry.family || "").replaceAll("_", " ")}</div>
+            <div className="mt-1 flex justify-between gap-2 text-[11px]"><span className="text-white/45">Entry</span><span className="nums font-semibold text-white/90">{zone(entry.entryZone)}</span></div>
+            <div className="mt-1 flex justify-between gap-2 text-[11px]"><span className="text-white/45">Targets</span><span className="nums font-semibold text-white/90">{pips(entry.expectedMovePips)} pips</span></div>
+          </> : <div className="mt-1 text-[12px] text-gold-300">THESIS ACTIVE — WAITING FOR ENTRY</div>}
+        </div>
+
+        {/* Thesis context */}
         <div className="mt-2.5 flex items-center justify-between gap-2 text-[12px]">
-          <span className="text-white/40">Expected move</span>
-          <span className="nums font-semibold text-white/90">{isNeutral ? "—" : `${pips(o.expectedMovePips)} pips`}</span>
+          <span className="text-white/40">Thesis runway</span>
+          <span className="nums font-semibold text-white/90">{o.directionalRunwayPips ? o.directionalRunwayPips + " pips" : "—"}</span>
         </div>
         <div className="mt-1 flex items-center justify-between gap-2 text-[12px]">
-          <span className="text-white/40">Preferred entry</span>
+          <span className="text-white/40">Next entry area</span>
           <span className="nums font-semibold text-white/90">{isNeutral ? "—" : zone(o.preferredZone)}</span>
         </div>
         <div className="mt-1 flex items-center justify-between gap-2 text-[12px]">
-          <span className="text-white/40">Directional runway</span>
-          <span className="nums font-semibold text-white/90">{o.directionalRunwayPips ? `${o.directionalRunwayPips} pips` : "—"}</span>
+          <span className="text-white/40">Entry status</span>
+          <span className="nums font-semibold text-white/90">{entry ? "AVAILABLE" : "WAITING"}</span>
         </div>
 
         {/* status + time */}
@@ -133,8 +143,8 @@ export default function FourHourOutlookCard() {
           <span className="flex items-center gap-1 text-[11.5px] text-white/50"><Clock size={11} /><span className="nums">{fmtRemaining(o.expiresAt)}</span></span>
         </div>
 
-        {o.status === "WAIT_FOR_ENTRY" && !isNeutral && (
-          <div className="mt-2 text-[11.5px] leading-snug text-gold-300/90">Bias remains {o.direction}. Price {o.currentPrice} is extended — waiting for a pullback toward {zone(o.preferredZone)}.</div>
+        {!entry && !isNeutral && (
+          <div className="mt-2 text-[11.5px] leading-snug text-gold-300/90">The {o.direction} thesis is still valid. Price needs a separate confirmation near {zone(o.preferredZone)} before an entry is shown.</div>
         )}
         {isNeutral && <div className="mt-2 text-[11.5px] leading-snug text-white/45">No high-confidence 200+ pip setup right now. Monitoring Gold…</div>}
 
@@ -148,16 +158,18 @@ export default function FourHourOutlookCard() {
         <div className="max-h-[68vh] space-y-3 overflow-y-auto pb-1">
           <div className="grid grid-cols-2 gap-2">
             <Cell k="Thesis status" v={o.state || "NO SETUP"} tone="text-gold-300" />
-            <Cell k="Expected move" v={isNeutral ? "—" : `${pips(o.expectedMovePips)} pips`} />
-            <Cell k="Preferred entry" v={isNeutral ? "—" : zone(o.preferredZone)} />
+            <Cell k="Current opportunity" v={entry ? entry.direction + " " + String(entry.family || "").replaceAll("_", " ") : "WAITING FOR ENTRY"} tone={entry ? d.text : "text-gold-300"} />
+            <Cell k="Entry zone" v={entry ? zone(entry.entryZone) : (isNeutral ? "—" : zone(o.preferredZone))} />
             <Cell k="Invalidation" v={o.invalidation ?? "—"} tone={o.invalidation ? "text-loss" : "text-white"} />
             <Cell k="Current price" v={o.currentPrice ?? "—"} />
             <Cell k="Regime" v={o.regimeLabel || "—"} tone="text-gold-300" />
-            <Cell k="Directional runway" v={o.directionalRunwayPips ? `${o.directionalRunwayPips} pips` : "—"} />
+            <Cell k="Directional runway" v={o.directionalRunwayPips ? o.directionalRunwayPips + " pips" : "—"} />
             <Cell k="Confidence" v={`${o.confidence}%`} />
           </div>
 
-          {Array.isArray(o.targets) && o.targets.length > 0 && <div className="grid grid-cols-3 gap-2">{o.targets.map((t) => <Cell key={t.label} k={t.label} v={`${t.price} · ${t.pips}p`} />)}</div>}
+          {Array.isArray((entry || o).targets) && (entry || o).targets.length > 0 && <div className="grid grid-cols-3 gap-2">{(entry || o).targets.map((t) => <Cell key={t.label} k={t.label} v={t.price + " · " + t.pips + "p"} />)}</div>}
+
+          {Array.isArray(o.recentOpportunities) && o.recentOpportunities.length > 0 && <div className="rounded-xl border border-white/[0.06] p-3"><div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-white/40">Recent entries in this thesis</div>{o.recentOpportunities.map((item) => <div key={item.id} className="flex items-center justify-between gap-2 py-1 text-[11px]"><span className="text-white/70">{item.direction} {String(item.family || "").replaceAll("_", " ")}</span><span className={item.status === "T1_REACHED" ? "text-profit" : item.status === "INVALIDATED" ? "text-loss" : "text-gold-300"}>{String(item.status || "").replaceAll("_", " ")}</span></div>)}</div>}
 
           <div className="overflow-hidden rounded-xl border border-white/[0.06]">
             {evidence.map(([k, v], i) => (
