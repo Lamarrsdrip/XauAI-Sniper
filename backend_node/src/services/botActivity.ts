@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { getDb } from "../db.js";
 import { normalizeLicenseKey } from "./license.js";
+import { recordAuditableEaDecision, recordVerifiedManualTradingQuote } from "./manualTradingMarketStore.js";
 
 export interface BotActivityDetails {
   license_key?: string;
@@ -92,6 +93,12 @@ export async function storeBotActivity(
       details,
     };
     await activity.updateOne({ id: existing["id"] as string }, { $set: patch });
+    try {
+      await recordVerifiedManualTradingQuote({ account: account || "", symbol: symbol || "", receivedAt: now, marketThesis: details["market_thesis"] });
+      await recordAuditableEaDecision({ at: now, account: account || "", symbol: symbol || "", eventType: ev, severity: sev, category, message: String(message ?? ""), details });
+    } catch {
+      /* A candle-store failure must not affect an EA acknowledgement. */
+    }
     return { ...existing, ...patch };
   }
 
@@ -133,6 +140,21 @@ export async function storeBotActivity(
     pipeline_stage: details.pipeline_stage ?? "",
   };
   await activity.insertOne({ ...doc });
+
+  // Retain verified broker candles separately from short-lived operational
+  // activity. This is deliberately best-effort: a storage failure can never
+  // make an EA heartbeat or trade decision fail.
+  try {
+    await recordVerifiedManualTradingQuote({
+      account: account || "",
+      symbol: symbol || "",
+      receivedAt: now,
+      marketThesis: details["market_thesis"],
+    });
+    await recordAuditableEaDecision({ at: now, account: account || "", symbol: symbol || "", eventType: ev, severity: sev, category, message: String(message ?? ""), details });
+  } catch {
+    /* Manual Trading Intelligence will fail closed until its candle history exists. */
+  }
 
   const total = await activity.estimatedDocumentCount();
   if (total > 2500) {

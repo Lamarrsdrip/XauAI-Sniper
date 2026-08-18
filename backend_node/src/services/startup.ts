@@ -75,6 +75,13 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
     await db.collection("cloud_market_outlooks").createIndex({ monitoring_closed: 1, primary_direction: 1, account: 1 });
     await db.collection("cloud_market_outlook_outcomes").createIndex("outlook_id", { unique: true });
     await db.collection("cloud_bot_activity").createIndex({ account: 1, ts: 1 });
+    await db.collection("manual_trading_broker_candles").createIndex(
+      { account: 1, symbol: 1, timeframe: 1, openTime: 1 },
+      { unique: true },
+    );
+    await db.collection("manual_trading_broker_candles").createIndex({ lastSourceAt: -1 });
+    await db.collection("manual_trading_ea_decisions").createIndex({ account: 1, symbol: 1, recordedAt: -1 });
+    await db.collection("manual_trading_ea_decisions").createIndex("recordedAt", { expireAfterSeconds: 180 * 86400 });
     await db.collection("cloud_notification_prefs").createIndex("user_id", { unique: true });
     await db.collection("cloud_push_subscriptions").createIndex({ user_id: 1, opted_in: 1 });
     await db.collection("cloud_outlook_signal_events").createIndex(

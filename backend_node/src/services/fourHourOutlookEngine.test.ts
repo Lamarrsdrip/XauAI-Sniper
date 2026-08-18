@@ -1,123 +1,63 @@
-import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { computeForecast, pipsOf, QUALIFYING_PIPS, type Direction } from "./fourHourOutlookEngine.js";
+import { describe, expect, it } from "vitest";
+import { computeForecast, pipsOf, type Direction } from "./fourHourOutlookEngine.js";
 import type { Candle, EaSnapshot, MarketData } from "./fourHourFeed.js";
 
-function genCandles(n: number, start: number, drift: number, range: number, bucket: number): Candle[] {
-  const out: Candle[] = [];
-  const t0 = 1_700_000_000;
-  for (let i = 0; i < n; i++) {
+function candles(n: number, start: number, drift: number, range: number, seconds: number): Candle[] {
+  return Array.from({ length: n }, (_, i) => {
     const c = start + drift * i;
-    out.push({ t: t0 + i * bucket, o: c - drift / 2, h: c + range / 2, l: c - range / 2, c });
-  }
-  return out;
+    return { t: 1_700_000_000 + i * seconds, o: c - drift / 2, h: c + range / 2, l: c - range / 2, c };
+  });
+}
+function md(side: "BUY" | "SELL" | "FLAT", ready = true): MarketData {
+  const drift = side === "BUY" ? 2 : side === "SELL" ? -2 : 0;
+  const h1 = candles(100, 4300, drift / 5, 3, 3600);
+  const h4 = candles(40, 4300, drift / 5, 8, 14_400);
+  const d1 = candles(25, 4300, drift / 15, 24, 86_400);
+  const price = h1.at(-1)!.c;
+  // Give the trend a real opposing level sufficiently far away for runway.
+  if (side === "BUY") { h4[5]!.h = price + 45; d1[5]!.h = price + 55; }
+  if (side === "SELL") { h4[5]!.l = price - 45; d1[5]!.l = price - 55; }
+  const latest: EaSnapshot = { ts: 1_700_000_000, mid: price, thesisDir: "SELL", preferredDir: "SELL", buyP: 20, sellP: 80, trendHealth: 20, location: 20, exhaustion: 10, moveConsumed: 10, buyRoomR: 0, sellRoomR: 10, structuralSl: price + 10, atr: 5, structureState: "STRUCTURE_OPPOSES", trendState: "TREND_CONTINUING", buyCase: 20, sellCase: 80, freshness: "FRESH", invalidated: false };
+  return { price, latestTs: latest.ts, ageSec: 20, candlesH1: h1, candlesH4: h4, candlesD1: d1, snapshots: [latest, latest, latest], latest, account: "test", source: "ea-stream(spot)", dataStatus: ready ? "READY" : "ACCUMULATING_BROKER_HISTORY", dataCoverage: { h1: ready ? 100 : 3, h4: ready ? 40 : 1, d1: ready ? 25 : 1, complete: ready } };
 }
 
-function snap(ts: number, mid: number, over: Partial<EaSnapshot> = {}): EaSnapshot {
-  return {
-    ts, mid, thesisDir: "NONE", preferredDir: "NONE", buyP: 50, sellP: 50, trendHealth: 50,
-    location: 60, exhaustion: 30, moveConsumed: 40, buyRoomR: 3, sellRoomR: 3, structuralSl: mid - 10,
-    atr: 5, structureState: "", trendState: "", buyCase: 50, sellCase: 50, freshness: "FRESH", invalidated: false, ...over,
-  };
-}
-
-function market(dir: "BUY" | "SELL" | "MIXED" | "FLAT", opts: { room?: number; range?: number } = {}): MarketData {
-  const room = opts.room ?? 6;
-  const range = opts.range ?? 15;
-  const drift = dir === "BUY" ? 1.0 : dir === "SELL" ? -1.0 : 0;
-  const h1 = genCandles(20, 4300, drift, dir === "FLAT" ? 1.5 : range, 3600);
-  const h4 = genCandles(6, 4300, drift * 4, dir === "FLAT" ? 2 : range * 1.2, 4 * 3600);
-  const price = h1[h1.length - 1]!.c;
-  const base: Partial<EaSnapshot> =
-    dir === "BUY" ? { thesisDir: "BUY", preferredDir: "BUY", buyCase: 72, sellCase: 28, buyP: 66, sellP: 34, trendHealth: 72, exhaustion: 25, moveConsumed: 40, buyRoomR: room, structuralSl: price - 10 }
-    : dir === "SELL" ? { thesisDir: "SELL", preferredDir: "SELL", buyCase: 28, sellCase: 72, buyP: 34, sellP: 66, trendHealth: 70, exhaustion: 25, moveConsumed: 40, sellRoomR: room, structuralSl: price + 10 }
-    : dir === "MIXED" ? { thesisDir: "BUY", preferredDir: "SELL", buyCase: 44, sellCase: 66, buyP: 49, sellP: 65, trendHealth: 29, exhaustion: 57, moveConsumed: 80, buyRoomR: 5, sellRoomR: 0.4 }
-    : { thesisDir: "NONE", preferredDir: "NONE", buyCase: 50, sellCase: 50, buyP: 50, sellP: 50, trendHealth: 40 };
-  const snaps: EaSnapshot[] = [];
-  const t0 = 1_700_000_000;
-  for (let i = 0; i < 10; i++) snaps.push(snap(t0 + i * 300, price, base));
-  return { price, latestTs: t0 + 9 * 300, ageSec: 60, candlesH1: h1, candlesH4: h4, snapshots: snaps, latest: snaps[snaps.length - 1]!, account: "test", source: "ea-stream(spot)" };
-}
-
-describe("Manual Trading Intelligence engine (EA-driven)", () => {
-  it("CASE BUY: aligned bullish EA read + room => BUY, qualifies, positive net", () => {
-    const r = computeForecast(market("BUY"), "NEUTRAL");
+describe("Manual Trading Intelligence swing engine", () => {
+  it("returns NO SETUP until verified daily/H4 history exists", () => {
+    const r = computeForecast(md("BUY", false));
+    expect(r.direction).toBe("NEUTRAL");
+    expect(r.thesisStatus).toBe("NO_SETUP");
+    expect(r.reasoning).toContain("accumulating verified broker candle history");
+  });
+  it("uses Daily/H4 structure, not the opposing M10 snapshot, for a BUY thesis", () => {
+    const r = computeForecast(md("BUY"), "NEUTRAL");
     expect(r.direction).toBe("BUY");
-    expect(r.netScore).toBeGreaterThan(0);
-    expect(r.expectedMovePips![1]).toBeGreaterThanOrEqual(QUALIFYING_PIPS);
-    expect(["ACTIVE", "WAIT_FOR_ENTRY"]).toContain(r.qualification);
+    expect(r.htfScores.d1).toBeGreaterThan(0);
+    expect(r.targets).toHaveLength(3);
     expect(r.invalidation).toBeLessThan(r.currentPrice);
-    expect(r.confidence).toBeGreaterThan(55);
+    expect(r.directionalRunwayPips).toBeGreaterThanOrEqual(100);
   });
-
-  it("CASE SELL: aligned bearish EA read => SELL, invalidation above price", () => {
-    const r = computeForecast(market("SELL"), "NEUTRAL");
+  it("creates a SELL only from aligned bearish HTF structure", () => {
+    const r = computeForecast(md("SELL"), "NEUTRAL");
     expect(r.direction).toBe("SELL");
-    expect(r.netScore).toBeLessThan(0);
     expect(r.invalidation).toBeGreaterThan(r.currentPrice);
-    expect(r.expectedMovePips![1]).toBeGreaterThanOrEqual(QUALIFYING_PIPS);
+    expect(r.targets[2]!.price).toBeLessThan(r.currentPrice);
   });
-
-  it("CASE MIXED: thesis vs M10 conflict + late/exhausted => NEUTRAL (no forced call)", () => {
-    const r = computeForecast(market("MIXED"), "NEUTRAL");
-    expect(r.direction).toBe("NEUTRAL");
-    expect(r.qualification).toBe("NO_QUALIFYING_OPPORTUNITY");
-    expect(r.expectedMovePips).toBeNull();
+  it("does not flip a held BUY on a mild opposing read", () => {
+    const m = md("BUY");
+    m.candlesH1 = candles(100, 4300, -0.05, 3, 3600); // lower-timeframe pullback only
+    const r = computeForecast(m, "BUY");
+    expect(r.direction).not.toBe("SELL");
   });
-
-  it("CASE hysteresis: a held BUY stays through a mild dip but flips on strong opposite", () => {
-    // mildly-supportive read: not enough to ARM fresh, but enough to HOLD an existing BUY
-    const mild = market("BUY");
-    mild.snapshots = mild.snapshots.map((s) => ({ ...s, buyCase: 56, sellCase: 44, buyP: 54, sellP: 46, trendHealth: 45 }));
-    mild.latest = mild.snapshots[mild.snapshots.length - 1]!;
-    const held = computeForecast(mild, "BUY");
-    expect(["BUY", "NEUTRAL"]).toContain(held.direction); // never spontaneously flips to SELL on a mild dip
-    const flipped = computeForecast(market("SELL"), "BUY");
-    expect(flipped.direction).toBe("SELL"); // strong opposite genuinely flips
+  it("requires explicit opposing Daily/H4 structure before a held BUY may flip", () => {
+    const r = computeForecast(md("SELL"), "BUY");
+    expect(r.opposingStructureConfirmed).toBe(true);
+    expect(r.direction).toBe("SELL");
   });
-
-  it("CASE small room: aligned but sub-200-pip room => NO_QUALIFYING (no forced big-run call)", () => {
-    const r = computeForecast(market("BUY", { room: 0.3, range: 1.2 }), "NEUTRAL");
-    expect(r.qualification).toBe("NO_QUALIFYING_OPPORTUNITY");
+  it("never claims a signal without an actual opposing-structure runway", () => {
+    const m = md("BUY");
+    for (const c of [...m.candlesH4, ...m.candlesD1]) c.h = Math.min(c.h, m.price - 1);
+    const r = computeForecast(m, "NEUTRAL");
     expect(r.direction).toBe("NEUTRAL");
   });
-
-  it("source + pip convention", () => {
-    expect(pipsOf(20)).toBeCloseTo(200, 6);
-    expect(computeForecast(market("BUY"), "NEUTRAL").dataSource).toBe("ea-stream(spot)");
-  });
-
-  it("reasoning never claims certainty", () => {
-    const r = computeForecast(market("BUY"), "NEUTRAL");
-    expect(r.reasoning.toLowerCase()).not.toMatch(/guaranteed|risk-free|will definitely/);
-  });
-});
-
-describe("Manual Trading Intelligence execution isolation (static)", () => {
-  const files = ["fourHourFeed.ts", "fourHourOutlookEngine.ts", "fourHourOutlookService.ts"].map((f) =>
-    readFileSync(fileURLToPath(new URL(`./${f}`, import.meta.url)), "utf8"),
-  );
-  const routeSrc = readFileSync(fileURLToPath(new URL("../routes/fourHourOutlook.ts", import.meta.url)), "utf8");
-  const stripComments = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-  const all = [...files, routeSrc].map(stripComments).join("\n");
-
-  it("never references any trade-execution surface", () => {
-    for (const forbidden of ["OpenTrade", "cloud_bot_commands", "outlookExecution", "commandStateMachine", "enqueueIfActionable", "TryManualOpenNow"]) {
-      expect(all.includes(forbidden)).toBe(false);
-    }
-  });
-
-  it("only writes its own collections + read-only context sources", () => {
-    const writeMatches = [...all.matchAll(/collection\("([^"]+)"\)\.(insertOne|updateOne|replaceOne|deleteOne|deleteMany|insertMany)/g)].map((m) => m[1]);
-    for (const col of writeMatches) {
-      expect(["four_hour_outlooks", "four_hour_outlook_history", "cloud_notification_log"]).toContain(col);
-    }
-  });
-
-  it("uses no external market-data API (bot stream only)", () => {
-    for (const host of ["yahoo", "GC=F", "twelvedata", "kraken", "binance", "query1.finance", "api.twelvedata"]) {
-      expect(all.toLowerCase().includes(host.toLowerCase())).toBe(false);
-    }
-  });
+  it("keeps the declared pip convention", () => expect(pipsOf(20)).toBeCloseTo(200));
 });

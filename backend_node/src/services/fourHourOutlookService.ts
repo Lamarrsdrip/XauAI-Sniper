@@ -14,18 +14,19 @@
 import { randomUUID } from "node:crypto";
 import { getDb } from "../db.js";
 import { readMarketData } from "./fourHourFeed.js";
-import { computeForecast, pipsOf, type Direction, type FourHourForecast } from "./fourHourOutlookEngine.js";
+import { computeForecast, pipsOf, type Direction, type FourHourForecast, type ThesisState } from "./fourHourOutlookEngine.js";
 import { sendWebPushToUser } from "./webPush.js";
 
 const SYMBOL = "XAUUSD";
 const LIFETIME_MS = 4 * 3600 * 1000;
 const REVIEW_INTERVAL_MS = 3 * 60 * 1000;
-const CONFIDENCE_COLLAPSE = 20;
 
 export interface FourHourDoc extends FourHourForecast {
   id: string;
   symbol: string;
   version: number;
+  thesisId: string;
+  state: ThesisState;
   status: "ACTIVE" | "WAIT_FOR_ENTRY" | "NO_QUALIFYING_OPPORTUNITY" | "INVALIDATED" | "EXPIRED";
   generatedAt: string;
   expiresAt: string;
@@ -37,6 +38,7 @@ export interface FourHourDoc extends FourHourForecast {
   changeEvent: string | null;
   mfePips: number;
   maePips: number;
+  marketDataAt: string;
 }
 
 // ---- data-integrity gate: only publish on the EA's own genuine, fresh broker read ----
@@ -44,11 +46,10 @@ const EA_STALE_SEC = 10 * 60; // if the newest EA evidence is older than this, t
 const GENUINE_SOURCE = "ea-stream(spot)";
 
 /** Reject a forecast when the bot's live data is missing, offline/stale, or thin. */
-function validateMarketData(md: import("./fourHourFeed.js").MarketData | null): { ok: boolean; reason: string } {
+export function validateMarketData(md: import("./fourHourFeed.js").MarketData | null): { ok: boolean; reason: string } {
   if (!md) return { ok: false, reason: "NO_EA_DATA" };
   if (!Number.isFinite(md.ageSec) || md.ageSec > EA_STALE_SEC) return { ok: false, reason: `EA_OFFLINE_OR_STALE age=${Math.round(md.ageSec / 60)}m` };
   if (md.snapshots.length < 3) return { ok: false, reason: `THIN_EVIDENCE snaps=${md.snapshots.length}` };
-  if (md.candlesH1.length < 6) return { ok: false, reason: `INSUFFICIENT_HISTORY h1=${md.candlesH1.length}` };
   if (!(md.price >= 1000 && md.price <= 20000)) return { ok: false, reason: `PRICE_OUT_OF_RANGE price=${md.price}` };
   return { ok: true, reason: "" };
 }
@@ -76,6 +77,8 @@ async function publishNew(forecast: FourHourForecast, previous: FourHourDoc | nu
   const doc: FourHourDoc = {
     ...forecast,
     id: randomUUID(),
+    thesisId: previous?.thesisId && previous.direction === forecast.direction ? previous.thesisId : randomUUID(),
+    state: forecast.thesisStatus,
     symbol: SYMBOL,
     version: (previous?.version ?? 0) + 1,
     status: statusFromForecast(forecast),
@@ -89,6 +92,7 @@ async function publishNew(forecast: FourHourForecast, previous: FourHourDoc | nu
     changeEvent,
     mfePips: 0,
     maePips: 0,
+    marketDataAt: new Date().toISOString(),
   };
 
   if (previous) await finalizeHistory(previous, "REPLACED");
@@ -176,7 +180,7 @@ export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
 
   // Purge any forecast not built from the EA's own genuine broker stream
   // (e.g. retired external/futures-sourced docs) so the card never shows them.
-  if (current && !isGenuineSource(current.dataSource)) {
+  if (current && (!isGenuineSource(current.dataSource) || !current.marketDataAt || !current.thesisId)) {
     await db.collection("four_hour_outlooks").deleteOne({ symbol: SYMBOL });
     console.log(`MTI_PURGED_NON_GENUINE src=${current.dataSource}`);
     current = null;
@@ -196,8 +200,21 @@ export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
   const previousDir: Direction = (current?.direction as Direction) ?? "NEUTRAL";
   const forecast = computeForecast(validMd, previousDir); // hysteresis -> stable long-horizon bias
   const now = new Date();
+  console.log(`MTI_DECISION thesis=${current?.thesisId ?? "NEW"} previous=${previousDir} proposed=${forecast.direction} state=${forecast.thesisStatus} regime=${forecast.regimeLabel} conf=${forecast.confidence} runway=${forecast.directionalRunwayPips ?? 0} entry=${forecast.entryTiming} d1=${forecast.htfScores.d1} h4=${forecast.htfScores.h4} h1=${forecast.htfScores.h1} data=${forecast.dataStatus} flipEvidence=${forecast.opposingStructureConfirmed}`);
 
   if (!current) return publishNew(forecast, null, "INITIAL");
+
+  // A new installation starts with a real price but not enough D1/H4 history.
+  // It may state NO SETUP, but it must not invalidate or flip a thesis from a
+  // partial series. This is a data-availability state, not market evidence.
+  if (validMd.dataStatus !== "READY") {
+    const reviewedAt = now.toISOString();
+    await db.collection("four_hour_outlooks").updateOne(
+      { symbol: SYMBOL },
+      { $set: { lastReviewedAt: reviewedAt, nextScheduledReviewAt: new Date(now.getTime() + REVIEW_INTERVAL_MS).toISOString(), currentPrice: validMd.price, marketDataAt: reviewedAt, dataStale: false, dataStatus: validMd.dataStatus } },
+    );
+    return { ...current, lastReviewedAt: reviewedAt, currentPrice: validMd.price, marketDataAt: reviewedAt, dataStale: false, dataStatus: validMd.dataStatus };
+  }
 
   const expired = new Date(current.expiresAt).getTime() <= now.getTime();
   if (expired) {
@@ -211,11 +228,10 @@ export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
     current.direction !== "NEUTRAL" &&
     current.invalidation != null &&
     ((current.direction === "BUY" && validMd.price < current.invalidation) || (current.direction === "SELL" && validMd.price > current.invalidation));
-  const directionFlip = forecast.direction !== current.direction && Math.abs(forecast.netScore) >= 30;
-  const confidenceCollapse = current.direction !== "NEUTRAL" && current.confidence - forecast.confidence >= CONFIDENCE_COLLAPSE && forecast.confidence < 50;
+  const directionFlip = forecast.direction !== current.direction && forecast.direction !== "NEUTRAL" && forecast.opposingStructureConfirmed && forecast.confidence >= 75;
 
-  if (priceBreachedInvalidation || directionFlip || confidenceCollapse) {
-    const reason = priceBreachedInvalidation ? "INVALIDATION_BREACHED" : directionFlip ? "DIRECTION_FLIP" : "CONFIDENCE_COLLAPSE";
+  if (priceBreachedInvalidation || directionFlip) {
+    const reason = priceBreachedInvalidation ? "INVALIDATION_BREACHED" : "DIRECTION_FLIP";
     if (priceBreachedInvalidation) {
       await db.collection("four_hour_outlooks").updateOne({ symbol: SYMBOL }, { $set: { status: "INVALIDATED" } });
       console.log(`4H_OUTLOOK_INVALIDATED id=${current.id} reason=${reason} price=${validMd.price} inval=${current.invalidation}`);
@@ -223,13 +239,15 @@ export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
     return publishNew(forecast, current, reason);
   }
 
-  // No material change: update review timestamps + excursion tracking only.
+  // No material change: preserve the thesis ID/direction. Small candles can
+  // weaken confidence or change entry timing, never manufacture a new thesis.
   const { mfePips, maePips } = trackExcursion(current, validMd.price);
+  const state: ThesisState = current.direction !== "NEUTRAL" && forecast.direction !== current.direction ? "WEAKENING" : forecast.thesisStatus;
   await db.collection("four_hour_outlooks").updateOne(
     { symbol: SYMBOL },
-    { $set: { lastReviewedAt: now.toISOString(), nextScheduledReviewAt: new Date(now.getTime() + REVIEW_INTERVAL_MS).toISOString(), currentPrice: forecast.currentPrice, mfePips, maePips } },
+    { $set: { lastReviewedAt: now.toISOString(), nextScheduledReviewAt: new Date(now.getTime() + REVIEW_INTERVAL_MS).toISOString(), currentPrice: forecast.currentPrice, marketDataAt: now.toISOString(), dataStale: false, dataStatus: validMd.dataStatus, state, confidence: forecast.confidence, evidence: forecast.evidence, reasoning: forecast.reasoning, entryTiming: forecast.entryTiming, htfScores: forecast.htfScores, mfePips, maePips } },
   );
-  return { ...current, lastReviewedAt: now.toISOString(), currentPrice: forecast.currentPrice, mfePips, maePips };
+  return { ...current, lastReviewedAt: now.toISOString(), currentPrice: forecast.currentPrice, marketDataAt: now.toISOString(), dataStale: false, dataStatus: validMd.dataStatus, state, confidence: forecast.confidence, evidence: forecast.evidence, reasoning: forecast.reasoning, entryTiming: forecast.entryTiming, htfScores: forecast.htfScores, mfePips, maePips };
 }
 
 /** Mark the current forecast as seen (clears the dashboard NEW badge). */
@@ -241,6 +259,7 @@ export async function getFourHourCurrent(): Promise<FourHourDoc | null> {
   const doc = await getCurrent();
   if (!doc) return null;
   if (!isGenuineSource(doc.dataSource)) return null; // never serve legacy futures data
+  if (!doc.marketDataAt || Date.now() - new Date(doc.marketDataAt).getTime() > EA_STALE_SEC * 1000) return null;
   if (new Date(doc.expiresAt).getTime() <= Date.now()) return null; // expired -> card shows unavailable
   return doc;
 }
