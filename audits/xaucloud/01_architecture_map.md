@@ -1,5 +1,9 @@
 # XauCloud Architecture Map (Phase 1)
 
+> **Hosting update (18 August 2026):** The earlier unconfirmed/Vercel wording
+> below is historical only. Production is verified as a Hostinger Web App; see
+> `20260818_production_hosting_verification.md`.
+
 Recorded: 2026-07-24, from repo inspection only (no external dashboard access). This is a
 **single monorepo** — one EA, one FastAPI backend, one React frontend (Command Center +
 marketing site share this frontend). No separate repos for website vs. Command Center were

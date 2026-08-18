@@ -1,5 +1,10 @@
 # XauCloud Live-Step Packages (Phase 8)
 
+> **Hosting update (18 August 2026):** The earlier Vercel deployment question
+> below is resolved. Production is a Hostinger Web App connected to GitHub
+> `main`, rooted at `backend_node`; see
+> `20260818_production_hosting_verification.md`.
+
 **Update**: §1 (compile) and §2 (real-tick replay) were completed for real later in this
 session, once an isolated MetaEditor/MT5 install (separate from the live/attached
 terminal) was found at `tester_sandbox/MT5_Isolated/`. Real results are in

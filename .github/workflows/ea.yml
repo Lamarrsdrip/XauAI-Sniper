@@ -148,8 +148,7 @@ jobs:
 #   current-release gate until it is explicitly retired or version-scoped.
 # - Redeployment. auto-promote-release updates manifest.json's
 #   current_version on main (durable, survives a redeploy) but this
-#   workflow has no credentials for and does not trigger the Emergent
-#   platform's actual redeploy -- the running backend keeps serving
-#   whatever it was already serving until the next redeploy happens
-#   through that platform's own normal process.
+#   workflow has no credentials for and does not trigger the Hostinger Web App
+#   deploy. Production is connected to GitHub `main` and Hostinger's
+#   auto-deployment publishes the current backend_node build.
 # ---------------------------------------------------------------------

@@ -1,5 +1,9 @@
 # XauCloud Final Production Audit — Baseline State (Phase 0)
 
+> **Hosting update (18 August 2026):** The historical Vercel/Emergent uncertainty
+> below is superseded by `20260818_production_hosting_verification.md`: production
+> is a Hostinger Web App connected to GitHub `main`, rooted at `backend_node`.
+
 Recorded: 2026-07-24. Canonical project: `/Users/libertyelectronics/XauAI-Sniper-m10-fixed-sl`.
 Owner-approved production foundation branch: `experiment/v62524-m10-fixed-sl` @ `210f0e8`.
 
