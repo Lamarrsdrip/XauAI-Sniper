@@ -61,8 +61,8 @@ function MainDashboard() {
         <section id="overview"><HeroSection goldPrice={goldPrice} /></section>
         <TrustStrip />
         <section id="performance">
-          <DailyTradingResultsSection api={API} />
           <GoldReplaySection api={API} />
+          <DailyTradingResultsSection api={API} />
         </section>
         <section id="how-it-works"><HowItWorksSection /></section>
         <section id="features"><FeaturesSection /></section>
