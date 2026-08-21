@@ -2,11 +2,11 @@
 # ============================================================================
 #  XauAi Cloud Worker — one-line installer for Windows
 #  Usage (PowerShell as Administrator):
-#    iwr -useb https://xauaisniper.com/install-worker.ps1 | iex
+#    iwr -useb https://xaucloud.io/install-worker.ps1 | iex
 # ============================================================================
 $ErrorActionPreference = "Stop"
 $InstallDir = "$env:USERPROFILE\xauai-worker"
-$ZipUrl     = "https://xauaisniper.com/xauai_worker_agent_v1.5.5.zip"
+$ZipUrl     = "https://xaucloud.io/xauai_worker_agent_v1.5.5.zip"
 
 function Say($msg) { Write-Host "[xauai] $msg" -ForegroundColor Cyan }
 function Ok($msg)  { Write-Host "[ok]    $msg" -ForegroundColor Green }
@@ -84,11 +84,11 @@ Ok "Dependencies installed"
 # 4. Pair (interactive)
 Write-Host ""
 Write-Host "------------------------------------------------------------"
-Write-Host "  PAIRING - open xauaisniper.com/admin -> Cloud -> Infrastructure"
+Write-Host "  PAIRING - open xaucloud.io/admin -> Cloud -> Infrastructure"
 Write-Host "  Click '+ Generate Pairing Code' and paste the 6 digits below."
 Write-Host "------------------------------------------------------------"
-$cloud = Read-Host "Cloud URL [https://xauaisniper.com]"
-if ([string]::IsNullOrWhiteSpace($cloud)) { $cloud = "https://xauaisniper.com" }
+$cloud = Read-Host "Cloud URL [https://xaucloud.io]"
+if ([string]::IsNullOrWhiteSpace($cloud)) { $cloud = "https://xaucloud.io" }
 $code = Read-Host "6-digit pairing code"
 if (-not ($code -match "^\d{6}$")) { Die "Code must be 6 digits." }
 
@@ -140,7 +140,7 @@ Ok "Service XauAiWorker installed and running"
 
 Write-Host ""
 Write-Host "------------------------------------------------------------"
-Write-Host "  DONE. Refresh xauaisniper.com/admin - your worker is now ONLINE."
+Write-Host "  DONE. Refresh xaucloud.io/admin - your worker is now ONLINE."
 Write-Host "  Logs:   notepad $InstallDir\worker.log"
 Write-Host "  Stop:   nssm stop XauAiWorker"
 Write-Host "  Status: nssm status XauAiWorker"

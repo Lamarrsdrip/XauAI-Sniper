@@ -61,7 +61,7 @@ def _interactive_pair():
     print(" 1. Open your admin panel → Cloud → Infrastructure")
     print(" 2. Click 'Generate Pairing Code'")
     print(" 3. Paste the 6-digit code below.\n")
-    cloud_url = input("Cloud URL [https://xauaisniper.com]: ").strip() or "https://xauaisniper.com"
+    cloud_url = input("Cloud URL [https://xaucloud.io]: ").strip() or "https://xaucloud.io"
     code = input("6-digit pairing code: ").strip()
     if not code.isdigit() or len(code) != 6:
         print("[FAIL] Code must be 6 digits."); sys.exit(1)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================================
 #  XauAi Cloud Worker — one-line installer for macOS / Linux
-#  Usage:   curl -fsSL https://xauaisniper.com/install-worker.sh | bash
+#  Usage:   curl -fsSL https://xaucloud.io/install-worker.sh | bash
 # ============================================================================
 set -e
 GREEN="\033[1;32m"; RED="\033[1;31m"; CYAN="\033[1;36m"; NC="\033[0m"
@@ -10,7 +10,7 @@ err() { echo -e "${RED}[fail]${NC}  $*"; exit 1; }
 ok()  { echo -e "${GREEN}[ok]${NC}    $*"; }
 
 INSTALL_DIR="$HOME/xauai-worker"
-ZIP_URL="https://xauaisniper.com/xauai_worker_agent_v1.5.5.zip"
+ZIP_URL="https://xaucloud.io/xauai_worker_agent_v1.5.5.zip"
 
 say "Installing XauAi Cloud Worker → $INSTALL_DIR"
 
@@ -43,7 +43,7 @@ ok "Dependencies installed"
 # 4. Pair (interactive)
 echo
 echo "──────────────────────────────────────────────────────────"
-echo "  PAIRING — open xauaisniper.com/admin → Cloud → Infrastructure"
+echo "  PAIRING — open xaucloud.io/admin → Cloud → Infrastructure"
 echo "  Click '+ Generate Pairing Code' and paste the 6 digits below."
 echo "──────────────────────────────────────────────────────────"
 # Detect OS — set MOCK_MT5 default automatically
@@ -63,7 +63,7 @@ wait $WORKER_PID 2>/dev/null || true
 # Use a helper script that ONLY does pairing (no loop)
 python3 <<'PYEOF'
 import os, sys, socket, requests
-cloud = input("Cloud URL [https://xauaisniper.com]: ").strip() or "https://xauaisniper.com"
+cloud = input("Cloud URL [https://xaucloud.io]: ").strip() or "https://xaucloud.io"
 code = input("6-digit pairing code: ").strip()
 if not (code.isdigit() and len(code) == 6):
     print("Bad code."); sys.exit(1)
@@ -136,7 +136,7 @@ esac
 
 echo
 echo "──────────────────────────────────────────────────────────"
-echo "  ✅ DONE. Refresh xauaisniper.com/admin — your worker is now ONLINE."
+echo "  ✅ DONE. Refresh xaucloud.io/admin — your worker is now ONLINE."
 echo "  Stop:    launchctl unload ~/Library/LaunchAgents/com.xauai.worker.plist  (mac)"
 echo "           systemctl --user stop xauai-worker  (linux)"
 echo "  Logs:    tail -f /tmp/xauai-worker.log"
