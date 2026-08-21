@@ -985,6 +985,10 @@ function SettingsTab({ api }) {
   const [settings, setSettings] = useState(null);
   const [pk, setPk] = useState("");
   const [priceNaira, setPriceNaira] = useState(300000);
+  const [weeklyNaira, setWeeklyNaira] = useState(20000);
+  const [monthlyNaira, setMonthlyNaira] = useState(50000);
+  const [signalSourceAccount, setSignalSourceAccount] = useState("");
+  const [signalBackupAccount, setSignalBackupAccount] = useState("");
   const [smtpEmail, setSmtpEmail] = useState("");
   const [smtpPw, setSmtpPw] = useState("");
   const [smtpHost, setSmtpHost] = useState("");
@@ -1020,6 +1024,10 @@ function SettingsTab({ api }) {
       setVpsGuideUrl(r.data.vps_guide_url || "");
       setInstallationGuideUrl(r.data.installation_guide_url || "");
       setCommandCenterUrl(r.data.command_center_url || "");
+      setWeeklyNaira(r.data.signals_weekly_price_kobo ? r.data.signals_weekly_price_kobo / 100 : 20000);
+      setMonthlyNaira(r.data.signals_monthly_price_kobo ? r.data.signals_monthly_price_kobo / 100 : 50000);
+      setSignalSourceAccount(r.data.subscriber_signal_source_account || "");
+      setSignalBackupAccount(r.data.subscriber_signal_backup_source_account || "");
     }).catch(() => {});
   }, [api, h]);
 
@@ -1028,6 +1036,10 @@ function SettingsTab({ api }) {
     const updates = {};
     if (pk) updates.paystack_secret_key = pk;
     updates.pin_price_kobo = Math.round(priceNaira * 100);
+    updates.signals_weekly_price_kobo = Math.round(weeklyNaira * 100);
+    updates.signals_monthly_price_kobo = Math.round(monthlyNaira * 100);
+    updates.subscriber_signal_source_account = signalSourceAccount;
+    updates.subscriber_signal_backup_source_account = signalBackupAccount;
     if (smtpEmail) updates.smtp_email = smtpEmail;
     if (smtpPw) updates.smtp_password = smtpPw;
     updates.smtp_host = smtpHost;
@@ -1055,12 +1067,43 @@ function SettingsTab({ api }) {
     <div className="max-w-2xl space-y-5" data-testid="admin-settings-tab">
       <CardSection title="Pricing">
         <div className="space-y-4">
-          <Field label="PIN price (Naira)">
+          <Field label="XauCloud Bot — Lifetime license price (Naira)">
             <div className="flex items-center gap-2">
               <span className="text-white/50">₦</span>
               <Input data-testid="settings-price" type="number" value={priceNaira} onChange={e => setPriceNaira(parseInt(e.target.value) || 0)} className="font-mono" />
             </div>
             <p className="mt-1 text-[11px] text-white/35">Current: ₦{priceNaira?.toLocaleString()} — used by the Paystack checkout and Nigeria bank-transfer orders.</p>
+          </Field>
+          <Field label="Weekly Signals price (Naira)">
+            <div className="flex items-center gap-2">
+              <span className="text-white/50">₦</span>
+              <Input data-testid="settings-weekly-price" type="number" value={weeklyNaira} onChange={e => setWeeklyNaira(parseInt(e.target.value) || 0)} className="font-mono" />
+            </div>
+            <p className="mt-1 text-[11px] text-white/35">Current: ₦{weeklyNaira?.toLocaleString()} / 7 days — signal-only access, no bot license.</p>
+          </Field>
+          <Field label="Monthly Signals price (Naira)">
+            <div className="flex items-center gap-2">
+              <span className="text-white/50">₦</span>
+              <Input data-testid="settings-monthly-price" type="number" value={monthlyNaira} onChange={e => setMonthlyNaira(parseInt(e.target.value) || 0)} className="font-mono" />
+            </div>
+            <p className="mt-1 text-[11px] text-white/35">Current: ₦{monthlyNaira?.toLocaleString()} / fixed 30 days — signal-only access, no bot license.</p>
+          </Field>
+        </div>
+      </CardSection>
+
+      <CardSection title="Subscriber signal feed">
+        <div className="space-y-4">
+          <p className="text-[12px] text-white/40 leading-5">
+            Trial and Weekly/Monthly subscribers see a sanitized mirror of ONE designated, already-connected
+            account's Market Outlook and 10-minute engine -- never a second signal engine, and never routed into
+            any licensed bot's own execution. Leave blank to keep the subscriber feed dormant
+            (Market Outlook / 10-minute engine will show "temporarily unavailable" to signal-only users).
+          </p>
+          <Field label="Primary source MT5 account">
+            <Input data-testid="settings-signal-source" value={signalSourceAccount} onChange={e => setSignalSourceAccount(e.target.value.trim())} placeholder="e.g. 476396807" className="font-mono" />
+          </Field>
+          <Field label="Backup source MT5 account (optional)">
+            <Input data-testid="settings-signal-backup" value={signalBackupAccount} onChange={e => setSignalBackupAccount(e.target.value.trim())} placeholder="Used only if the primary account's heartbeat goes stale" className="font-mono" />
           </Field>
         </div>
       </CardSection>
