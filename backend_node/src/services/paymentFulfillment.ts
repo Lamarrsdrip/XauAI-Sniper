@@ -4,9 +4,31 @@ import { getDb } from "../db.js";
 import { getSettings } from "./settings.js";
 import { getActiveNombaCredentials } from "./nombaConfig.js";
 import { NombaError, verifyTransaction } from "./nombaService.js";
-import { notifyAdminNewSale, recordFulfillmentEmailResult, sendPinEmail } from "./paymentEmails.js";
+import { notifyAdminNewSale, notifyAdminNewSignalSale, recordFulfillmentEmailResult, recordSubscriptionEmailResult, sendPinEmail, sendSignalSubscriptionEmail } from "./paymentEmails.js";
+import { activateSignalSubscription, type SignalPlan } from "./signalSubscriptions.js";
 
 export const PAYSTACK_BASE_URL = "https://api.paystack.co";
+
+const SIGNAL_PLAN_IDS = new Set<string>(["SIGNALS_WEEKLY", "SIGNALS_MONTHLY"]);
+export function isSignalPlan(planId: unknown): planId is SignalPlan { return SIGNAL_PLAN_IDS.has(String(planId ?? "")); }
+const PLAN_LABEL: Record<SignalPlan, string> = { SIGNALS_WEEKLY: "Weekly Signals", SIGNALS_MONTHLY: "Monthly Signals" };
+
+/**
+ * The SIGNALS_WEEKLY/SIGNALS_MONTHLY sibling of mintLicenseForReference,
+ * called from the exact same FULFILLING-state choke point in all three
+ * fulfillment functions below. Never mints a pin_licenses row -- a signal
+ * subscription is a separate product from the lifetime bot license.
+ */
+async function activateSubscriptionForReference(reference: string, tx: Record<string, unknown>, gateway: string, amountFormatted: string): Promise<void> {
+  const planId = tx["plan_id"] as SignalPlan;
+  const planLabel = PLAN_LABEL[planId];
+  const sub = await activateSignalSubscription(reference, tx, planId);
+  const buyerEmail = String(tx["buyer_email"] ?? "");
+  const buyerName = String(tx["buyer_name"] ?? "");
+  const emailSent = await sendSignalSubscriptionEmail(buyerEmail, buyerName, planLabel, sub.activated_at, sub.expires_at);
+  await recordSubscriptionEmailResult(reference, buyerName, buyerEmail, planLabel, emailSent);
+  await notifyAdminNewSignalSale(reference, buyerName, buyerEmail, amountFormatted, planLabel, gateway);
+}
 
 /** Port of server.py:638 `generate_unique_pin`. */
 export function generateUniquePin(): string {
@@ -113,8 +135,11 @@ export async function approveBankTransfer(reference: string, adminEmail: string)
   const db = getDb();
   const tx = await db.collection("payment_transactions").findOne({ reference, provider: "BANK_TRANSFER" }, { projection: { _id: 0 } });
   if (!tx) return { status: "not_found" };
-  if (tx["pin_generated"] && tx["payment_status"] === "FULFILLED") {
-    return { status: "already_fulfilled", pin: String(tx["pin_generated"]) };
+  // A signal-plan order never sets pin_generated, so "already fulfilled"
+  // must be recognized from payment_status alone -- not just the
+  // pin_generated marker, which only applies to BOT_LIFETIME orders.
+  if (tx["payment_status"] === "FULFILLED") {
+    return { status: "already_fulfilled", pin: tx["pin_generated"] ? String(tx["pin_generated"]) : undefined };
   }
   const effective = await bankTransferEffectiveStatus(tx);
   if (!["BANK_TRANSFER_SUBMITTED", "UNDER_ADMIN_REVIEW"].includes(effective)) {
@@ -123,8 +148,18 @@ export async function approveBankTransfer(reference: string, adminEmail: string)
   const won = await transitionPaymentState(reference, [effective], "FULFILLING");
   if (!won) {
     const fresh = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
-    if (fresh?.["pin_generated"]) return { status: "already_fulfilled", pin: String(fresh["pin_generated"]) };
+    if (fresh?.["payment_status"] === "FULFILLED") return { status: "already_fulfilled", pin: fresh["pin_generated"] ? String(fresh["pin_generated"]) : undefined };
     return { status: "conflict" };
+  }
+
+  const amountFormatted = `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`;
+  if (isSignalPlan(tx["plan_id"])) {
+    await db.collection("payment_transactions").updateOne(
+      { reference },
+      { $set: { payment_status: "FULFILLED", approved_by: adminEmail, approved_at: new Date().toISOString() } },
+    );
+    await activateSubscriptionForReference(reference, tx, "Bank Transfer", amountFormatted);
+    return { status: "approved" };
   }
 
   const pin = await mintLicenseForReference(reference, tx, "BankTransfer", "BANK_TRANSFER");
@@ -134,16 +169,7 @@ export async function approveBankTransfer(reference: string, adminEmail: string)
   );
   const emailSent = await sendPinEmail(String(tx["buyer_email"] ?? ""), String(tx["buyer_name"] ?? ""), pin);
   await recordFulfillmentEmailResult(reference, String(tx["buyer_name"] ?? ""), String(tx["buyer_email"] ?? ""), pin, emailSent);
-  await notifyAdminNewSale(
-    reference,
-    String(tx["buyer_name"] ?? ""),
-    String(tx["buyer_email"] ?? ""),
-    `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`,
-    pin,
-    "Bank Transfer",
-    "",
-    reference,
-  );
+  await notifyAdminNewSale(reference, String(tx["buyer_name"] ?? ""), String(tx["buyer_email"] ?? ""), amountFormatted, pin, "Bank Transfer", "", reference);
   return { status: "approved", pin };
 }
 
@@ -158,14 +184,14 @@ export async function fulfillPayment(reference: string, source: string): Promise
   const db = getDb();
   let tx = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
   if (!tx) return { status: "not_found" };
-  if (tx["pin_generated"] && tx["payment_status"] === "FULFILLED") {
-    return { status: "success", pin: String(tx["pin_generated"]), buyer_name: String(tx["buyer_name"] ?? "") };
+  if (tx["payment_status"] === "FULFILLED") {
+    return { status: "success", pin: tx["pin_generated"] ? String(tx["pin_generated"]) : undefined, buyer_name: String(tx["buyer_name"] ?? "") };
   }
 
   const wonVerifying = await transitionPaymentState(reference, ["PENDING"], "VERIFYING");
   if (!wonVerifying) {
     tx = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
-    if (tx?.["pin_generated"]) return { status: "success", pin: String(tx["pin_generated"]), buyer_name: String(tx["buyer_name"] ?? "") };
+    if (tx?.["payment_status"] === "FULFILLED") return { status: "success", pin: tx["pin_generated"] ? String(tx["pin_generated"]) : undefined, buyer_name: String(tx["buyer_name"] ?? "") };
     return { status: "pending" };
   }
 
@@ -211,8 +237,14 @@ export async function fulfillPayment(reference: string, source: string): Promise
   const wonFulfilling = await transitionPaymentState(reference, ["PAID"], "FULFILLING");
   if (!wonFulfilling) {
     tx = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
-    if (tx?.["pin_generated"]) return { status: "success", pin: String(tx["pin_generated"]), buyer_name: String(tx["buyer_name"] ?? "") };
+    if (tx?.["payment_status"] === "FULFILLED") return { status: "success", pin: tx["pin_generated"] ? String(tx["pin_generated"]) : undefined, buyer_name: String(tx["buyer_name"] ?? "") };
     return { status: "pending" };
+  }
+
+  if (isSignalPlan(tx["plan_id"])) {
+    await db.collection("payment_transactions").updateOne({ reference }, { $set: { payment_status: "FULFILLED" } });
+    await activateSubscriptionForReference(reference, tx, "Paystack", `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`);
+    return { status: "success", buyer_name: String(tx["buyer_name"] ?? "") };
   }
 
   const pin = await mintLicenseForReference(reference, tx, source);
@@ -233,14 +265,14 @@ export async function fulfillNombaPayment(reference: string, source: string): Pr
   const db = getDb();
   let tx = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
   if (!tx) return { status: "not_found" };
-  if (tx["pin_generated"] && tx["payment_status"] === "FULFILLED") {
-    return { status: "success", pin: String(tx["pin_generated"]), buyer_name: String(tx["buyer_name"] ?? "") };
+  if (tx["payment_status"] === "FULFILLED") {
+    return { status: "success", pin: tx["pin_generated"] ? String(tx["pin_generated"]) : undefined, buyer_name: String(tx["buyer_name"] ?? "") };
   }
 
   const wonVerifying = await transitionPaymentState(reference, ["PENDING"], "VERIFYING");
   if (!wonVerifying) {
     tx = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
-    if (tx?.["pin_generated"]) return { status: "success", pin: String(tx["pin_generated"]), buyer_name: String(tx["buyer_name"] ?? "") };
+    if (tx?.["payment_status"] === "FULFILLED") return { status: "success", pin: tx["pin_generated"] ? String(tx["pin_generated"]) : undefined, buyer_name: String(tx["buyer_name"] ?? "") };
     return { status: "pending" };
   }
 
@@ -277,8 +309,16 @@ export async function fulfillNombaPayment(reference: string, source: string): Pr
   const wonFulfilling = await transitionPaymentState(reference, ["PAID"], "FULFILLING");
   if (!wonFulfilling) {
     tx = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
-    if (tx?.["pin_generated"]) return { status: "success", pin: String(tx["pin_generated"]), buyer_name: String(tx["buyer_name"] ?? "") };
+    if (tx?.["payment_status"] === "FULFILLED") return { status: "success", pin: tx["pin_generated"] ? String(tx["pin_generated"]) : undefined, buyer_name: String(tx["buyer_name"] ?? "") };
     return { status: "pending" };
+  }
+
+  if (isSignalPlan(tx["plan_id"])) {
+    await db
+      .collection("payment_transactions")
+      .updateOne({ reference }, { $set: { payment_status: "FULFILLED", nomba_transaction_id: result.nomba_transaction_id } });
+    await activateSubscriptionForReference(reference, tx, "Nomba", `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`);
+    return { status: "success", buyer_name: String(tx["buyer_name"] ?? "") };
   }
 
   const pin = await mintLicenseForReference(reference, tx, source, "NOMBA");

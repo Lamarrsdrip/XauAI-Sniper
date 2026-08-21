@@ -117,6 +117,22 @@ ${adminNotifyRow("Date &amp; Time", now)}
   return notifyAdmin(`✅ New XauCloud Sale — ${reference}`, html, sendEmail);
 }
 
+/** notifyAdminNewSale's SIGNALS_WEEKLY/SIGNALS_MONTHLY sibling -- no license PIN row, since a signal subscription never mints one. */
+export async function notifyAdminNewSignalSale(reference: string, buyerName: string, buyerEmail: string, amountFormatted: string, planLabel: string, gateway: string): Promise<boolean> {
+  const now = `${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;">
+<h3 style="color:#1a7f37;margin-bottom:12px;">✅ New XauCloud Signal Subscription</h3>
+${adminNotifyRow("Customer Name", buyerName || "-")}
+${adminNotifyRow("Customer Email", buyerEmail || "-")}
+${adminNotifyRow("Amount", amountFormatted)}
+${adminNotifyRow("Plan Purchased", planLabel)}
+${adminNotifyRow("Payment Gateway", gateway)}
+${adminNotifyRow("Date &amp; Time", now)}
+${adminNotifyRow("Reference", reference)}
+</div>`;
+  return notifyAdmin(`✅ New Signal Subscription — ${reference}`, html, sendEmail);
+}
+
 export interface BankTransferOrder {
   amount_formatted: string;
   bank_name: string;
@@ -176,6 +192,48 @@ export async function notifyAdminBankTransferSubmitted(tx: Record<string, unknow
 <p><a href="${adminUrl}">Review in Admin Dashboard</a></p>
 </div>`;
   return notifyAdmin(`Bank transfer submitted — ${tx["reference"]}`, html, sendEmail);
+}
+
+/** Signal-subscription activation email -- the SIGNALS_WEEKLY/SIGNALS_MONTHLY sibling of sendPinEmail, same override + branding pattern, no license PIN involved. */
+export async function sendSignalSubscriptionEmail(toEmail: string, buyerName: string, planLabel: string, activatedAtIso: string, expiresAtIso: string): Promise<boolean> {
+  const override = await publishedTransactionalRender("signal_subscription_activated", {
+    buyer_name: buyerName, first_name: buyerName, buyer_email: toEmail, account_email: toEmail,
+    plan: planLabel, activated_at: activatedAtIso, expires_at: expiresAtIso,
+  });
+  if (override) return sendEmail(toEmail, String(override["subject"]), String(override["html"]), { text: String(override["text"] ?? "") });
+  const b = await emailBranding();
+  const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#1a1a1a;">
+<h2 style="color:#B8860B;">${planLabel} activated</h2>
+<p>Hello ${buyerName || "Trader"},</p>
+<p>Your <strong>${planLabel}</strong> is now active on ${b.sender_name}.</p>
+<div style="background:#f5f5f5;border:2px solid #B8860B;padding:16px;margin:16px 0;font-size:14px;">
+<p style="margin:4px 0;"><strong>Plan:</strong> ${planLabel}</p>
+<p style="margin:4px 0;"><strong>Activated:</strong> ${activatedAtIso}</p>
+<p style="margin:4px 0;"><strong>Expires:</strong> ${expiresAtIso}</p>
+</div>
+<p style="font-size:13px;color:#333;">Open your Command Center to see the current XauCloud Market Outlook, the 10-minute engine view, and manage your billing.</p>
+<div style="text-align:center;margin:20px 0;">
+${emailLinkButton("Open Command Center", b.command_center_url, true)}
+</div>
+<p style="font-size:12px;color:#6E6E73;">This subscription covers XauCloud's signal experience -- it does not include the XauCloud bot/EA license or automated MT5 execution.</p>
+</div>`;
+  return sendEmail(toEmail, `${planLabel} activated — ${b.sender_name}`, html);
+}
+
+/** Admin fallback when a subscription-activation email fails -- mirrors recordFulfillmentEmailResult without implying a license PIN exists. */
+export async function recordSubscriptionEmailResult(reference: string, buyerName: string, buyerEmail: string, planLabel: string, emailSent: boolean): Promise<void> {
+  if (emailSent) return;
+  await getDb()
+    .collection("payment_transactions")
+    .updateOne({ reference }, { $set: { fulfillment_email_failed: true, fulfillment_email_failed_at: new Date().toISOString() } });
+  const adminUrl = `${env.PUBLIC_SITE_URL}/admin`;
+  const html = `<div style="font-family:Arial,sans-serif;">
+<h3>Subscription activation email failed to send</h3>
+<p>Reference: ${reference}<br>Buyer: ${buyerName} &lt;${buyerEmail}&gt;<br>Plan: ${planLabel}</p>
+<p>The subscription is active, but the customer may not have been notified. Please follow up manually or check SMTP configuration.</p>
+<p><a href="${adminUrl}">Review in Admin Dashboard</a></p>
+</div>`;
+  await notifyAdmin(`Subscription email FAILED — ${reference}`, html, sendEmail);
 }
 
 /** Port of server.py:986 `_record_fulfillment_email_result` -- a failed send must never be silently lost. */

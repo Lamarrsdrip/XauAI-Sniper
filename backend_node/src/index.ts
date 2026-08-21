@@ -32,10 +32,13 @@ import { registerNotificationRoutes } from "./routes/notificationRoutes.js";
 import { registerOutlookCurrentRoutes } from "./routes/outlookCurrent.js";
 import { registerOutlookHistoryRoutes } from "./routes/outlookHistory.js";
 import { registerPurchaseRoutes } from "./routes/purchase.js";
+import { registerCloudSignalRoutes } from "./routes/cloud/signals.js";
+import { sweepSignalLifecycleEmails } from "./services/signalLifecycleEmails.js";
 import { registerMiscRoutes } from "./routes/misc.js";
 import { registerPublicMarketFeedRoutes } from "./routes/publicMarketFeed.js";
 import { registerAdminSettingsRoutes } from "./routes/admin/settings.js";
 import { registerAdminBankTransferRoutes } from "./routes/admin/bankTransfers.js";
+import { registerAdminSignalSubscriptionRoutes } from "./routes/admin/signalSubscriptions.js";
 import { registerAdminDashboardRoutes } from "./routes/admin/dashboard.js";
 import { registerAdminPinsRoutes } from "./routes/admin/pins.js";
 import { registerAdminConfigsRoutes } from "./routes/admin/configs.js";
@@ -206,10 +209,12 @@ async function main(): Promise<void> {
       await registerOutlookCurrentRoutes(api);
       await registerOutlookHistoryRoutes(api);
       await registerPurchaseRoutes(api);
+      await registerCloudSignalRoutes(api);
       await registerMiscRoutes(api);
       await registerPublicMarketFeedRoutes(api);
       await registerAdminSettingsRoutes(api);
       await registerAdminBankTransferRoutes(api);
+      await registerAdminSignalSubscriptionRoutes(api);
       await registerAdminDashboardRoutes(api);
       await registerAdminPinsRoutes(api);
       await registerAdminConfigsRoutes(api);
@@ -300,6 +305,7 @@ async function main(): Promise<void> {
   await runReadinessStep("startup_tasks", () => runStartupTasks(app.log), 45_000);
   // Queue processing is inert until the explicitly-admin-enabled setting is true.
   setInterval(() => { void processQueuedXTradePosts().catch((error) => app.log.warn({ error }, "[x-posting] queue processing failed")); }, 30_000).unref();
+  setInterval(() => { void sweepSignalLifecycleEmails().catch((error) => app.log.warn({ error }, "[signal-lifecycle-emails] sweep failed")); }, 15 * 60_000).unref();
   await runReadinessStep("gpt_email_actions", () => ensureGptEmailActionIndexes(), 30_000);
   await runReadinessStep("marketing_actions", () => ensureMarketingActionInfrastructure(), 45_000);
   await runReadinessStep("admin_ops_actions", () => ensureAdminOpsInfrastructure(), 30_000);

@@ -5,6 +5,7 @@ import { getSettings } from "./settings.js";
 import { NAMESPACE_URL, uuidV5 } from "./uuidV5.js";
 import { sendWebPushToUser, getVapidPublicKey } from "./webPush.js";
 import { buildResultConversion } from "./marketOutlookCore.js";
+import { isMarketOpen } from "./marketCalendar.js";
 
 /** Customer notification dispatch. First-party VAPID Web Push is the only delivery authority. */
 
@@ -59,6 +60,7 @@ const EVENT_CATEGORY: Record<string, string> = {
   TRADE_CLOSED: "TRADES",
   AUTOMATED_TRADE_RESULT: "TRADES",
   PATTERN_CONFIRMED: "SIGNALS",
+  SUBSCRIBER_SIGNAL: "SIGNALS",
 };
 
 export function notificationCategory(event: string): string {
@@ -477,9 +479,7 @@ const HEARTBEAT_STALE_SECONDS = 90;
 
 /** Port of notifications.py:515 `_market_open_and_bot_connected`. */
 async function marketOpenAndBotConnected(account: string, now: Date = new Date()): Promise<[boolean, string]> {
-  const weekday = (now.getUTCDay() + 6) % 7; // Monday=0 .. Sunday=6
-  const marketClosed = weekday === 5 || (weekday === 4 && now.getUTCHours() >= 21) || (weekday === 6 && now.getUTCHours() < 21);
-  if (marketClosed) return [false, "MARKET_CLOSED_WEEKEND"];
+  if (!isMarketOpen(now)) return [false, "MARKET_CLOSED_WEEKEND"];
   if (!account) return [false, "NO_ACCOUNT_CONTEXT"];
 
   const hb = await getDb().collection("cloud_bot_heartbeats").findOne({ account_number: account }, { projection: { _id: 0, ts: 1 }, sort: { ts: -1 } });
@@ -628,6 +628,107 @@ export async function sendOutlookNotification(doc: Record<string, unknown>, even
         idempotency_key: idemKey,
         user_id: userId,
         outlook_id: outlookId,
+        notification_type: event,
+        category: notificationCategory(event),
+        title: payload["title"],
+        body: payload["body"],
+        scheduled_time: already?.["scheduled_time"] ?? new Date().toISOString(),
+        sent_time: null,
+        delivery_status: "PENDING",
+        opened_time: null,
+        read_at: already?.["read_at"] ?? null,
+        device_count: devices.length,
+        retry_count: Number(already?.["retry_count"] ?? 0),
+        failure_reason: null,
+      };
+      if (devices.length === 0) {
+        logEntry["delivery_status"] = "NO_DEVICE";
+        logEntry["failure_reason"] = "SUBSCRIPTION_MISSING";
+      } else {
+        const { ok, failureClass, provider } = await sendUserPush(userId, payload);
+        Object.assign(logEntry, {
+          sent_time: new Date().toISOString(),
+          delivery_status: ok ? "SENT" : "FAILED",
+          failure_reason: ok ? null : (failureClass ?? UNKNOWN_FAILURE),
+          provider_http_status: provider["http_status"],
+          provider_message_id: provider["message_id"],
+          provider_errors: provider["errors"],
+          provider_warnings: provider["warnings"],
+        });
+        if (ok) sent += 1;
+      }
+      if (already) {
+        logEntry["retry_count"] = Number(already["retry_count"] ?? 0) + 1;
+        await db.collection("cloud_notification_log").updateOne({ idempotency_key: idemKey }, { $set: logEntry });
+      } else {
+        await db.collection("cloud_notification_log").insertOne({ ...logEntry });
+      }
+    }
+    return sent;
+  } catch {
+    return null;
+  }
+}
+
+/** Union of currently-active trial and subscription user_ids, deduped -- the eligible-recipient set for the read-only subscriber signal feed. Licensed bot customers are notified through the existing account-based sendOutlookNotification path, not this one. */
+async function eligibleSubscriberSignalRecipients(): Promise<string[]> {
+  const db = getDb();
+  const nowIso = new Date().toISOString();
+  const [trialUsers, subUsers] = await Promise.all([
+    db.collection("signal_trials").find({ trial_expires_at: { $gt: nowIso } }, { projection: { _id: 0, user_id: 1 } }).toArray(),
+    db.collection("signal_subscriptions").find({ expires_at: { $gt: nowIso }, status: { $ne: "CANCELLED" } }, { projection: { _id: 0, user_id: 1 } }).toArray(),
+  ]);
+  return [...new Set([...trialUsers, ...subUsers].map((r) => String(r["user_id"] ?? "")).filter(Boolean))];
+}
+
+function buildSubscriberSignalPayload(signal: Record<string, unknown>): Record<string, unknown> {
+  const direction = String(signal["direction"] ?? "");
+  const symbol = String(signal["symbol"] ?? "XAUUSD");
+  const icon = direction === "BUY" ? "🟢" : direction === "SELL" ? "🔴" : "📊";
+  const title = `${icon} XauCloud Signal: ${direction} ${symbol}`;
+  const parts: string[] = [];
+  if (signal["entry"] !== null && signal["entry"] !== undefined) parts.push(`Entry ${signal["entry"]}`);
+  if (signal["stop"] !== null && signal["stop"] !== undefined) parts.push(`Stop ${signal["stop"]}`);
+  if (signal["confidence"] !== null && signal["confidence"] !== undefined) parts.push(`Confidence ${signal["confidence"]}%`);
+  const body = parts.length > 0 ? parts.join(" · ") : "A new XauCloud signal is available in Command Center.";
+  return { title, body, deep_link: "/command/dashboard", outlook_id: signal["signal_id"], event: "SUBSCRIBER_SIGNAL" };
+}
+
+/**
+ * Fans out ONE canonical subscriber-feed signal to every currently-eligible
+ * trial/subscription user. Reuses sendOutlookNotification's exact push-
+ * delivery + cloud_notification_log idempotency mechanics (same dedupe key
+ * shape, same SENT/FAILED/NO_DEVICE bookkeeping) -- only recipient
+ * resolution differs, since these users have no MT5 account to key off of.
+ * Never touches licensed-bot notification delivery.
+ */
+export async function sendSubscriberSignalNotification(signal: Record<string, unknown>): Promise<number | null> {
+  try {
+    if (!isMarketOpen(new Date())) return null;
+    const db = getDb();
+    const signalId = String(signal["signal_id"] ?? "");
+    const event = "SUBSCRIBER_SIGNAL";
+    const userIds = await eligibleSubscriberSignalRecipients();
+
+    let sent = 0;
+    for (const userId of userIds) {
+      const prefs = await db.collection("cloud_notification_prefs").findOne({ user_id: userId }, { projection: { _id: 0 } });
+      if (!prefs) continue; // opt-in only -- same rule as the account-based notification path
+      const tier = String(prefs["tier"] ?? "OFF");
+      if ((TIER_RANK[tier] ?? 0) < (TIER_RANK["HOURLY_ONLY"] ?? 99)) continue;
+      if (categoryMuted(prefs, notificationCategory(event))) continue;
+
+      const idemKey = idempotencyKey(signalId, event, userId);
+      const already = await db.collection("cloud_notification_log").findOne({ idempotency_key: idemKey });
+      if (already && (already["delivery_status"] === "SENT" || !RETRYABLE_FAILURES.has(String(already["failure_reason"])))) continue;
+
+      const payload = buildSubscriberSignalPayload(signal);
+      const devices = await completeActiveDevices(userId);
+      const logEntry: Record<string, unknown> = {
+        id: already?.["id"] ?? randomUUID(),
+        idempotency_key: idemKey,
+        user_id: userId,
+        outlook_id: signalId,
         notification_type: event,
         category: notificationCategory(event),
         title: payload["title"],

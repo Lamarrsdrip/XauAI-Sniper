@@ -40,6 +40,10 @@ const AdminSettingsUpdateSchema = z.object({
   vps_guide_url: z.string().nullable().optional(),
   installation_guide_url: z.string().nullable().optional(),
   command_center_url: z.string().nullable().optional(),
+  signals_weekly_price_kobo: z.number().int().nullable().optional(),
+  signals_monthly_price_kobo: z.number().int().nullable().optional(),
+  subscriber_signal_source_account: z.string().nullable().optional(),
+  subscriber_signal_backup_source_account: z.string().nullable().optional(),
 });
 
 const NombaConfigUpdateSchema = z.object({
@@ -137,6 +141,10 @@ export async function registerAdminSettingsRoutes(app: FastifyInstance): Promise
       vps_guide_url: s["vps_guide_url"] ?? "",
       installation_guide_url: s["installation_guide_url"] ?? "",
       command_center_url: s["command_center_url"] ?? "",
+      signals_weekly_price_kobo: Number(s["signals_weekly_price_kobo"] ?? 2_000_000),
+      signals_monthly_price_kobo: Number(s["signals_monthly_price_kobo"] ?? 5_000_000),
+      subscriber_signal_source_account: s["subscriber_signal_source_account"] ?? "",
+      subscriber_signal_backup_source_account: s["subscriber_signal_backup_source_account"] ?? "",
     };
   });
 
@@ -189,6 +197,10 @@ export async function registerAdminSettingsRoutes(app: FastifyInstance): Promise
     if (req.installation_guide_url !== undefined && req.installation_guide_url !== null)
       updates["installation_guide_url"] = req.installation_guide_url.trim();
     if (req.command_center_url !== undefined && req.command_center_url !== null) updates["command_center_url"] = req.command_center_url.trim();
+    if (req.signals_weekly_price_kobo !== undefined && req.signals_weekly_price_kobo !== null) updates["signals_weekly_price_kobo"] = req.signals_weekly_price_kobo;
+    if (req.signals_monthly_price_kobo !== undefined && req.signals_monthly_price_kobo !== null) updates["signals_monthly_price_kobo"] = req.signals_monthly_price_kobo;
+    if (req.subscriber_signal_source_account !== undefined && req.subscriber_signal_source_account !== null) updates["subscriber_signal_source_account"] = req.subscriber_signal_source_account.trim();
+    if (req.subscriber_signal_backup_source_account !== undefined && req.subscriber_signal_backup_source_account !== null) updates["subscriber_signal_backup_source_account"] = req.subscriber_signal_backup_source_account.trim();
     if (Object.keys(updates).length > 0) {
       await getDb().collection("admin_settings").updateOne({ key: "main" }, { $set: updates }, { upsert: true });
     }

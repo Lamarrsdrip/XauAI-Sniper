@@ -5,6 +5,7 @@ import { canonicalM10Signal, latestEaEvidence } from "./marketOutlookEvidence.js
 import { generateOutlookForAccount } from "./marketOutlookSignal.js";
 import { NAMESPACE_URL, uuidV5, uuidV5Hex } from "./uuidV5.js";
 import { RETRYABLE_FAILURES, sendOutlookNotification } from "./notifications.js";
+import { m10EventAsSubscriberSignal, mirrorSubscriberSignal, outlookDocAsSubscriberSignal } from "./subscriberSignalFeed.js";
 
 /** Port of market_outlook.py:2409 `_dispatch_signal_event`. */
 export async function dispatchSignalEvent(doc: Record<string, unknown>, event: string): Promise<void> {
@@ -70,6 +71,10 @@ export async function publishM10SignalFromActivity(licenseKey: string, account: 
     { $set: eventDoc, $setOnInsert: { id: randomUUID(), created_at: nowIso } },
     { upsert: true },
   );
+  // Keeps the subscriber "10-minute engine" view current for WATCHING/BLOCKED/EXPIRED
+  // states too, not just final actionable signals. No-op for every account except
+  // the configured subscriber-signal source; never affects this account's own flow.
+  await mirrorSubscriberSignal(account, m10EventAsSubscriberSignal(eventDoc)).catch(() => {});
 
   if (!canonical["actionable"]) return null;
 
@@ -95,6 +100,7 @@ export async function publishM10SignalFromActivity(licenseKey: string, account: 
   delete doc["_newly_inserted"];
   if (newlyInserted && ["BUY", "SELL"].includes(String(doc["primary_direction"]))) {
     await dispatchSignalEvent(doc, "TRACKING_STARTED");
+    await mirrorSubscriberSignal(account, outlookDocAsSubscriberSignal(doc, "M10_ENGINE", true)).catch(() => {});
     await signalEvents.updateOne(
       { account, candidate_id: candidateId, event_type: OUTLOOK_ACTIONABLE, event_version: 1 },
       { $set: { outlook_id: doc["id"], notification_dispatched_at: new Date().toISOString() } },

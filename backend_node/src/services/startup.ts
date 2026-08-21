@@ -123,6 +123,10 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
   indexReport.push(await tryIndex("admin_email_log.at", () => db.collection("admin_email_log").createIndex({ at: -1 })));
   indexReport.push(await tryIndex("transactional_email_events.event_key: unique", () => db.collection("transactional_email_events").createIndex({ event_key: 1 }, { unique: true })));
   indexReport.push(await tryIndex("admin_custom_email_drafts.id: unique", () => db.collection("admin_custom_email_drafts").createIndex({ id: 1 }, { unique: true })));
+  indexReport.push(await tryIndex("signal_trials.user_id: unique", () => db.collection("signal_trials").createIndex({ user_id: 1 }, { unique: true })));
+  indexReport.push(await tryIndex("signal_subscriptions.source_payment_ref: unique", () => db.collection("signal_subscriptions").createIndex({ source_payment_ref: 1 }, { unique: true })));
+  indexReport.push(await tryIndex("signal_subscriptions.user_id+expires_at", () => db.collection("signal_subscriptions").createIndex({ user_id: 1, expires_at: -1 })));
+  indexReport.push(await tryIndex("subscriber_signals.signal_id+engine: unique", () => db.collection("subscriber_signals").createIndex({ signal_id: 1, engine: 1 }, { unique: true })));
   indexReport.push(await tryIndex("x_trade_posts.idempotency_key: unique", () => db.collection("x_trade_posts").createIndex({ idempotency_key: 1 }, { unique: true })));
   indexReport.push(await tryIndex("x_trade_posts.queue", () => db.collection("x_trade_posts").createIndex({ status: 1, next_attempt_at: 1, created_at: 1 })));
   indexReport.push(await tryIndex("x_oauth_states.state_hash: unique+TTL", async () => {

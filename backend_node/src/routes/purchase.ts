@@ -3,7 +3,7 @@ import { randomUUID, createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { getDb } from "../db.js";
 import { env } from "../env.js";
-import { clientIp, rateLimit } from "../auth.js";
+import { clientIp, rateLimit, requireCloudUser } from "../auth.js";
 import { getSettings } from "../services/settings.js";
 import { buildPriceDisplay, detectDisplayCurrency, detectCountryCode } from "../services/currencyDisplay.js";
 import { getPaymentMethodsSettings, paymentMethodAvailability, getBankTransferSettings, bankTransferIsConfigured, PAYMENT_METHOD_COPY } from "../services/paymentMethods.js";
@@ -12,6 +12,8 @@ import { createCheckoutOrder, extractOrderReference, extractWebhookSignatureFiel
 import type { NombaEnvBlock } from "../services/nombaConfig.js";
 import { fulfillNombaPayment, fulfillPayment, transitionPaymentState, bankTransferEffectiveStatus, PAYSTACK_BASE_URL } from "../services/paymentFulfillment.js";
 import { notifyAdminBankTransferSubmitted, notifyAdminPaymentStarted, sendBankTransferInstructionsEmail } from "../services/paymentEmails.js";
+import { TRIAL_MARKET_DAY_LIMIT } from "../services/signalTrial.js";
+import type { SignalPlan } from "../services/signalSubscriptions.js";
 
 const PurchaseInitRequestSchema = z.object({
   buyer_name: z.string(),
@@ -21,6 +23,15 @@ const PurchaseInitRequestSchema = z.object({
 });
 const BankTransferInitiateRequestSchema = z.object({ buyer_name: z.string(), buyer_email: z.string() });
 const BankTransferProofRequestSchema = z.object({ proof_image: z.string() });
+
+const SIGNAL_PLAN_IDS = ["SIGNALS_WEEKLY", "SIGNALS_MONTHLY"] as const;
+const SignalPlanInitRequestSchema = z.object({ plan_id: z.enum(SIGNAL_PLAN_IDS), origin_url: z.string() });
+const SignalPlanLabel: Record<SignalPlan, string> = { SIGNALS_WEEKLY: "Weekly Signals", SIGNALS_MONTHLY: "Monthly Signals" };
+
+/** Server-authoritative price lookup for a signal plan -- never trust a client-supplied amount. Same defensive-default pattern as pin_price_kobo. */
+function signalPlanPriceKobo(settings: Record<string, unknown>, planId: SignalPlan): number {
+  return Number(settings[planId === "SIGNALS_WEEKLY" ? "signals_weekly_price_kobo" : "signals_monthly_price_kobo"] ?? (planId === "SIGNALS_WEEKLY" ? 2_000_000 : 5_000_000));
+}
 
 /** Port of server.py:1487 `_verify_paystack_signature` -- HMAC-SHA512 over the raw body, constant-time compare. */
 function verifyPaystackSignature(rawBody: Buffer, signature: string, secret: string): boolean {
@@ -43,6 +54,147 @@ export async function registerPurchaseRoutes(app: FastifyInstance): Promise<void
     const availability = await paymentMethodAvailability(request);
     const availableMethods = settings.payment_method_order.filter((m) => availability[m]);
     return { ...priceDisplay, payment_method: availableMethods[0] ?? "unavailable" };
+  });
+
+  // GET /purchase/plans -- authoritative price list for the 4-tier product (trial/weekly/monthly/lifetime).
+  // The frontend renders prices from here; it never hardcodes an NGN literal.
+  app.get("/purchase/plans", async () => {
+    const settings = await getSettings();
+    const lifetimeKobo = Number(settings["pin_price_kobo"] ?? 30_000_000);
+    return {
+      trial: { plan_id: "TRIAL", label: "Free Signal Trial", price_kobo: 0, market_days: TRIAL_MARKET_DAY_LIMIT },
+      signals_weekly: { plan_id: "SIGNALS_WEEKLY", label: SignalPlanLabel.SIGNALS_WEEKLY, price_kobo: signalPlanPriceKobo(settings, "SIGNALS_WEEKLY") },
+      signals_monthly: { plan_id: "SIGNALS_MONTHLY", label: SignalPlanLabel.SIGNALS_MONTHLY, price_kobo: signalPlanPriceKobo(settings, "SIGNALS_MONTHLY") },
+      bot_lifetime: { plan_id: "BOT_LIFETIME", label: "XauCloud Bot — Lifetime", price_kobo: lifetimeKobo },
+      currency: "NGN",
+    };
+  });
+
+  // POST /purchase/signals/paystack/initialize -- authenticated signal-subscription checkout (Paystack).
+  // Reuses the exact same payment_transactions/transitionPaymentState/fulfillPayment engine as the
+  // lifetime-license flow below; only plan_id + the authenticated user_id differ.
+  app.post("/purchase/signals/paystack/initialize", { preHandler: requireCloudUser }, async (request, reply) => {
+    const req = SignalPlanInitRequestSchema.parse(request.body);
+    const user = (request as typeof request & { cloudUser?: Record<string, unknown> }).cloudUser!;
+    rateLimit(`signal_purchase_init_ip:${clientIp(request)}`, 10, 600);
+
+    const paymentSettings = await getPaymentMethodsSettings();
+    if (!paymentSettings.paystack_enabled) return reply.code(503).send({ detail: "Card payment is not currently available." });
+    const s = await getSettings();
+    const pk = String(s["paystack_secret_key"] ?? "");
+    if (!pk) return reply.code(503).send({ detail: "Payment system not configured yet." });
+
+    const kobo = signalPlanPriceKobo(s, req.plan_id);
+    const ref = `ASE-SIG-${randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
+    const callbackUrl = `${env.PUBLIC_SITE_URL}/purchase/success?reference=${ref}`;
+    const buyerEmail = String(user["email"] ?? "");
+    const buyerName = String(user["full_name"] ?? "");
+
+    const tx = {
+      id: randomUUID(), reference: ref, amount_kobo: kobo, currency: "NGN", provider: "PAYSTACK",
+      plan_id: req.plan_id, user_id: String(user["id"] ?? ""),
+      buyer_name: buyerName, buyer_email: buyerEmail, payment_status: "PENDING", pin_generated: null,
+      state_transitions: {}, created_at: new Date().toISOString(),
+    };
+    await getDb().collection("payment_transactions").insertOne({ ...tx });
+    await notifyAdminPaymentStarted("Paystack", ref, buyerName, buyerEmail, `₦${(kobo / 100).toLocaleString("en-US")}`, SignalPlanLabel[req.plan_id]);
+
+    const resp = await fetch(`${PAYSTACK_BASE_URL}/transaction/initialize`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${pk}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ email: buyerEmail, amount: kobo, reference: ref, callback_url: callbackUrl, metadata: { buyer_name: buyerName, plan_id: req.plan_id }, currency: "NGN" }),
+    });
+    if (resp.status !== 200) {
+      await getDb().collection("payment_transactions").updateOne({ reference: ref }, { $set: { payment_status: "FAILED" } });
+      return reply.code(502).send({ detail: "Payment init failed" });
+    }
+    const data = (await resp.json()) as { status: boolean; data?: { authorization_url: string }; message?: string };
+    if (!data.status) {
+      await getDb().collection("payment_transactions").updateOne({ reference: ref }, { $set: { payment_status: "FAILED" } });
+      return reply.code(502).send({ detail: data.message ?? "Failed" });
+    }
+    return { authorization_url: data.data!.authorization_url, reference: ref };
+  });
+
+  // POST /purchase/signals/nomba/initialize -- authenticated signal-subscription checkout (Nomba).
+  app.post("/purchase/signals/nomba/initialize", { preHandler: requireCloudUser }, async (request, reply) => {
+    const req = SignalPlanInitRequestSchema.parse(request.body);
+    const user = (request as typeof request & { cloudUser?: Record<string, unknown> }).cloudUser!;
+    rateLimit(`signal_purchase_init_ip:${clientIp(request)}`, 10, 600);
+
+    const paymentSettings = await getPaymentMethodsSettings();
+    if (!paymentSettings.nomba_enabled) return reply.code(503).send({ detail: "Nomba is not currently available. Please choose Manual Bank Transfer or Paystack instead." });
+    const [nombaCfg, creds] = await getActiveNombaCredentials();
+    if (!creds) return reply.code(503).send({ detail: "Payment system not configured yet." });
+
+    const s = await getSettings();
+    const kobo = signalPlanPriceKobo(s, req.plan_id);
+    const naira = kobo / 100;
+    const ref = `ASE-SIG-${randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
+    const callbackUrl = `${env.PUBLIC_SITE_URL}/purchase/success?reference=${ref}`;
+    const buyerEmail = String(user["email"] ?? "");
+    const buyerName = String(user["full_name"] ?? "");
+
+    const tx = {
+      id: randomUUID(), reference: ref, amount_kobo: kobo, currency: "NGN", provider: "NOMBA",
+      plan_id: req.plan_id, user_id: String(user["id"] ?? ""),
+      nomba_order_reference: ref, nomba_transaction_id: null,
+      buyer_name: buyerName, buyer_email: buyerEmail, payment_status: "PENDING", pin_generated: null,
+      created_at: new Date().toISOString(), state_transitions: {},
+    };
+    await getDb().collection("payment_transactions").insertOne({ ...tx });
+    await notifyAdminPaymentStarted("Nomba (card/transfer/USSD)", ref, buyerName, buyerEmail, `₦${naira.toLocaleString("en-US", { maximumFractionDigits: 0 })}`, SignalPlanLabel[req.plan_id]);
+
+    try {
+      const result = await createCheckoutOrder(creds, {
+        order_reference: ref, amount: naira, currency: String(nombaCfg["currency"] ?? "NGN"),
+        callback_url: callbackUrl, customer_email: buyerEmail,
+        allowed_payment_methods: (nombaCfg["allowed_payment_methods"] as string[] | undefined) ?? null,
+        idempotency_key: ref,
+      });
+      return { authorization_url: result.checkout_link, reference: result.order_reference };
+    } catch {
+      return reply.code(502).send({ detail: "Payment init failed" });
+    }
+  });
+
+  // POST /purchase/signals/bank-transfer/initiate -- authenticated signal-subscription checkout (bank transfer).
+  app.post("/purchase/signals/bank-transfer/initiate", { preHandler: requireCloudUser }, async (request, reply) => {
+    const req = SignalPlanInitRequestSchema.parse(request.body);
+    const user = (request as typeof request & { cloudUser?: Record<string, unknown> }).cloudUser!;
+    rateLimit(`signal_bank_transfer_init_ip:${clientIp(request)}`, 10, 600);
+    const country = detectCountryCode(request);
+    const settings = await getBankTransferSettings();
+    if (!settings.enabled) return reply.code(503).send({ detail: "Bank transfer is not currently available." });
+    if (!bankTransferIsConfigured(settings)) return reply.code(503).send({ detail: "Bank transfer is not fully configured yet." });
+
+    const s = await getSettings();
+    const kobo = signalPlanPriceKobo(s, req.plan_id);
+    const naira = kobo / 100;
+    const ref = `ASE-SIGBT-${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+    const timeoutMinutes = settings.timeout_minutes;
+    const expiresAt = new Date(Date.now() + timeoutMinutes * 60_000).toISOString();
+    const buyerEmail = String(user["email"] ?? "");
+    const buyerName = String(user["full_name"] ?? "");
+
+    const tx = {
+      id: randomUUID(), reference: ref, amount_kobo: kobo, currency: "NGN", provider: "BANK_TRANSFER",
+      plan_id: req.plan_id, user_id: String(user["id"] ?? ""),
+      buyer_name: buyerName, buyer_email: buyerEmail, payment_status: "BANK_TRANSFER_PENDING", pin_generated: null,
+      created_at: new Date().toISOString(), state_transitions: {}, expires_at: expiresAt,
+      detected_country: country, bank_transfer_proof: null, admin_notes: [],
+    };
+    await getDb().collection("payment_transactions").insertOne({ ...tx });
+
+    const order = {
+      reference: ref, amount_naira: naira, amount_formatted: `₦${naira.toLocaleString("en-US", { maximumFractionDigits: 0 })}`,
+      bank_name: settings.bank_name, account_name: settings.account_name, account_number: settings.account_number,
+      expires_at: expiresAt, timeout_minutes: timeoutMinutes, proof_required: settings.proof_required,
+      instructions: settings.instructions, support_contact: settings.support_contact,
+    };
+    await sendBankTransferInstructionsEmail(buyerEmail, buyerName, order);
+    await notifyAdminPaymentStarted("Bank Transfer", ref, buyerName, buyerEmail, order.amount_formatted, SignalPlanLabel[req.plan_id]);
+    return order;
   });
 
   // POST /purchase/initialize (Nomba) -- server.py:1374
