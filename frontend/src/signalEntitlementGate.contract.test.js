@@ -29,6 +29,17 @@ describe("signal trial/subscription entitlement contract", () => {
     expect(dashboard).toMatch(/entFailed[\s\S]{0,60}<LicensedCloudDashboard/);
   });
 
+  test("a licensed customer can actually reach a Billing view -- not just signal-only users", () => {
+    // Regression guard: GET /cloud/billing was originally only wired into
+    // CloudSignalDashboard, leaving a bot-licensed customer (who renders
+    // LicensedCloudDashboard, never CloudSignalDashboard) with no billing
+    // entry point at all.
+    expect(dashboard).toContain('active==="billing"');
+    expect(dashboard).toContain("function BillingPage()");
+    expect(dashboard).toMatch(/label="Billing"[\s\S]{0,80}setActive\("billing"\)/);
+    expect(dashboard).toContain("/cloud/billing");
+  });
+
   test("CloudSignalDashboard never exposes bot-only sections outside the locked teaser", () => {
     expect(signalDashboard).toContain("Bot license required");
     expect(signalDashboard).not.toMatch(/fake|mock|placeholder/i);

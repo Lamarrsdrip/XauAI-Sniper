@@ -16,6 +16,8 @@ import FourHourOutlookCard from "./FourHourOutlookCard";
 import M10VsOutlookCard, { M10_DECISION_LABELS, M30_LIFECYCLE_LABELS, FRESHNESS_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
 import CloudSignalDashboard from "./CloudSignalDashboard";
+import { PaymentMethodModal } from "../BankTransferFlow";
+import { useSignalCheckout } from "@/lib/signalCheckout";
 import { API } from "@/lib/api";
 import * as UI from "@/lib/ui";
 import * as AK from "@/lib/appkit";
@@ -736,6 +738,7 @@ function LicensedCloudDashboard() {
       {active==="activity"     && <ActivityPage events={events} filter={filter} setFilter={setFilter} onForceOpen={setModalCommand} />}
       {active==="control"      && <ControlPage heartbeat={heartbeat} online={online} commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true; propFirmIdempotencyKey.current=null;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} />}
       {active==="license"      && <LicensePage license={license} licenseInput={licenseInput} setLicenseInput={setLicenseInput} linkLicense={linkLicense} commandMsg={commandMsg} heartbeat={heartbeat} me={me} status={status} />}
+      {active==="billing"      && <BillingPage />}
       {active==="settings"     && <SettingsPage me={me} heartbeat={heartbeat} licenseInfo={licenseInfo} logout={logout} status={status} />}
       {active==="more"         && <MorePage setActive={setActive} me={me} status={status} openNotifications={()=>setNotifOpen(true)} logout={logout} />}
       {active==="education"    && <EducationPage setActive={setActive} />}
@@ -1998,6 +2001,111 @@ function EaDownloadCard({ hasLicense, release }) {
   );
 }
 
+function billingNaira(kobo) {
+  if (kobo === null || kobo === undefined) return "—";
+  const naira = kobo / 100;
+  return naira === 0 ? "Free" : `₦${naira.toLocaleString("en-NG", { maximumFractionDigits: 0 })}`;
+}
+
+// Billing is reachable from Command Center → More → Account → Billing for
+// EVERY signed-in user, licensed or not -- GET /cloud/billing already
+// returns entitlement + payment history + plans generically off the
+// authenticated user, so a lifetime-licensed customer correctly sees their
+// bot license status and full payment history here, not just signal
+// subscribers (who also reach this same data via CloudSignalDashboard's
+// inline Billing card).
+function BillingPage() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const load = useCallback(() => {
+    commandAxios.get("/cloud/billing")
+      .then((r) => setData(r.data))
+      .catch(() => setError("Could not load billing."));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const signalCheckout = useSignalCheckout(API);
+  const signalPlanMeta = signalCheckout.planId === "SIGNALS_WEEKLY" ? data?.plans?.signals_weekly : data?.plans?.signals_monthly;
+  const signalPriceDisplay = billingNaira(signalPlanMeta?.price_kobo);
+
+  const ent = data?.entitlement;
+  const history = data?.payment_history || [];
+
+  return (
+    <div className="space-y-4">
+      <div className={`${CARD} p-4`}>
+        <div className={MONO_LABEL}>Current status</div>
+        {!data && !error && <div className="mt-2 text-[12px] text-white/40">Loading…</div>}
+        {error && <div className="mt-2 text-[12px] text-rose-400">{error}</div>}
+        {ent && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {ent.bot_license && <span className="rounded-full bg-emerald-400/15 px-3 py-1 text-[11px] font-bold text-emerald-300">XauCloud Bot — Lifetime license active</span>}
+            {!ent.bot_license && ent.source === "trial" && <span className="rounded-full bg-gold-300/15 px-3 py-1 text-[11px] font-bold text-gold-200">Free Signal Trial · {ent.trial?.days_remaining ?? 0} market day{(ent.trial?.days_remaining ?? 0) === 1 ? "" : "s"} left</span>}
+            {!ent.bot_license && ent.source === "subscription" && <span className="rounded-full bg-gold-300/15 px-3 py-1 text-[11px] font-bold text-gold-200">{ent.subscription?.plan === "WEEKLY" ? "Weekly Signals" : "Monthly Signals"} · active until {fmtDate(ent.subscription?.expires_at)}</span>}
+            {!ent.bot_license && ent.source === "none" && <span className="rounded-full bg-white/[0.08] px-3 py-1 text-[11px] font-bold text-white/50">No signal plan active</span>}
+          </div>
+        )}
+        <p className="mt-3 text-[12px] leading-5 text-white/40">
+          Your XauCloud bot license and any signal subscription are separate products. A bot license never expires; signal plans are optional and only affect Market Outlook / 10-minute engine access, never MT5 execution.
+        </p>
+      </div>
+
+      <Card title="Available plans">
+        <div className="grid gap-3 sm:grid-cols-3">
+          {[
+            { key: "signals_weekly", id: "SIGNALS_WEEKLY", label: "Weekly Signals", sub: "/ week" },
+            { key: "signals_monthly", id: "SIGNALS_MONTHLY", label: "Monthly Signals", sub: "/ month" },
+          ].map((p) => (
+            <button key={p.key} type="button" onClick={() => signalCheckout.openPlan(p.id)}
+              className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4 text-left transition hover:border-gold-300/30 hover:bg-white/[0.05]">
+              <div className="text-[12px] font-semibold text-white/80">{p.label}</div>
+              <div className="mt-1 font-mono text-[16px] font-black text-gold-200">{billingNaira(data?.plans?.[p.key]?.price_kobo)}</div>
+              <div className="mt-0.5 text-[10.5px] text-white/35">{p.sub}</div>
+            </button>
+          ))}
+          <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
+            <div className="text-[12px] font-semibold text-white/80">XauCloud Bot (Lifetime)</div>
+            <div className="mt-1 font-mono text-[16px] font-black text-gold-200">{billingNaira(data?.plans?.bot_lifetime?.price_kobo)}</div>
+            <div className="mt-0.5 text-[10.5px] text-white/35">{ent?.bot_license ? "Already active" : "one-time · see homepage"}</div>
+          </div>
+        </div>
+        {signalCheckout.error && <div className="mt-3 text-[12px] text-rose-400">{signalCheckout.error}</div>}
+      </Card>
+
+      <Card title="Payment history">
+        {history.length === 0 && <div className="text-[12.5px] text-white/35">No payments yet.</div>}
+        {history.length > 0 && (
+          <div className="divide-y divide-white/[0.06]">
+            {history.map((p) => (
+              <div key={p.reference} className="flex items-center justify-between gap-3 py-2.5 text-[12px]">
+                <div className="min-w-0">
+                  <div className="truncate font-mono text-white/70">{p.reference}</div>
+                  <div className="text-white/35">{p.plan_id || "BOT_LIFETIME"} · {fmtDate(p.created_at)}</div>
+                </div>
+                <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${p.payment_status === "FULFILLED" ? "bg-emerald-400/15 text-emerald-300" : /FAILED|REJECTED|EXPIRED/.test(String(p.payment_status)) ? "bg-rose-400/15 text-rose-300" : "bg-white/[0.08] text-white/50"}`}>
+                  {p.payment_status}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {signalCheckout.showModal && (
+        <PaymentMethodModal
+          api={API}
+          priceDisplay={signalPriceDisplay}
+          subtitle={signalPriceDisplay}
+          onPaystack={() => { signalCheckout.closeModal(); signalCheckout.payByPaystack(); }}
+          onNomba={() => { signalCheckout.closeModal(); signalCheckout.payByNomba(); }}
+          onClose={signalCheckout.closeModal}
+          bankTransfer={signalCheckout.bankTransferProps}
+        />
+      )}
+    </div>
+  );
+}
+
 function LicensePage({ license, licenseInput, setLicenseInput, linkLicense, commandMsg, heartbeat, me, status }) {
   const info = license?.license;
   return (
@@ -2211,6 +2319,7 @@ function MorePage({ setActive, me, status, openNotifications, logout }) {
 
       <UI.ListGroup label="Account">
         <UI.ListRow icon={KeyRound} label="License" sub="Key, MT5 binding, EA download" onClick={() => setActive("license")} />
+        <UI.ListRow icon={CircleDollarSign} label="Billing" sub="Plan, payment history, signal add-ons" onClick={() => setActive("billing")} />
         <UI.ListRow icon={User} label="Account & Security" sub="Profile, connection, log out" onClick={() => setActive("settings")} last />
       </UI.ListGroup>
 
