@@ -1940,15 +1940,15 @@
 //     g_lastEntryGrade, which is a global that changes on every new trade open (race condition).
 //   IMPACT: A/A+ trades with proven profit and confirmed trend continuation now hold through normal
 //   M5 pullbacks. BE ratchet fires hard only on genuine reversals. Trail width adapts to momentum.
-#property copyright "Claude XauCloud"
-#property link      "https://xauaisniper.com"
-// Market Edition (Claude XauCloud) Task 2: second Marketplace release candidate, ported from
-// current production v6.27.2 (never submitted before -- see the first candidate, v1.00, forked
+#property copyright "XauCloud"
+#property link      "https://xaucloud.io"
+// XauCloud MQL5 Market listing (product #188838), live version 1.0 published 2026.08.03.
+// This is version 1.1: re-derived from current production v6.27.2 (the published 1.0 was forked
 // from an older v6.25.30 lineage). #property version is MQL5-Market-only bookkeeping, unrelated to
 // the real, authoritative version string below (XAUAI_EA_VERSION), which is unchanged from
 // production and is what the header banner/filenames/website actually use.
-#property version   "1.01"
-#property description "Claude XauCloud -- standalone Market Edition. Deterministic M10 gold engine:"
+#property version   "1.1"
+#property description "XauCloud -- standalone Market Edition. Deterministic M10 gold engine:"
 #property description "no AI/LLM calls, no cloud backend, no remote control channel. Zero network use."
 #property description "Forked from the XauCloud production EA's proven local signal/risk/exit logic --"
 #property description "trading/risk/SL/exit behavior matches the deterministic path already used offline."
@@ -2097,7 +2097,7 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //| INPUTS                                                           |
 //+------------------------------------------------------------------+
 input group "=== LICENSE ==="
-input string InpLicensePIN     = ""; // Market Edition (Claude XauCloud) Task 2: legacy field, no longer a required gate -- MQL5 Marketplace's own per-account activation handles licensing for this build. Safe to leave blank.
+input string InpLicensePIN     = ""; // Not required for this Market Edition build -- MQL5 Marketplace's own per-account activation handles licensing. Safe to leave blank.
 
 input group "=== RISK (Gate 4) ==="
 // Decision ownership map:
