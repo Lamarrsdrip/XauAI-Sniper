@@ -6,6 +6,7 @@ import { rateLimit } from "../auth.js";
 import { TradeJournalEntrySchema, WeeklyReportEntrySchema } from "../models/journal.js";
 import { reconcileTradeJournalEntry } from "../services/automatedTradeReconciliation.js";
 import { canonicalTradeIdentity, classifyTrade, dedupeByTradeIdentity, netResult } from "../services/performanceEngine.js";
+import { enqueueFinalTradeForXPost } from "../services/xTradePosting.js";
 
 export const MAX_JOURNAL_TRADES_PAGE_SIZE = 200;
 
@@ -98,16 +99,30 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
       // endpoint's own success response.
       if (isClosedTrade) {
         // Reconcile the canonical stored row, never the untrusted request
-        // object. Reconciliation is explicitly best-effort: once the write
-        // succeeds, this endpoint must remain successful for EA retries.
-        try {
-          const stored = await db.collection("trade_journal").findOne(
-            { trade_identity: doc["trade_identity"] },
-            { projection: { _id: 0 } },
-          );
-          if (stored) await reconcileTradeJournalEntry(stored);
-        } catch {
-          request.log.warn("journal reconciliation failed after a persisted trade");
+        // object. Both side effects below are explicitly best-effort: once
+        // the write succeeds, this endpoint must remain successful for EA
+        // retries, and one side effect failing must never block the other.
+        const stored = await db
+          .collection("trade_journal")
+          .findOne({ trade_identity: doc["trade_identity"] }, { projection: { _id: 0 } })
+          .catch(() => null);
+        if (stored) {
+          try {
+            await reconcileTradeJournalEntry(stored);
+          } catch {
+            request.log.warn("journal reconciliation failed after a persisted trade");
+          }
+          // X auto-post eligibility is decided later by the queue processor
+          // (auto_post_enabled + post_wins/post_losses/post_breakeven); this
+          // only makes the authenticated final close visible to that check.
+          // enqueueFinalTradeForXPost is itself idempotent on closed_trade_id,
+          // so a retried close event can never create a duplicate queue entry.
+          request.log.info({ closed_trade_id: doc["trade_identity"] }, "[x-posting] final closed trade received; queuing for auto-post eligibility check");
+          try {
+            await enqueueFinalTradeForXPost(stored);
+          } catch (error) {
+            request.log.warn({ error, closed_trade_id: doc["trade_identity"] }, "[x-posting] failed to queue closed trade for X posting");
+          }
         }
       }
 
