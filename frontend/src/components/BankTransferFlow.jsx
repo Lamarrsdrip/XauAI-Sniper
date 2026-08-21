@@ -33,7 +33,16 @@ const METHOD_ICON = { bank_transfer: Bank };
 // renders as a disabled "Coming soon" card whenever the backend reports it
 // unavailable, never a clickable option. Every availability flag is a UX
 // nicety -- the backend independently re-validates on every endpoint too.
-export function PaymentMethodModal({ api, priceDisplay, buyerName, buyerEmail, onPaystack, onNomba, onClose }) {
+//
+// Shared by both checkout flows: the anonymous lifetime-bot purchase
+// (buyerName/buyerEmail collected on the form, no auth) and the
+// authenticated signal-subscription purchase (Weekly/Monthly -- identity
+// comes from the cloud auth cookie, not form fields). `subtitle` overrides
+// the default "price · email" line, and `bankTransfer` overrides the
+// initiate endpoint/payload/credentials mode passed to BankTransferPanel --
+// the follow-up submitted/proof/status calls are reference-scoped and
+// identical either way, so they're never parametrized.
+export function PaymentMethodModal({ api, priceDisplay, buyerName, buyerEmail, subtitle, onPaystack, onNomba, onClose, bankTransfer }) {
   const [methods, setMethods] = useState(null);
   const [selected, setSelected] = useState(null);
   const [showBankTransfer, setShowBankTransfer] = useState(false);
@@ -56,6 +65,7 @@ export function PaymentMethodModal({ api, priceDisplay, buyerName, buyerEmail, o
         buyerEmail={buyerEmail}
         onBack={() => setShowBankTransfer(false)}
         onClose={onClose}
+        {...bankTransfer}
       />
     );
   }
@@ -71,7 +81,7 @@ export function PaymentMethodModal({ api, priceDisplay, buyerName, buyerEmail, o
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" data-testid="payment-method-modal">
       <div className="w-full max-w-sm rounded-[24px] border border-white/[0.1] bg-[#0a0a0e] p-6 shadow-2xl">
         <h3 className="font-heading text-xl font-bold text-white">How would you like to pay?</h3>
-        <p className="mt-1 font-mono text-[12px] text-white/40">{priceDisplay} · {buyerEmail}</p>
+        <p className="mt-1 font-mono text-[12px] text-white/40">{subtitle || `${priceDisplay} · ${buyerEmail}`}</p>
 
         {error && <div className="mt-4 text-[12px] text-rose-400" data-testid="payment-methods-error">{error}</div>}
 
@@ -140,7 +150,19 @@ export function PaymentMethodModal({ api, priceDisplay, buyerName, buyerEmail, o
   );
 }
 
-function BankTransferPanel({ api, buyerName, buyerEmail, onBack, onClose }) {
+// `initiateEndpoint`/`initiatePayload`/`withCredentials` default to the
+// original anonymous lifetime-bot flow. The signal-subscription flow (see
+// PurchaseSection and CloudSignalDashboard) passes
+// `/purchase/signals/bank-transfer/initiate`, `{ plan_id, origin_url }`,
+// and `withCredentials: true` instead -- everything after the order is
+// created (countdown, submitted/proof/status polling) is reference-scoped
+// and unchanged either way.
+function BankTransferPanel({
+  api, buyerName, buyerEmail, onBack, onClose,
+  initiateEndpoint = "/purchase/bank-transfer/initiate",
+  initiatePayload,
+  withCredentials = false,
+}) {
   const [order, setOrder] = useState(null);
   const [status, setStatus] = useState(null);
   const [error, setError] = useState("");
@@ -151,11 +173,13 @@ function BankTransferPanel({ api, buyerName, buyerEmail, onBack, onClose }) {
   const remaining = useCountdown(order?.expires_at);
 
   useEffect(() => {
-    axios.post(`${api}/purchase/bank-transfer/initiate`, { buyer_name: buyerName, buyer_email: buyerEmail })
+    const payload = initiatePayload || { buyer_name: buyerName, buyer_email: buyerEmail };
+    axios.post(`${api}${initiateEndpoint}`, payload, withCredentials ? { withCredentials: true } : undefined)
       .then(r => { setOrder(r.data); setStatus("BANK_TRANSFER_PENDING"); })
       .catch(e => setError(e.response?.data?.detail || "Could not start bank transfer. Please try again."))
       .finally(() => setLoading(false));
-  }, [api, buyerName, buyerEmail]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, initiateEndpoint]);
 
   const poll = useCallback(async (reference) => {
     try {

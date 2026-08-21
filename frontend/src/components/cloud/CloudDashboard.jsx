@@ -15,6 +15,7 @@ import AIMarketOutlookCard from "./AIMarketOutlookCard";
 import FourHourOutlookCard from "./FourHourOutlookCard";
 import M10VsOutlookCard, { M10_DECISION_LABELS, M30_LIFECYCLE_LABELS, FRESHNESS_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
+import CloudSignalDashboard from "./CloudSignalDashboard";
 import { API } from "@/lib/api";
 import * as UI from "@/lib/ui";
 import * as AK from "@/lib/appkit";
@@ -582,7 +583,13 @@ function AppShell({ active, setActive, children, logout, statusText, online, eaV
 }
 
 // ─── Main controller ──────────────────────────────────────────────────────────
-export default function CloudDashboard() {
+// Renamed from the old default export (2026-08) when entitlement gating was
+// added below -- this function's internals are UNCHANGED. It renders the
+// existing, fully-featured, bot-licensed Command Center dashboard exactly
+// as it always has. The new default export at the bottom of this file
+// decides, from GET /cloud/entitlement, whether a signed-in user sees this
+// (bot_license === true) or the new lightweight signal/trial dashboard.
+function LicensedCloudDashboard() {
   useAuthGuard();
   const navigate = useNavigate();
   const [active, setActive] = useState("home");
@@ -2913,4 +2920,54 @@ function PatternScannerPage({ setActive, events, heartbeat }) {
       </p>
     </div>
   );
+}
+
+// ─── Entitlement gate ──────────────────────────────────────────────────────
+// The single new decision point for this whole feature: every signed-in
+// Command Center visit fetches GET /cloud/entitlement once and branches on
+// it. bot_license === true is the ONLY condition that renders the
+// pre-existing LicensedCloudDashboard above -- and it renders completely
+// unmodified, with its own independent auth/data fetching exactly as
+// before. Everyone else (never purchased anything, on an active/expired
+// free trial, or on an active/expired Weekly/Monthly signal subscription)
+// gets the new, much smaller CloudSignalDashboard.
+//
+// Fail-safe: if this entitlement fetch itself errors (network blip, etc.,
+// as opposed to a 401 which means "not logged in"), this falls back to
+// LicensedCloudDashboard rather than to a broken/locked screen -- that is
+// exactly the dashboard every signed-in user already saw before this
+// feature existed (it already tolerates "no license linked yet" with an
+// empty state), so a transient entitlement-fetch failure can never regress
+// an existing customer below their pre-existing experience.
+export default function CloudDashboard() {
+  const navigate = useNavigate();
+  const [entitlement, setEntitlement] = useState(null);
+  const [entLoading, setEntLoading] = useState(true);
+  const [entFailed, setEntFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    commandAxios.get("/cloud/entitlement")
+      .then((r) => { if (!cancelled) setEntitlement(r.data); })
+      .catch((err) => {
+        if (cancelled) return;
+        if (err.response?.status === 401) { navigate("/command/login"); return; }
+        setEntFailed(true);
+      })
+      .finally(() => { if (!cancelled) setEntLoading(false); });
+    return () => { cancelled = true; };
+  }, [navigate]);
+
+  if (entLoading) return (
+    <div className="flex min-h-screen items-center justify-center bg-[#050507] text-white">
+      <div className="text-center">
+        <Loader2 className="mx-auto h-6 w-6 animate-spin text-gold-300" />
+        <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.22em] text-white/30">Loading</div>
+      </div>
+    </div>
+  );
+
+  if (entFailed || entitlement?.bot_license) return <LicensedCloudDashboard />;
+
+  return <CloudSignalDashboard entitlement={entitlement} />;
 }

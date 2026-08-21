@@ -30,6 +30,13 @@ export default function PurchaseSuccessPage() {
           setStatus("success");
           setPin(res.data.pin);
           setBuyerName(res.data.buyer_name || "");
+        } else if (res.data.payment_status === "success") {
+          // Signal-subscription purchases (Weekly/Monthly) fulfil without
+          // minting a bot-license PIN -- same success response shape, just
+          // no `pin`. Show the signal-plan confirmation instead of waiting
+          // forever for a PIN that will never arrive.
+          setStatus("signal_success");
+          setBuyerName(res.data.buyer_name || "");
         } else if (res.data.payment_status === "failed" || res.data.status === "failed") {
           setStatus("error");
         } else {
@@ -100,6 +107,25 @@ export default function PurchaseSuccessPage() {
                 OPEN COMMAND CENTER
               </a>
             </div>
+          </div>
+        )}
+
+        {status === "signal_success" && (
+          <div className="border border-border bg-card p-8" data-testid="payment-success-signals">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-[hsl(142,71%,45%)]/10 flex items-center justify-center mx-auto mb-4">
+                <Check size={32} weight="bold" className="text-[hsl(142,71%,45%)]" />
+              </div>
+              <h2 className="font-heading text-2xl font-bold mb-1">Payment Successful!</h2>
+              <p className="text-sm text-muted-foreground">Welcome{buyerName ? `, ${buyerName}` : ""}! Your signal plan is now active.</p>
+            </div>
+            <p className="text-sm text-muted-foreground mb-6 text-center">
+              Open your Command Center dashboard to see your Market Outlook, 10-minute engine signals, and billing details.
+            </p>
+            <a href="/command/dashboard" data-testid="signal-success-dashboard-link"
+              className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 bg-primary text-primary-foreground font-bold text-sm hover:-translate-y-[1px] transition-transform duration-150">
+              OPEN COMMAND CENTER
+            </a>
           </div>
         )}
 

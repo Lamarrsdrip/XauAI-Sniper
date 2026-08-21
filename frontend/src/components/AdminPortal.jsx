@@ -6,7 +6,7 @@ import {
   Key, GearSix, SignOut, ShieldCheck, Copy, Check, Trash, Plus,
   UserCircle, CurrencyNgn, Envelope, Lock, Eye, EyeSlash, ArrowLeft,
   FloppyDisk, Megaphone,
-  House, Pulse, TrendUp, Bell, ArrowClockwise, WarningCircle, Bank,
+  House, Pulse, TrendUp, Bell, ArrowClockwise, WarningCircle, Bank, Broadcast,
 } from "@phosphor-icons/react";
 
 const ax = axios.create({ withCredentials: true });
@@ -108,7 +108,7 @@ export default function AdminPortal({ api }) {
   // Trading / Comms / System — desktop sidebar, mobile horizontal scroll.
   const NAV_GROUPS = [
     { label: "Overview",  tabs: [["dashboard", "Dashboard", House]] },
-    { label: "Customers", tabs: [["pins", "Licenses", Key]] },
+    { label: "Customers", tabs: [["pins", "Licenses", Key], ["signals", "Signals", Broadcast]] },
     { label: "Money",     tabs: [["transactions", "Payments", CurrencyNgn], ["bankTransfers", "Bank Transfers", Bank]] },
     { label: "Trading",   tabs: [["command", "Bot Ops", Pulse], ["performance", "Performance", TrendUp]] },
     { label: "Comms",     tabs: [["marketing", "Marketing", Megaphone], ["notifications", "Notifications", Bell], ["email", "Email", Envelope], ["xPosting", "X Posting", Megaphone]] },
@@ -183,6 +183,7 @@ export default function AdminPortal({ api }) {
         <main className="min-w-0 flex-1">
           {tab === "dashboard"     && <DashboardTab     api={api} />}
           {tab === "pins"          && <PinsTab          api={api} />}
+          {tab === "signals"       && <SignalsTab       api={api} />}
           {tab === "command"       && <CommandOpsTab    api={api} />}
           {tab === "notifications" && <NotificationsTab api={api} />}
           {tab === "email"         && <EmailComposer    api={api} />}
@@ -197,6 +198,97 @@ export default function AdminPortal({ api }) {
       </div>
     </div>
   );
+}
+
+// Read-only admin visibility into the trial/subscription product. Approving
+// or rejecting an actual payment still happens on the existing Bank
+// Transfers tab (reused unchanged) -- this tab is status/reporting only.
+function SignalsTab({ api }) {
+  const [overview, setOverview] = useState(null);
+  const [users, setUsers] = useState(null);
+  const [message, setMessage] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const [ov, us] = await Promise.all([
+        ax.get(`${api}/admin/signals/overview`),
+        ax.get(`${api}/admin/signals/users`),
+      ]);
+      setOverview(ov.data);
+      setUsers(us.data.users || []);
+    } catch {
+      setMessage("Could not load signal trial/subscription data.");
+    }
+  }, [api]);
+  useEffect(() => { load(); }, [load]);
+
+  return <div className="max-w-4xl space-y-5" data-testid="admin-signals-tab">
+    <CardSection title="Trial & subscription overview">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        {[
+          ["Active trials", overview?.active_trials],
+          ["Expired trials", overview?.expired_trials],
+          ["Weekly subscribers", overview?.weekly_subscribers],
+          ["Monthly subscribers", overview?.monthly_subscribers],
+          ["Lifetime licenses", overview?.lifetime_licenses],
+          ["Pending signal transfers", overview?.pending_signal_bank_transfers],
+        ].map(([label, value]) => (
+          <div key={label} className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3">
+            <div className={LABEL}>{label}</div>
+            <div className="mt-1 font-mono text-lg font-bold text-white">{value ?? "—"}</div>
+          </div>
+        ))}
+      </div>
+      {message && <p className="mt-3 text-[12px] text-white/65">{message}</p>}
+      <p className="mt-4 text-[12px] text-white/40">
+        To approve or reject a pending signal-plan bank transfer, use the existing <strong>Bank Transfers</strong> tab --
+        signal-plan orders appear there like any other order, filterable by reference prefix <span className="font-mono">ASE-SIG</span>.
+      </p>
+    </CardSection>
+
+    <CardSection title="Users">
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12.5px]">
+          <thead>
+            <tr className="border-b border-white/[0.08] text-left text-white/40">
+              <th className="py-2 pr-3 font-medium">Customer</th>
+              <th className="py-2 pr-3 font-medium">Trial</th>
+              <th className="py-2 pr-3 font-medium">Subscription</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(users || []).map((u) => (
+              <tr key={u.user_id} className="border-b border-white/[0.04]">
+                <td className="py-2 pr-3">
+                  <div className="font-semibold text-white/85">{u.full_name || "—"}</div>
+                  <div className="text-white/40">{u.email || u.user_id}</div>
+                </td>
+                <td className="py-2 pr-3">
+                  {u.trial ? (
+                    <>
+                      <Badge tone={u.trial.status === "ACTIVE" ? "green" : "neutral"}>{u.trial.status}</Badge>
+                      <div className="mt-1 text-white/40">Started {fmtDate(u.trial.trial_started_at)}</div>
+                    </>
+                  ) : <span className="text-white/25">—</span>}
+                </td>
+                <td className="py-2 pr-3">
+                  {u.subscription ? (
+                    <>
+                      <Badge tone={u.subscription.active ? "green" : "neutral"}>{u.subscription.plan}{u.subscription.active ? "" : " (expired)"}</Badge>
+                      <div className="mt-1 text-white/40">Expires {fmtDate(u.subscription.expires_at)}</div>
+                    </>
+                  ) : <span className="text-white/25">—</span>}
+                </td>
+              </tr>
+            ))}
+            {(!users || users.length === 0) && (
+              <tr><td colSpan={3} className="py-4 text-center text-white/30">No trial or subscription activity yet.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </CardSection>
+  </div>;
 }
 
 function XPostingTab({ api }) {
