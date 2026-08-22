@@ -5,7 +5,6 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-route
 import Header from "@/components/Header";
 import HeroSection from "@/components/HeroSection";
 import TrustStrip from "@/components/TrustStrip";
-import FeaturesSection from "@/components/FeaturesSection";
 import DailyTradingResultsSection from "@/components/DailyTradingResultsSection";
 import GoldReplaySection from "@/components/GoldReplaySection";
 import HowItWorksSection from "@/components/HowItWorksSection";
@@ -58,14 +57,13 @@ function MainDashboard() {
       <Header activeSection={activeSection} onNavigate={scrollTo} goldPrice={goldPrice} />
       <WebsiteCampaignSlots />
       <main>
-        <section id="overview"><HeroSection goldPrice={goldPrice} /></section>
+        <section id="overview"><HeroSection /></section>
         <TrustStrip />
         <section id="performance">
           <GoldReplaySection api={API} />
           <DailyTradingResultsSection api={API} />
         </section>
         <section id="how-it-works"><HowItWorksSection /></section>
-        <section id="features"><FeaturesSection /></section>
         <ReassuranceSection />
         <section id="purchase"><PurchaseSection api={API} /></section>
         <ReleaseStrip api={API} />

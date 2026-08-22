@@ -45,4 +45,36 @@ describe("XauCloud customer surface cleanup contract", () => {
     expect(roadmap).toContain("text-white/90");
     expect(roadmap).toContain("text-white/80");
   });
+
+  test("removed Features section cannot return", () => {
+    const app = fs.readFileSync(path.join(root, "App.js"), "utf8");
+
+    expect(app).not.toContain("FeaturesSection");
+    expect(app).not.toContain('id="features"');
+    expect(
+      fs.existsSync(path.join(root, "components", "FeaturesSection.jsx"))
+    ).toBe(false);
+
+    const header = fs.readFileSync(
+      path.join(root, "components", "Header.jsx"),
+      "utf8"
+    );
+    expect(header).not.toContain('id: "features"');
+  });
+
+  test("removed hero Command Center preview card cannot return", () => {
+    const hero = fs.readFileSync(
+      path.join(root, "components", "HeroSection.jsx"),
+      "utf8"
+    );
+
+    expect(hero).not.toContain("ProductPreview");
+    expect(hero).not.toContain("Live product environment");
+    expect(hero).not.toContain("EA heartbeat");
+    expect(hero).not.toContain("Mobile Command Center");
+    // The approved hero headline/CTAs must survive untouched.
+    expect(hero).toContain("Professional automation for");
+    expect(hero).toContain("Get XauCloud");
+    expect(hero).toContain("Explore Command Center");
+  });
 });

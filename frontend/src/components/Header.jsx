@@ -5,7 +5,6 @@ import XauAiLogo from "./cloud/XauAiLogo";
 const NAV = [
   { id: "how-it-works", label: "How It Works" },
   { id: "performance",  label: "Performance"   },
-  { id: "features",     label: "Features"      },
   { id: "purchase",     label: "Pricing"       },
 ];
 
