@@ -54,6 +54,24 @@ describe("payment plan branching (approveBankTransfer)", () => {
     expect(state.emailCalls).not.toContain("sendPinEmail");
   });
 
+  it("never marks a signal-plan payment FULFILLED before the subscription actually exists -- a failure mid-grant leaves it retriable, not falsely 'done'", async () => {
+    const { sendSignalSubscriptionEmail } = await import("./paymentEmails.js");
+    (sendSignalSubscriptionEmail as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("SMTP down"));
+    await state.db.collection("payment_transactions").insertOne(bankTransferTx({ reference: "ASE-SIGBT-3", plan_id: "SIGNALS_WEEKLY", user_id: "user-11" }));
+
+    await expect(approveBankTransfer("ASE-SIGBT-3", "admin@xaucloud.io")).rejects.toThrow("SMTP down");
+
+    const tx = await state.db.collection("payment_transactions").findOne({ reference: "ASE-SIGBT-3" });
+    // The entitlement was already granted (activateSignalSubscription runs
+    // before the email step) -- but payment_status must NOT have flipped to
+    // FULFILLED, since that would make a retry report "already_fulfilled"
+    // without ever confirming the grant. This is the exact bug this test
+    // guards against: FULFILLED must never be set before the grant is
+    // durably confirmed to have happened.
+    expect(tx?.["payment_status"]).not.toBe("FULFILLED");
+    expect(state.db.collection("signal_subscriptions").docs).toHaveLength(1);
+  });
+
   it("approving the same signal-plan reference twice activates the subscription exactly once (idempotent)", async () => {
     await state.db.collection("payment_transactions").insertOne(bankTransferTx({ reference: "ASE-SIGBT-2", plan_id: "SIGNALS_MONTHLY", user_id: "user-10" }));
     const first = await approveBankTransfer("ASE-SIGBT-2", "admin@xaucloud.io");

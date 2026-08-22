@@ -154,11 +154,17 @@ export async function approveBankTransfer(reference: string, adminEmail: string)
 
   const amountFormatted = `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`;
   if (isSignalPlan(tx["plan_id"])) {
+    // Same safety ordering as the lifetime-license path below: the actual
+    // entitlement artifact (here, the signal_subscriptions row) is created
+    // BEFORE payment_status flips to FULFILLED. If this throws, the order
+    // stays in FULFILLING (not falsely marked done), so it is never
+    // reported "already_fulfilled" on retry without ever having granted
+    // anything.
+    await activateSubscriptionForReference(reference, tx, "Bank Transfer", amountFormatted);
     await db.collection("payment_transactions").updateOne(
       { reference },
       { $set: { payment_status: "FULFILLED", approved_by: adminEmail, approved_at: new Date().toISOString() } },
     );
-    await activateSubscriptionForReference(reference, tx, "Bank Transfer", amountFormatted);
     return { status: "approved" };
   }
 
@@ -242,8 +248,12 @@ export async function fulfillPayment(reference: string, source: string): Promise
   }
 
   if (isSignalPlan(tx["plan_id"])) {
-    await db.collection("payment_transactions").updateOne({ reference }, { $set: { payment_status: "FULFILLED" } });
+    // Same safety ordering as mintLicenseForReference below: grant the
+    // entitlement before marking FULFILLED, so a failure here can never be
+    // silently reported "already fulfilled" on retry without ever granting
+    // anything.
     await activateSubscriptionForReference(reference, tx, "Paystack", `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`);
+    await db.collection("payment_transactions").updateOne({ reference }, { $set: { payment_status: "FULFILLED" } });
     return { status: "success", buyer_name: String(tx["buyer_name"] ?? "") };
   }
 
@@ -314,10 +324,12 @@ export async function fulfillNombaPayment(reference: string, source: string): Pr
   }
 
   if (isSignalPlan(tx["plan_id"])) {
+    // Same safety ordering as mintLicenseForReference below: grant the
+    // entitlement before marking FULFILLED.
+    await activateSubscriptionForReference(reference, tx, "Nomba", `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`);
     await db
       .collection("payment_transactions")
       .updateOne({ reference }, { $set: { payment_status: "FULFILLED", nomba_transaction_id: result.nomba_transaction_id } });
-    await activateSubscriptionForReference(reference, tx, "Nomba", `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`);
     return { status: "success", buyer_name: String(tx["buyer_name"] ?? "") };
   }
 
