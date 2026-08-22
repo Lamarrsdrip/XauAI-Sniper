@@ -2040,7 +2040,7 @@ function BillingPage() {
         {ent && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {ent.bot_license && <span className="rounded-full bg-emerald-400/15 px-3 py-1 text-[11px] font-bold text-emerald-300">XauCloud Bot — Lifetime license active</span>}
-            {!ent.bot_license && ent.source === "trial" && <span className="rounded-full bg-gold-300/15 px-3 py-1 text-[11px] font-bold text-gold-200">Free Signal Trial · {ent.trial?.days_remaining ?? 0} market day{(ent.trial?.days_remaining ?? 0) === 1 ? "" : "s"} left</span>}
+            {!ent.bot_license && ent.source === "trial" && <span className="rounded-full bg-gold-300/15 px-3 py-1 text-[11px] font-bold text-gold-200">Free Signal Trial · {(ent.trial?.days_remaining ?? 0) === 0 ? "Last day" : `${ent.trial?.days_remaining ?? 0} market day${(ent.trial?.days_remaining ?? 0) === 1 ? "" : "s"} left`}</span>}
             {!ent.bot_license && ent.source === "subscription" && <span className="rounded-full bg-gold-300/15 px-3 py-1 text-[11px] font-bold text-gold-200">{ent.subscription?.plan === "WEEKLY" ? "Weekly Signals" : "Monthly Signals"} · active until {fmtDate(ent.subscription?.expires_at)}</span>}
             {!ent.bot_license && ent.source === "none" && <span className="rounded-full bg-white/[0.08] px-3 py-1 text-[11px] font-bold text-white/50">No signal plan active</span>}
           </div>

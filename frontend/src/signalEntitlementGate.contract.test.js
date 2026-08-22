@@ -50,6 +50,14 @@ describe("signal trial/subscription entitlement contract", () => {
     expect(signalDashboard).toMatch(/locked:\s*true/);
   });
 
+  test("the trial's last active day says 'Last day', never a confusing '0 market days left'", () => {
+    // days_remaining hits 0 while the trial is still ACTIVE (its own last
+    // day) -- showing "0 days left" next to full access reads as a
+    // contradiction.
+    expect(signalDashboard).toContain('"Last day"');
+    expect(dashboard).toContain('"Last day"');
+  });
+
   test("no guaranteed-profit language anywhere in the new signal dashboard", () => {
     expect(signalDashboard).not.toMatch(/guarantee(d)? (profit|return)/i);
     expect(signalDashboard).not.toMatch(/risk[- ]free/i);

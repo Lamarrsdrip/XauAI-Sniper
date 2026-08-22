@@ -58,9 +58,13 @@ function planSummary(entitlement) {
 
   if (source === "trial" && trial) {
     const days = trial.days_remaining ?? 0;
+    // days_remaining hits 0 on the trial's own last active day (it's still
+    // ACTIVE until trial_expires_at, at the end of that day) -- "0 market
+    // days left" would read as a contradiction next to full access, so say
+    // "Last day" instead of a confusing zero.
     return {
       title: "Free Signal Trial",
-      sub: `${days} market day${days === 1 ? "" : "s"} left`,
+      sub: days === 0 ? "Last day" : `${days} market day${days === 1 ? "" : "s"} left`,
       tone: "gold",
     };
   }
@@ -393,7 +397,7 @@ export default function CloudSignalDashboard({ entitlement: initialEntitlement }
 
       <div className="mx-auto max-w-5xl space-y-4 px-4 py-6 md:px-6">
 
-        <UI.Card>
+        <UI.Card tone={summary.tone}>
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="min-w-0">
               <div className="font-mono text-[10px] uppercase tracking-widest text-white/35">Your plan{me?.full_name ? ` · ${me.full_name}` : ""}</div>
