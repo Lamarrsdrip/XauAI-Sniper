@@ -54,7 +54,7 @@ bool XAU_LeaseLookupTrustedModulus(const string &keyId, string &modulusOut)
 //+------------------------------------------------------------------+
 //| Failure classification (Phase 6) -- replaces the single           |
 //| RESERVATION_BACKEND_UNREACHABLE bucket described in                |
-//| 02_reservation_flow_audit.md §4-5 with a strict, named set. Only  |
+//| 02_reservation_flow_audit.md S.4-5 with a strict, named set. Only  |
 //| TEMPORARY_CONNECTIVITY_FAILURE and SERVER_TEMPORARY_FAILURE may   |
 //| ever result in consulting the cached lease -- every other value   |
 //| blocks the trade exactly as today, unconditionally.                |
@@ -109,7 +109,7 @@ ENUM_XAU_LEASE_FAILURE_CLASS XAU_ClassifyReservationFailure(int httpCode, const 
       if(StringFind(responseBody, "PRIMARY_TERMINAL_ALREADY_ASSIGNED") >= 0 ||
          StringFind(responseBody, "NOT_CURRENT_HOLDER") >= 0)
          return XAU_LFC_AUTHORIZATION_FAILURE;
-      return XAU_LFC_AUTHENTICATION_FAILURE; // license/account-binding mismatches (Phase 2 audit §9)
+      return XAU_LFC_AUTHENTICATION_FAILURE; // license/account-binding mismatches (Phase 2 audit S.9)
    }
    if(httpCode == 409) return XAU_LFC_DUPLICATE_OR_CONFLICT;
    if(httpCode == 500 || httpCode == 502 || httpCode == 503 || httpCode == 504)
@@ -622,7 +622,7 @@ void XAU_LeaseQueueReconciliationEvent(const string &executionKey, const string 
 //+------------------------------------------------------------------+
 //| Minimal JSON field extraction -- raw substring search, matching   |
 //| this codebase's existing convention (per                          |
-//| audits/offline_lease/02_reservation_flow_audit.md §1: the existing|
+//| audits/offline_lease/02_reservation_flow_audit.md S.1: the existing|
 //| XAU_ClaimDirectionReservation() already parses "claimed":true and |
 //| "reservationId" this same way, not with a full JSON library).     |
 //| Only used to read a handful of known, backend-controlled response |
