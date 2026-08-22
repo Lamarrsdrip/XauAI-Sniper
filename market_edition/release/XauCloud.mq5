@@ -19631,6 +19631,15 @@ void CheckPyramidOpportunity()
                TimeToString(timingSourceBar, TIME_DATE|TIME_MINUTES), XAU_TimingStateName(pyramidTimingState), moveATR,
                TimeToString(timingSourceBar, TIME_DATE|TIME_MINUTES), pyramidTransition.exhaustionProbability);
 
+   // Marketplace-build-only: skip locally rather than send an order the
+   // broker is guaranteed to reject as "[Market closed]".
+   if(!XAU_MarketSessionTradeable())
+   {
+      PrintFormat("MARKET_SESSION_CLOSED_FINAL_SEND_BLOCK signal=%s reason=PYRAMID", isBuy ? "BUY" : "SELL");
+      XAU_PyramidGateReject(dir, "MARKET_SESSION_CLOSED");
+      return;
+   }
+
    // v6.25.11 owner directive -- restore the pre-v6.25.9 pyramid broker TP.
    // This is the existing pyramid target calculated above (campaign TP when
    // present, otherwise the normal R target), not a new exit system. The
@@ -23064,6 +23073,27 @@ void PrintBacktestAuditReport()
 // the soft blockers get bypassed, by design"). Hard safety below (hedge/
 // exposure/margin/broker/risk) is untouched and still applies to every
 // caller, manual override included.
+// Marketplace-build-only pre-check, added after a MetaQuotes Market
+// validation report flagged two entry attempts rejected by the broker as
+// "[Market closed]" during backtesting. Same session lookup already used
+// and proven inline inside XAU_TryForceOpenTrade below -- shared here so
+// every new-position broker-send path can skip locally instead of sending
+// a request that is guaranteed to be rejected. This only answers "would
+// the broker accept an order right now" -- it never touches which
+// direction to trade, when a signal fires, sizing, or exits.
+bool XAU_MarketSessionTradeable()
+{
+   if(SymbolInfoInteger(Symbol(), SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_DISABLED)
+      return false;
+   datetime srvNow = TimeCurrent();
+   MqlDateTime dtNow;
+   TimeToStruct(srvNow, dtNow);
+   datetime dayStart = srvNow - (dtNow.hour * 3600 + dtNow.min * 60 + dtNow.sec);
+   datetime sessFrom = 0, sessTo = 0;
+   return SymbolInfoSessionTrade(Symbol(), (ENUM_DAY_OF_WEEK)dtNow.day_of_week, 0, sessFrom, sessTo) &&
+          srvNow >= dayStart + sessFrom && srvNow < dayStart + sessTo;
+}
+
 bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isManualOverride = false, double explicitSL = 0.0)
 {
    g_lastOpenTradeFailureReason="PRE_BROKER_EXECUTION_GATE_REJECTED_SEE_EXACT_GATE_LOG";
@@ -24398,6 +24428,15 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
          PrintFormat("DIRECTION_EXCLUSIVITY_FINAL_SEND_BLOCK signal=%s reason=%s", signal == 1 ? "BUY" : "SELL", sendGuardReason);
          return false;
       }
+   }
+
+   // Marketplace-build-only: skip locally rather than send an order the
+   // broker is guaranteed to reject as "[Market closed]". Never a strategy
+   // decision -- see XAU_MarketSessionTradeable's own comment above.
+   if(!XAU_MarketSessionTradeable())
+   {
+      PrintFormat("MARKET_SESSION_CLOSED_FINAL_SEND_BLOCK signal=%s reason=%s", signal == 1 ? "BUY" : "SELL", reason);
+      return false;
    }
 
    bool requestOk;
@@ -38479,6 +38518,14 @@ void XAU_TryCounterExcursionEntry(int originalSignal, string setupName, string g
          PrintFormat("COUNTER_EXCURSION_REJECTED reason=DIRECTION_EXCLUSIVITY candidateId=%s detail=%s", candidateId, counterGuardReason);
          return;
       }
+   }
+
+   // Marketplace-build-only: skip locally rather than send an order the
+   // broker is guaranteed to reject as "[Market closed]".
+   if(!XAU_MarketSessionTradeable())
+   {
+      PrintFormat("MARKET_SESSION_CLOSED_FINAL_SEND_BLOCK candidateId=%s reason=COUNTER_EXCURSION", candidateId);
+      return;
    }
 
    trade.SetExpertMagicNumber(InpCounterExcursionMagicNumber);
