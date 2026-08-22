@@ -1277,6 +1277,10 @@ const BANK_TRANSFER_STATUS_TONE = {
   BANK_TRANSFER_REJECTED: "red",
   BANK_TRANSFER_EXPIRED: "red",
 };
+// Missing plan_id means an order predates the signal-plan feature -- those
+// are always lifetime bot purchases (the only product that existed then).
+const PLAN_LABEL = { SIGNALS_WEEKLY: "Weekly Signals", SIGNALS_MONTHLY: "Monthly Signals", BOT_LIFETIME: "Lifetime Bot" };
+const planLabel = (planId) => PLAN_LABEL[planId] || "Lifetime Bot";
 
 function BankTransfersTab({ api }) {
   const [settings, setSettings] = useState(null);
@@ -1399,7 +1403,7 @@ function BankTransfersTab({ api }) {
             <table className="w-full text-[12px] min-w-[760px]">
               <thead>
                 <tr className="border-b border-white/[0.06]">
-                  {["Reference","Buyer","Amount","Status","Proof","Date",""].map(col => (
+                  {["Reference","Buyer","Plan","Amount","Status","Proof","Date",""].map(col => (
                     <th key={col} className="px-5 py-2.5 text-left text-[10px] font-bold uppercase tracking-[0.12em] text-white/35">{col}</th>
                   ))}
                 </tr>
@@ -1409,6 +1413,7 @@ function BankTransfersTab({ api }) {
                   <tr key={t.reference}>
                     <td className="px-5 py-3 font-mono text-[11px] text-white/55">{t.reference}</td>
                     <td className="px-5 py-3"><div>{t.buyer_name}</div><div className="text-white/35">{t.buyer_email}</div></td>
+                    <td className="px-5 py-3"><Badge tone={t.plan_id && t.plan_id !== "BOT_LIFETIME" ? "amber" : "neutral"}>{planLabel(t.plan_id)}</Badge></td>
                     <td className="px-5 py-3 font-mono">₦{(t.amount_kobo / 100).toLocaleString()}</td>
                     <td className="px-5 py-3"><Badge tone={BANK_TRANSFER_STATUS_TONE[t.payment_status] || "neutral"}>{t.payment_status}</Badge></td>
                     <td className="px-5 py-3">{t.has_proof ? <Badge tone="green">Yes</Badge> : <Badge tone="neutral">No</Badge>}</td>
@@ -1444,6 +1449,7 @@ function BankTransfersTab({ api }) {
             </div>
             <div className="mt-3 space-y-1.5 text-[12px] text-white/60">
               <div>Buyer: {detail.buyer_name} · {detail.buyer_email}</div>
+              <div>Plan: {planLabel(detail.plan_id)}</div>
               <div>Amount: ₦{(detail.amount_kobo / 100).toLocaleString()}</div>
               <div>Expires: {detail.expires_at}</div>
               {detail.rejection_reason && <div>Rejection reason: {detail.rejection_reason}</div>}

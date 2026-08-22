@@ -64,6 +64,19 @@ describe("signal trial/subscription entitlement contract", () => {
   });
 });
 
+describe("admin bank transfer visibility contract", () => {
+  const portal = read("components/AdminPortal.jsx");
+
+  test("the review queue shows which plan an order is for -- not just the amount", () => {
+    // An admin previously had no way to tell a signal-plan order apart from
+    // a lifetime bot order without doing amount math. Guards against that
+    // regressing.
+    expect(portal).toContain('"Reference","Buyer","Plan","Amount"');
+    expect(portal).toContain("planLabel(t.plan_id)");
+    expect(portal).toContain("planLabel(detail.plan_id)");
+  });
+});
+
 describe("public pricing section contract", () => {
   test("renders all four plans: trial, weekly, monthly, and the lifetime bot", () => {
     expect(purchaseSection).toMatch(/badge="Free Trial"/);
