@@ -5,6 +5,32 @@ import { requireAdmin } from "../auth.js";
 import { resolveMonitorLicense } from "../services/license.js";
 
 const HiveScoreRequestSchema = z.object({ signature: z.string().optional().default(""), window_days: z.number().optional().default(7) });
+// v6.27.9 ShadowML: what the EA observed at one decision cycle -- the
+// existing rule-engine verdict alongside the existing ML/Hive learning
+// memory's opinion. Written once per genuine signal, joined to its eventual
+// trade outcome later by journal.ts (best-effort, by signature). This is a
+// decision LOG, not a new pattern-scoring corpus -- ml_patterns and
+// hive_signatures (the actual learning memory) are untouched.
+const ShadowDecisionSchema = z.object({
+  symbol: z.string().optional().default("XAUUSD"),
+  direction: z.string().optional().default("NONE"),
+  setup_type: z.string().optional().default(""),
+  regime: z.string().optional().default(""),
+  rule_score: z.number().optional().default(0),
+  rule_decision: z.string().optional().default(""),
+  ml_score: z.number().optional().default(0.5),
+  ml_samples: z.number().optional().default(0),
+  hive_verdict: z.string().optional().default("NONE"),
+  hive_verdict_int: z.number().optional().default(0),
+  hive_samples: z.number().optional().default(0),
+  hive_win_rate: z.number().optional().default(0.5),
+  hive_rollup_level: z.number().optional().default(-1),
+  signature: z.string().optional().default(""),
+  shadow_recommendation: z.string().optional().default("NONE"),
+  actual_action: z.string().optional().default("CANDIDATE"),
+  account: z.number().optional().default(0),
+  decision_time_utc: z.string().optional().default(""),
+});
 const PatternDataSchema = z.object({
   pin: z.string().optional().default(""),
   account_id: z.string().optional().default(""),
@@ -145,6 +171,84 @@ export async function registerMlRoutes(app: FastifyInstance): Promise<void> {
     } catch {
       return { wins: 0, losses: 0, total: 0, wr: 0.5, verdict: "NONE", level: -1, matched_signature: "" };
     }
+  });
+
+  // POST /ml/shadow/record -- v6.27.9 ShadowML (EA-consumed). Pure
+  // observation log; never read back by any live trading decision. Outcome
+  // join happens in journal.ts when the corresponding trade later closes.
+  app.post("/ml/shadow/record", async (request, reply) => {
+    const req = ShadowDecisionSchema.parse(request.body);
+    if (!req.signature) return reply.code(400).send({ detail: "signature is required" });
+    try {
+      await getDb()
+        .collection("ml_shadow_decisions")
+        .insertOne({ ...req, created_at: new Date().toISOString(), created_ts: Date.now() / 1000 });
+      return { status: "ok" };
+    } catch {
+      return { status: "error" };
+    }
+  });
+
+  // GET /admin/ml/shadow-stats -- v6.27.9 ShadowML admin view. Deliberately
+  // separate from /admin/ml/stats above rather than folded into it -- keeps
+  // the existing endpoint's contract untouched for any existing caller.
+  app.get("/admin/ml/shadow-stats", { preHandler: requireAdmin }, async () => {
+    const db = getDb();
+    const shadow = db.collection("ml_shadow_decisions");
+    const totalObservations = await shadow.countDocuments({});
+
+    const verdictBuckets = ["BOOST", "VETO", "NEUTRAL", "COLD_START"] as const;
+    const observationCounts: Record<string, number> = {};
+    for (const v of verdictBuckets) observationCounts[v] = await shadow.countDocuments({ hive_verdict: v });
+
+    const outcomeAgg = await shadow
+      .aggregate<{ _id: string; trades: number; wins: number; losses: number; totalPL: number }>([
+        { $match: { eventual_result: { $exists: true } } },
+        {
+          $group: {
+            _id: "$hive_verdict",
+            trades: { $sum: 1 },
+            wins: { $sum: { $cond: [{ $eq: ["$eventual_result", "WIN"] }, 1, 0] } },
+            losses: { $sum: { $cond: [{ $eq: ["$eventual_result", "LOSS"] }, 1, 0] } },
+            totalPL: { $sum: { $ifNull: ["$profit", 0] } },
+          },
+        },
+      ])
+      .toArray();
+
+    const outcomesByVerdict: Record<
+      string,
+      { trades: number; wins: number; losses: number; win_rate: number; avg_pl: number; expectancy: number }
+    > = {};
+    for (const row of outcomeAgg) {
+      const winRate = row.trades > 0 ? row.wins / row.trades : 0;
+      const avgPl = row.trades > 0 ? Math.round((row.totalPL / row.trades) * 100) / 100 : 0;
+      // Expectancy (avg P/L per trade) and avg_pl are the same figure here --
+      // reported under both names since both are asked for and this is the
+      // standard, honest definition of expectancy, not two different numbers.
+      outcomesByVerdict[row._id] = {
+        trades: row.trades,
+        wins: row.wins,
+        losses: row.losses,
+        win_rate: Math.round(winRate * 1000) / 10,
+        avg_pl: avgPl,
+        expectancy: avgPl,
+      };
+    }
+
+    const pendingCandidates = await shadow.countDocuments({ actual_action: "CANDIDATE", eventual_result: { $exists: false } });
+    const executed = await shadow.countDocuments({ actual_action: "EXECUTED" });
+    const skipped = await shadow.countDocuments({ actual_action: "SKIPPED" });
+
+    return {
+      total_observations: totalObservations,
+      observation_counts: observationCounts,
+      outcomes_by_verdict: outcomesByVerdict,
+      executed,
+      skipped,
+      pending_unjoined_candidates: pendingCandidates,
+      note: "Shadow mode: these results show what the EXISTING ML/Hive learning memory would have recommended. It does not influence live trading yet.",
+    };
   });
 
   // POST /ml/patterns/save -- server.py:5764

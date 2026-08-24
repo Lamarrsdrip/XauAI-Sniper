@@ -31,6 +31,28 @@ class FakeCollection {
     const rows = this.docs.filter((d) => Object.entries(query).every(([k, v]) => d[k] === v));
     return { sort: () => ({ toArray: async () => structuredClone(rows) }) };
   }
+  // Operator-aware (adds $exists) matcher, used only by findOneAndUpdate --
+  // the plain-equality methods above are untouched, matching every existing
+  // passing test's expectations exactly.
+  private matchesWithOperators(doc: Doc, query: Doc): boolean {
+    return Object.entries(query).every(([key, expected]) => {
+      if (expected && typeof expected === "object" && !Array.isArray(expected) && "$exists" in (expected as Doc)) {
+        return (expected as Doc)["$exists"] ? doc[key] !== undefined : doc[key] === undefined;
+      }
+      return doc[key] === expected;
+    });
+  }
+  async findOneAndUpdate(query: Doc, update: { $set?: Doc }, options: { sort?: Doc } = {}) {
+    let candidates = this.docs.filter((d) => this.matchesWithOperators(d, query));
+    if (options.sort) {
+      const [[key, dir]] = Object.entries(options.sort);
+      candidates = [...candidates].sort((a, b) => (dir === -1 ? 1 : -1) * String(a[key]).localeCompare(String(b[key])));
+    }
+    const found = candidates[0];
+    if (!found) return null;
+    Object.assign(found, structuredClone(update.$set ?? {}));
+    return structuredClone(found);
+  }
 }
 
 class FakeDb {
@@ -130,5 +152,72 @@ describe("POST /journal/log wires an authenticated final close into the X-post q
     });
     expect(response.json()).toMatchObject({ status: "ok" });
     expect(state.db.collection("x_trade_posts").docs).toHaveLength(0);
+  });
+});
+
+describe("v6.27.9 ShadowML — closed trade joins back to its pending shadow observation", () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    state.db = new FakeDb();
+    reconcileTradeJournalEntry.mockClear();
+    reconcileTradeJournalEntry.mockResolvedValue(null);
+    app = await createApp();
+  });
+
+  it("marks the matching pending shadow record EXECUTED with the real outcome", async () => {
+    state.db.collection("ml_shadow_decisions").docs.push({
+      signature: "1|2|3|4|5|6|7",
+      hive_verdict: "BOOST",
+      actual_action: "CANDIDATE",
+      decision_time_utc: "2026.08.24 11:59:00",
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/journal/log",
+      payload: closedTradePayload({ signature: "1|2|3|4|5|6|7", result: "WIN", profit: 250 }),
+    });
+    expect(response.json()).toMatchObject({ status: "ok" });
+    const shadow = state.db.collection("ml_shadow_decisions").docs[0]!;
+    expect(shadow["actual_action"]).toBe("EXECUTED");
+    expect(shadow["eventual_result"]).toBe("WIN");
+    expect(shadow["profit"]).toBe(250);
+    expect(shadow["trade_id"]).toBeTruthy();
+  });
+
+  it("does not re-join an already-joined shadow record on a later unrelated close", async () => {
+    state.db.collection("ml_shadow_decisions").docs.push({
+      signature: "1|2|3|4|5|6|7",
+      hive_verdict: "BOOST",
+      actual_action: "EXECUTED",
+      eventual_result: "WIN",
+      profit: 250,
+    });
+    await app.inject({
+      method: "POST",
+      url: "/journal/log",
+      payload: closedTradePayload({ ticket: 2002, signature: "1|2|3|4|5|6|7", result: "LOSS", profit: -90 }),
+    });
+    const shadow = state.db.collection("ml_shadow_decisions").docs[0]!;
+    // Untouched -- still the original WIN/250, not overwritten by the second trade.
+    expect(shadow["eventual_result"]).toBe("WIN");
+    expect(shadow["profit"]).toBe(250);
+  });
+
+  it("a closed trade with no matching shadow observation still succeeds normally", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/journal/log",
+      payload: closedTradePayload({ signature: "no-match-signature" }),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "ok" });
+    expect(state.db.collection("ml_shadow_decisions").docs).toHaveLength(0);
+  });
+
+  it("a closed trade with no signature at all does not touch the shadow collection", async () => {
+    const response = await app.inject({ method: "POST", url: "/journal/log", payload: closedTradePayload({ ticket: 3003 }) });
+    expect(response.statusCode).toBe(200);
+    expect(state.db.collection("ml_shadow_decisions").docs).toHaveLength(0);
   });
 });

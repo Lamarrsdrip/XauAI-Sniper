@@ -96,6 +96,32 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
         } catch {
           /* best-effort, matches Python's logged-but-swallowed exception */
         }
+
+        // v6.27.9 ShadowML: join this closed trade back to whichever pending
+        // shadow observation (same signature, most recent, not yet joined)
+        // this trade actually came from -- lets the admin shadow-stats view
+        // measure real outcomes, not just verdict counts. Best-effort, never
+        // affects this endpoint's own success response; a trade with no
+        // matching shadow observation (e.g. from before this build) simply
+        // matches nothing here.
+        try {
+          const outcome = entry.result === "WIN" ? "WIN" : entry.result === "LOSS" ? "LOSS" : "BREAKEVEN";
+          await db.collection("ml_shadow_decisions").findOneAndUpdate(
+            { signature: entry.signature, actual_action: "CANDIDATE", eventual_result: { $exists: false } },
+            {
+              $set: {
+                actual_action: "EXECUTED",
+                eventual_result: outcome,
+                profit: entry.profit,
+                trade_id: doc["trade_identity"],
+                joined_at: new Date().toISOString(),
+              },
+            },
+            { sort: { decision_time_utc: -1 } },
+          );
+        } catch {
+          /* best-effort */
+        }
       }
 
       // Real-time Outlook signal reconciliation -- matches this closed trade
