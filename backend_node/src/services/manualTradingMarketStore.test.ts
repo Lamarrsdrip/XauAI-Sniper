@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type Update = { key: Record<string, unknown>; update: Record<string, unknown> };
+type Update = { key: Record<string, unknown>; update: Record<string, unknown>[] };
 const state = vi.hoisted(() => ({ writes: [] as Update[] }));
 
 vi.mock("../db.js", () => ({
   getDb: () => ({
     collection: () => ({
-      updateOne: async (key: Record<string, unknown>, update: Record<string, unknown>) => {
+      updateOne: async (key: Record<string, unknown>, update: Record<string, unknown>[]) => {
         state.writes.push({ key, update });
       },
     }),
@@ -26,7 +26,9 @@ describe("Manual Trading Intelligence broker quote persistence", () => {
     expect(state.writes).toHaveLength(3);
     for (const write of state.writes) {
       expect(write.key).toMatchObject({ account: "476396807", symbol: "XAUUSD" });
-      expect(write.update.$set).toMatchObject({ brokerSymbol: "XAUUSDm", source: "ea-stream(spot)" });
+      expect(write.update).toHaveLength(1);
+      expect(write.update[0]?.$set).toMatchObject({ brokerSymbol: "XAUUSDm", source: "ea-stream(spot)", c: 4380.2895 });
+      expect((write.update[0]?.$set as Record<string, unknown>)?.samples).toEqual({ $add: [{ $ifNull: ["$samples", 0] }, 1] });
     }
     expect(receipt).toMatchObject({ persisted: true, normalizedSymbol: "XAUUSD", sourceAt: "2026-08-23T12:00:00.000Z", close: 4380.2895 });
   });

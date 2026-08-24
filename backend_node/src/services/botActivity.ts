@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { getDb } from "../db.js";
 import { normalizeLicenseKey } from "./license.js";
 import { recordAuditableEaDecision, recordVerifiedManualTradingQuote } from "./manualTradingMarketStore.js";
+import { recordDiagnostic } from "./diagnostics.js";
 
 export interface BotActivityDetails {
   license_key?: string;
@@ -100,7 +101,8 @@ export async function storeBotActivity(
     try {
       manualMarketQuote = { ...(await recordVerifiedManualTradingQuote({ account: account || "", symbol: symbol || "", receivedAt: now, marketThesis: details["market_thesis"] })) };
       await recordAuditableEaDecision({ at: now, account: account || "", symbol: symbol || "", eventType: ev, severity: sev, category, message: String(message ?? ""), details });
-    } catch {
+    } catch (error) {
+      recordDiagnostic("warning", "manual-trading-market-store", error, { code: "BROKER_CANDLE_PERSIST_FAILED" });
       /* A candle-store failure must not affect an EA acknowledgement. */
     }
     return { ...existing, ...patch, manual_market_quote: manualMarketQuote };
@@ -157,7 +159,8 @@ export async function storeBotActivity(
       marketThesis: details["market_thesis"],
     })) };
     await recordAuditableEaDecision({ at: now, account: account || "", symbol: symbol || "", eventType: ev, severity: sev, category, message: String(message ?? ""), details });
-  } catch {
+  } catch (error) {
+    recordDiagnostic("warning", "manual-trading-market-store", error, { code: "BROKER_CANDLE_PERSIST_FAILED" });
     /* Manual Trading Intelligence will fail closed until its candle history exists. */
   }
 

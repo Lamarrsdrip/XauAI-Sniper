@@ -6,8 +6,30 @@ import { storeBotActivity } from "../../services/botActivity.js";
 import { BotHeartbeatReqSchema } from "../../models/cloudMonitor.js";
 import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
 import { normalizeGoldSymbol } from "../../services/goldSymbol.js";
+import { getFourHourCurrent, reviewFourHourOutlook } from "../../services/fourHourOutlookService.js";
+import { recordDiagnostic } from "../../services/diagnostics.js";
 
 const NOISY_STALE_ERRORS = new Set(["MQL ERROR 5035"]);
+
+export function heartbeatMarketDetails(req: {
+  license_key?: string;
+  market_thesis?: Record<string, unknown> | null;
+  m10_signal?: Record<string, unknown> | null;
+}): Record<string, unknown> {
+  const details: Record<string, unknown> = {
+    license_key: req.license_key ?? "",
+    market_thesis: req.market_thesis ?? {},
+    source: "HEARTBEAT",
+  };
+  // An absent M10 reading is not evidence. Persisting `{}` here made each
+  // 20-second quote heartbeat newer than the EA's genuine completed-scan
+  // activity, so Command Center selected an empty object and rendered
+  // Evidence #— / UNKNOWN. Preserve M10 only when the EA actually sent it.
+  if (req.m10_signal && Object.keys(req.m10_signal).length > 0) {
+    details["m10_signal"] = req.m10_signal;
+  }
+  return details;
+}
 
 /** Port of server.py:7277 `POST /cloud/monitor/heartbeat` -- remote monitoring only, never executes trades. */
 export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<void> {
@@ -69,12 +91,11 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
     // that exact quote through the existing activity/candle pipeline whenever
     // a heartbeat arrives; this is not a second price source.  A quiet M10
     // decision loop must never make a connected terminal look market-stale.
-    const marketDetails = {
+    const marketDetails = heartbeatMarketDetails({
       license_key: licenseKey,
-      market_thesis: req.market_thesis ?? {},
-      m10_signal: req.m10_signal ?? {},
-      source: "HEARTBEAT",
-    };
+      market_thesis: req.market_thesis,
+      m10_signal: req.m10_signal,
+    });
     const quote = extractEvidenceQuoteFromDetails(marketDetails, now.toISOString());
     let marketData: Record<string, unknown> = {
       source: "EA_HEARTBEAT",
@@ -108,6 +129,18 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
         evidence_timestamp: receipt["sourceAt"] ?? quote.quote_at ?? null,
         close: receipt["close"] ?? quote.mid ?? null,
       };
+      if (receipt["persisted"] === true) {
+        // Reuse the one existing 4H engine. When its current output is absent
+        // or stale, let the first successful broker write review immediately
+        // instead of leaving the UI unavailable until a background-loop tick.
+        void (async () => {
+          try {
+            if (!(await getFourHourCurrent())) await reviewFourHourOutlook();
+          } catch (error) {
+            recordDiagnostic("warning", "manual-trading-intelligence", error, { code: "IMMEDIATE_REVIEW_FAILED" });
+          }
+        })();
+      }
     }
 
     const noisyStaleError = NOISY_STALE_ERRORS.has(String(req.last_error || "").trim().toUpperCase());

@@ -70,24 +70,26 @@ export async function recordVerifiedManualTradingQuote(args: {
     const key = { account: args.account, symbol: normalizedSymbol, timeframe: name, openTime };
     await db.collection("manual_trading_broker_candles").updateOne(
       key,
-      {
-        $setOnInsert: {
+      [{
+        // A single aggregation-pipeline $set is intentional. The former
+        // update placed h/l/c/bid/ask/source/brokerSymbol in multiple update
+        // operators at once ($setOnInsert + $min/$max/$set), which MongoDB
+        // rejects as conflicting paths before it writes anything.
+        $set: {
           ...key,
           brokerSymbol: String(args.symbol),
-          o: mid,
-          h: mid,
-          l: mid,
+          o: { $ifNull: ["$o", mid] },
+          h: { $max: [{ $ifNull: ["$h", mid] }, mid] },
+          l: { $min: [{ $ifNull: ["$l", mid] }, mid] },
           c: mid,
-          firstSourceAt: sourceAt,
+          firstSourceAt: { $ifNull: ["$firstSourceAt", sourceAt] },
+          lastSourceAt: sourceAt,
           source: "ea-stream(spot)",
           bid,
           ask,
+          samples: { $add: [{ $ifNull: ["$samples", 0] }, 1] },
         },
-        $min: { l: mid },
-        $max: { h: mid },
-        $set: { c: mid, bid, ask, lastSourceAt: sourceAt, source: "ea-stream(spot)", brokerSymbol: String(args.symbol) },
-        $inc: { samples: 1 },
-      },
+      }],
       { upsert: true },
     );
   }));
