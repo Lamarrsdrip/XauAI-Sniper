@@ -1948,7 +1948,7 @@
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
 #property version   "6.280"
-#property description "XAUCloud-Combined EXPERIMENTAL build: FixedSLTP's broker-side SL+TP at entry PLUS ShadowML's observation-only ML/Hive shadow recording, together. NOT the production build. NOT compiled. NOT tested. Combines two independently-tested changes; the combination itself has not been separately verified end-to-end."
+#property description "XAUCloud-Fixed candidate build: broker-side SL+TP attached together at entry (real $10 SL / 60-pip=$6 TP, no manual floating-profit close) PLUS observation-only ML/Hive shadow recording. Audited 2026-08-24: order-send, reconciliation, and shadow write path verified against production DB. Still requires compile + Strategy Tester validation before any production promotion."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
 #property description "or fail closed; no silent downscaling. Real broker margin check."
@@ -2034,9 +2034,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "XAUCloud-Combined_v6.28.0"
+#define XAUAI_EA_VERSION "XAUCloud-Fixed_v6.28.0"
 #define XAUAI_EA_VERSION_NUM "6.280"
-#define XAUAI_BUILD_HASH "xaucloud-combined-fixedsltp-plus-shadowml-20260824"
+#define XAUAI_BUILD_HASH "xaucloud-fixed-audited-broker-tp-plus-shadowml-20260824"
 
 // v6.26.0 owner directive (2026-08-05): permanent migration off the R
 // (risk-multiple) measurement system. Every internal exit/protection
@@ -24730,10 +24730,25 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       rawLots, lots, riskAmount, actualRiskUSD,
       (balance > 0.0 ? actualRiskUSD / balance * 100.0 : 0.0), marginNeeded);
 
+   // v6.27.8 FixedSLTP: this entry becomes a GENERAL position (see
+   // XAU_OwnerExitProfileForEntryRegime -- BREAKOUT_UP/BREAKOUT_DOWN regimes
+   // become OWNER_EXIT_BREAKOUT, everything else becomes OWNER_EXIT_GENERAL)
+   // unless it inherited an already-inverted BREAKOUT campaign. Only GENERAL
+   // gets a real broker-side TP attached here; BREAKOUT keeps sending 0.0,
+   // completely unchanged, so its existing trailing/protection ownership
+   // (XAU_ComputeOwnerRequiredFloorPips / XAU_ComputePrimaryExitFloor) is
+   // untouched. Computed here, BEFORE the EXECUTING log line, specifically
+   // so that log prints the value actually sent to the broker -- printing
+   // the stale, never-sent `tp` (the old R-multiple analytical value) here
+   // would silently disagree with what the position actually opens with,
+   // exactly the "two logged values that can drift apart" class of bug this
+   // file's own audits elsewhere call out and fix.
+   bool pendingIsGeneralProfile = (XAU_OwnerExitProfileForEntryRegime(frozenEntryRegime) == OWNER_EXIT_GENERAL);
+   double brokerTP = pendingIsGeneralProfile ? XAU_FixedSixtyPipTPPrice(price, signal, digits) : 0.0;
    Print("EXECUTING: ", signal > 0 ? "BUY" : "SELL",
          " Price=", DoubleToString(price, digits),
          " SL=", DoubleToString(sl, digits),
-         " TP=", DoubleToString(tp, digits),
+         " TP=", DoubleToString(brokerTP, digits),
          " Lots=", DoubleToString(lots, lotDigits),
          " | ", reason);
    g_lastTradeReason = reason;
@@ -24767,17 +24782,9 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    }
 
    bool requestOk;
-   // v6.27.8 FixedSLTP: this entry becomes a GENERAL position (see
-   // XAU_OwnerExitProfileForEntryRegime -- BREAKOUT_UP/BREAKOUT_DOWN regimes
-   // become OWNER_EXIT_BREAKOUT, everything else becomes OWNER_EXIT_GENERAL)
-   // unless it inherited an already-inverted BREAKOUT campaign. Only GENERAL
-   // gets a real broker-side TP attached here; BREAKOUT keeps sending 0.0,
-   // completely unchanged, so its existing trailing/protection ownership
-   // (XAU_ComputeOwnerRequiredFloorPips / XAU_ComputePrimaryExitFloor) is
-   // untouched. `tp` (the old R-multiple analytical value, never sent to the
-   // broker) is left alone; this is a new, separate value.
-   bool pendingIsGeneralProfile = (XAU_OwnerExitProfileForEntryRegime(frozenEntryRegime) == OWNER_EXIT_GENERAL);
-   double brokerTP = pendingIsGeneralProfile ? XAU_FixedSixtyPipTPPrice(price, signal, digits) : 0.0;
+   // pendingIsGeneralProfile/brokerTP are computed earlier now, right before
+   // the EXECUTING log line above, so that diagnostic line reports the real
+   // value being sent -- see the comment there.
    string ownerDirectionComment=StringFormat("XAU-SNIPER|ORIG=%s|EXEC=%s|REG=%s|INV=%s|%s",
       ownerOriginalSignalDirection==1?"BUY":"SELL",signal==1?"BUY":"SELL",
       XAU_OwnerRegimeLabel(frozenEntryRegime),breakoutInversionApplied?"Y":"N",reason);
