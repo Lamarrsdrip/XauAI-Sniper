@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateMarketData } from "./fourHourOutlookService.js";
+import { isFourHourOutlookExpired, validateMarketData } from "./fourHourOutlookService.js";
 import type { MarketData } from "./fourHourFeed.js";
 
 function market(overrides: Partial<MarketData> = {}): MarketData {
@@ -19,5 +19,8 @@ describe("Manual Trading Intelligence data gate", () => {
   });
   it("accepts one fresh verified quote; M10 snapshot count is not a 4H availability gate", () => {
     expect(validateMarketData(market({ snapshots: [market().latest] }))).toEqual({ ok: true, reason: "" });
+  });
+  it("replaces an expired outlook even while broker history is still accumulating", () => {
+    expect(isFourHourOutlookExpired({ expiresAt: "2026-08-19T01:46:35.828Z" }, Date.parse("2026-08-24T09:23:45.838Z"))).toBe(true);
   });
 });

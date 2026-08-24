@@ -86,6 +86,10 @@ function statusFromForecast(f: FourHourForecast): FourHourDoc["status"] {
   return "ACTIVE";
 }
 
+export function isFourHourOutlookExpired(doc: Pick<FourHourDoc, "expiresAt">, nowMs = Date.now()): boolean {
+  return new Date(doc.expiresAt).getTime() <= nowMs;
+}
+
 async function getCurrent(): Promise<FourHourDoc | null> {
   return (await getDb().collection("four_hour_outlooks").findOne({ symbol: SYMBOL }, { projection: { _id: 0 } })) as FourHourDoc | null;
 }
@@ -255,6 +259,17 @@ export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
 
   if (!current) return publishNew(forecast, null, "INITIAL");
 
+  // Expiry must be handled before the partial-history branch. Previously an
+  // expired genuine document had marketDataAt refreshed forever while its old
+  // expiresAt remained unchanged; getFourHourCurrent correctly rejected it,
+  // leaving the card permanently DATA_UNAVAILABLE despite a healthy feed.
+  const expired = isFourHourOutlookExpired(current, now.getTime());
+  if (expired) {
+    await finalizeHistory(current, "EXPIRED");
+    console.log(`4H_OUTLOOK_EXPIRED id=${current.id} dir=${current.direction} mfe=${current.mfePips} mae=${current.maePips}`);
+    return publishNew(forecast, current, "SCHEDULED_REFRESH");
+  }
+
   // A new installation starts with a real price but not enough D1/H4 history.
   // It may state NO SETUP, but it must not invalidate or flip a thesis from a
   // partial series. This is a data-availability state, not market evidence.
@@ -265,13 +280,6 @@ export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
       { $set: { lastReviewedAt: reviewedAt, nextScheduledReviewAt: new Date(now.getTime() + REVIEW_INTERVAL_MS).toISOString(), currentPrice: validMd.price, marketDataAt: reviewedAt, dataStale: false, dataStatus: validMd.dataStatus } },
     );
     return { ...current, lastReviewedAt: reviewedAt, currentPrice: validMd.price, marketDataAt: reviewedAt, dataStale: false, dataStatus: validMd.dataStatus };
-  }
-
-  const expired = new Date(current.expiresAt).getTime() <= now.getTime();
-  if (expired) {
-    await finalizeHistory(current, "EXPIRED");
-    console.log(`4H_OUTLOOK_EXPIRED id=${current.id} dir=${current.direction} mfe=${current.mfePips} mae=${current.maePips}`);
-    return publishNew(forecast, current, "SCHEDULED_REFRESH");
   }
 
   // Material invalidation / change detection.
