@@ -247,4 +247,24 @@ describe("X auto-post queue + eligibility", () => {
     expect(row["x_post_id"]).toBe("17000000002");
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+
+  it("recovers an interrupted worker claim and resumes the same durable job", async () => {
+    await setSettings({ auto_post_enabled: true, last_auto_post_at: new Date(Date.now() - 60_000).toISOString() });
+    const trade = closedTrade({ profit: 20 });
+    state.db.collection("x_trade_posts").docs.push({
+      id: "xpost-restart",
+      idempotency_key: "x_trade_post:restart",
+      closed_trade_id: "restart",
+      trade,
+      status: "PROCESSING",
+      retry_count: 0,
+      attempted_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 201, headers: new Headers(), json: async () => ({ data: { id: "17000000003" } }) })));
+    await processQueuedXTradePosts();
+    const row = state.db.collection("x_trade_posts").docs[0]!;
+    expect(row["status"]).toBe("POSTED");
+    expect(row["x_post_id"]).toBe("17000000003");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
 });

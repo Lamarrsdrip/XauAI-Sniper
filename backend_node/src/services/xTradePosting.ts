@@ -182,7 +182,7 @@ async function failXTradePost(row: Record<string, unknown>, error?: unknown): Pr
 async function blockInvalidXTradePost(row: Record<string, unknown>, checked: Extract<FinalTradeValidation, { valid: false }>): Promise<void> {
   const now = new Date().toISOString();
   await getDb().collection("x_trade_posts").updateOne(
-    { idempotency_key: String(row["idempotency_key"] ?? ""), status: { $in: RETRYABLE_STATUSES } },
+    { idempotency_key: String(row["idempotency_key"] ?? ""), status: { $in: [...RETRYABLE_STATUSES, ...PROCESSING_STATUSES] } },
     { $set: { status: "BLOCKED_INVALID_TRADE_DATA", trade: checked.trade, blocked_at: now, failure_category: checked.reason, last_attempt_at: now } },
   );
   xPostLog("blocked_invalid_trade_data", { closed_trade_id: row["closed_trade_id"], reason: checked.reason });
@@ -195,7 +195,7 @@ async function recoverInterruptedPosts(): Promise<void> {
   for (const row of rows) {
     await coll.updateOne(
       { idempotency_key: String(row["idempotency_key"] ?? ""), status: { $in: PROCESSING_STATUSES } },
-      { $set: { status: "RETRYING", failure_category: "WORKER_RESTART_RECOVERY", next_attempt_at: new Date().toISOString() } },
+      { $set: { status: "RETRYING", failure_category: "WORKER_RESTART_RECOVERY", next_attempt_at: staleAt } },
     );
     xPostLog("recovered_interrupted_post", { closed_trade_id: row["closed_trade_id"] });
   }
