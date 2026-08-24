@@ -19,7 +19,7 @@ describe("Manual Trading Intelligence broker quote persistence", () => {
   beforeEach(() => { state.writes = []; });
 
   it("accepts XAUUSDm as canonical XAUUSD and retains its broker symbol", async () => {
-    await recordVerifiedManualTradingQuote({
+    const receipt = await recordVerifiedManualTradingQuote({
       account: "476396807", symbol: "XAUUSDm", receivedAt: new Date("2026-08-23T12:00:00Z"),
       marketThesis: { live_bid: 4380.123, live_ask: 4380.456, evidence_time_utc: "2026.08.23 12:00:00" },
     });
@@ -28,13 +28,15 @@ describe("Manual Trading Intelligence broker quote persistence", () => {
       expect(write.key).toMatchObject({ account: "476396807", symbol: "XAUUSD" });
       expect(write.update.$set).toMatchObject({ brokerSymbol: "XAUUSDm", source: "ea-stream(spot)" });
     }
+    expect(receipt).toMatchObject({ persisted: true, normalizedSymbol: "XAUUSD", sourceAt: "2026-08-23T12:00:00.000Z", close: 4380.2895 });
   });
 
   it("rejects a non-Gold quote instead of remapping it to Gold", async () => {
-    await recordVerifiedManualTradingQuote({
+    const receipt = await recordVerifiedManualTradingQuote({
       account: "476396807", symbol: "EURUSD", receivedAt: new Date(),
       marketThesis: { live_bid: 4380, live_ask: 4381 },
     });
     expect(state.writes).toHaveLength(0);
+    expect(receipt).toMatchObject({ persisted: false, normalizedSymbol: "EURUSD" });
   });
 });

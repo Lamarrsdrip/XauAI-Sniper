@@ -18,6 +18,13 @@ const TIMEFRAMES = [
   { name: "D1", seconds: 24 * 60 * 60 },
 ] as const;
 
+export interface VerifiedManualQuoteReceipt {
+  persisted: boolean;
+  normalizedSymbol: string;
+  sourceAt: string | null;
+  close: number | null;
+}
+
 function finite(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
@@ -40,15 +47,17 @@ export async function recordVerifiedManualTradingQuote(args: {
   symbol: string;
   receivedAt: Date;
   marketThesis: unknown;
-}): Promise<void> {
+}): Promise<VerifiedManualQuoteReceipt> {
   const thesis = (args.marketThesis && typeof args.marketThesis === "object" ? args.marketThesis : {}) as Record<string, unknown>;
   const bid = finite(thesis["live_bid"]);
   const ask = finite(thesis["live_ask"]);
-  if (!args.account || !isGoldSymbol(args.symbol) || bid == null || ask == null || ask < bid || bid < GOLD_MIN || ask > GOLD_MAX) return;
+  const normalizedSymbol = normalizeGoldSymbol(args.symbol);
+  const rejected = { persisted: false, normalizedSymbol, sourceAt: null, close: null };
+  if (!args.account || !isGoldSymbol(args.symbol) || bid == null || ask == null || ask < bid || bid < GOLD_MIN || ask > GOLD_MAX) return rejected;
 
   const sourceAt = isoFromEvidence(thesis["evidence_time_utc"], args.receivedAt);
   const sourceMs = new Date(sourceAt).getTime();
-  if (!Number.isFinite(sourceMs)) return;
+  if (!Number.isFinite(sourceMs)) return rejected;
   const mid = (bid + ask) / 2;
   const db = getDb();
 
@@ -58,7 +67,7 @@ export async function recordVerifiedManualTradingQuote(args: {
     // XAUUSDm is the same Gold market as XAUUSD for intelligence identity.
     // Preserve the raw broker symbol for traceability, but key the candle by
     // the one existing XauCloud canonical Gold symbol.
-    const key = { account: args.account, symbol: normalizeGoldSymbol(args.symbol), timeframe: name, openTime };
+    const key = { account: args.account, symbol: normalizedSymbol, timeframe: name, openTime };
     await db.collection("manual_trading_broker_candles").updateOne(
       key,
       {
@@ -82,6 +91,7 @@ export async function recordVerifiedManualTradingQuote(args: {
       { upsert: true },
     );
   }));
+  return { persisted: true, normalizedSymbol, sourceAt, close: mid };
 }
 
 /** Persist entry/exit decision evidence beyond the short activity retention. */

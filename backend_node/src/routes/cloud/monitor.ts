@@ -5,6 +5,7 @@ import { normalizeLicenseKey, resolveMonitorLicense } from "../../services/licen
 import { storeBotActivity } from "../../services/botActivity.js";
 import { BotHeartbeatReqSchema } from "../../models/cloudMonitor.js";
 import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
+import { normalizeGoldSymbol } from "../../services/goldSymbol.js";
 
 const NOISY_STALE_ERRORS = new Set(["MQL ERROR 5035"]);
 
@@ -75,6 +76,12 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
       source: "HEARTBEAT",
     };
     const quote = extractEvidenceQuoteFromDetails(marketDetails, now.toISOString());
+    let marketData: Record<string, unknown> = {
+      source: "EA_HEARTBEAT",
+      received: false,
+      persisted: false,
+      state: "NO_VALID_BID_ASK",
+    };
     if (quote.valid && account && req.symbol) {
       const marketActivity = await storeBotActivity(
         "MARKET_HEARTBEAT",
@@ -89,6 +96,18 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
         { $set: { monitor_last_activity_at: marketActivity["ts"], monitor_last_activity: marketActivity } },
         { upsert: true },
       );
+      const receipt = (marketActivity["manual_market_quote"] && typeof marketActivity["manual_market_quote"] === "object")
+        ? marketActivity["manual_market_quote"] as Record<string, unknown>
+        : {};
+      marketData = {
+        source: "EA_HEARTBEAT",
+        received: true,
+        persisted: receipt["persisted"] === true,
+        state: receipt["persisted"] === true ? "PERSISTED" : "PERSISTENCE_UNAVAILABLE",
+        normalized_symbol: receipt["normalizedSymbol"] ?? normalizeGoldSymbol(req.symbol),
+        evidence_timestamp: receipt["sourceAt"] ?? quote.quote_at ?? null,
+        close: receipt["close"] ?? quote.mid ?? null,
+      };
     }
 
     const noisyStaleError = NOISY_STALE_ERRORS.has(String(req.last_error || "").trim().toUpperCase());
@@ -118,6 +137,7 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
     return {
       ok: true,
       status: "received",
+      market_data: marketData,
       auth: licenseKey ? "license_pin" : "agent_token",
       license_pin: licenseKey,
       license_id: licenseId,

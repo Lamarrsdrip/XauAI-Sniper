@@ -96,13 +96,14 @@ export async function storeBotActivity(
       details,
     };
     await activity.updateOne({ id: existing["id"] as string }, { $set: patch });
+    let manualMarketQuote: Record<string, unknown> = { persisted: false };
     try {
-      await recordVerifiedManualTradingQuote({ account: account || "", symbol: symbol || "", receivedAt: now, marketThesis: details["market_thesis"] });
+      manualMarketQuote = await recordVerifiedManualTradingQuote({ account: account || "", symbol: symbol || "", receivedAt: now, marketThesis: details["market_thesis"] });
       await recordAuditableEaDecision({ at: now, account: account || "", symbol: symbol || "", eventType: ev, severity: sev, category, message: String(message ?? ""), details });
     } catch {
       /* A candle-store failure must not affect an EA acknowledgement. */
     }
-    return { ...existing, ...patch };
+    return { ...existing, ...patch, manual_market_quote: manualMarketQuote };
   }
 
   const doc: Record<string, unknown> = {
@@ -147,8 +148,9 @@ export async function storeBotActivity(
   // Retain verified broker candles separately from short-lived operational
   // activity. This is deliberately best-effort: a storage failure can never
   // make an EA heartbeat or trade decision fail.
+  let manualMarketQuote: Record<string, unknown> = { persisted: false };
   try {
-    await recordVerifiedManualTradingQuote({
+    manualMarketQuote = await recordVerifiedManualTradingQuote({
       account: account || "",
       symbol: symbol || "",
       receivedAt: now,
@@ -170,7 +172,7 @@ export async function storeBotActivity(
       await activity.deleteMany({ _id: { $in: oldest.map((o) => o["_id"]) } });
     }
   }
-  return doc;
+  return { ...doc, manual_market_quote: manualMarketQuote };
 }
 
 /**
