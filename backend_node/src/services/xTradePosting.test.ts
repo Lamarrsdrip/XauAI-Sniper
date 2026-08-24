@@ -8,7 +8,11 @@ function matches(doc: Doc, query: Doc): boolean {
       const ops = expected as Doc;
       if ("$lt" in ops) return Number(doc[key] ?? 0) < Number(ops["$lt"]);
       if ("$exists" in ops) return ops["$exists"] ? doc[key] !== undefined : doc[key] === undefined;
-      if ("$lte" in ops) return String(doc[key] ?? "") <= String(ops["$lte"]);
+      // Real MongoDB range operators never match a null/missing field value
+      // against a non-null bound -- this fake must reproduce that, or a test
+      // asserting $lte behavior here would pass regardless of whether the
+      // production query actually handles a null field correctly.
+      if ("$lte" in ops) { const v = doc[key]; return v !== null && v !== undefined && String(v) <= String(ops["$lte"]); }
       if ("$in" in ops) return (ops["$in"] as unknown[]).includes(doc[key]);
     }
     return doc[key] === expected;
@@ -182,6 +186,23 @@ describe("X auto-post queue + eligibility", () => {
     const row = state.db.collection("x_trade_posts").docs[0]!;
     expect(row["status"]).toBe("POSTED");
     expect(row["x_post_id"]).toBe("17000000000");
+  });
+
+  it("still claims and posts a queued trade when last_auto_post_at is null (admin settings-save reset)", async () => {
+    // routes/admin/xPosting.ts and the GPT admin gateway both save settings
+    // with `last_auto_post_at: null` (not omitted). A prior bug's rate-slot
+    // query only matched `{ $exists: false }` or `{ $lte: <cutoff> }`, and
+    // MongoDB's $lte never matches a null field value -- so any admin save
+    // permanently jammed auto-posting: jobs stayed QUEUED with retry_count 0
+    // forever, since the claim query itself never matched.
+    await setSettings({ auto_post_enabled: true, last_auto_post_at: null });
+    await enqueueFinalTradeForXPost(closedTrade({ profit: 500 }));
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 201, headers: new Headers(), json: async () => ({ data: { id: "17000000002" } }) })));
+    await processQueuedXTradePosts();
+    const row = state.db.collection("x_trade_posts").docs[0]!;
+    expect(row["status"]).toBe("POSTED");
+    expect(row["x_post_id"]).toBe("17000000002");
+    expect(row["retry_count"]).toBe(0);
   });
 
   it("records a failure and safe retry state when the X API call fails", async () => {

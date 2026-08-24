@@ -304,7 +304,7 @@ export async function processQueuedXTradePosts(limit = 20): Promise<void> {
       continue;
     }
     const rateSlot = await getDb().collection("x_posting_settings").updateOne(
-      { id: "trade_posts", auto_post_enabled: true, $or: [{ last_auto_post_at: { $exists: false } }, { last_auto_post_at: { $lte: new Date(Date.now() - 15_000).toISOString() } }] },
+      { id: "trade_posts", auto_post_enabled: true, $or: [{ last_auto_post_at: { $exists: false } }, { last_auto_post_at: null }, { last_auto_post_at: { $lte: new Date(Date.now() - 15_000).toISOString() } }] },
       { $set: { last_auto_post_at: now } },
     );
     if (!rateSlot.modifiedCount) break;
