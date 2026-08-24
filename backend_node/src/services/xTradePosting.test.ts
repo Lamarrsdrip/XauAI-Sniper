@@ -77,6 +77,7 @@ vi.mock("./xOAuth.js", () => ({
 
 const {
   buildXTradePost,
+  authoritativeExitPrice,
   normalizePublicSymbol,
   enqueueFinalTradeForXPost,
   processQueuedXTradePosts,
@@ -140,7 +141,7 @@ describe("X auto-post queue + eligibility", () => {
     await enqueueFinalTradeForXPost(closedTrade({ profit: 500 }));
     const rows = state.db.collection("x_trade_posts").docs;
     expect(rows).toHaveLength(1);
-    expect(rows[0]!["status"]).toBe("queued");
+    expect(rows[0]!["status"]).toBe("QUEUED");
   });
 
   it("enqueues exactly one job for a finalized losing trade", async () => {
@@ -161,7 +162,7 @@ describe("X auto-post queue + eligibility", () => {
     await enqueueFinalTradeForXPost(closedTrade({ profit: 500 }));
     await processQueuedXTradePosts();
     const row = state.db.collection("x_trade_posts").docs[0]!;
-    expect(row["status"]).toBe("queued");
+    expect(row["status"]).toBe("QUEUED");
   });
 
   it("never publishes a breakeven trade when breakeven posting is OFF", async () => {
@@ -170,7 +171,7 @@ describe("X auto-post queue + eligibility", () => {
     vi.stubGlobal("fetch", vi.fn());
     await processQueuedXTradePosts();
     expect(fetch).not.toHaveBeenCalled();
-    expect(state.db.collection("x_trade_posts").docs[0]!["status"]).toBe("queued");
+    expect(state.db.collection("x_trade_posts").docs[0]!["status"]).toBe("QUEUED");
   });
 
   it("publishes a winning trade when auto posting is ON and persists status + X post ID", async () => {
@@ -179,7 +180,7 @@ describe("X auto-post queue + eligibility", () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 201, headers: new Headers(), json: async () => ({ data: { id: "17000000000" } }) })));
     await processQueuedXTradePosts();
     const row = state.db.collection("x_trade_posts").docs[0]!;
-    expect(row["status"]).toBe("posted");
+    expect(row["status"]).toBe("POSTED");
     expect(row["x_post_id"]).toBe("17000000000");
   });
 
@@ -189,7 +190,7 @@ describe("X auto-post queue + eligibility", () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 503, headers: new Headers(), json: async () => ({}) })));
     await processQueuedXTradePosts();
     const row = state.db.collection("x_trade_posts").docs[0]!;
-    expect(row["status"]).toBe("queued");
+    expect(row["status"]).toBe("RETRYING");
     expect(row["retry_count"]).toBe(1);
     expect(row["next_attempt_at"]).toBeTruthy();
     expect(row["x_post_id"]).toBeUndefined();
@@ -199,10 +200,51 @@ describe("X auto-post queue + eligibility", () => {
     const trade = closedTrade({ profit: 250 });
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 201, headers: new Headers(), json: async () => ({ data: { id: "17000000001" } }) })));
     const first = await publishApprovedXTrade(trade);
-    expect(first["status"]).toBe("posted");
+    expect(first["status"]).toBe("POSTED");
     expect(first["x_post_id"]).toBe("17000000001");
     const second = await publishApprovedXTrade(trade);
     expect(second["duplicate"]).toBe(true);
     expect(state.db.collection("x_trade_posts").docs).toHaveLength(1);
+  });
+
+  it("uses the genuine EA price even when legacy default exit fields are zero", () => {
+    const trade = closedTrade({ exit_price: 0, close_price: 0, price: 4381.23 });
+    expect(authoritativeExitPrice(trade)).toBe(4381.23);
+    expect(buildXTradePost(trade)).toContain("Exit: 4381.23");
+  });
+
+  it("blocks zero or missing actual exits before an X API call", async () => {
+    await setSettings({ auto_post_enabled: true });
+    await enqueueFinalTradeForXPost(closedTrade({ exit_price: 0, close_price: 0, price: 0 }));
+    vi.stubGlobal("fetch", vi.fn());
+    await processQueuedXTradePosts();
+    const row = state.db.collection("x_trade_posts").docs[0]!;
+    expect(row["status"]).toBe("BLOCKED_INVALID_TRADE_DATA");
+    expect(row["failure_category"]).toBe("MISSING_OR_INVALID_ACTUAL_EXIT_PRICE");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("uses result-driven emoji and stays within the X character limit", () => {
+    const win = buildXTradePost(closedTrade({ profit: 403.10, price: 4578.11 }));
+    const loss = buildXTradePost(closedTrade({ profit: -25, price: 4400.01 }));
+    expect(win).toContain("XauCloud Trade Closed 🟢");
+    expect(loss).toContain("XauCloud Trade Closed 🔴");
+    expect(win.length).toBeLessThanOrEqual(280);
+    expect(loss.length).toBeLessThanOrEqual(280);
+  });
+
+  it("retries a temporary X failure and posts exactly once after the retry", async () => {
+    await setSettings({ auto_post_enabled: true });
+    await enqueueFinalTradeForXPost(closedTrade({ profit: -50 }));
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 503, headers: new Headers(), json: async () => ({}) })));
+    await processQueuedXTradePosts();
+    const row = state.db.collection("x_trade_posts").docs[0]!;
+    row["next_attempt_at"] = new Date(Date.now() - 1_000).toISOString();
+    state.db.collection("x_posting_settings").docs[0]!["last_auto_post_at"] = new Date(Date.now() - 60_000).toISOString();
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 201, headers: new Headers(), json: async () => ({ data: { id: "17000000002" } }) })));
+    await processQueuedXTradePosts();
+    expect(row["status"]).toBe("POSTED");
+    expect(row["x_post_id"]).toBe("17000000002");
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

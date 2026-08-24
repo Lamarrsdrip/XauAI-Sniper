@@ -24,14 +24,16 @@ export async function registerAdminXPostingRoutes(app: FastifyInstance): Promise
   });
 
   app.get("/admin/x-posting", { preHandler: requireAdmin }, async () => {
-    const [settings, queued, posting, failed, posted] = await Promise.all([
+    const [settings, queued, posting, retrying, failed, blocked, posted] = await Promise.all([
       xPostingSettings(),
-      getDb().collection("x_trade_posts").countDocuments({ status: "queued" }),
-      getDb().collection("x_trade_posts").countDocuments({ status: "posting" }),
-      getDb().collection("x_trade_posts").countDocuments({ status: "failed" }),
-      getDb().collection("x_trade_posts").countDocuments({ status: "posted" }),
+      getDb().collection("x_trade_posts").countDocuments({ status: { $in: ["QUEUED", "queued"] } }),
+      getDb().collection("x_trade_posts").countDocuments({ status: { $in: ["PROCESSING", "posting"] } }),
+      getDb().collection("x_trade_posts").countDocuments({ status: "RETRYING" }),
+      getDb().collection("x_trade_posts").countDocuments({ status: { $in: ["FAILED", "failed"] } }),
+      getDb().collection("x_trade_posts").countDocuments({ status: "BLOCKED_INVALID_TRADE_DATA" }),
+      getDb().collection("x_trade_posts").countDocuments({ status: { $in: ["POSTED", "posted"] } }),
     ]);
-    return { ...settings, oauth_client_configured: xOAuthClientConfigured(), queue: { queued, posting, failed, posted } };
+    return { ...settings, oauth_client_configured: xOAuthClientConfigured(), queue: { queued, posting, retrying, failed, blocked, posted } };
   });
 
   app.put("/admin/x-posting", { preHandler: requireAdmin }, async (request, reply) => {

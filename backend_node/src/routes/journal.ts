@@ -6,7 +6,7 @@ import { rateLimit } from "../auth.js";
 import { TradeJournalEntrySchema, WeeklyReportEntrySchema } from "../models/journal.js";
 import { reconcileTradeJournalEntry } from "../services/automatedTradeReconciliation.js";
 import { canonicalTradeIdentity, classifyTrade, dedupeByTradeIdentity, netResult } from "../services/performanceEngine.js";
-import { enqueueFinalTradeForXPost } from "../services/xTradePosting.js";
+import { authoritativeExitPrice, enqueueFinalTradeForXPost } from "../services/xTradePosting.js";
 
 export const MAX_JOURNAL_TRADES_PAGE_SIZE = 200;
 
@@ -52,7 +52,14 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
       doc["win_rate"] = entry.total_trades > 0 ? Math.round((entry.wins / entry.total_trades) * 1000) / 10 : 0;
       doc["has_rich_ledger_data"] = entry.ticket > 0;
       const isClosedTrade = Boolean(doc["has_rich_ledger_data"]) && Number(doc["closed_at"] ?? 0) > 0;
-      if (isClosedTrade) doc["trade_identity"] = canonicalTradeIdentity(doc);
+      if (isClosedTrade) {
+        doc["trade_identity"] = canonicalTradeIdentity(doc);
+        // `price` is the existing EA's broker DEAL_PRICE close field. Preserve
+        // it as the explicit authoritative exit price before queueing/posting;
+        // never substitute a strategy target or a frontend-derived value.
+        const actualExitPrice = authoritativeExitPrice(doc);
+        if (Number.isFinite(actualExitPrice) && actualExitPrice > 0) doc["actual_exit_price"] = actualExitPrice;
+      }
       let journalWrite: { upsertedCount: number } = { upsertedCount: 1 };
       if (isClosedTrade) {
         try {

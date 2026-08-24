@@ -311,6 +311,9 @@ async function main(): Promise<void> {
   await runReadinessStep("admin_ops_actions", () => ensureAdminOpsInfrastructure(), 30_000);
   markApplicationReady();
   app.log.info({ readiness: readinessSnapshot() }, "XauCloud startup initialization complete");
+  // Recover/publish existing durable jobs immediately after a process restart;
+  // the interval below remains the steady-state worker cadence.
+  void processQueuedXTradePosts().catch((error) => app.log.warn({ error }, "[x-posting] initial queue processing failed"));
 
   void outlookHourlyLoop();
   void outlookLifecycleLoop();

@@ -94,13 +94,14 @@ describe("POST /journal/log wires an authenticated final close into the X-post q
 
     const posts = state.db.collection("x_trade_posts").docs;
     expect(posts).toHaveLength(1);
-    expect(posts[0]!["status"]).toBe("queued");
+    expect(posts[0]!["status"]).toBe("QUEUED");
     expect(posts[0]!["closed_trade_id"]).toBe(JSON.stringify(["555111", "999"]));
 
     // Preserved security rule: the queued job is keyed off the durably
     // stored trade_journal row, not the raw request body.
     const journalRows = state.db.collection("trade_journal").docs;
     expect(journalRows).toHaveLength(1);
+    expect(journalRows[0]!["actual_exit_price"]).toBe(4396.25);
   });
 
   it("does not queue a duplicate job when the same close event is delivered twice", async () => {
