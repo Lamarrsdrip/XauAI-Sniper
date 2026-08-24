@@ -4,6 +4,7 @@ import { getDb } from "../db.js";
 import { env } from "../env.js";
 import { hashPassword, verifyPassword } from "../auth.js";
 import { ensureLocalAiIndexes } from "./localAiRelay.js";
+import { repairMisclassifiedActivityCategories } from "./botActivity.js";
 
 /**
  * Port of server.py's `@app.on_event("startup")` handler (lines 4139-4283):
@@ -99,6 +100,11 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
     .catch((e) => log.warn(`[remote-command] could not create dedupe_key index: ${String(e)}`));
 
   await ensureLocalAiIndexes().catch((e) => log.warn(`[local-ai-remote] could not create queue indexes: ${String(e)}`));
+  const repairedActivity = await repairMisclassifiedActivityCategories().catch((e) => {
+    log.warn(`[activity] could not repair legacy execution classifications: ${String(e)}`);
+    return 0;
+  });
+  if (repairedActivity) log.info(`[activity] repaired ${repairedActivity} legacy non-execution activity classifications`);
 
   const indexReport: string[] = [];
   indexReport.push(await tryIndex("cloud_users.email: unique", () => db.collection("cloud_users").createIndex("email", { unique: true })));

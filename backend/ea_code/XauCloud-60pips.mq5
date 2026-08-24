@@ -1947,7 +1947,7 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.272"
+#property version   "6.273"
 #property description "XAUCloud-60pips production build: fixed $10 broker SL, +60-pip profit floor, and Outlook recovery."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
@@ -2034,9 +2034,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "XAUCloud-60pips_v6.27.2"
-#define XAUAI_EA_VERSION_NUM "6.272"
-#define XAUAI_BUILD_HASH "xaucloud-60pips-production-20260813"
+#define XAUAI_EA_VERSION "XAUCloud-60pips_v6.27.3"
+#define XAUAI_EA_VERSION_NUM "6.273"
+#define XAUAI_BUILD_HASH "xaucloud-60pips-mti-heartbeat-20260824"
 
 // v6.26.0 owner directive (2026-08-05): permanent migration off the R
 // (risk-multiple) measurement system. Every internal exit/protection
@@ -20004,8 +20004,14 @@ void CheckPyramidOpportunity()
    // per-leg profit SL alive until the next tick.
    XAU_ActivateBasketModeImmediately(dir);
 
-   BotMonitorActivity("PYRAMID_ADD","TRADE",
-                      StringFormat("%s %.2f lot @%.2f - %s",isBuy?"BUY":"SELL",addLot,entryPx,why));
+   // This is a real broker-side entry.  Use the structured decision transport
+   // so Command Center receives its actual direction and does not render a
+   // generic TRADE activity as NONE.
+   BotMonitorDecisionEvent("PYRAMID_ADD", "TRADE", "PyramidAdd", "PYRAMID_ADD_EXECUTED",
+                           true, why, "", (string)((long)posId), 0.0, entryPx,
+                           "", "", false, false, false, false,
+                           isBuy ? "BUY" : "SELL", "", "", 0.0,
+                           (double)lastAIConfidence, isBuy ? 1 : -1, "", "");
    if(CloudEnabled())
    {
       string sigId=CloudPostSignal(Symbol(),isBuy?"BUY":"SELL",entryPx,pyramidSL,pyramidTP,
@@ -44513,6 +44519,9 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
    string sev = BotMonitorJsonSafe(severity, 16);
    string mod = BotMonitorJsonSafe(module, 80);
    string dec = BotMonitorJsonSafe(decision, 260);
+   // Profit is a realised close value only.  Posting 0.00 for an opening or
+   // non-trade diagnostic makes the Command Center invent a break-even result.
+   string profitJson = (ev == "TRADE_CLOSED") ? DoubleToString(profit, 2) : "null";
    string why = BotMonitorJsonSafe(reason, 420);
    string blocker = BotMonitorJsonSafe(blockedBy, 160);
    string funnelTop = "";
@@ -44749,7 +44758,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       "\"score\":%.2f,\"trade_allowed\":%s,\"allowed\":%s,\"decision\":\"%s\","
       "\"reason\":\"%s\",\"blocked_by\":\"%s\",\"current_trade_status\":\"%s\","
       "\"exit_decision\":\"%s\",\"risk_lot_decision\":\"%s\",\"module\":\"%s\","
-      "\"ticket\":\"%s\",\"profit\":%.2f,\"price\":%.5f,\"close_reason_exact\":\"%s\","
+      "\"ticket\":\"%s\",\"profit\":%s,\"price\":%.5f,\"close_reason_exact\":\"%s\","
       "\"closed_by_module\":\"%s\",\"was_broker_sl\":%s,\"was_manual\":%s,"
       "\"was_emergency_margin\":%s,\"was_ea_forced_close\":%s,"
       "\"position_direction\":\"%s\",%s\"message\":\"%s\","
@@ -44766,7 +44775,7 @@ void BotMonitorDecisionEvent(string eventType, string severity, string module, s
       BotMonitorBool(allowed), BotMonitorBool(allowed), dec, why, blocker,
       BotMonitorJsonSafe(tradeStatus, 180), BotMonitorJsonSafe(exitDecision, 220),
       BotMonitorJsonSafe(riskLotDecision, 220), mod, BotMonitorJsonSafe(ticket, 40),
-      profit, price, BotMonitorJsonSafe(closeReasonExact, 180),
+      profitJson, price, BotMonitorJsonSafe(closeReasonExact, 180),
       BotMonitorJsonSafe(closedByModule, 80), BotMonitorBool(wasBrokerSL),
       BotMonitorBool(wasManual), BotMonitorBool(wasEmergencyMargin),
       BotMonitorBool(wasEAForcedClose), BotMonitorJsonSafe(positionDirection, 12),
@@ -44825,6 +44834,21 @@ void BotMonitorActivity(string eventType, string severity, string message)
    }
 }
 
+// The heartbeat and decision-event transports must use the same genuine
+// broker quote.  This is data provenance only: it neither calculates a trade
+// signal nor changes execution.  It keeps the existing Command Center market
+// pipeline alive while the EA is scanning or any higher-level gate is active.
+string BotMonitorLiveQuoteJson()
+{
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double mid = (bid > 0.0 && ask > 0.0) ? (bid + ask) * 0.5 : 0.0;
+   return StringFormat(
+      "{\"live_bid\":%.5f,\"live_ask\":%.5f,\"live_mid\":%.5f,\"digits\":%d,\"evidence_time_utc\":\"%s\"}",
+      bid, ask, mid, (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
+      TimeToString(TimeGMT(), TIME_DATE | TIME_SECONDS));
+}
+
 void BotMonitorHeartbeat()
 {
    if(!BotMonitorEnabled()) return;
@@ -44878,7 +44902,7 @@ void BotMonitorHeartbeat()
       "\"current_r\":%.3f,\"peak_r\":%.3f,\"protected_floor\":%s,\"exit_owner\":\"COUNTER_EXCURSION_MANAGER\"},"
       "\"pyramid_basket\":{\"buy\":%s,\"sell\":%s},"
       "\"exhaustion_counter\":{\"mode\":\"%s\",\"active\":%s,\"exhausted_direction\":\"%s\","
-      "\"counter_direction\":\"%s\",\"current_r\":%.3f,\"peak_r\":%.3f,\"protected_floor\":%s,\"target_r\":%.2f}}",
+      "\"counter_direction\":\"%s\",\"current_r\":%.3f,\"peak_r\":%.3f,\"protected_floor\":%s,\"target_r\":%.2f},\"market_thesis\":%s}",
       BotMonitorJsonSafe(InpLicensePIN, 32),
       BotMonitorJsonSafe(InpLicensePIN, 32),
       XAUAI_EA_VERSION,
@@ -44920,7 +44944,7 @@ void BotMonitorHeartbeat()
       g_exhaustionCounter.active ? g_exhaustionCounterLastPips : 0.0,
       g_exhaustionCounter.active ? g_exhaustionCounter.peakPips : 0.0,
       (g_exhaustionCounter.active && g_exhaustionCounter.protectedFloorPips > -999.0) ? DoubleToString(g_exhaustionCounter.protectedFloorPips, 2) : "null",
-      InpExhaustionCounterTargetPips);
+      InpExhaustionCounterTargetPips, BotMonitorLiveQuoteJson());
    char pd[], res[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";

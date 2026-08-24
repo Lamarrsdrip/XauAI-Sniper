@@ -17,4 +17,7 @@ describe("Manual Trading Intelligence data gate", () => {
   it("allows early history only as a no-setup accumulation state", () => {
     expect(validateMarketData(market())).toEqual({ ok: true, reason: "" });
   });
+  it("accepts one fresh verified quote; M10 snapshot count is not a 4H availability gate", () => {
+    expect(validateMarketData(market({ snapshots: [market().latest] }))).toEqual({ ok: true, reason: "" });
+  });
 });

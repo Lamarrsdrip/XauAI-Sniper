@@ -30,11 +30,14 @@ export interface BotActivityDetails {
   [key: string]: unknown;
 }
 
-function categorize(sev: string, text: string): string {
+export function categorizeBotActivity(sev: string, text: string): string {
   if (sev === "OVERRIDE" || ["OVERRIDE", "IGNORED", "LOSS_CLOSE_BLOCKED"].some((k) => text.includes(k))) {
     return "overrides";
   }
-  if (["ENTRY", "TRADE"].includes(sev) || ["TRADE_EXECUTED", "FIRE", "PYR", "ENTRY"].some((k) => text.includes(k))) {
+  // A primary decision can truthfully say "no entry"/"waiting for entry".
+  // It is not a broker execution.  Only the EA's explicit execution events
+  // (or the legacy TRADE/ENTRY severities) belong in the trade-open feed.
+  if (["ENTRY", "TRADE"].includes(sev) || ["TRADE_EXECUTED", "FIRE", "PYR"].some((k) => text.includes(k))) {
     return "entries";
   }
   if (sev === "EXIT" || ["EXIT", "CLOSE", "CLOSED"].some((k) => text.includes(k))) return "exits";
@@ -72,7 +75,7 @@ export async function storeBotActivity(
   const blockedBy = String(details.blocked_by ?? "").slice(0, 120);
   const ticket = String(details.ticket ?? "");
   const text = `${ev} ${sev} ${moduleName} ${decision} ${reason} ${blockedBy}`.toUpperCase();
-  const category = categorize(sev, text);
+  const category = categorizeBotActivity(sev, text);
 
   const dedupeSource = [licenseKey, account || "", symbol || "", ev, sev, moduleName, decision, reason, blockedBy, ticket].join("|");
   const dedupeKey = createHash("sha256").update(dedupeSource, "utf8").digest("hex");
@@ -168,4 +171,28 @@ export async function storeBotActivity(
     }
   }
   return doc;
+}
+
+/**
+ * Correct rows written before execution classification was tightened.  This
+ * changes persisted source metadata (not frontend rendering), is idempotent,
+ * and deliberately leaves genuine broker execution rows untouched.
+ */
+export async function repairMisclassifiedActivityCategories(): Promise<number> {
+  const activity = getDb().collection("cloud_bot_activity");
+  const rows = await activity
+    .find({ event_category: "entries" }, { projection: { _id: 0, id: 1, event_type: 1, severity: 1, module: 1, decision: 1, reason: 1, blocked_by: 1 } })
+    .limit(2500)
+    .toArray() as Record<string, unknown>[];
+  let repaired = 0;
+  for (const row of rows) {
+    const text = [row["event_type"], row["severity"], row["module"], row["decision"], row["reason"], row["blocked_by"]]
+      .map((value) => String(value ?? "")).join(" ").toUpperCase();
+    const category = categorizeBotActivity(String(row["severity"] ?? "INFO").toUpperCase(), text);
+    if (category !== "entries" && row["id"]) {
+      await activity.updateOne({ id: row["id"] }, { $set: { event_category: category, category_repaired_at: new Date().toISOString() } });
+      repaired += 1;
+    }
+  }
+  return repaired;
 }

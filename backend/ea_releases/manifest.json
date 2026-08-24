@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.27.2",
+  "current_version": "v6.27.3",
   "internal_codename": "XauCloud_m10_private_vps_ai",
   "production_branch": "XauCloud_m10_private_vps_ai",
   "production_branch_source_commit": "8498c47eefec0e3cba71ec0c3bb5967feb0de096",
@@ -205,6 +205,20 @@
       "ex5_sha256": "d5ae1a46984432314f09057e399b470d802687a3a77572aeacd2025438adc96c",
       "customer_filename": "XauCloud-60pips.ex5",
       "release_notes": "Production promotion of the XauCloud-Final-derived fixed-$10 / fixed-60-pip source. GENERAL and pyramid-basket voluntary profit closes share the fixed +60-pip authority; hard safety and loss exits remain authoritative. Outlook signals missed solely because the delayed price was extended retain their original one-hour thesis, wait for current safe timing, execute without a second delay, and persist/consume state across restart. Normal M10 entries, risk, SL construction, and pyramid entry logic remain unchanged.",
+      "stable_status": true
+    },
+    "v6.27.3": {
+      "version": "v6.27.3",
+      "edition": "XauCloud-60pips: verified broker heartbeat for Manual Trading Intelligence",
+      "source_lineage": "v6.27.2 fixed-60-pip production source + market-data transport repair",
+      "source_filename": "XauCloud-60pips.mq5",
+      "source_sha256": "ff5bf3c1c1ed1ab4639368b7786d2d706419441baa6c469488086f8fbde9837e",
+      "build_timestamp": "2026-08-24T07:24:05Z",
+      "compiler_result": "0 errors, 0 warnings, 380317 ms elapsed (MetaEditor64.exe via Wine; isolated release build)",
+      "ex5_filename": "XauCloud-60pips.ex5",
+      "ex5_sha256": "6ce0bccfd8618a56ab75303f428ed132b91377ef3792ccce4d467b982a6d304e",
+      "customer_filename": "XauCloud-60pips.ex5",
+      "release_notes": "Repairs the verified broker-data path for Manual Trading Intelligence without changing trading logic: every normal EA heartbeat now carries the connected broker's live Bid/Ask and UTC evidence timestamp. The backend persists that same verified quote through the existing activity and H1/H4/D1 candle pipeline, recognizes broker suffixes such as XAUUSDm as canonical XAUUSD, and distinguishes a working no-setup/history-accumulation state from true data unavailability. No price source, trade signal authority, stale timeout, or UI state is fabricated. Also corrects activity classification so non-execution \"no entry\" decisions cannot render as Trade opened/NONE/$0.00.",
       "stable_status": true
     }
   }

@@ -66,7 +66,10 @@ const GENUINE_SOURCE = "ea-stream(spot)";
 export function validateMarketData(md: import("./fourHourFeed.js").MarketData | null): { ok: boolean; reason: string } {
   if (!md) return { ok: false, reason: "NO_EA_DATA" };
   if (!Number.isFinite(md.ageSec) || md.ageSec > EA_STALE_SEC) return { ok: false, reason: `EA_OFFLINE_OR_STALE age=${Math.round(md.ageSec / 60)}m` };
-  if (md.snapshots.length < 3) return { ok: false, reason: `THIN_EVIDENCE snaps=${md.snapshots.length}` };
+  // HTF direction is calculated from persisted H1/H4/D1 broker candles.
+  // M10 snapshots are entry context only, so one fresh quote is enough to
+  // distinguish a working/no-setup feed from a genuinely unavailable feed.
+  if (md.snapshots.length < 1) return { ok: false, reason: "NO_CURRENT_BROKER_QUOTE" };
   if (!(md.price >= 1000 && md.price <= 20000)) return { ok: false, reason: `PRICE_OUT_OF_RANGE price=${md.price}` };
   return { ok: true, reason: "" };
 }

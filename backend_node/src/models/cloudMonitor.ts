@@ -36,6 +36,11 @@ export const BotHeartbeatReqSchema = z.object({
   prop_safety_buffer_pct: z.number().optional().default(0),
   prop_risk_per_trade_pct: z.number().optional().default(0),
   prop_max_basket_risk_pct: z.number().optional().default(0),
+  // Same broker quote contract already emitted by BotMonitorDecisionEvent.
+  // Heartbeats carry it as well so an actively scanning EA cannot leave the
+  // manual-intelligence feed stale behind a quiet decision pipeline.
+  market_thesis: z.record(z.string(), z.unknown()).nullable().optional(),
+  m10_signal: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 export type BotHeartbeatReq = z.infer<typeof BotHeartbeatReqSchema>;

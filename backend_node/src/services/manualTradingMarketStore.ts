@@ -8,6 +8,7 @@
  * timestamp needed to audit every later thesis.
  */
 import { getDb } from "../db.js";
+import { isGoldSymbol, normalizeGoldSymbol } from "./goldSymbol.js";
 
 const GOLD_MIN = 1000;
 const GOLD_MAX = 20_000;
@@ -43,7 +44,7 @@ export async function recordVerifiedManualTradingQuote(args: {
   const thesis = (args.marketThesis && typeof args.marketThesis === "object" ? args.marketThesis : {}) as Record<string, unknown>;
   const bid = finite(thesis["live_bid"]);
   const ask = finite(thesis["live_ask"]);
-  if (!args.account || !/^XAU/i.test(args.symbol) || bid == null || ask == null || ask < bid || bid < GOLD_MIN || ask > GOLD_MAX) return;
+  if (!args.account || !isGoldSymbol(args.symbol) || bid == null || ask == null || ask < bid || bid < GOLD_MIN || ask > GOLD_MAX) return;
 
   const sourceAt = isoFromEvidence(thesis["evidence_time_utc"], args.receivedAt);
   const sourceMs = new Date(sourceAt).getTime();
@@ -54,12 +55,16 @@ export async function recordVerifiedManualTradingQuote(args: {
   await Promise.all(TIMEFRAMES.map(async ({ name, seconds }) => {
     const startMs = Math.floor(sourceMs / (seconds * 1000)) * seconds * 1000;
     const openTime = new Date(startMs).toISOString();
-    const key = { account: args.account, symbol: args.symbol, timeframe: name, openTime };
+    // XAUUSDm is the same Gold market as XAUUSD for intelligence identity.
+    // Preserve the raw broker symbol for traceability, but key the candle by
+    // the one existing XauCloud canonical Gold symbol.
+    const key = { account: args.account, symbol: normalizeGoldSymbol(args.symbol), timeframe: name, openTime };
     await db.collection("manual_trading_broker_candles").updateOne(
       key,
       {
         $setOnInsert: {
           ...key,
+          brokerSymbol: String(args.symbol),
           o: mid,
           h: mid,
           l: mid,
@@ -71,7 +76,7 @@ export async function recordVerifiedManualTradingQuote(args: {
         },
         $min: { l: mid },
         $max: { h: mid },
-        $set: { c: mid, bid, ask, lastSourceAt: sourceAt, source: "ea-stream(spot)" },
+        $set: { c: mid, bid, ask, lastSourceAt: sourceAt, source: "ea-stream(spot)", brokerSymbol: String(args.symbol) },
         $inc: { samples: 1 },
       },
       { upsert: true },
@@ -90,10 +95,10 @@ export async function recordAuditableEaDecision(args: {
   message: string;
   details: Record<string, unknown>;
 }): Promise<void> {
-  if (!args.account || !/^XAU/i.test(args.symbol) || !["entries", "exits"].includes(args.category)) return;
+  if (!args.account || !isGoldSymbol(args.symbol) || !["entries", "exits"].includes(args.category)) return;
   const d = args.details;
   await getDb().collection("manual_trading_ea_decisions").insertOne({
-    recordedAt: args.at.toISOString(), account: args.account, symbol: args.symbol,
+    recordedAt: args.at.toISOString(), account: args.account, symbol: normalizeGoldSymbol(args.symbol), brokerSymbol: String(args.symbol),
     eventType: args.eventType, severity: args.severity, category: args.category,
     message: args.message.slice(0, 600), ticket: String(d["ticket"] ?? ""),
     module: String(d["module"] ?? ""), reason: String(d["reason"] ?? "").slice(0, 1200),

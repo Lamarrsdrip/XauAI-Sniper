@@ -4,6 +4,7 @@ import { getDb } from "../../db.js";
 import { normalizeLicenseKey, resolveMonitorLicense } from "../../services/license.js";
 import { storeBotActivity } from "../../services/botActivity.js";
 import { BotHeartbeatReqSchema } from "../../models/cloudMonitor.js";
+import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
 
 const NOISY_STALE_ERRORS = new Set(["MQL ERROR 5035"]);
 
@@ -62,6 +63,33 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
       },
       { upsert: true },
     );
+
+    // The production EA already owns the genuine broker Bid/Ask.  Preserve
+    // that exact quote through the existing activity/candle pipeline whenever
+    // a heartbeat arrives; this is not a second price source.  A quiet M10
+    // decision loop must never make a connected terminal look market-stale.
+    const marketDetails = {
+      license_key: licenseKey,
+      market_thesis: req.market_thesis ?? {},
+      m10_signal: req.m10_signal ?? {},
+      source: "HEARTBEAT",
+    };
+    const quote = extractEvidenceQuoteFromDetails(marketDetails, now.toISOString());
+    if (quote.valid && account && req.symbol) {
+      const marketActivity = await storeBotActivity(
+        "MARKET_HEARTBEAT",
+        "INFO",
+        "Verified broker market heartbeat",
+        account,
+        req.symbol,
+        marketDetails,
+      );
+      await db.collection("cloud_settings").updateOne(
+        { key: "main" },
+        { $set: { monitor_last_activity_at: marketActivity["ts"], monitor_last_activity: marketActivity } },
+        { upsert: true },
+      );
+    }
 
     const noisyStaleError = NOISY_STALE_ERRORS.has(String(req.last_error || "").trim().toUpperCase());
     if (req.last_error && !noisyStaleError) {

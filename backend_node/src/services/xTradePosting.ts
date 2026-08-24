@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { getDb } from "../db.js";
 import { env } from "../env.js";
 import { xOAuthConnection, xUserAccessToken } from "./xOAuth.js";
+import { normalizeGoldSymbol } from "./goldSymbol.js";
 
 export type FinalTrade = Record<string, unknown>;
 const asNumber = (v: unknown) => typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : Number.NaN;
@@ -14,7 +15,9 @@ function xPostLog(event: string, fields: Record<string, unknown> = {}): void {
   console.log(`[x-posting] ${event}`, JSON.stringify(fields));
 }
 
-export function normalizePublicSymbol(symbol: unknown): string { return /^XAUUSD(?:[._A-Z0-9-]+)?$/i.test(String(symbol ?? "").trim()) ? "XAUUSD" : String(symbol ?? "").trim().toUpperCase().slice(0, 32); }
+// Public X posts were the original canonical-symbol consumer.  Keep this
+// export for callers, but share the exact normalizer with market ingestion.
+export const normalizePublicSymbol = normalizeGoldSymbol;
 export function canonicalTradeId(t: FinalTrade): string { return String(t["trade_identity"] ?? t["id"] ?? `${String(t["account_login"] ?? "")}:${String(t["ticket"] ?? t["deal_id"] ?? "")}`); }
 export function buildXTradePost(t: FinalTrade): string {
   // The EA's durable journal schema calls its close quote `price`; older
