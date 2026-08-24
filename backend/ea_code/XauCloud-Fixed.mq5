@@ -1948,7 +1948,8 @@
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
 #property version   "6.280"
-#property description "XAUCloud-Fixed candidate build: broker-side SL+TP attached together at entry (real $10 SL / 60-pip=$6 TP, no manual floating-profit close) PLUS observation-only ML/Hive shadow recording. Audited 2026-08-24: order-send, reconciliation, and shadow write path verified against production DB. Still requires compile + Strategy Tester validation before any production promotion."
+#property description "XAUCloud-Fixed: broker-side $10 SL + 60-pip TP at entry."
+#property description "Plus observation-only ML/Hive shadow recording. Audited 2026-08-24."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
 #property description "or fail closed; no silent downscaling. Real broker margin check."
