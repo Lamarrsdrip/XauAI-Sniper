@@ -98,7 +98,7 @@ export async function storeBotActivity(
     await activity.updateOne({ id: existing["id"] as string }, { $set: patch });
     let manualMarketQuote: Record<string, unknown> = { persisted: false };
     try {
-      manualMarketQuote = await recordVerifiedManualTradingQuote({ account: account || "", symbol: symbol || "", receivedAt: now, marketThesis: details["market_thesis"] });
+      manualMarketQuote = { ...(await recordVerifiedManualTradingQuote({ account: account || "", symbol: symbol || "", receivedAt: now, marketThesis: details["market_thesis"] })) };
       await recordAuditableEaDecision({ at: now, account: account || "", symbol: symbol || "", eventType: ev, severity: sev, category, message: String(message ?? ""), details });
     } catch {
       /* A candle-store failure must not affect an EA acknowledgement. */
@@ -150,12 +150,12 @@ export async function storeBotActivity(
   // make an EA heartbeat or trade decision fail.
   let manualMarketQuote: Record<string, unknown> = { persisted: false };
   try {
-    manualMarketQuote = await recordVerifiedManualTradingQuote({
+    manualMarketQuote = { ...(await recordVerifiedManualTradingQuote({
       account: account || "",
       symbol: symbol || "",
       receivedAt: now,
       marketThesis: details["market_thesis"],
-    });
+    })) };
     await recordAuditableEaDecision({ at: now, account: account || "", symbol: symbol || "", eventType: ev, severity: sev, category, message: String(message ?? ""), details });
   } catch {
     /* Manual Trading Intelligence will fail closed until its candle history exists. */
