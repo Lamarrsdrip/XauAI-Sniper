@@ -4,6 +4,8 @@ import { getDb } from "../db.js";
 import { GOLD_SYMBOL_QUERY, normalizeGoldSymbol } from "../services/goldSymbol.js";
 import { extractEvidenceQuoteFromDetails } from "../services/marketOutlookEvidence.js";
 import { getFourHourCurrent } from "../services/fourHourOutlookService.js";
+import { marketDataReadError, readMarketData } from "../services/fourHourFeed.js";
+import { validateMarketData } from "../services/fourHourOutlookService.js";
 
 function ageSeconds(iso: unknown): number | null {
   const time = new Date(String(iso ?? "")).getTime();
@@ -35,7 +37,7 @@ export async function registerApiHealthRoutes(app: FastifyInstance): Promise<voi
     const evidenceAt = quote.quote_at ?? latest?.["ts"] ?? null;
     const dataAge = ageSeconds(evidenceAt);
     const account = String(latest?.["account"] ?? "");
-    const [latestCandle, m10, outlook, h1, h4, d1] = await Promise.all([
+    const [latestCandle, m10, outlook, rawOutlook, feed, h1, h4, d1] = await Promise.all([
       account ? db.collection("manual_trading_broker_candles").findOne(
         { account, symbol: "XAUUSD", source: "ea-stream(spot)" },
         { projection: { _id: 0, lastSourceAt: 1 }, sort: { lastSourceAt: -1 } },
@@ -45,6 +47,8 @@ export async function registerApiHealthRoutes(app: FastifyInstance): Promise<voi
         { projection: { _id: 0, ts: 1, "details.m10_signal": 1 }, sort: { ts: -1 } },
       ) as Promise<Record<string, unknown> | null> : null,
       getFourHourCurrent(),
+      db.collection("four_hour_outlooks").findOne({ symbol: "XAUUSD" }, { projection: { _id: 0, dataSource: 1, dataStatus: 1, status: 1, direction: 1, marketDataAt: 1, expiresAt: 1, lastReviewedAt: 1 } }),
+      readMarketData(),
       account ? db.collection("manual_trading_broker_candles").countDocuments({ account, symbol: "XAUUSD", timeframe: "H1", source: "ea-stream(spot)" }) : 0,
       account ? db.collection("manual_trading_broker_candles").countDocuments({ account, symbol: "XAUUSD", timeframe: "H4", source: "ea-stream(spot)" }) : 0,
       account ? db.collection("manual_trading_broker_candles").countDocuments({ account, symbol: "XAUUSD", timeframe: "D1", source: "ea-stream(spot)" }) : 0,
@@ -63,6 +67,13 @@ export async function registerApiHealthRoutes(app: FastifyInstance): Promise<voi
         persistence_state: latestCandle ? "PERSISTED" : "PERSISTENCE_UNAVAILABLE",
       },
       broker_history: { h1, h4, d1, input_status: h1 >= 80 && h4 >= 30 && d1 >= 20 ? "READY" : latestCandle ? "ACCUMULATING_BROKER_HISTORY" : "UNAVAILABLE" },
+      feed_validation: {
+        ...validateMarketData(feed),
+        read_error: marketDataReadError(),
+        age_seconds: feed ? Math.max(0, Math.floor(feed.ageSec)) : null,
+        snapshot_count: feed?.snapshots.length ?? 0,
+        data_status: feed?.dataStatus ?? null,
+      },
       m10: m10Signal ? {
         input_status: "AVAILABLE",
         evidence_id: m10Signal["evidence_id"],
@@ -75,7 +86,14 @@ export async function registerApiHealthRoutes(app: FastifyInstance): Promise<voi
         output_status: outlook.status,
         direction: outlook.direction,
         last_reviewed_at: outlook.lastReviewedAt,
-      } : { input_status: latestCandle ? "ACCUMULATING_BROKER_HISTORY" : "UNAVAILABLE", output_status: "DATA_UNAVAILABLE" },
+      } : {
+        input_status: latestCandle ? "ACCUMULATING_BROKER_HISTORY" : "UNAVAILABLE",
+        output_status: "DATA_UNAVAILABLE",
+        stored_output: rawOutlook ? {
+          source: rawOutlook["dataSource"], status: rawOutlook["status"], direction: rawOutlook["direction"],
+          data_status: rawOutlook["dataStatus"], market_data_at: rawOutlook["marketDataAt"], expires_at: rawOutlook["expiresAt"],
+        } : null,
+      },
     };
   });
 }

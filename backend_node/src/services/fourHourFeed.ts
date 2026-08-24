@@ -8,6 +8,7 @@
  */
 import { getDb } from "../db.js";
 import { GOLD_SYMBOL_QUERY } from "./goldSymbol.js";
+import { recordDiagnostic } from "./diagnostics.js";
 
 export interface Candle { t: number; o: number; h: number; l: number; c: number; }
 export interface EaSnapshot {
@@ -28,6 +29,7 @@ const GOLD_MAX = 20_000;
 const RAW_WINDOW_HOURS = 48;
 const SNAPSHOT_WINDOW_MIN = 90;
 const REQUIRED = { h1: 80, h4: 30, d1: 20 };
+let lastReadError: string | null = null;
 
 function num(v: unknown, d = 0): number { const n = Number(v); return Number.isFinite(n) ? n : d; }
 function str(v: unknown): string { return v == null ? "" : String(v); }
@@ -69,8 +71,18 @@ function snapshot(row: Record<string, unknown>): EaSnapshot | null {
 const PROJECTION = { _id: 0, ts: 1, account: 1, details: 1 } as const;
 
 export async function readMarketData(): Promise<MarketData | null> {
-  try { return await readMarketDataInner(); } catch { return null; }
+  try {
+    const data = await readMarketDataInner();
+    lastReadError = null;
+    return data;
+  } catch (error) {
+    lastReadError = error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300);
+    recordDiagnostic("warning", "manual-trading-market-feed", error, { code: "BROKER_MARKET_READ_FAILED" });
+    return null;
+  }
 }
+
+export function marketDataReadError(): string | null { return lastReadError; }
 
 async function readMarketDataInner(): Promise<MarketData | null> {
   const db = getDb();
