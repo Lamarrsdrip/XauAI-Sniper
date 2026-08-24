@@ -61,6 +61,7 @@ export interface PersistedOpportunity extends TradeOpportunity {
 // ---- data-integrity gate: only publish on the EA's own genuine, fresh broker read ----
 const EA_STALE_SEC = 10 * 60; // if the newest EA evidence is older than this, the bot is offline -> degrade
 const GENUINE_SOURCE = "ea-stream(spot)";
+let reviewInFlight: Promise<FourHourDoc | null> | null = null;
 
 /** Reject a forecast when the bot's live data is missing, offline/stale, or thin. */
 export function validateMarketData(md: import("./fourHourFeed.js").MarketData | null): { ok: boolean; reason: string } {
@@ -310,6 +311,14 @@ export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
   return { ...current, lastReviewedAt: now.toISOString(), currentPrice: forecast.currentPrice, marketDataAt: now.toISOString(), dataStale: false, dataStatus: validMd.dataStatus, state, confidence: forecast.confidence, evidence: forecast.evidence, reasoning: forecast.reasoning, entryTiming: forecast.entryTiming, qualification: forecast.qualification, preferredZone: forecast.preferredZone, expectedMovePips: forecast.expectedMovePips, targets: forecast.targets, directionalRunwayPips: forecast.directionalRunwayPips, rejectionReasons: forecast.rejectionReasons, opportunity: forecast.opportunity, currentOpportunity, entryCooldownUntil, htfScores: forecast.htfScores, mfePips, maePips };
 }
 
+/** Coalesce heartbeat/background requests onto the one existing 4H review. */
+export function ensureFourHourOutlookReview(): Promise<FourHourDoc | null> {
+  if (!reviewInFlight) {
+    reviewInFlight = reviewFourHourOutlook().finally(() => { reviewInFlight = null; });
+  }
+  return reviewInFlight;
+}
+
 /** Mark the current forecast as seen (clears the dashboard NEW badge). */
 export async function markFourHourSeen(): Promise<void> {
   await getDb().collection("four_hour_outlooks").updateOne({ symbol: SYMBOL }, { $set: { seen: true } });
@@ -334,7 +343,7 @@ export async function getFourHourHistory(limit = 30): Promise<Record<string, unk
 export async function fourHourOutlookLoop(logger?: { info: (m: string) => void; warn: (m: string) => void }): Promise<void> {
   for (;;) {
     try {
-      await reviewFourHourOutlook();
+      await ensureFourHourOutlookReview();
     } catch (e) {
       logger?.warn(`[4h-outlook] ${String(e)}`);
     }

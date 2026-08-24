@@ -6,7 +6,7 @@ import { storeBotActivity } from "../../services/botActivity.js";
 import { BotHeartbeatReqSchema } from "../../models/cloudMonitor.js";
 import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
 import { normalizeGoldSymbol } from "../../services/goldSymbol.js";
-import { getFourHourCurrent, reviewFourHourOutlook } from "../../services/fourHourOutlookService.js";
+import { ensureFourHourOutlookReview, getFourHourCurrent } from "../../services/fourHourOutlookService.js";
 import { recordDiagnostic } from "../../services/diagnostics.js";
 
 const NOISY_STALE_ERRORS = new Set(["MQL ERROR 5035"]);
@@ -135,7 +135,7 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
         // instead of leaving the UI unavailable until a background-loop tick.
         void (async () => {
           try {
-            if (!(await getFourHourCurrent())) await reviewFourHourOutlook();
+            if (!(await getFourHourCurrent())) await ensureFourHourOutlookReview();
           } catch (error) {
             recordDiagnostic("warning", "manual-trading-intelligence", error, { code: "IMMEDIATE_REVIEW_FAILED" });
           }

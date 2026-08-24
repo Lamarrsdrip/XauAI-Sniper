@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { readinessSnapshot } from "../services/readiness.js";
 import { getDb } from "../db.js";
-import { GOLD_SYMBOL_QUERY, normalizeGoldSymbol } from "../services/goldSymbol.js";
+import { normalizeGoldSymbol } from "../services/goldSymbol.js";
 import { extractEvidenceQuoteFromDetails } from "../services/marketOutlookEvidence.js";
 import { getFourHourCurrent } from "../services/fourHourOutlookService.js";
 import { marketDataReadError, readMarketData } from "../services/fourHourFeed.js";
@@ -29,7 +29,7 @@ export async function registerApiHealthRoutes(app: FastifyInstance): Promise<voi
   app.get("/health/market-intelligence", async () => {
     const db = getDb();
     const latest = await db.collection("cloud_bot_activity").findOne(
-      { symbol: GOLD_SYMBOL_QUERY, "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } },
+      { normalized_symbol: "XAUUSD", "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } },
       { projection: { _id: 0, account: 1, symbol: 1, ts: 1, details: 1 }, sort: { ts: -1 } },
     ) as Record<string, unknown> | null;
     const details = (latest?.["details"] as Record<string, unknown> | undefined) ?? {};
@@ -43,7 +43,7 @@ export async function registerApiHealthRoutes(app: FastifyInstance): Promise<voi
         { projection: { _id: 0, lastSourceAt: 1 }, sort: { lastSourceAt: -1 } },
       ) : null,
       account ? db.collection("cloud_bot_activity").findOne(
-        { account, symbol: GOLD_SYMBOL_QUERY, "details.m10_signal.evidence_id": { $gt: 0 } },
+        { account, normalized_symbol: "XAUUSD", "details.m10_signal.evidence_id": { $gt: 0 } },
         { projection: { _id: 0, ts: 1, "details.m10_signal": 1 }, sort: { ts: -1 } },
       ) as Promise<Record<string, unknown> | null> : null,
       getFourHourCurrent(),

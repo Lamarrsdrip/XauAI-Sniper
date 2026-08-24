@@ -7,7 +7,6 @@
  * series, so the most recently live account is selected and used exclusively.
  */
 import { getDb } from "../db.js";
-import { GOLD_SYMBOL_QUERY } from "./goldSymbol.js";
 import { recordDiagnostic } from "./diagnostics.js";
 
 export interface Candle { t: number; o: number; h: number; l: number; c: number; }
@@ -89,13 +88,13 @@ async function readMarketDataInner(): Promise<MarketData | null> {
   // Select one live broker stream. The earlier implementation combined all
   // accounts in one candle series, which is invalid whenever feeds differ.
   const newest = await db.collection("cloud_bot_activity")
-    .find({ symbol: GOLD_SYMBOL_QUERY, "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } }, { projection: PROJECTION })
+    .find({ normalized_symbol: "XAUUSD", "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } }, { projection: PROJECTION })
     .sort({ ts: -1 }).limit(1).next() as Record<string, unknown> | null;
   if (!newest || !str(newest["account"])) return null;
   const account = str(newest["account"]);
   const since = new Date(Date.now() - RAW_WINDOW_HOURS * 3600_000).toISOString();
   const rows = await db.collection("cloud_bot_activity")
-    .find({ account, symbol: GOLD_SYMBOL_QUERY, ts: { $gte: since }, "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } }, { projection: PROJECTION })
+    .find({ account, normalized_symbol: "XAUUSD", ts: { $gte: since }, "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } }, { projection: PROJECTION })
     .sort({ ts: 1 }).limit(5000).toArray() as Record<string, unknown>[];
   const snaps = rows.map(snapshot).filter((x): x is EaSnapshot => x !== null);
   // One current, verified broker quote is sufficient to report healthy data
@@ -106,7 +105,7 @@ async function readMarketDataInner(): Promise<MarketData | null> {
   const latest = snaps.at(-1)!;
   const priceSeries = snaps.map(({ ts, mid }) => ({ t: ts, mid }));
   const stored = await db.collection("manual_trading_broker_candles")
-    .find({ account, symbol: { $in: ["XAUUSD", GOLD_SYMBOL_QUERY] }, source: "ea-stream(spot)" }, { projection: { _id: 0, openTime: 1, o: 1, h: 1, l: 1, c: 1, timeframe: 1 } })
+    .find({ account, symbol: "XAUUSD", source: "ea-stream(spot)" }, { projection: { _id: 0, openTime: 1, o: 1, h: 1, l: 1, c: 1, timeframe: 1 } })
     .sort({ openTime: 1 }).limit(4000).toArray() as Record<string, unknown>[];
   const storedBy = (tf: string) => stored.filter((row) => row["timeframe"] === tf).map(asCandle).filter((x): x is Candle => x !== null);
   // Before the durable collector has accumulated sufficient history, show a

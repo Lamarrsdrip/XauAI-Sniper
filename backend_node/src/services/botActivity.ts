@@ -3,6 +3,7 @@ import { getDb } from "../db.js";
 import { normalizeLicenseKey } from "./license.js";
 import { recordAuditableEaDecision, recordVerifiedManualTradingQuote } from "./manualTradingMarketStore.js";
 import { recordDiagnostic } from "./diagnostics.js";
+import { normalizeGoldSymbol } from "./goldSymbol.js";
 
 export interface BotActivityDetails {
   license_key?: string;
@@ -95,6 +96,7 @@ export async function storeBotActivity(
       repeat_count: repeatCount,
       message: String(message ?? "").slice(0, 600),
       details,
+      normalized_symbol: normalizeGoldSymbol(symbol),
     };
     await activity.updateOne({ id: existing["id"] as string }, { $set: patch });
     let manualMarketQuote: Record<string, unknown> = { persisted: false };
@@ -121,6 +123,7 @@ export async function storeBotActivity(
     license_key: licenseKey,
     account: account || "",
     symbol: symbol || "",
+    normalized_symbol: normalizeGoldSymbol(symbol),
     message: String(message ?? "").slice(0, 600),
     details,
     module: moduleName,
