@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.27.3",
+  "current_version": "v6.27.4",
   "internal_codename": "XauCloud_m10_private_vps_ai",
   "production_branch": "XauCloud_m10_private_vps_ai",
   "production_branch_source_commit": "8498c47eefec0e3cba71ec0c3bb5967feb0de096",
@@ -219,6 +219,20 @@
       "ex5_sha256": "6ce0bccfd8618a56ab75303f428ed132b91377ef3792ccce4d467b982a6d304e",
       "customer_filename": "XauCloud-60pips.ex5",
       "release_notes": "Repairs the verified broker-data path for Manual Trading Intelligence without changing trading logic: every normal EA heartbeat now carries the connected broker's live Bid/Ask and UTC evidence timestamp. The backend persists that same verified quote through the existing activity and H1/H4/D1 candle pipeline, recognizes broker suffixes such as XAUUSDm as canonical XAUUSD, and distinguishes a working no-setup/history-accumulation state from true data unavailability. No price source, trade signal authority, stale timeout, or UI state is fabricated. Also corrects activity classification so non-execution \"no entry\" decisions cannot render as Trade opened/NONE/$0.00.",
+      "stable_status": true
+    },
+    "v6.27.4": {
+      "version": "v6.27.4",
+      "edition": "Full-platform audit: stable indicator ownership and credential-safe telemetry",
+      "source_lineage": "v6.27.3 verified broker heartbeat production source",
+      "source_filename": "XauCloud-60pips.mq5",
+      "source_sha256": "a01ae2aa6785464df159936f0b49ff04f311ef07efd6b6d5062d610d099c0b86",
+      "build_timestamp": "2026-08-24T10:58:58Z",
+      "compiler_result": "0 errors, 0 warnings, 172446 ms elapsed (MetaEditor64.exe via Wine; isolated release build with production lease includes)",
+      "ex5_filename": "XauCloud-60pips.ex5",
+      "ex5_sha256": "f3406963b1b651c6a6c97019bea2cff2a82337fe23f3d691761f5903fc889890",
+      "customer_filename": "XauCloud-60pips.ex5",
+      "release_notes": "Full-platform audit repair. The EA no longer writes the license PIN or credential-bearing command URLs into MT5 logs. M10/H1 trend helpers now reuse authoritative EMA/ATR handles without releasing shared handles, eliminating the recurring MT5/Wine 4807 invalid-handle cycle while preserving custom indicator input behavior. Trading strategy, genuine broker market-data authority, risk, SL, target, and setup qualification are unchanged.",
       "stable_status": true
     }
   }

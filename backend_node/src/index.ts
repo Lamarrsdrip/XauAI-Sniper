@@ -66,6 +66,7 @@ import { runStartupTasks } from "./services/startup.js";
 import { processQueuedXTradePosts } from "./services/xTradePosting.js";
 import { isApplicationReady, markApplicationReady, readinessSnapshot, runReadinessStep } from "./services/readiness.js";
 import { recordDiagnostic } from "./services/diagnostics.js";
+import { applySecurityHeaders } from "./services/httpSecurity.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -111,7 +112,8 @@ async function main(): Promise<void> {
   // application traffic closed until the database and indexes are ready.
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-xaucloud-correlation-id", request.id);
-    const pathName = request.url.split("?", 1)[0];
+    const pathName = request.url.split("?", 1)[0] ?? "";
+    applySecurityHeaders(reply, pathName, IS_PRODUCTION);
     if (!isApplicationReady() && pathName !== "/health" && pathName !== "/api/health" && pathName !== "/api/readiness") {
       const readiness = readinessSnapshot();
       return reply.code(503).send({
@@ -130,7 +132,9 @@ async function main(): Promise<void> {
         status_code: reply.statusCode, result: reply.statusCode < 400 ? "success" : "error", at: new Date().toISOString(),
         action: String((request.routeOptions.config as unknown as Record<string, unknown>)?.["gptActionName"] ?? request.routeOptions.url ?? route),
       });
-    } catch { /* DB may still be starting; readiness endpoint remains authoritative. */ }
+    } catch (error) {
+      request.log.warn({ error, route, requestId: request.id }, "Could not persist admin action request trace");
+    }
   });
 
   // Capture the raw request body alongside Fastify's normal JSON parsing --

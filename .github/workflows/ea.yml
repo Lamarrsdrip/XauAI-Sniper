@@ -59,6 +59,7 @@ jobs:
         run: |
           python -m pytest \
             tests/test_xaucloud_pattern_breakout_promotion.py \
+            tests/test_xaucloud_current_release_security.py \
             tests/test_utf16_tester_event_extractor.py \
             tests/test_xau_outlook_missed_entry_recovery_contract.py \
             -v --tb=short
@@ -113,16 +114,16 @@ jobs:
         id: promote
         run: python3 scripts/auto_promote_release.py
 
-      - name: Commit and push promoted manifest
-        if: steps.promote.outputs.promoted == 'true'
+      - name: Commit and push promoted release
+        if: steps.promote.outputs.promoted == 'true' || steps.promote.outputs.runtime_synced == 'true'
         run: |
           git config user.name "xaucloud-release-bot"
           git config user.email "release-bot@users.noreply.github.com"
-          git add backend/ea_releases/manifest.json
+          git add backend/ea_releases/manifest.json backend_node/ea_releases/
           # [skip ci] prevents this bot commit from re-triggering this same
-          # workflow -- it only touches manifest.json, which this workflow's
-          # own path filters would otherwise pick back up, and the
-          # promotion decision is already final once applied.
+          # workflow. The promotion decision is already final once applied,
+          # and the bot commit contains only the release manifests plus the
+          # exact checksum-verified production runtime artifact.
           git commit -m "chore(release): auto-promote to ${{ steps.promote.outputs.version }} [skip ci]"
           git push
 
@@ -146,9 +147,9 @@ jobs:
 #   current workflow runs the current production-audit invariants instead;
 #   the historical suite remains available as evidence but is not a valid
 #   current-release gate until it is explicitly retired or version-scoped.
-# - Redeployment. auto-promote-release updates manifest.json's
-#   current_version on main (durable, survives a redeploy) but this
-#   workflow has no credentials for and does not trigger the Hostinger Web App
-#   deploy. Production is connected to GitHub `main` and Hostinger's
-#   auto-deployment publishes the current backend_node build.
+# - Redeployment. auto-promote-release synchronizes the promoted manifest
+#   entry and checksum-verified EX5 into backend_node on main (durable and
+#   deployable), but this workflow has no credentials for and does not itself
+#   trigger the Hostinger Web App deploy. Production is connected to GitHub
+#   `main`, and Hostinger's auto-deployment publishes that backend_node build.
 # ---------------------------------------------------------------------

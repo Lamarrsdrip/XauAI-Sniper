@@ -17,7 +17,7 @@ SCRIPTS_DIR = os.path.join(ROOT_DIR, "scripts")
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
-from auto_promote_release import decide_promotion  # noqa: E402
+from auto_promote_release import decide_promotion, sync_runtime_release  # noqa: E402
 
 
 @pytest.fixture()
@@ -149,3 +149,22 @@ def test_no_current_version_pointer_still_finds_a_candidate(releases_dir):
     version, reason, problems = decide_promotion(manifest, releases_dir)
     assert version == "v1"
     assert problems == []
+
+
+def test_syncs_promoted_release_into_node_runtime(releases_dir):
+    payload = b"verified runtime artifact"
+    digest = _write_artifact(releases_dir, "v2", "bot.ex5", payload)
+    manifest = {
+        "current_version": "v2",
+        "website_product_name": "XauCloud",
+        "releases": {"v2": {"version": "v2", "stable_status": True, "build_timestamp": "2026-02-01T00:00:00Z",
+                              "ex5_filename": "bot.ex5", "ex5_sha256": digest}},
+    }
+    runtime_manifest = releases_dir / "runtime" / "manifest.json"
+
+    assert sync_runtime_release(manifest, releases_dir, runtime_manifest) is True
+    runtime = __import__("json").loads(runtime_manifest.read_text(encoding="utf-8"))
+    assert runtime["current_version"] == "v2"
+    assert runtime["releases"]["v2"] == manifest["releases"]["v2"]
+    assert (runtime_manifest.parent / "v2" / "bot.ex5").read_bytes() == payload
+    assert sync_runtime_release(manifest, releases_dir, runtime_manifest) is False

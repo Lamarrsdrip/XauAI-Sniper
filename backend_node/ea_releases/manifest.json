@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.27.3",
+  "current_version": "v6.27.4",
   "website_product_name": "XauCloud",
   "mt5_market_product_name": "XauCloud",
   "releases": {
@@ -94,6 +94,20 @@
       "ex5_sha256": "6ce0bccfd8618a56ab75303f428ed132b91377ef3792ccce4d467b982a6d304e",
       "customer_filename": "XauCloud-60pips.ex5",
       "release_notes": "Verified broker heartbeat repair for Manual Trading Intelligence. The connected EA sends its genuine live Bid/Ask and UTC evidence timestamp on each normal heartbeat; the existing backend activity and H1/H4/D1 candle pipeline persists it as canonical XAUUSD while retaining broker symbols such as XAUUSDm for audit. No market-data source, signal authority, stale timeout, or UI state is fabricated.",
+      "stable_status": true
+    },
+    "v6.27.4": {
+      "version": "v6.27.4",
+      "edition": "Full-platform audit: stable indicator ownership and credential-safe telemetry",
+      "source_lineage": "v6.27.3 verified broker heartbeat production source",
+      "source_filename": "XauCloud-60pips.mq5",
+      "source_sha256": "a01ae2aa6785464df159936f0b49ff04f311ef07efd6b6d5062d610d099c0b86",
+      "build_timestamp": "2026-08-24T10:58:58Z",
+      "compiler_result": "0 errors, 0 warnings, 172446 ms elapsed (MetaEditor64.exe via Wine; isolated release build with production lease includes)",
+      "ex5_filename": "XauCloud-60pips.ex5",
+      "ex5_sha256": "f3406963b1b651c6a6c97019bea2cff2a82337fe23f3d691761f5903fc889890",
+      "customer_filename": "XauCloud-60pips.ex5",
+      "release_notes": "Full-platform audit repair. The EA no longer writes the license PIN or credential-bearing command URLs into MT5 logs. M10/H1 trend helpers now reuse authoritative EMA/ATR handles without releasing shared handles, eliminating the recurring MT5/Wine 4807 invalid-handle cycle while preserving custom indicator input behavior. Trading strategy, genuine broker market-data authority, risk, SL, target, and setup qualification are unchanged.",
       "stable_status": true
     }
   }

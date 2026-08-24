@@ -5,15 +5,65 @@ on:
     branches: [main, "release/**"]
     paths:
       - "backend/**"
+      - "backend_node/**"
       - ".github/workflows/backend.yml"
   pull_request:
     branches: [main, "release/**"]
     paths:
       - "backend/**"
+      - "backend_node/**"
       - ".github/workflows/backend.yml"
 
 jobs:
-  test:
+  production-node-test:
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand(\"ping\")' || mongo --eval 'db.runCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MONGO_URL: mongodb://localhost:27017
+      DB_NAME: ci_node_test_db
+      JWT_SECRET: ci-test-secret-not-for-production
+      ADMIN_EMAIL: ci-admin@test.com
+      ENVIRONMENT: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: backend_node/package-lock.json
+
+      - name: Install production-backend dependencies
+        working-directory: backend_node
+        run: npm ci
+
+      - name: Test production backend
+        working-directory: backend_node
+        run: npm test -- --run --silent
+
+      - name: Typecheck production backend
+        working-directory: backend_node
+        run: npm run typecheck
+
+      - name: Build production backend
+        working-directory: backend_node
+        run: npm run build
+
+      - name: Audit production dependencies
+        working-directory: backend_node
+        run: npm audit --omit=dev --audit-level=high
+
+  legacy-python-test:
     runs-on: ubuntu-latest
     services:
       mongodb:

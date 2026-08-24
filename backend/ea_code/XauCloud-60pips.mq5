@@ -1947,7 +1947,7 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.273"
+#property version   "6.274"
 #property description "XAUCloud-60pips production build: fixed $10 broker SL, +60-pip profit floor, and Outlook recovery."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
@@ -2034,9 +2034,9 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "XAUCloud-60pips_v6.27.3"
-#define XAUAI_EA_VERSION_NUM "6.273"
-#define XAUAI_BUILD_HASH "xaucloud-60pips-mti-heartbeat-20260824"
+#define XAUAI_EA_VERSION "XAUCloud-60pips_v6.27.4"
+#define XAUAI_EA_VERSION_NUM "6.274"
+#define XAUAI_BUILD_HASH "xaucloud-60pips-audit-security-20260824"
 
 // v6.26.0 owner directive (2026-08-05): permanent migration off the R
 // (risk-multiple) measurement system. Every internal exit/protection
@@ -11371,11 +11371,11 @@ int OnInit()
       licenseValid = ValidatePIN(InpLicensePIN);
       if(!licenseValid)
       {
-         Print("INIT_FAIL [LICENSE_INVALID]: Invalid PIN: ", InpLicensePIN);
-         Alert("Invalid PIN: " + InpLicensePIN);
+         Print("INIT_FAIL [LICENSE_INVALID]: The configured license PIN was rejected.");
+         Alert("The configured license PIN was rejected.");
          return INIT_FAILED;
       }
-      Print("LICENSE OK: ", InpLicensePIN);
+      Print("LICENSE OK: configured PIN accepted (value redacted)");
    }
 
    // Strategy Tester startup self-tests are diagnostic, not fatal.
@@ -34843,19 +34843,25 @@ int PG_HTFTrend()
    // bars back), not shift 0 (current), silently offsetting the whole
    // trend-strength read.
    ArraySetAsSeries(ema, true); ArraySetAsSeries(close, true); ArraySetAsSeries(atr, true);
-   int hEMA = iMA(Symbol(), InpPG_HTFTrendTF, 50, 0, MODE_EMA, PRICE_CLOSE);
-   int loc_hATR = iATR(Symbol(), InpPG_HTFTrendTF, 14);
+   // InpPG_HTFTrendTF is locked to M10 and these parameters are identical to
+   // the authoritative entry handles. Creating and releasing duplicate handles
+   // invalidates the shared cached handle on MT5/Wine (live error 4807). Reuse
+   // the long-lived handles here and leave their lifecycle to OnInit/OnDeinit.
+   bool ownsEMA = (InpEMAFast != 50);
+   bool ownsATR = (InpATRPeriod != 14);
+   int hEMA = ownsEMA ? iMA(Symbol(), InpPG_HTFTrendTF, 50, 0, MODE_EMA, PRICE_CLOSE) : hEMAFast;
+   int loc_hATR = ownsATR ? iATR(Symbol(), InpPG_HTFTrendTF, 14) : hATR;
    if(hEMA == INVALID_HANDLE || loc_hATR == INVALID_HANDLE)
    {
-      if(hEMA != INVALID_HANDLE) IndicatorRelease(hEMA);
-      if(loc_hATR != INVALID_HANDLE) IndicatorRelease(loc_hATR);
+      if(ownsEMA && hEMA != INVALID_HANDLE) IndicatorRelease(hEMA);
+      if(ownsATR && loc_hATR != INVALID_HANDLE) IndicatorRelease(loc_hATR);
       return lastTrend;
    }
    bool dataOk = (CopyBuffer(hEMA, 0, 0, 3, ema)           > 0 &&
                   CopyBuffer(loc_hATR, 0, 0, 3, atr)       > 0 &&
                   CopyClose(Symbol(), InpPG_HTFTrendTF, 0, 3, close) > 0);
-   IndicatorRelease(hEMA);
-   IndicatorRelease(loc_hATR);
+   if(ownsEMA) IndicatorRelease(hEMA);
+   if(ownsATR) IndicatorRelease(loc_hATR);
    if(!dataOk) return lastTrend;
    double price = close[0];
    double diff  = price - ema[0];
@@ -42588,10 +42594,39 @@ string TFShortName(ENUM_TIMEFRAMES tf)
 
 int TFDirectionByEMA(int signal, ENUM_TIMEFRAMES tf, double atrThreshold, string &why)
 {
-   int hEMA = iMA(Symbol(), tf, 50, 0, MODE_EMA, PRICE_CLOSE);
-   int loc_hATR = iATR(Symbol(), tf, 14);
+   bool ownsEMA = true;
+   bool ownsATR = true;
+   int hEMA = INVALID_HANDLE;
+   int loc_hATR = INVALID_HANDLE;
+   if(tf == XAU_PRIMARY_DECISION_TF && InpEMAFast == 50)
+   {
+      hEMA = hEMAFast;
+      ownsEMA = false;
+   }
+   else if(tf == PERIOD_H1 && InpEMAFast == 50)
+   {
+      hEMA = hEMAFast_H1;
+      ownsEMA = false;
+   }
+   else if(tf == InpContextTF && InpEMAFast == 50)
+   {
+      hEMA = hEMAFast_H4;
+      ownsEMA = false;
+   }
+   else
+      hEMA = iMA(Symbol(), tf, 50, 0, MODE_EMA, PRICE_CLOSE);
+
+   if(tf == XAU_PRIMARY_DECISION_TF && InpATRPeriod == 14)
+   {
+      loc_hATR = hATR;
+      ownsATR = false;
+   }
+   else
+      loc_hATR = iATR(Symbol(), tf, 14);
    if(hEMA == INVALID_HANDLE || loc_hATR == INVALID_HANDLE)
    {
+      if(ownsEMA && hEMA != INVALID_HANDLE) IndicatorRelease(hEMA);
+      if(ownsATR && loc_hATR != INVALID_HANDLE) IndicatorRelease(loc_hATR);
       why = TFShortName(tf) + ":DATA";
       return 0;
    }
@@ -42600,8 +42635,8 @@ int TFDirectionByEMA(int signal, ENUM_TIMEFRAMES tf, double atrThreshold, string
    bool ok = (CopyBuffer(hEMA, 0, 0, 2, ema) > 0 &&
               CopyBuffer(loc_hATR, 0, 0, 2, atr) > 0 &&
               CopyClose(Symbol(), tf, 0, 2, close) > 0);
-   IndicatorRelease(hEMA);
-   IndicatorRelease(loc_hATR);
+   if(ownsEMA) IndicatorRelease(hEMA);
+   if(ownsATR) IndicatorRelease(loc_hATR);
    if(!ok || atr[0] <= 0.0)
    {
       why = TFShortName(tf) + ":WAIT";
@@ -44829,7 +44864,6 @@ void BotMonitorActivity(string eventType, string severity, string message)
       string responseBody = CharArrayToString(res);
       Print("BOT-MONITOR activity POST failed url=", InpCloudURL, "/api/cloud/monitor/activity",
             " http=", code, " err=", GetLastError(),
-            " pin=", BotMonitorJsonSafe(InpLicensePIN, 32),
             " response=", BotMonitorJsonSafe(responseBody, 360));
    }
 }
@@ -44957,7 +44991,6 @@ void BotMonitorHeartbeat()
       string responseBody = CharArrayToString(res);
       Print("XAUCLOUD CONNECTION FAILED | Heartbeat cannot reach xaucloud.io. MT5 setup: Tools > Options > Expert Advisors > Allow WebRequest for https://xaucloud.io | heartbeat POST failed url=", InpCloudURL, "/api/cloud/monitor/heartbeat",
             " http=", code, " err=", errCode, " consecutiveFails=", g_cloudConsecutiveFails + 1,
-            " pin=", BotMonitorJsonSafe(InpLicensePIN, 32),
             " account=", (string)AccountInfoInteger(ACCOUNT_LOGIN),
             " payloadFields=pin,license_key,account_number,ea_version,symbol,timeframe,equity,balance",
             " response=", BotMonitorJsonSafe(responseBody, 520),
@@ -44968,7 +45001,6 @@ void BotMonitorHeartbeat()
    {
       string responseBody = CharArrayToString(res);
       Print("BOT-MONITOR heartbeat OK account=", (string)AccountInfoInteger(ACCOUNT_LOGIN),
-            " pin=", BotMonitorJsonSafe(InpLicensePIN, 32),
             " response=", BotMonitorJsonSafe(responseBody, 220));
       XAU_CloudRecordSuccess("BOT-MONITOR");
    }
@@ -44995,7 +45027,6 @@ void BotMonitorAckCommand(string commandId, string status, string message)
    {
       string responseBody = CharArrayToString(res);
       Print("BOT-COMMAND ack failed http=", code, " err=", GetLastError(),
-            " pin=", BotMonitorJsonSafe(InpLicensePIN, 32),
             " response=", BotMonitorJsonSafe(responseBody, 360));
    }
 }
@@ -45313,7 +45344,7 @@ void BotMonitorPollCommands()
       {
          int errCode = GetLastError();
          string responseBody = CharArrayToString(res);
-         Print("XAUCLOUD CONNECTION FAILED | Command Center cannot reach xaucloud.io. MT5 setup: Tools > Options > Expert Advisors > Allow WebRequest for https://xaucloud.io | pending GET failed url=", pendingUrl,
+         Print("XAUCLOUD CONNECTION FAILED | Command Center cannot reach xaucloud.io. MT5 setup: Tools > Options > Expert Advisors > Allow WebRequest for https://xaucloud.io | pending GET failed endpoint=", InpCloudURL, "/api/cloud/command/pending (query redacted)",
                " http=", code, " err=", errCode, " consecutiveFails=", g_cloudConsecutiveFails + 1,
                " response=", BotMonitorJsonSafe(responseBody, 360));
          XAU_CloudRecordFailure("BOT-COMMAND", code, errCode);
