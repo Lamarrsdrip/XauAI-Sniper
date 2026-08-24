@@ -213,12 +213,36 @@ async function markJobsWaitingForXConfiguration(): Promise<void> {
   }
 }
 
+/**
+ * Backfill only from the genuine broker close already held in trade_journal.
+ * This repairs legacy rows where the schema materialized missing exit_price as
+ * zero while the EA's authoritative DEAL_PRICE was correctly retained in
+ * `price`; it never calculates an exit from a target or price movement.
+ */
+async function persistAuthoritativeExitPrice(trade: FinalTrade): Promise<void> {
+  const actualExitPrice = authoritativeExitPrice(trade);
+  const tradeIdentity = canonicalTradeId(trade);
+  if (!Number.isFinite(actualExitPrice) || actualExitPrice <= 0 || !tradeIdentity) return;
+  await getDb().collection("trade_journal").updateOne(
+    { trade_identity: tradeIdentity },
+    {
+      $set: {
+        actual_exit_price: actualExitPrice,
+        exit_price: actualExitPrice,
+        exit_price_source: "MT5_DEAL_PRICE",
+        exit_price_reconciled_at: new Date().toISOString(),
+      },
+    },
+  );
+}
+
 async function processClaimedXTradePost(row: Record<string, unknown>, source: "auto" | "admin_manual"): Promise<Record<string, unknown>> {
   const checked = validateFinalTrade(row["trade"] as FinalTrade);
   if (!checked.valid) {
     await blockInvalidXTradePost(row, checked);
     return { status: "BLOCKED_INVALID_TRADE_DATA", closed_trade_id: row["closed_trade_id"] };
   }
+  await persistAuthoritativeExitPrice(checked.trade);
   xPostLog("publishing", { closed_trade_id: row["closed_trade_id"], source });
   try {
     const postText = buildXTradePost(checked.trade);
