@@ -107,8 +107,13 @@ def test_public_info_endpoint_never_exposes_source_code():
     async def go():
         result = await srv.download_info()
         # No raw MQ5 content, no filesystem paths, no secrets -- metadata only.
-        assert "input " not in str(result)  # a literal MQL5 `input` declaration would leak if source were embedded
-        assert "InpCloudAgentToken" not in str(result)
+        # Do not reject ordinary release-note prose containing a word such as
+        # "input". Check actual MQL/source markers and forbidden response keys.
+        rendered = str(result)
+        assert "#property" not in rendered
+        assert "void OnTick(" not in rendered
+        assert "InpCloudAgentToken" not in rendered
+        assert not ({"source", "source_code", "source_path", "mq5", "artifact_path"} & set(result))
         assert result.get("available") is True
         assert "version" in result
         assert "checksum_sha256_12" in result
