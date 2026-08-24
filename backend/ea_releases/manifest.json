@@ -227,7 +227,7 @@
       "source_lineage": "v6.27.3 verified broker heartbeat production source",
       "source_filename": "XauCloud-60pips.mq5",
       "source_sha256": "a01ae2aa6785464df159936f0b49ff04f311ef07efd6b6d5062d610d099c0b86",
-      "build_timestamp": "2026-08-24T10:58:58Z",
+      "build_timestamp": "2026-08-24T09:58:58Z",
       "compiler_result": "0 errors, 0 warnings, 172446 ms elapsed (MetaEditor64.exe via Wine; isolated release build with production lease includes)",
       "ex5_filename": "XauCloud-60pips.ex5",
       "ex5_sha256": "f3406963b1b651c6a6c97019bea2cff2a82337fe23f3d691761f5903fc889890",
