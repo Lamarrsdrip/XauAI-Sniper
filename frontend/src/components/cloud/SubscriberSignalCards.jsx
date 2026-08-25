@@ -146,20 +146,28 @@ export function SignalCard({ title, icon: Icon, state }) {
   );
 }
 
-export function RecentSignalsCard({ state }) {
+// `scroll` -- when true (Home), rows render inside a fixed-height,
+// internally-scrollable container so the section stays visibly open (not
+// collapsed/accordion) without making the page grow with every signal --
+// same pattern as the public homepage's 30-Day Replay trade list
+// (GoldReplaySection.jsx: max-h + overflow-y-auto). When false (the
+// Activity tab's own dedicated page), the full list renders unbounded, as
+// before. Same rows either way -- one implementation, not two.
+export function RecentSignalsCard({ state, scroll = false }) {
   const { loading, signals, locked, error } = state;
+  const count = signals?.length || 0;
   return (
-    <UI.Card title="Recent Signals">
+    <UI.Card title="Recent Signals" subtitle={!loading && !locked && !error && count > 0 ? `${count} item${count === 1 ? "" : "s"}` : undefined}>
       {loading && <UI.Skeleton className="h-16 w-full" />}
       {!loading && locked && (
         <UI.EmptyState icon={Lock} title="Not included in your plan" body="Start a free trial or subscribe to see your recent signals." />
       )}
       {!loading && !locked && error && <div className="text-[12px] text-rose-400">{error}</div>}
-      {!loading && !locked && !error && (!signals || signals.length === 0) && (
+      {!loading && !locked && !error && count === 0 && (
         <div className="text-[12.5px] text-white/45">No recent signals yet.</div>
       )}
-      {!loading && !locked && !error && signals && signals.length > 0 && (
-        <div className="divide-y divide-white/[0.06]">
+      {!loading && !locked && !error && count > 0 && (
+        <div className={scroll ? "max-h-[320px] divide-y divide-white/[0.06] overflow-y-auto pr-1" : "divide-y divide-white/[0.06]"} data-testid="recent-signals-list">
           {signals.map((s) => (
             <div key={s.signal_id} className="flex items-center justify-between gap-3 py-2.5">
               <div className="min-w-0">

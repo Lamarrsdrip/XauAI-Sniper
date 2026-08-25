@@ -1276,108 +1276,59 @@ function StatChips({ online, ddNum, winRate, spread, openTrades }) {
 // the same `events` data HomePage already receives (no new API call),
 // filtered to plain-language trade lifecycle events only.
 const clockTime = (iso) => { try { return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }); } catch { return ""; } };
-// ── Collapsible summary card ────────────────────────────────────────────────
-// Compact-by-default pattern for list-heavy Home sections (Recent Signals,
-// Closed Trades) so the page doesn't grow unbounded with every new item.
-// Session-only open state (resets on reload -- not worth persisting), fully
-// keyboard/aria accessible (the whole summary row is the button, not just
-// the chevron), and renders no expand affordance at all when there's
-// nothing to expand.
-function Collapsible({ title, icon: Icon, summary, emptyText, count, testId, children }) {
-  const [open, setOpen] = useState(false);
-  if (!count) {
-    return (
-      <AK.Panel>
-        <div className="flex items-center gap-2.5 px-4 py-3.5">
-          {Icon && <Icon className="h-4 w-4 flex-none text-white/25" />}
-          <div className="min-w-0 flex-1">
-            <div className="text-[13.5px] font-semibold text-white/70">{title}</div>
-            <div className="mt-0.5 text-[11.5px] text-white/35">{emptyText}</div>
-          </div>
-        </div>
-      </AK.Panel>
-    );
-  }
-  return (
-    <AK.Panel>
-      <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid={testId}
-        className="no-select flex w-full items-center gap-2.5 px-4 py-3.5 text-left transition hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-300/40">
-        {Icon && <Icon className="h-4 w-4 flex-none text-gold-300/60" />}
-        <div className="min-w-0 flex-1">
-          <div className="text-[13.5px] font-semibold">{title}</div>
-          <div className="mt-0.5 truncate text-[11.5px] text-white/45">{summary}</div>
-        </div>
-        <ChevronDown className={`h-4 w-4 flex-none text-white/30 transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
-      </button>
-      {open && (
-        <div className="animate-in fade-in slide-in-from-top-1 border-t border-white/[0.06] px-4 pb-2 pt-1 duration-150">
-          {children}
-        </div>
-      )}
-    </AK.Panel>
-  );
-}
 
-// Collapsible wrapper around the real RecentSignalsCard (see
-// SubscriberSignalCards.jsx) for Home specifically -- the Activity tab's
-// own use of RecentSignalsCard stays a full, uncollapsed list; this is only
-// about keeping Home short. No new fetch: reuses the same `state` Home
-// already loads from GET /cloud/signals/recent.
-function RecentSignalsSummary({ state }) {
-  const { loading, signals, locked, error } = state;
-  if (loading) return <UI.Card title="Recent Signals"><UI.Skeleton className="h-16 w-full" /></UI.Card>;
-  if (locked || error) return <RecentSignalsCard state={state} />;
-  const count = signals?.length || 0;
-  if (count === 0) return <Collapsible title="Recent Signals" icon={Clock3} count={0} emptyText="No recent signals" />;
-  const latest = signals[0];
-  const summary = `${count} item${count === 1 ? "" : "s"} · Latest: ${latest.symbol} ${String(latest.direction || "").replace(/_/g, " ")} · ${latest.engine === "OUTLOOK" ? "Market Outlook" : "10-Minute Engine"} · ${relTime(latest.updated_at)}`;
-  return (
-    <Collapsible title="Recent Signals" icon={Clock3} count={count} summary={summary} testId="recent-signals-toggle">
-      <RecentSignalsCard state={state} />
-    </Collapsible>
-  );
-}
-
-function HomeRecentActivity({ events = [], onOpenFull }) {
+// Visible-by-default, internally-scrolling list -- same pattern as the
+// public homepage's 30-Day Replay trade list (GoldReplaySection.jsx:
+// max-h-[...] + overflow-y-auto). Corrected 2026-08-25: an earlier pass
+// collapsed this behind a tap-to-expand accordion, which is explicitly NOT
+// what was wanted -- the latest rows must already be visible, with the
+// page kept short by a bounded, scrollable container instead of a hidden
+// one. No new fetch: reuses the same `events` data HomePage already loads.
+function HomeRecentActivity({ events = [], heartbeat, onOpenFull }) {
   const todayStr = new Date().toDateString();
   const closedToday = (events || []).filter((e) => eventCategory(e) === "exits" && new Date(e.ts || e.timestamp || 0).toDateString() === todayStr);
   const wins = closedToday.filter((e) => Number(getEventField(e, "profit", 0)) >= 0).length;
   const losses = closedToday.length - wins;
-  const meaningful = (events || []).filter((e) => ["entries", "exits"].includes(eventCategory(e))).slice(0, 10);
-  if (!meaningful.length) {
-    return <Collapsible title="Closed Trades" icon={History} count={0} emptyText="No closed trades today" />;
-  }
-
-  const summary = closedToday.length > 0
-    ? `${closedToday.length} trade${closedToday.length === 1 ? "" : "s"} · ${wins}W / ${losses}L`
-    : "No closed trades today";
+  const dailyPnl = Number(heartbeat?.daily_pnl || 0);
+  const meaningful = (events || []).filter((e) => ["entries", "exits"].includes(eventCategory(e))).slice(0, 20);
 
   return (
-    <Collapsible title="Closed Trades" icon={History} count={meaningful.length} summary={summary} testId="closed-trades-toggle">
-      <div className="pb-1.5" data-testid="home-recent-activity">
-        {meaningful.map((e, i) => {
-          const opened = eventCategory(e) === "entries";
-          const sym = e.symbol || getEventField(e, "symbol", "XAUUSD");
-          const dir = getEventField(e, "signal_direction", "") || getEventField(e, "position_direction", "");
-          const pnlRaw = getEventField(e, "profit", "");
-          const hasPnl = pnlRaw !== "" && pnlRaw !== null && pnlRaw !== undefined;
-          return (
-            <AK.FeedItem key={e.id || i}
-              time={clockTime(e.ts)}
-              title={opened ? "Trade opened" : "Trade closed"}
-              tone={opened ? "gold" : hasPnl ? (Number(pnlRaw) >= 0 ? "profit" : "loss") : "white"}
-              detail={`${dir ? dir + " " : ""}${sym}${hasPnl ? ` · ${money(Number(pnlRaw))}` : ""}`}
-              last={i === meaningful.length - 1}
-            />
-          );
-        })}
-        {onOpenFull && (
-          <button onClick={onOpenFull} className="no-select mt-2 w-full rounded-xl bg-white/[0.04] py-2 text-center text-[11.5px] font-semibold text-white/50 hover:bg-white/[0.07]">
-            View all activity
-          </button>
+    <AK.Panel>
+      <AK.PanelHead title="Closed Trades" onMore={meaningful.length > 0 ? onOpenFull : undefined} />
+      <div className="px-4 pb-2">
+        {closedToday.length > 0 ? (
+          <div className="flex items-center gap-4 text-[11.5px] text-white/50" data-testid="closed-trades-summary">
+            <span>Today <span className="font-mono font-bold text-white/85">{closedToday.length}</span></span>
+            <span className="font-mono font-bold text-white/85">{wins}W / {losses}L</span>
+            <span className={`font-mono font-bold ${dailyPnl >= 0 ? "text-profit" : "text-loss"}`}>{money(dailyPnl)}</span>
+          </div>
+        ) : (
+          <div className="text-[11.5px] text-white/40">No closed trades today</div>
         )}
       </div>
-    </Collapsible>
+      {meaningful.length === 0 ? (
+        <div className="px-4 pb-3.5 text-[12.5px] text-white/40">No closed trades yet.</div>
+      ) : (
+        <div className="max-h-[320px] overflow-y-auto pb-1.5" data-testid="home-recent-activity">
+          {meaningful.map((e, i) => {
+            const opened = eventCategory(e) === "entries";
+            const sym = e.symbol || getEventField(e, "symbol", "XAUUSD");
+            const dir = getEventField(e, "signal_direction", "") || getEventField(e, "position_direction", "");
+            const pnlRaw = getEventField(e, "profit", "");
+            const hasPnl = pnlRaw !== "" && pnlRaw !== null && pnlRaw !== undefined;
+            return (
+              <AK.FeedItem key={e.id || i}
+                time={clockTime(e.ts)}
+                title={opened ? "Trade opened" : "Trade closed"}
+                tone={opened ? "gold" : hasPnl ? (Number(pnlRaw) >= 0 ? "profit" : "loss") : "white"}
+                detail={`${dir ? dir + " " : ""}${sym}${hasPnl ? ` · ${money(Number(pnlRaw))}` : ""}`}
+                last={i === meaningful.length - 1}
+              />
+            );
+          })}
+        </div>
+      )}
+    </AK.Panel>
   );
 }
 
@@ -1577,7 +1528,7 @@ function SubscriberHomePage({ entitlement, setActive, onBuyBot }) {
       <SignalCard title="Market Outlook" icon={LineChart} state={outlook} />
       <SignalCard title="10-Minute Engine" icon={Zap} state={engine} />
       <FourHourOutlookCard />
-      <RecentSignalsSummary state={recent} />
+      <RecentSignalsCard state={recent} scroll />
 
       {academy && <ContinueLearningCard academy={academy} setActive={setActive} />}
 
@@ -1656,7 +1607,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, equityPoints, events
       <StatChips online={online} ddNum={ddNum} winRate={winRate} spread={heartbeat.spread} openTrades={openTrades} />
 
       {/* 2–3 most important events — full timeline on tap */}
-      <HomeRecentActivity events={events} onOpenFull={() => setActive("activity")} />
+      <HomeRecentActivity events={events} heartbeat={heartbeat} onOpenFull={() => setActive("activity")} />
 
       {!linked && (
         <AK.Panel>
