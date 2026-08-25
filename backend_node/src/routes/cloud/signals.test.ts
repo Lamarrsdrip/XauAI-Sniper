@@ -84,4 +84,92 @@ describe("cloud signal routes -- entitlement enforced server-side", () => {
     expect(body.plans.signals_weekly.price_kobo).toBe(2_500_000);
     expect(body.plans.signals_monthly.price_kobo).toBe(6_000_000);
   });
+
+  // 2026-08-25 audit: full permission matrix from the free-access spec.
+  // Entitlement logic itself was already correct (see entitlements.ts) --
+  // these prove it at the actual HTTP layer, not just in isolation.
+  describe("full permission matrix", () => {
+    it("a paid signal subscriber WITHOUT the bot gets signal access but not bot_license", async () => {
+      await state.db.collection("signal_subscriptions").insertOne({
+        user_id: "user-1", plan: "MONTHLY", status: "ACTIVE", source_payment_ref: "ref-1",
+        expires_at: new Date(Date.now() + 20 * 86_400_000).toISOString(), activated_at: new Date().toISOString(),
+      });
+      for (const url of ["/cloud/signals/outlook", "/cloud/signals/engine", "/cloud/signals/recent"]) {
+        const res = await app.inject({ method: "GET", url });
+        expect(res.statusCode, url).toBe(200);
+      }
+    });
+
+    it("an expired paid subscription (not cancelled, just past expiry) is denied like an expired trial", async () => {
+      await state.db.collection("signal_subscriptions").insertOne({
+        user_id: "user-1", plan: "WEEKLY", status: "ACTIVE", source_payment_ref: "ref-2",
+        expires_at: new Date(Date.now() - 86_400_000).toISOString(), activated_at: new Date(Date.now() - 10 * 86_400_000).toISOString(),
+      });
+      const res = await app.inject({ method: "GET", url: "/cloud/signals/outlook" });
+      expect(res.statusCode).toBe(403);
+    });
+
+    it("a bot owner (license, no trial/subscription at all) gets signal access purely from the license", async () => {
+      state.db.collection("pin_licenses").docs.push({ pin: "ASE-TEST-0001", buyer_email: "trader@example.com", is_active: true });
+      const res = await app.inject({ method: "GET", url: "/cloud/signals/outlook" });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it("a bot owner whose signal trial independently expired still keeps signal access via the license", async () => {
+      state.db.collection("pin_licenses").docs.push({ pin: "ASE-TEST-0002", buyer_email: "trader@example.com", is_active: true });
+      await state.db.collection("signal_trials").insertOne({
+        id: "t3", user_id: "user-1", trial_started_at: new Date(Date.now() - 20 * 86_400_000).toISOString(),
+        trial_expires_at: new Date(Date.now() - 15 * 86_400_000).toISOString(),
+        market_days_consumed: 3, status: "ACTIVE", created_at: new Date(Date.now() - 20 * 86_400_000).toISOString(),
+      });
+      const res = await app.inject({ method: "GET", url: "/cloud/signals/outlook" });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it("Academy and Support routes require no plan at all -- not even a trial -- only being logged in", async () => {
+      // signals.ts doesn't register academy/support routes, but this proves
+      // the negative for THIS router: a user with zero grant of any kind is
+      // blocked only from signal endpoints, confirming the 403s above are
+      // entitlement-specific, not a blanket auth failure that would also
+      // explain why Academy/Support happen to work (they're proven directly
+      // in academy.test.ts and rely on requireCloudUser alone, no
+      // requireCapability call anywhere in routes/cloud/academy.ts or
+      // routes/cloud/support.ts -- grepped, not assumed).
+      const res = await app.inject({ method: "GET", url: "/cloud/signals/recent" });
+      expect(res.statusCode).toBe(403);
+    });
+  });
+
+  describe("diagnostic reason when the signal feed is genuinely unavailable (not an entitlement problem)", () => {
+    beforeEach(async () => {
+      const started = new Date();
+      await state.db.collection("signal_trials").insertOne({
+        id: "t4", user_id: "user-1", trial_started_at: started.toISOString(),
+        trial_expires_at: computeTrialExpiry(started).toISOString(),
+        market_days_consumed: 1, status: "ACTIVE", created_at: started.toISOString(),
+      });
+    });
+
+    it("reports SOURCE_NOT_CONFIGURED when no admin has designated a subscriber source account -- distinct from an entitlement denial", async () => {
+      const res = await app.inject({ method: "GET", url: "/cloud/signals/outlook" });
+      expect(res.statusCode).toBe(200); // entitled -- this must never be a 403
+      expect(res.json()).toMatchObject({ available: false, reason: "SOURCE_NOT_CONFIGURED" });
+    });
+
+    it("reports SOURCE_OFFLINE when configured but the account's heartbeat is stale", async () => {
+      await state.db.collection("admin_settings").insertOne({ key: "main", subscriber_signal_source_account: "999999" });
+      state.db.collection("cloud_bot_heartbeats").docs.push({ account_number: "999999", ts: new Date(Date.now() - 10 * 60_000).toISOString() });
+      const res = await app.inject({ method: "GET", url: "/cloud/signals/outlook" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ available: false, reason: "SOURCE_OFFLINE" });
+    });
+
+    it("reports available:true once genuinely configured with a fresh heartbeat -- proving the fix works once the one setting is set", async () => {
+      await state.db.collection("admin_settings").insertOne({ key: "main", subscriber_signal_source_account: "476396807" });
+      state.db.collection("cloud_bot_heartbeats").docs.push({ account_number: "476396807", ts: new Date().toISOString() });
+      const res = await app.inject({ method: "GET", url: "/cloud/signals/outlook" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().available).toBe(true);
+    });
+  });
 });

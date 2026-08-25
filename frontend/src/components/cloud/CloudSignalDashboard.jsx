@@ -268,6 +268,11 @@ function LockedBotTeasers() {
             </span>
           </div>
         ))}
+        <p className="pt-1 text-[11.5px] text-white/40">This feature requires the XauCloud automated trading bot.</p>
+        <button onClick={() => { window.location.href = "/#purchase"; }}
+          className="no-select mt-1 w-full rounded-xl bg-gold-300 py-2.5 text-[12px] font-black text-black">
+          Get XauCloud Bot
+        </button>
       </div>
     </UI.Card>
   );

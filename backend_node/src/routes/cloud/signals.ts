@@ -3,7 +3,7 @@ import { getDb } from "../../db.js";
 import { requireCloudUser } from "../../auth.js";
 import { effectiveEntitlement, requireCapability } from "../../services/entitlements.js";
 import { startTrial } from "../../services/signalTrial.js";
-import { subscriberSourceHealth } from "../../services/subscriberSignalFeed.js";
+import { subscriberSourceHealth, type SubscriberSourceHealth } from "../../services/subscriberSignalFeed.js";
 import { getSettings } from "../../services/settings.js";
 import { publishedTransactionalRender } from "../../services/adminOpsControl.js";
 import { emailBranding, emailLinkButton } from "../../services/emailBranding.js";
@@ -11,6 +11,23 @@ import { sendEmail } from "../../services/email.js";
 
 function cloudUserOf(request: unknown): Record<string, unknown> {
   return (request as { cloudUser: Record<string, unknown> }).cloudUser;
+}
+
+/**
+ * Diagnostic-only (never authorization): distinguishes "nobody has told the
+ * subscriber feed which production account to mirror" (an admin setup gap --
+ * see admin_settings.subscriber_signal_source_account) from "it's configured
+ * but that account's heartbeat has gone stale" (a genuine outage). Both
+ * still mean available:false to the customer -- the feed really is
+ * unavailable either way -- but this makes the difference visible to
+ * whoever is debugging it instead of requiring a raw DB query, which is
+ * exactly what it took to find the 2026-08-25 incident (subscriber_signals
+ * had zero documents ever because the source account was never set).
+ */
+function healthReason(health: SubscriberSourceHealth): string {
+  if (!health.configured) return "SOURCE_NOT_CONFIGURED";
+  if (!health.online) return "SOURCE_OFFLINE";
+  return "OK";
 }
 
 /** Best-effort welcome+trial-started email -- never blocks trial activation on a send failure. */
@@ -104,7 +121,7 @@ export async function registerCloudSignalRoutes(app: FastifyInstance): Promise<v
       getDb().collection("subscriber_signals").findOne({ engine: "OUTLOOK" }, { projection: { _id: 0 }, sort: { updated_at: -1 } }),
       subscriberSourceHealth(),
     ]);
-    if (!health.configured || !health.online) return { available: false, signal: null, health };
+    if (!health.configured || !health.online) return { available: false, signal: null, health, reason: healthReason(health) };
     return { available: true, signal, health };
   });
 
@@ -121,7 +138,7 @@ export async function registerCloudSignalRoutes(app: FastifyInstance): Promise<v
       getDb().collection("subscriber_signals").findOne({ engine: "M10_ENGINE" }, { projection: { _id: 0 }, sort: { updated_at: -1 } }),
       subscriberSourceHealth(),
     ]);
-    if (!health.configured || !health.online) return { available: false, signal: null, health };
+    if (!health.configured || !health.online) return { available: false, signal: null, health, reason: healthReason(health) };
     return { available: true, signal, health };
   });
 
