@@ -4,7 +4,7 @@ import { getDb } from "../db.js";
 import { normalizeGoldSymbol } from "../services/goldSymbol.js";
 import { extractEvidenceQuoteFromDetails } from "../services/marketOutlookEvidence.js";
 import { getFourHourCurrent } from "../services/fourHourOutlookService.js";
-import { marketDataReadError, readMarketData } from "../services/fourHourFeed.js";
+import { marketDataReadError, readMarketDataWithStatus } from "../services/fourHourFeed.js";
 import { validateMarketData } from "../services/fourHourOutlookService.js";
 
 function ageSeconds(iso: unknown): number | null {
@@ -48,7 +48,7 @@ export async function registerApiHealthRoutes(app: FastifyInstance): Promise<voi
       ) as Promise<Record<string, unknown> | null> : null,
       getFourHourCurrent(),
       db.collection("four_hour_outlooks").findOne({ symbol: "XAUUSD" }, { projection: { _id: 0, dataSource: 1, dataStatus: 1, status: 1, direction: 1, marketDataAt: 1, expiresAt: 1, lastReviewedAt: 1 } }),
-      readMarketData(),
+      readMarketDataWithStatus(),
       account ? db.collection("manual_trading_broker_candles").countDocuments({ account, symbol: "XAUUSD", timeframe: "H1", source: "ea-stream(spot)" }) : 0,
       account ? db.collection("manual_trading_broker_candles").countDocuments({ account, symbol: "XAUUSD", timeframe: "H4", source: "ea-stream(spot)" }) : 0,
       account ? db.collection("manual_trading_broker_candles").countDocuments({ account, symbol: "XAUUSD", timeframe: "D1", source: "ea-stream(spot)" }) : 0,
@@ -69,10 +69,11 @@ export async function registerApiHealthRoutes(app: FastifyInstance): Promise<voi
       broker_history: { h1, h4, d1, input_status: h1 >= 80 && h4 >= 30 && d1 >= 20 ? "READY" : latestCandle ? "ACCUMULATING_BROKER_HISTORY" : "UNAVAILABLE" },
       feed_validation: {
         ...validateMarketData(feed),
+        read_code: feed.code,
         read_error: marketDataReadError(),
-        age_seconds: feed ? Math.max(0, Math.floor(feed.ageSec)) : null,
-        snapshot_count: feed?.snapshots.length ?? 0,
-        data_status: feed?.dataStatus ?? null,
+        age_seconds: feed.data ? Math.max(0, Math.floor(feed.data.ageSec)) : null,
+        snapshot_count: feed.data?.snapshots.length ?? 0,
+        data_status: feed.data?.dataStatus ?? null,
       },
       m10: m10Signal ? {
         input_status: "AVAILABLE",

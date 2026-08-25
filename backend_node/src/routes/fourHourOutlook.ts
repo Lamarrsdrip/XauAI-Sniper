@@ -5,13 +5,13 @@
  */
 import type { FastifyInstance } from "fastify";
 import { requireCloudUser } from "../auth.js";
-import { getFourHourCurrent, getFourHourHistory, markFourHourSeen } from "../services/fourHourOutlookService.js";
+import { getFourHourCurrent, getFourHourHistory, getFourHourUnavailableReason, markFourHourSeen } from "../services/fourHourOutlookService.js";
 
 export async function registerFourHourOutlookRoutes(app: FastifyInstance): Promise<void> {
   // Current forecast for the dashboard card + expanded view.
   app.get("/cloud/4h-outlook/current", { preHandler: requireCloudUser }, async () => {
     const doc = await getFourHourCurrent();
-    if (!doc) return { available: false, reason: "TEMPORARILY_UNAVAILABLE" };
+    if (!doc) return { available: false, reason: await getFourHourUnavailableReason() };
     return { available: true, outlook: doc };
   });
 

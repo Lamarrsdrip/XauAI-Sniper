@@ -29,8 +29,24 @@ const pips = (mv) => (Array.isArray(mv) && mv.length === 2 ? `${mv[0]}–${mv[1]
 const zone = (z) => (Array.isArray(z) && z.length === 2 ? `${z[0]}–${z[1]}` : "—");
 const fmtTime = (iso) => { try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { return "—"; } };
 
+// Every code here means "no verified live XAUUSD data reached Manual
+// Trading" -- distinct from a healthy feed with no qualifying setup, which
+// is a normal `available:true` doc (see STATUS.NO_QUALIFYING_OPPORTUNITY
+// below) and never routes through this unavailable state at all.
+const UNAVAILABLE_REASON = {
+  EA_FEED_MISSING: "Manual Trading Intelligence temporarily unavailable — no live XAUUSD quote has reached the server yet.",
+  LIVE_MARKET_STALE: "Manual Trading Intelligence temporarily unavailable — the last verified XAUUSD quote is stale.",
+  DATABASE_READ_TIMEOUT: "Manual Trading Intelligence temporarily unavailable — market-data database is slow to respond.",
+  DATABASE_UNAVAILABLE: "Manual Trading Intelligence temporarily unavailable — market-data database is unreachable.",
+};
+const DEFAULT_UNAVAILABLE = "Manual Trading Intelligence temporarily unavailable — waiting for verified live XAUUSD data.";
+function unavailableMessage(reason) {
+  const code = String(reason || "").split(" ")[0];
+  return UNAVAILABLE_REASON[code] || DEFAULT_UNAVAILABLE;
+}
+
 export default function FourHourOutlookCard() {
-  const [state, setState] = useState({ loading: true, available: false, outlook: null });
+  const [state, setState] = useState({ loading: true, available: false, outlook: null, reason: null });
   const [open, setOpen] = useState(false);
   const [, tick] = useState(0);
   const seenRef = useRef(false);
@@ -38,9 +54,9 @@ export default function FourHourOutlookCard() {
   const load = useCallback(async () => {
     try {
       const data = await fetch4HOutlook();
-      setState({ loading: false, available: !!data?.available, outlook: data?.outlook || null });
+      setState({ loading: false, available: !!data?.available, outlook: data?.outlook || null, reason: data?.reason || null });
     } catch {
-      setState({ loading: false, available: false, outlook: null });
+      setState({ loading: false, available: false, outlook: null, reason: null });
     }
   }, []);
 
@@ -78,7 +94,7 @@ export default function FourHourOutlookCard() {
       <AK.Panel className="p-3.5">
         <Head isNew={false} />
         <div className="mt-2 text-[12.5px] text-white/45">
-          {state.loading ? "Loading market intelligence…" : "Manual Trading Intelligence temporarily unavailable — waiting for verified live XAUUSD data."}
+          {state.loading ? "Loading market intelligence…" : unavailableMessage(state.reason)}
         </div>
       </AK.Panel>
     );

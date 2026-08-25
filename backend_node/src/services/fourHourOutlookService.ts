@@ -13,7 +13,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { getDb } from "../db.js";
-import { readMarketData } from "./fourHourFeed.js";
+import { readMarketDataWithStatus, type MarketDataReadResult } from "./fourHourFeed.js";
 import { computeForecast, pipsOf, type Direction, type FourHourForecast, type ThesisState, type TradeOpportunity } from "./fourHourOutlookEngine.js";
 import { sendWebPushToUser } from "./webPush.js";
 
@@ -63,16 +63,28 @@ const EA_STALE_SEC = 10 * 60; // if the newest EA evidence is older than this, t
 const GENUINE_SOURCE = "ea-stream(spot)";
 let reviewInFlight: Promise<FourHourDoc | null> | null = null;
 
-/** Reject a forecast when the bot's live data is missing, offline/stale, or thin. */
-export function validateMarketData(md: import("./fourHourFeed.js").MarketData | null): { ok: boolean; reason: string } {
-  if (!md) return { ok: false, reason: "NO_EA_DATA" };
-  if (!Number.isFinite(md.ageSec) || md.ageSec > EA_STALE_SEC) return { ok: false, reason: `EA_OFFLINE_OR_STALE age=${Math.round(md.ageSec / 60)}m` };
+/**
+ * Reject a forecast when the bot's live data is missing, offline/stale, or
+ * thin. Takes the discriminated read result (not just the data) so a genuine
+ * "no EA has posted a fresh quote" (EA_FEED_MISSING) is never confused with
+ * "the database read itself failed" (DATABASE_READ_TIMEOUT /
+ * DATABASE_UNAVAILABLE) -- these have different causes and different fixes,
+ * and were previously indistinguishable because readMarketData() collapsed
+ * both into the same `null`.
+ */
+export function validateMarketData(result: MarketDataReadResult): { ok: boolean; reason: string } {
+  if (result.code === "DATABASE_READ_TIMEOUT" || result.code === "DATABASE_UNAVAILABLE") {
+    return { ok: false, reason: result.errorMessage ? `${result.code} ${result.errorMessage}` : result.code };
+  }
+  const md = result.data;
+  if (!md) return { ok: false, reason: "EA_FEED_MISSING" };
+  if (!Number.isFinite(md.ageSec) || md.ageSec > EA_STALE_SEC) return { ok: false, reason: `LIVE_MARKET_STALE age=${Math.round(md.ageSec / 60)}m` };
   // HTF direction is calculated from persisted H1/H4/D1 broker candles.
   // M10 snapshots are entry context only, so one fresh quote is enough to
   // distinguish a working/no-setup feed from a genuinely unavailable feed.
-  if (md.snapshots.length < 1) return { ok: false, reason: "NO_CURRENT_BROKER_QUOTE" };
+  if (md.snapshots.length < 1) return { ok: false, reason: "EA_FEED_MISSING" };
   if (!(md.price >= 1000 && md.price <= 20000)) return { ok: false, reason: `PRICE_OUT_OF_RANGE price=${md.price}` };
-  return { ok: true, reason: "" };
+  return { ok: true, reason: "LIVE_MARKET_OK" };
 }
 
 /** Only forecasts built from the EA's own genuine broker stream are ever served. */
@@ -228,9 +240,27 @@ function trackExcursion(doc: FourHourDoc, price: number): { mfePips: number; mae
  *  - otherwise just update lastReviewed + MFE/MAE (clock NOT reset).
  * Returns the current doc (or null if live data is unavailable and none exists).
  */
+let lastLoggedDegradedReason: string | null = null;
+
+/** Persist the last non-OK reason so a route handler (no live MarketData in
+ * hand) can report something more useful than a hardcoded string when there
+ * is no current doc to fall back on. Best-effort: never blocks the review. */
+async function recordManualTradingStatus(reason: string): Promise<void> {
+  try {
+    await getDb().collection("cloud_settings").updateOne(
+      { key: "main" },
+      { $set: { manual_trading_last_reason: reason, manual_trading_last_reason_at: new Date().toISOString() } },
+      { upsert: true },
+    );
+  } catch {
+    /* status bookkeeping only -- never let this fail the review pass */
+  }
+}
+
 export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
   const db = getDb();
-  const md = await readMarketData();
+  const readResult = await readMarketDataWithStatus();
+  const md = readResult.data;
   let current = await getCurrent();
 
   // Purge any forecast not built from the EA's own genuine broker stream
@@ -242,14 +272,22 @@ export async function reviewFourHourOutlook(): Promise<FourHourDoc | null> {
   }
 
   // Data-integrity gate: only the bot's own genuine, fresh broker read publishes.
-  const check = validateMarketData(md);
+  const check = validateMarketData(readResult);
   if (!check.ok) {
-    console.log(`MTI_DEGRADED reason=${check.reason}`);
+    // Throttle: log a state transition, not every ~3-minute review tick, so
+    // a sustained outage produces one line instead of spamming the journal.
+    if (check.reason !== lastLoggedDegradedReason) {
+      console.log(`MTI_DEGRADED reason=${check.reason}`);
+      lastLoggedDegradedReason = check.reason;
+    }
+    await recordManualTradingStatus(check.reason);
     // A previously-published, genuine, not-yet-expired forecast may keep
     // showing; otherwise there is nothing valid to display (card degrades).
     if (current && new Date(current.expiresAt).getTime() > Date.now()) return current;
     return null;
   }
+  lastLoggedDegradedReason = null;
+  await recordManualTradingStatus("LIVE_MARKET_OK");
 
   const validMd = md!; // validated non-null above
   const previousDir: Direction = (current?.direction as Direction) ?? "NEUTRAL";
@@ -341,6 +379,16 @@ export async function getFourHourCurrent(): Promise<FourHourDoc | null> {
   const recentOpportunities = await getDb().collection("four_hour_trade_opportunities")
     .find({ thesisId: doc.thesisId }, { projection: { _id: 0 } }).sort({ generatedAt: -1 }).limit(8).toArray() as unknown as PersistedOpportunity[];
   return { ...doc, currentOpportunity: doc.currentOpportunity ?? null, recentOpportunities };
+}
+
+/** The real reason the card is showing "unavailable" -- last non-OK code
+ * from reviewFourHourOutlook's data-integrity gate (recordManualTradingStatus),
+ * so the route/frontend can distinguish EA_FEED_MISSING from a database
+ * problem instead of a single hardcoded "TEMPORARILY_UNAVAILABLE" string. */
+export async function getFourHourUnavailableReason(): Promise<string> {
+  const settings = await getDb().collection("cloud_settings").findOne({ key: "main" }, { projection: { _id: 0, manual_trading_last_reason: 1 } });
+  const reason = settings?.["manual_trading_last_reason"];
+  return typeof reason === "string" && reason.length > 0 ? reason : "EA_FEED_MISSING";
 }
 
 export async function getFourHourHistory(limit = 30): Promise<Record<string, unknown>[]> {

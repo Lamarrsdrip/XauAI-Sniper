@@ -69,16 +69,64 @@ function snapshot(row: Record<string, unknown>): EaSnapshot | null {
 
 const PROJECTION = { _id: 0, ts: 1, account: 1, details: 1 } as const;
 
-export async function readMarketData(): Promise<MarketData | null> {
+/**
+ * Observability codes for the market-data read path (see audit "URGENT FIX
+ * XAUCLOUD MANUAL TRADING LIVE MARKET FEED", 2026-08-25). Distinguishing
+ * these matters: a genuinely empty query result (no EA has posted a fresh
+ * XAUUSD quote) and a thrown database error were previously both collapsed
+ * into the same `null` return, so "the EA is offline" and "Mongo timed out"
+ * were indistinguishable everywhere downstream -- including in the
+ * MTI_DEGRADED log line an operator would actually look at during an
+ * incident. They are root-cause-different and need different responses.
+ */
+export type MarketDataReadCode =
+  | "LIVE_MARKET_OK"
+  | "EA_FEED_MISSING"
+  | "DATABASE_READ_TIMEOUT"
+  | "DATABASE_UNAVAILABLE";
+
+export interface MarketDataReadResult {
+  code: MarketDataReadCode;
+  data: MarketData | null;
+  errorMessage: string | null;
+}
+
+/** Classify a thrown Mongo driver error into a diagnostic-friendly code. Best-effort: unknown error shapes still degrade safely to DATABASE_UNAVAILABLE. */
+function classifyDbError(error: unknown): { code: "DATABASE_READ_TIMEOUT" | "DATABASE_UNAVAILABLE"; message: string } {
+  const name = error instanceof Error ? error.name : "";
+  const message = error instanceof Error ? error.message : String(error);
+  const isTimeout =
+    name === "MongoServerSelectionError" ||
+    name === "MongoNetworkTimeoutError" ||
+    /timed?\s*out|timeout|ETIMEDOUT/i.test(message);
+  return { code: isTimeout ? "DATABASE_READ_TIMEOUT" : "DATABASE_UNAVAILABLE", message: message.slice(0, 300) };
+}
+
+let lastLoggedReadCode: MarketDataReadCode | null = null;
+
+export async function readMarketDataWithStatus(): Promise<MarketDataReadResult> {
+  let result: MarketDataReadResult;
   try {
     const data = await readMarketDataInner();
     lastReadError = null;
-    return data;
+    result = { code: data ? "LIVE_MARKET_OK" : "EA_FEED_MISSING", data, errorMessage: null };
   } catch (error) {
-    lastReadError = error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300);
+    const classified = classifyDbError(error);
+    lastReadError = classified.message;
     recordDiagnostic("warning", "manual-trading-market-feed", error, { code: "BROKER_MARKET_READ_FAILED" });
-    return null;
+    result = { code: classified.code, data: null, errorMessage: classified.message };
   }
+  // Throttle: only log on a state transition, never on every ~20-40s tick,
+  // so a sustained outage produces one line instead of spamming the journal.
+  if (result.code !== lastLoggedReadCode) {
+    console.log(`MARKET_FEED_STATUS code=${result.code}${result.errorMessage ? ` error=${result.errorMessage}` : ""}`);
+    lastLoggedReadCode = result.code;
+  }
+  return result;
+}
+
+export async function readMarketData(): Promise<MarketData | null> {
+  return (await readMarketDataWithStatus()).data;
 }
 
 export function marketDataReadError(): string | null { return lastReadError; }
