@@ -1,13 +1,18 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
-import { LogOut, Lock, TrendingUp, Zap, Clock3 } from "lucide-react";
+import { LogOut, Lock, TrendingUp, Zap, Clock3, GraduationCap, HelpCircle } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
 import { PaymentMethodModal } from "../BankTransferFlow";
 import { useSignalCheckout } from "@/lib/signalCheckout";
 import { API } from "@/lib/api";
 import * as UI from "@/lib/ui";
+// Academy and Support are bot-independent (both routes require only
+// requireCloudUser server-side, never a capability check -- see
+// routes/cloud/academy.ts / support.ts) so free/trial users get the exact
+// same real components a bot owner sees, not a stripped-down duplicate.
+import { EducationPage, SupportCenterPage } from "./CloudDashboard";
 
 // The Command Center experience for every signed-in user who is NOT
 // bot-licensed (source: "trial" | "subscription" | "none" from GET
@@ -283,6 +288,11 @@ export default function CloudSignalDashboard({ entitlement: initialEntitlement }
   const [entitlement, setEntitlement] = useState(initialEntitlement);
   useEffect(() => { setEntitlement(initialEntitlement); }, [initialEntitlement]);
 
+  // "signals" | "academy" | "support" -- free/trial users are not limited to
+  // the signal card stack; Academy and Support are full features here too.
+  const [view, setView] = useState("signals");
+  const backToSignals = useCallback(() => setView("signals"), []);
+
   const [me, setMe] = useState(null);
   const [trialBusy, setTrialBusy] = useState(false);
   const [trialError, setTrialError] = useState("");
@@ -398,8 +408,32 @@ export default function CloudSignalDashboard({ entitlement: initialEntitlement }
             <LogOut className="h-3.5 w-3.5" /> Log out
           </button>
         </div>
+        <div className="mx-auto flex max-w-5xl gap-1 px-4 pb-2 md:px-6">
+          {[
+            { id: "signals", label: "Signals", icon: TrendingUp },
+            { id: "academy", label: "Academy", icon: GraduationCap },
+            { id: "support", label: "Support", icon: HelpCircle },
+          ].map((t) => (
+            <button key={t.id} onClick={() => setView(t.id)} data-testid={`signal-dashboard-nav-${t.id}`}
+              className={`no-select flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[12px] font-semibold transition ${view === t.id ? "bg-gold-300 text-black" : "text-white/50 hover:text-white"}`}>
+              <t.icon className="h-3.5 w-3.5" /> {t.label}
+            </button>
+          ))}
+        </div>
       </nav>
 
+      {view === "academy" && (
+        <div className="mx-auto max-w-5xl px-4 py-6 md:px-6">
+          <EducationPage setActive={backToSignals} />
+        </div>
+      )}
+      {view === "support" && (
+        <div className="mx-auto max-w-5xl px-4 py-6 md:px-6">
+          <SupportCenterPage setActive={backToSignals} me={me} />
+        </div>
+      )}
+
+      {view === "signals" && (
       <div className="mx-auto max-w-5xl space-y-4 px-4 py-6 md:px-6">
 
         <UI.Card tone={summary.tone}>
@@ -443,6 +477,7 @@ export default function CloudSignalDashboard({ entitlement: initialEntitlement }
           <Clock3 className="h-3 w-3" /> Signals refresh automatically. This page shows plain-English status only -- no trading advice or profit guarantee.
         </div>
       </div>
+      )}
 
       {signalCheckout.showModal && (
         <PaymentMethodModal

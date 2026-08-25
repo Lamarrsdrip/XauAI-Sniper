@@ -2374,7 +2374,7 @@ function SupportStatus({ status }) {
   return <span className={`rounded-full px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] ${cls}`}>{raw.replaceAll("_", " ")}</span>;
 }
 
-function SupportCenterPage({ setActive, me }) {
+export function SupportCenterPage({ setActive, me }) {
   const [tickets, setTickets] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [selected, setSelected] = useState(null);
@@ -2770,7 +2770,7 @@ const FOREX_FAQ = [
   ["Can an EA guarantee profit?", "No. Automation can improve consistency and remove some emotional mistakes, but market uncertainty and loss remain real."],
 ];
 
-function EducationPage({ setActive }) {
+export function EducationPage({ setActive }) {
   const [topicId, setTopicId] = useState(null);
   const [faqOpen, setFaqOpen] = useState(null);
   const [query, setQuery] = useState("");
