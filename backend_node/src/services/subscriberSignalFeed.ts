@@ -24,6 +24,30 @@ export interface SubscriberSignalInput {
   expires_at: string | null;
   /** True only for a genuinely NEW actionable BUY/SELL -- gates the (rate-limited-by-nature) notification fan-out. A WATCHING/BLOCKED state update never notifies. */
   isNewActionable: boolean;
+  /**
+   * Customer-facing M10 evidence panel fields (2026-08-25 dashboard-unification
+   * fix) -- optional because OUTLOOK-engine mirrors and the older
+   * candidate-only M10 event mirror don't populate them. Sourced only from
+   * the EA's own m10_signal payload, already sanitized (no account/license/
+   * broker fields ever read from it here).
+   */
+  buy_evidence?: number | null;
+  sell_evidence?: number | null;
+  /** Raw EA decision enum (e.g. WAIT_FOR_BUY_RETRACE) -- lets the UI reuse the same fine-grained M10_DECISION_LABELS map bot owners see, not just the coarse WATCHING/ACTIONABLE/BLOCKED/EXPIRED status bucket. */
+  decision?: string | null;
+  freshness_state?: string | null;
+  trend_state?: string | null;
+  structure_state?: string | null;
+  location_state?: string | null;
+  exhaustion_decision?: string | null;
+  reason?: string | null;
+  evidence_id?: number | string | null;
+  bar_time?: string | null;
+  /** Outlook-only customer-safe fields, mirroring cloud_market_outlooks -- lets the subscriber Outlook card reuse the exact bot-owner AIMarketOutlookCard shape instead of a stripped-down summary. */
+  confidence_category?: string | null;
+  automated_entry_approved?: boolean | null;
+  entry_zone_low?: number | null;
+  entry_zone_high?: number | null;
 }
 
 async function configuredSourceAccounts(): Promise<{ primary: string; backup: string }> {
@@ -75,6 +99,22 @@ export async function mirrorSubscriberSignal(account: string, input: SubscriberS
     rationale: input.rationale,
     effective_at: input.effective_at,
     expires_at: input.expires_at,
+    buy_evidence: input.buy_evidence ?? null,
+    sell_evidence: input.sell_evidence ?? null,
+    decision: input.decision ?? null,
+    freshness_state: input.freshness_state ?? null,
+    trend_state: input.trend_state ?? null,
+    structure_state: input.structure_state ?? null,
+    location_state: input.location_state ?? null,
+    exhaustion_decision: input.exhaustion_decision ?? null,
+    reason: input.reason ?? null,
+    evidence_id: input.evidence_id ?? null,
+    bar_time: input.bar_time ?? null,
+    confidence_category: input.confidence_category ?? null,
+    automated_entry_approved: input.automated_entry_approved ?? null,
+    entry_zone_low: input.entry_zone_low ?? null,
+    entry_zone_high: input.entry_zone_high ?? null,
+    last_evaluated_at: nowIso,
     source: "subscriber_feed",
     updated_at: nowIso,
   };
@@ -87,6 +127,109 @@ export async function mirrorSubscriberSignal(account: string, input: SubscriberS
   if (input.isNewActionable) {
     await sendSubscriberSignalNotification(doc);
   }
+}
+
+/**
+ * Continuous M10-evaluation mirror (2026-08-25 dashboard-unification fix).
+ *
+ * Root cause this exists to fix: the EA re-evaluates and re-stamps its M10
+ * snapshot (g_m10Snapshot, with its own age_seconds) on every heartbeat --
+ * that's why the bot-owner dashboard's M10 card is always fresh. But
+ * mirrorSubscriberSignal() above is only ever called for a genuine candidate
+ * (BUY_CANDIDATE/SELL_CANDIDATE/ALLOW_CORE -- see marketOutlookPublish.ts and
+ * its caller in routes/cloud/activity.ts), so a subscriber's copy of the
+ * M10_ENGINE doc previously went untouched for however long the engine
+ * stayed in WATCHING/no-candidate, showing a misleadingly stale "Updated Xh
+ * ago" even though the engine was actively scanning the whole time.
+ *
+ * This is called unconditionally on every heartbeat that carries a
+ * m10_signal payload from the configured subscriber source account (see
+ * routes/cloud/activity.ts). It never creates notification noise (never
+ * calls sendSubscriberSignalNotification) and never duplicates "Recent
+ * Signals" rows for a routine re-evaluation that didn't actually change
+ * anything: when the current state (status+direction) matches the existing
+ * latest M10_ENGINE doc, it only refreshes that same doc's evidence fields
+ * and last_evaluated_at/updated_at (created_at, i.e. "last state change,"
+ * stays untouched). Only a genuine status/direction change creates a new
+ * doc -- exactly the "last evaluated" vs "last state change" distinction
+ * the dashboard needs, and exactly why Recent Signals doesn't flood with
+ * near-identical WATCHING rows every few seconds.
+ */
+export async function mirrorSubscriberM10Evaluation(account: string, m10: Record<string, unknown>, eventTime: unknown): Promise<void> {
+  if (!(await isConfiguredSubscriberSource(account))) return;
+  if (!m10 || Object.keys(m10).length === 0) return;
+
+  const decision = String(m10["decision"] ?? m10["final_decision"] ?? "").toUpperCase();
+  const preferredDir = String(m10["preferred_direction"] ?? m10["direction"] ?? "").toUpperCase();
+  const status: SubscriberSignalStatus = ["BUY_CANDIDATE", "SELL_CANDIDATE", "ALLOW_CORE"].includes(decision)
+    ? "ACTIONABLE"
+    : decision.startsWith("BLOCK") ? "BLOCKED"
+    : decision === "EXPIRED" || decision === "STALE" ? "EXPIRED"
+    : "WATCHING";
+  const direction = status === "ACTIONABLE" && ["BUY", "SELL"].includes(preferredDir) ? preferredDir : (["BUY", "SELL"].includes(preferredDir) ? preferredDir : "NONE");
+
+  const db = getDb();
+  const collection = db.collection("subscriber_signals");
+  const latest = await collection.findOne({ engine: "M10_ENGINE" }, { sort: { updated_at: -1 } });
+
+  const nowIso = new Date().toISOString();
+  const evidenceFields = {
+    confidence: typeof m10["confidence"] === "number" ? (m10["confidence"] as number) : null,
+    buy_evidence: typeof m10["buy_case_score"] === "number" ? (m10["buy_case_score"] as number) : null,
+    sell_evidence: typeof m10["sell_case_score"] === "number" ? (m10["sell_case_score"] as number) : null,
+    decision: decision || null,
+    freshness_state: typeof m10["freshness_state"] === "string" ? (m10["freshness_state"] as string) : null,
+    trend_state: typeof m10["trend_state"] === "string" ? (m10["trend_state"] as string) : null,
+    structure_state: typeof m10["structure_state"] === "string" ? (m10["structure_state"] as string) : null,
+    location_state: typeof m10["location_state"] === "string" ? (m10["location_state"] as string) : null,
+    exhaustion_decision: typeof m10["exhaustion_decision"] === "string" ? (m10["exhaustion_decision"] as string) : null,
+    reason: typeof m10["reason"] === "string" ? (m10["reason"] as string) : null,
+    evidence_id: (m10["evidence_id"] as number | string | undefined) ?? null,
+    bar_time: typeof m10["bar_time"] === "string" ? (m10["bar_time"] as string) : null,
+  };
+
+  const sameState = latest && latest["engine"] === "M10_ENGINE" && latest["status"] === status && latest["direction"] === direction;
+
+  if (sameState) {
+    // Routine re-evaluation, nothing customer-visible changed -- refresh in
+    // place. Never touches created_at (last state change) or effective_at.
+    await collection.updateOne(
+      { signal_id: latest!["signal_id"], engine: "M10_ENGINE" },
+      { $set: { ...evidenceFields, last_evaluated_at: nowIso, updated_at: nowIso } },
+    );
+    return;
+  }
+
+  // Genuine state/direction change -- a new doc, which is also correctly a
+  // new "Recent Signals" entry. Not a notification trigger by itself
+  // (mirrorSubscriberSignal already owns notifications for real actionable
+  // candidates via the existing candidate-gated path).
+  const signalId = String(m10["evidence_id"] ?? m10["candidate_id"] ?? `${String(m10["bar_time"] ?? "")}-${direction}-${status}`);
+  const effectiveAt = String(eventTime ?? m10["bar_time"] ?? nowIso);
+  const doc = {
+    signal_id: signalId,
+    engine: "M10_ENGINE" as const,
+    symbol: "XAUUSD",
+    direction,
+    status,
+    ...evidenceFields,
+    entry: null,
+    stop: null,
+    tp1: null,
+    tp2: null,
+    tp3: null,
+    rationale: null,
+    effective_at: effectiveAt,
+    expires_at: null,
+    last_evaluated_at: nowIso,
+    source: "subscriber_feed",
+    updated_at: nowIso,
+  };
+  await collection.updateOne(
+    { signal_id: signalId, engine: "M10_ENGINE" },
+    { $set: doc, $setOnInsert: { created_at: nowIso } },
+    { upsert: true },
+  );
 }
 
 /** Shared mapper: a full cloud_market_outlooks-shaped doc (hourly Outlook OR the M10 actionable-publication doc, both produced by generateOutlookForAccount) into the sanitized subscriber shape. */
@@ -104,9 +247,13 @@ export function outlookDocAsSubscriberSignal(doc: Record<string, unknown>, engin
     tp1: typeof doc["tp1_price"] === "number" ? (doc["tp1_price"] as number) : null,
     tp2: typeof doc["tp2_price"] === "number" ? (doc["tp2_price"] as number) : null,
     tp3: typeof doc["tp3_price"] === "number" ? (doc["tp3_price"] as number) : null,
-    rationale: null,
+    rationale: typeof doc["reasoning"] === "string" ? (doc["reasoning"] as string) : null,
     effective_at: String(doc["published_at"] ?? doc["generated_at"] ?? new Date().toISOString()),
     expires_at: typeof doc["expiry_at"] === "string" ? (doc["expiry_at"] as string) : null,
+    confidence_category: typeof doc["confidence_category"] === "string" ? (doc["confidence_category"] as string) : null,
+    automated_entry_approved: typeof doc["automated_entry_approved"] === "boolean" ? (doc["automated_entry_approved"] as boolean) : null,
+    entry_zone_low: typeof doc["preferred_entry_zone_low"] === "number" ? (doc["preferred_entry_zone_low"] as number) : null,
+    entry_zone_high: typeof doc["preferred_entry_zone_high"] === "number" ? (doc["preferred_entry_zone_high"] as number) : null,
     isNewActionable,
   };
 }

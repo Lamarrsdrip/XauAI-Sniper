@@ -51,12 +51,26 @@ describe("ONE Command Center architecture contract (2026-08-25)", () => {
     expect(dashboard).toContain("Get XauCloud Bot");
   });
 
+  // 2026-08-25 dashboard-unification fix: a non-bot user used to see a
+  // 4-line SignalCard summary for Market Outlook/10-Minute Engine while a
+  // bot owner saw the full evidence panel (buy/sell evidence, plain-English
+  // reason, freshness) -- exactly the "cheaper fork" this test's name warns
+  // against. Both personas now render the SAME AIMarketOutlookCard/
+  // M10EngineCard components; only the data source differs (subscriberSignal
+  // prop vs the bot owner's own EA heartbeat).
   test("Home reuses the real Market Outlook/10-Minute Engine/Recent Signals cards for a non-bot user -- not a cheaper fork", () => {
     expect(dashboard).toMatch(/import \{ signalAxios, SignalCard, RecentSignalsCard, planSummary, relTime, formatDate as fmtDate \} from "\.\/SubscriberSignalCards"/);
-    expect(dashboard).toContain("<SignalCard title=\"Market Outlook\"");
-    expect(dashboard).toContain("<SignalCard title=\"10-Minute Engine\"");
+    expect(dashboard).toContain("<AIMarketOutlookCard linked online subscriberSignal={outlook.data?.signal ?? null}");
+    expect(dashboard).toContain("evidence={normalizeSubscriberM10Evidence(engine.data?.signal)}");
     expect(dashboard).toContain("<RecentSignalsCard");
     expect(dashboard).toContain("function ContinueLearningCard(");
+  });
+
+  test("the subscriber Market Outlook/10-Minute Engine cards are the SAME component the bot-owner Home page renders, not a second implementation", () => {
+    const botOwnerM10Site = dashboard.match(/\{linked && <M10EngineCard[^}]*\}/);
+    expect(botOwnerM10Site).toBeTruthy();
+    expect(dashboard.match(/<M10EngineCard/g).length).toBeGreaterThanOrEqual(2);
+    expect(dashboard.match(/<AIMarketOutlookCard/g).length).toBeGreaterThanOrEqual(2);
   });
 
   test("a licensed customer can actually reach a Billing view -- not just signal-only users", () => {

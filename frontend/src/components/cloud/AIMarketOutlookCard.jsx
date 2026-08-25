@@ -23,12 +23,44 @@ function directionStyle(dir) {
   return DIRECTION_STYLE[dir] || DIRECTION_STYLE.NO_VALID_OUTLOOK;
 }
 
+// 2026-08-25 dashboard-unification fix: a free/trial/signal-subscriber user
+// has no linked MT5 license, so the bot-owner's own /outlook/current (scoped
+// to their personal license/account) always returned "license_not_linked" --
+// this card was invisible to them, and the subscriber dashboard instead
+// rendered a much thinner fallback (SignalCard in SubscriberSignalCards.jsx).
+// `subscriberSignal` lets a caller hand this SAME card a pre-fetched,
+// sanitized GET /cloud/signals/outlook doc instead: internal fetching/
+// polling and the license-scoped notification bell (which posts to the
+// license-scoped /outlook/notifications/prefs) are skipped entirely, and the
+// same body-state rendering below is driven from that doc instead. Only the
+// data source differs; the UI is byte-identical either way.
+function subscriberSignalToOutlookState(signal) {
+  if (!signal) return { outlook: null, freshness: { state: "NO_FRESH_SIGNAL" } };
+  const direction = String(signal.direction || "").toUpperCase();
+  const outlook = {
+    primary_direction: ["BUY", "SELL"].includes(direction) ? direction : (direction || "NO_VALID_OUTLOOK"),
+    confidence_pct: signal.confidence,
+    confidence_category: signal.confidence_category,
+    preferred_entry_zone_low: signal.entry_zone_low ?? signal.entry,
+    preferred_entry_zone_high: signal.entry_zone_high ?? signal.entry,
+    suggested_sl: signal.stop,
+    reasoning: signal.rationale,
+    automated_entry_approved: signal.automated_entry_approved,
+  };
+  let state = "NO_FRESH_SIGNAL";
+  if (direction === "TRANSITION") state = "SIGNAL_FORMING";
+  else if (["BUY", "SELL"].includes(direction) && signal.status === "ACTIONABLE") state = "ACTIVE_SIGNAL";
+  else if (signal.status === "EXPIRED") state = "SIGNAL_COMPLETED";
+  return { outlook, freshness: { state, last_checked_at: signal.effective_at || signal.updated_at, message: signal.rationale } };
+}
+
 /** Compact "AI Market Outlook" card for the Home dashboard — replaces the
  * former "AI Trading Assistant" compact card. Advisory-only, entirely
  * separate data source from the trading engine (see backend/market_outlook.py
  * docstring for the strict-separation guarantee this card's data ultimately
  * relies on). */
-export default function AIMarketOutlookCard({ linked = true, online = true, onOutlookChange, onStatusChange }) {
+export default function AIMarketOutlookCard({ linked = true, online = true, onOutlookChange, onStatusChange, subscriberSignal = undefined, subscriberLoading = false, subscriberError = false }) {
+  const isSubscriberMode = subscriberSignal !== undefined;
   const [outlook, setOutlook] = useState(null);
   const [freshness, setFreshness] = useState(null);
   const [prefs, setPrefs] = useState(null);
@@ -41,6 +73,7 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
   const requestSeq = useRef(0);
 
   const load = useCallback(async () => {
+    if (isSubscriberMode) return; // driven entirely by the subscriberSignal prop instead
     if (!linked) {
       requestSeq.current += 1;
       setOutlook(null);
@@ -72,9 +105,23 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
       onStatusChange?.({ loading:false, requestFailed:true });
     }
     if (requestId === requestSeq.current) setLoading(false);
-  }, [linked, onOutlookChange, onStatusChange]);
+  }, [isSubscriberMode, linked, onOutlookChange, onStatusChange]);
 
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [load]);
+
+  useEffect(() => {
+    if (!isSubscriberMode) return;
+    if (subscriberError) {
+      setOutlook(null);
+      setFreshness(null);
+    } else {
+      const { outlook: nextOutlook, freshness: nextFreshness } = subscriberSignalToOutlookState(subscriberSignal);
+      setOutlook(nextOutlook);
+      setFreshness(nextFreshness);
+    }
+    setRequestFailed(Boolean(subscriberError));
+    setLoading(subscriberLoading);
+  }, [isSubscriberMode, subscriberSignal, subscriberLoading, subscriberError]);
 
   // v6.25.2 owner directive 2026-07-17 -- this compact card reproduced the
   // previously-fixed "false-ON" bug: it lit the bell gold on any successful
@@ -119,11 +166,19 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
   else if (freshness?.state) bodyState = freshness.state;
   else bodyState = "NO_FRESH_SIGNAL";
 
+  // Subscriber mode: notifications are controlled by the account-wide
+  // toggle on the dashboard (cloud_notification_prefs), not this
+  // license-scoped Outlook-specific bell -- and there's no subscriber-safe
+  // destination for the full bot-owner /ai-market-outlook page yet, so the
+  // card renders as a static panel instead of a broken link.
+  const Wrapper = isSubscriberMode ? "div" : Link;
+  const wrapperProps = isSubscriberMode ? {} : { to: "/ai-market-outlook" };
+
   return (
-    <Link to="/ai-market-outlook" className={`${CARD} block p-4 hover:border-gold-300/20 transition`} data-testid="ai-market-outlook-card">
+    <Wrapper {...wrapperProps} className={`${CARD} ${isSubscriberMode ? "" : "block hover:border-gold-300/20 transition"} p-4`} data-testid="ai-market-outlook-card">
       <div className="flex items-center justify-between">
         <span className={MONO_LABEL}>AI Market Outlook</span>
-        {notifOn ? (
+        {!isSubscriberMode && (notifOn ? (
           <button onClick={turnOffNotifications} title="Phone alerts verified active — click to turn off"
                   className="rounded-full p-1.5 hover:bg-white/[0.06] transition" data-testid="outlook-bell">
             <Bell className="h-3.5 w-3.5 text-gold-300" />
@@ -136,7 +191,7 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
           <span title="Not verified — open full settings to enable" className="rounded-full p-1.5" data-testid="outlook-bell">
             <BellOff className="h-3.5 w-3.5 text-white/30" />
           </span>
-        )}
+        ))}
       </div>
 
       {bodyState === "NOT_LINKED" && (
@@ -231,6 +286,6 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
           {lastCheckedText && <p className="mt-1 text-[10px] text-white/25">Last checked: {lastCheckedText}</p>}
         </div>
       )}
-    </Link>
+    </Wrapper>
   );
 }

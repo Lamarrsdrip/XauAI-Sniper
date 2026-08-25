@@ -7,7 +7,7 @@ vi.mock("./notifications.js", () => ({
   sendSubscriberSignalNotification: vi.fn(async (signal: Record<string, unknown>) => { state.notifyCalls.push(signal); return 1; }),
 }));
 
-const { mirrorSubscriberSignal, isConfiguredSubscriberSource, subscriberSourceHealth, outlookDocAsSubscriberSignal } = await import("./subscriberSignalFeed.js");
+const { mirrorSubscriberSignal, isConfiguredSubscriberSource, subscriberSourceHealth, outlookDocAsSubscriberSignal, mirrorSubscriberM10Evaluation } = await import("./subscriberSignalFeed.js");
 
 function baseSignal(overrides: Record<string, unknown> = {}) {
   return {
@@ -103,6 +103,62 @@ describe("subscriberSourceHealth", () => {
     const health = await subscriberSourceHealth();
     expect(health.online).toBe(true);
     expect(health.account).toBe("SRC2");
+  });
+});
+
+describe("mirrorSubscriberM10Evaluation -- continuous freshness (2026-08-25 fix)", () => {
+  beforeEach(async () => {
+    state.db = new FakeDb();
+    state.notifyCalls = [];
+    await state.db.collection("admin_settings").insertOne({ key: "main", subscriber_signal_source_account: "SOURCE-ACC" });
+  });
+
+  const watching = (overrides: Record<string, unknown> = {}) => ({
+    decision: "WAIT_FOR_BUY_RETRACE", preferred_direction: "BUY", freshness_state: "FRESH",
+    buy_case_score: 62, sell_case_score: 18, confidence: 62, reason: "Buy evidence forming, pullback not confirmed.",
+    trend_state: "UP", structure_state: "HH_HL", location_state: "MID_RANGE", exhaustion_decision: "NONE",
+    evidence_id: 101, bar_time: "2026.08.25 21:00",
+    ...overrides,
+  });
+
+  it("is a no-op for every account except the configured subscriber source", async () => {
+    await mirrorSubscriberM10Evaluation("SOME-OTHER-ACCOUNT", watching(), new Date().toISOString());
+    expect(state.db.collection("subscriber_signals").docs).toHaveLength(0);
+  });
+
+  it("creates the current-state doc on the first evaluation", async () => {
+    await mirrorSubscriberM10Evaluation("SOURCE-ACC", watching(), new Date().toISOString());
+    const rows = state.db.collection("subscriber_signals").docs;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!["status"]).toBe("WATCHING");
+    expect(rows[0]!["buy_evidence"]).toBe(62);
+    expect(rows[0]!["decision"]).toBe("WAIT_FOR_BUY_RETRACE");
+    expect(rows[0]!["last_evaluated_at"]).toBeTruthy();
+  });
+
+  it("a repeated same-state evaluation refreshes the SAME doc in place -- no duplicate Recent Signals rows", async () => {
+    await mirrorSubscriberM10Evaluation("SOURCE-ACC", watching({ evidence_id: 101, buy_case_score: 60 }), new Date().toISOString());
+    const firstCreatedAt = state.db.collection("subscriber_signals").docs[0]!["created_at"];
+
+    await mirrorSubscriberM10Evaluation("SOURCE-ACC", watching({ evidence_id: 102, buy_case_score: 71 }), new Date().toISOString());
+    const rows = state.db.collection("subscriber_signals").docs;
+    expect(rows).toHaveLength(1); // still one doc, not two
+    expect(rows[0]!["buy_evidence"]).toBe(71); // evidence refreshed
+    expect(rows[0]!["created_at"]).toBe(firstCreatedAt); // last-state-change timestamp untouched
+  });
+
+  it("never sends a notification -- notification ownership stays with mirrorSubscriberSignal's candidate-gated path", async () => {
+    await mirrorSubscriberM10Evaluation("SOURCE-ACC", watching(), new Date().toISOString());
+    await mirrorSubscriberM10Evaluation("SOURCE-ACC", { ...watching(), decision: "BUY_CANDIDATE" }, new Date().toISOString());
+    expect(state.notifyCalls).toHaveLength(0);
+  });
+
+  it("a genuine status/direction transition (a new evidence_id going actionable) creates a new doc, correctly surfacing as a distinct Recent Signals entry", async () => {
+    await mirrorSubscriberM10Evaluation("SOURCE-ACC", watching({ evidence_id: 101 }), new Date().toISOString());
+    await mirrorSubscriberM10Evaluation("SOURCE-ACC", { ...watching({ evidence_id: 102 }), decision: "BUY_CANDIDATE" }, new Date().toISOString());
+    const rows = state.db.collection("subscriber_signals").docs;
+    expect(rows).toHaveLength(2);
+    expect(rows.some((r) => r["status"] === "ACTIONABLE")).toBe(true);
   });
 });
 

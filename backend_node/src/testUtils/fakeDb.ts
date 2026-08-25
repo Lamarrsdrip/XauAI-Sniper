@@ -49,9 +49,14 @@ export class FakeCollection {
     }
   }
 
-  async findOne(query: Doc = {}): Promise<Doc | null> {
-    const found = this.docs.find((d) => matches(d, query));
-    return found ? structuredClone(found) : null;
+  async findOne(query: Doc = {}, options: { sort?: Record<string, 1 | -1> } = {}): Promise<Doc | null> {
+    let rows = this.docs.filter((d) => matches(d, query));
+    const entry = options.sort ? Object.entries(options.sort)[0] : undefined;
+    if (entry) {
+      const [key, dir] = entry;
+      rows = [...rows].sort((a, b) => compareLoose(get(a, key), get(b, key)) * dir);
+    }
+    return rows[0] ? structuredClone(rows[0]) : null;
   }
 
   find(query: Doc = {}) {

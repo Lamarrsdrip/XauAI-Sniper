@@ -37,6 +37,7 @@ describe("forensic operating-company browser contracts", () => {
   test("retrace wording is evidence, never another wait", () => {
     const surfaces = [
       read("components/cloud/CloudDashboard.jsx"),
+      read("components/cloud/M10EngineCard.jsx"),
       read("pages/AIMarketOutlookPage.jsx"),
     ].join("\n");
     expect(surfaces).not.toMatch(/waiting for retrace/i);

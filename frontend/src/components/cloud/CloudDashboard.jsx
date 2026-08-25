@@ -13,7 +13,8 @@ import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
 import AIThoughtFeed from "./AIThoughtFeed";
 import AIMarketOutlookCard from "./AIMarketOutlookCard";
-import M10VsOutlookCard, { M10_DECISION_LABELS, M30_LIFECYCLE_LABELS, FRESHNESS_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
+import M10VsOutlookCard, { M10_DECISION_LABELS, M30_LIFECYCLE_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
+import M10EngineCard, { normalizeSubscriberM10Evidence } from "./M10EngineCard";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
 import { signalAxios, SignalCard, RecentSignalsCard, planSummary, relTime, formatDate as fmtDate } from "./SubscriberSignalCards";
 import { PaymentMethodModal } from "../BankTransferFlow";
@@ -905,125 +906,9 @@ function latestM10Signal(events, heartbeat) {
   return accountMatches && symbolMatches ? latest : null;
 }
 
-function M10SignalCard({ events, heartbeat, online = true }) {
-  // v6.25.1 owner directive 2026-07-17 -- explicit newest-by-timestamp
-  // selection (not "first match in whatever order events arrived"), and
-  // verify the event actually belongs to the currently-connected
-  // account+symbol before trusting it -- a stale event from a previous
-  // session/build must never be silently displayed as current.
-  const latest = latestM10Signal(events, heartbeat);
-  const [showTechnical, setShowTechnical] = useState(false);
-  // Always keep the section on the dashboard so it's findable — show a waiting
-  // state until the EA posts a fresh M10 reading, instead of rendering nothing.
-  if (!latest) return (
-    <div className="rounded-2xl bg-panel p-4" data-testid="m10-signal-card">
-      <div className={MONO_LABEL}>M10 Signal Engine · Evidence</div>
-      <p className="mt-2 text-[12px] leading-5 text-white/45">
-        {online
-          ? "No live M10 evidence yet. The engine publishes a fresh reading after the next completed M10 scan (about every 10 minutes)."
-          : "Waiting for your EA heartbeat. M10 evidence appears here once your bot is online and reports a scan."}
-      </p>
-    </div>
-  );
-
-  const decision = latest.decision || "DATA_UNAVAILABLE";
-  const preferredDir = latest.preferred_direction || "NONE";
-  const freshnessState = latest.freshness_state || "UNKNOWN";
-  const isStaleOrUnknown = freshnessState === "STALE" || freshnessState === "UNKNOWN";
-  const decisionTone = isStaleOrUnknown ? "neutral"
-    : decision === "BUY_CANDIDATE" ? "green"
-    : decision === "SELL_CANDIDATE" ? "red"
-    : decision.startsWith("WAIT_FOR") ? "amber"
-    : decision === "TRANSITION_WATCH" ? "blue"
-    : "neutral";
-  const freshnessTone = freshnessState === "FRESH" ? "green" : freshnessState === "DEGRADED" ? "amber" : "red";
-
-  // Scores are already 0-100 -- show the RAW percentage for each side, not
-  // one normalized to the larger of the two (that used to make a 30-vs-20
-  // score render as a full bar vs a 2/3 bar instead of the true 30%/20%).
-  const buyScore = Number(latest.buy_case_score || 0);
-  const sellScore = Number(latest.sell_case_score || 0);
-  const leadingScore = Math.max(buyScore, sellScore);
-  const leadingSide = buyScore >= sellScore ? "BUY" : "SELL";
-  const isActionable = ["BUY_CANDIDATE", "SELL_CANDIDATE"].includes(decision);
-  const confidenceLabel = isActionable ? "Signal confidence" : "Evidence strength";
-  const rawReason = String(latest.reason || "");
-  const reasonLooksContradictory =
-    /neither case cleared/i.test(rawReason) && leadingScore >= 55;
-  const displayReason = reasonLooksContradictory
-    ? `${leadingSide} evidence reached ${leadingScore.toFixed(1)}, but no actionable candidate was authorized because direction, structure, location and confirmation did not all pass.`
-    : rawReason;
-
-  return (
-    <div className={`${CARD} p-5`} data-testid="m10-signal-card">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className={MONO_LABEL}>M10 Signal Engine · Evidence #{latest.evidence_id ?? "—"}</div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className={pill(freshnessTone)}>{humanEnumLabel(freshnessState, FRESHNESS_LABELS)}{latest.age_seconds != null ? ` · ${latest.age_seconds}s old` : ""}</span>
-          <span className={pill(decisionTone)}>{isStaleOrUnknown ? "Data delayed" : humanEnumLabel(decision, M10_DECISION_LABELS)}</span>
-        </div>
-      </div>
-
-      {isStaleOrUnknown ? (
-        <p className="mt-3 text-[11px] leading-4 text-white/45">
-          This evidence is {freshnessState.toLowerCase()} ({latest.age_seconds != null ? `${latest.age_seconds}s old` : "age unknown"}) -- not shown as a live signal.
-        </p>
-      ) : (
-        <>
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <div>
-              <div className="flex items-center justify-between text-[11px] text-white/50">
-                <span>Buy evidence</span><span className="font-mono">{buyScore.toFixed(0)}</span>
-              </div>
-              <div className="mt-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
-                <div className="h-full bg-emerald-400/70" style={{ width: `${Math.max(0, Math.min(100, buyScore))}%` }} />
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center justify-between text-[11px] text-white/50">
-                <span>Sell evidence</span><span className="font-mono">{sellScore.toFixed(0)}</span>
-              </div>
-              <div className="mt-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
-                <div className="h-full bg-red-400/70" style={{ width: `${Math.max(0, Math.min(100, sellScore))}%` }} />
-              </div>
-            </div>
-          </div>
-
-          <p className="mt-4 text-[12px] leading-5 text-white/70">
-            <span className="font-semibold text-white/85">{preferredDir}</span> evidence is {leadingScore.toFixed(0)}% strong{isActionable ? "." : ", but the setup is not ready for execution yet."}
-          </p>
-          {displayReason && <p className="mt-1.5 text-[11px] leading-4 text-white/45">{displayReason}</p>}
-
-          <button onClick={() => setShowTechnical((s) => !s)} className="mt-3 flex items-center gap-1 text-[10px] text-white/35 hover:text-white/65">
-            {showTechnical ? "Hide" : "Show"} technical details
-          </button>
-          {showTechnical && (
-            <>
-              <div className="mt-2 grid grid-cols-2 gap-3 border-t border-white/[0.05] pt-3 sm:grid-cols-4 text-[11px]">
-                <div><div className="text-white/35">Trend</div><div className="mt-0.5 font-mono text-white/80">{humanEnumLabel(latest.trend_state)}</div></div>
-                <div><div className="text-white/35">Structure</div><div className="mt-0.5 font-mono text-white/80">{humanEnumLabel(latest.structure_state)}</div></div>
-                <div><div className="text-white/35">Location</div><div className="mt-0.5 font-mono text-white/80">{humanEnumLabel(latest.location_state)}</div></div>
-                <div><div className="text-white/35">{confidenceLabel}</div><div className="mt-0.5 font-mono text-white/80">{Number(latest.confidence || 0).toFixed(0)}%</div></div>
-              </div>
-              <p className="mt-3 rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 text-[10px] leading-4 text-white/40">
-                Evidence scores describe the current setup; they are not next-candle probabilities. High evidence at a late or exhausted location can describe a move that is already mature.
-              </p>
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-white/35">
-                <span className={pill("neutral")}>Exhaustion evidence-only: {humanEnumLabel(latest.exhaustion_decision)}</span>
-                {latest.post_profit_buy_pending && <span className={pill("amber")}>Buy location evidence: extended</span>}
-                {latest.post_profit_sell_pending && <span className={pill("amber")}>Sell location evidence: extended</span>}
-              </div>
-            </>
-          )}
-        </>
-      )}
-
-      <div className="mt-3 text-[10px] text-white/25 font-mono">
-        M10 bar {latest.bar_time || "—"} · {latest.ea_version || ""} · {latest.build_hash || ""}
-      </div>
-    </div>
-  );
-}
+// M10SignalCard was extracted to M10EngineCard.jsx (2026-08-25 dashboard
+// unification fix) so the exact same rich evidence panel can be reused for
+// the free/trial/signal-subscriber Home page, not just a bot owner's.
 
 // v6.25.5 — M30 three-M10-evidence consensus mode transparency. Same
 // convention as M10SignalCard directly above: every value comes straight
@@ -1553,8 +1438,22 @@ function SubscriberHomePage({ entitlement, setActive, onBuyBot }) {
       <NotificationPrompt />
       <CommandToolsStrip setActive={setActive} />
 
-      <SignalCard title="Market Outlook" icon={LineChart} state={outlook} />
-      <SignalCard title="10-Minute Engine" icon={Zap} state={engine} />
+      {outlook.locked ? (
+        <SignalCard title="Market Outlook" icon={LineChart} state={outlook} />
+      ) : (
+        <AIMarketOutlookCard linked online subscriberSignal={outlook.data?.signal ?? null} subscriberLoading={outlook.loading} subscriberError={Boolean(outlook.error)} />
+      )}
+      <M10EngineCard
+        evidence={normalizeSubscriberM10Evidence(engine.data?.signal)}
+        online
+        locked={engine.locked}
+        unavailable={!engine.loading && !engine.locked && (Boolean(engine.error) || !engine.data?.available)}
+        freshnessMeta={engine.data?.signal ? {
+          last_evaluated_at: engine.data.signal.last_evaluated_at,
+          last_state_change_at: engine.data.signal.last_state_change_at,
+          last_actionable_at: engine.data.signal.last_actionable_at,
+        } : null}
+      />
       <RecentSignalsCard state={recent} scroll />
 
       {academy && <ContinueLearningCard academy={academy} setActive={setActive} />}
@@ -1623,7 +1522,7 @@ function HomePage({ status, heartbeat, licenseInfo, online, equityPoints, events
       <OutlookModule outlook={homeOutlook} online={online} onOpen={() => { window.location.href = "/ai-market-outlook"; }} />
 
       {/* M10 Signal Engine · Evidence — always on the dashboard (waiting state until a fresh reading) */}
-      {linked && <M10SignalCard events={events} heartbeat={heartbeat} online={online} />}
+      {linked && <M10EngineCard evidence={latestM10Signal(events, heartbeat)} online={online} />}
 
       {/* Focused open-position module (only when a trade is live) */}
       <PositionModule linked={linked} online={online} onDetails={() => setActive("trading")} />

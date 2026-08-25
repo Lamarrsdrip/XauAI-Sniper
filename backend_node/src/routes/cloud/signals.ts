@@ -134,12 +134,27 @@ export async function registerCloudSignalRoutes(app: FastifyInstance): Promise<v
       const err = e as { statusCode: number; detail: unknown };
       return reply.code(err.statusCode).send(err.detail);
     }
-    const [signal, health] = await Promise.all([
-      getDb().collection("subscriber_signals").findOne({ engine: "M10_ENGINE" }, { projection: { _id: 0 }, sort: { updated_at: -1 } }),
+    const db = getDb();
+    const [signal, health, lastActionable] = await Promise.all([
+      db.collection("subscriber_signals").findOne({ engine: "M10_ENGINE" }, { projection: { _id: 0 }, sort: { updated_at: -1 } }),
       subscriberSourceHealth(),
+      db.collection("subscriber_signals").findOne({ engine: "M10_ENGINE", status: "ACTIONABLE" }, { projection: { _id: 0, effective_at: 1 }, sort: { effective_at: -1 } }),
     ]);
     if (!health.configured || !health.online) return { available: false, signal: null, health, reason: healthReason(health) };
-    return { available: true, signal, health };
+    // Three distinct timestamps a customer can trust (2026-08-25 fix): the
+    // engine evaluates far more often than it produces a tradeable signal --
+    // conflating "last touched" with "last actionable" made a genuinely
+    // active engine look stalled for hours at a time.
+    return {
+      available: true,
+      signal: signal ? {
+        ...signal,
+        last_evaluated_at: signal["last_evaluated_at"] ?? signal["updated_at"] ?? null,
+        last_state_change_at: signal["created_at"] ?? null,
+        last_actionable_at: lastActionable?.["effective_at"] ?? null,
+      } : null,
+      health,
+    };
   });
 
   // GET /cloud/signals/recent -- recent subscriber-safe signal history. 403 if not entitled.

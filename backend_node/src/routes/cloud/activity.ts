@@ -6,6 +6,7 @@ import { sendPatternActivityNotification, sendTradeActivityNotification } from "
 import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
 import { trackOutlookLifecycleTick } from "../../services/marketOutlookTick.js";
 import { publishM10SignalFromActivity } from "../../services/marketOutlookPublish.js";
+import { mirrorSubscriberM10Evaluation } from "../../services/subscriberSignalFeed.js";
 import { hourlyGenerationTick } from "../../services/marketOutlookHourlyTick.js";
 import { enqueueIfActionable } from "../../services/outlookExecution.js";
 import { ACTIVITY_DETAIL_FIELDS, BotActivityReqSchema } from "../../models/cloudActivity.js";
@@ -104,6 +105,11 @@ export async function registerCloudActivityRoutes(app: FastifyInstance): Promise
         try {
           await trackOutlookLifecycleTick({ account: req.account || "", bid: quoteBid, ask: quoteAsk, quote_at: doc["ts"] });
           const m10Signal = (details["m10_signal"] as Record<string, unknown> | undefined) ?? {};
+          // Continuous evaluation-freshness mirror -- runs on every heartbeat
+          // regardless of decision, so a subscriber's "last evaluated" never
+          // goes stale just because the engine stayed in WATCHING. No-op for
+          // every account except the configured subscriber-signal source.
+          await mirrorSubscriberM10Evaluation(req.account || "", m10Signal, doc["ts"]);
           const m10Decision = String(m10Signal["decision"] ?? m10Signal["final_decision"] ?? "").toUpperCase();
           if (["BUY_CANDIDATE", "SELL_CANDIDATE", "ALLOW_CORE"].includes(m10Decision)) {
             const m10Doc = await publishM10SignalFromActivity(licenseKey, req.account || "", String(doc["id"]));
