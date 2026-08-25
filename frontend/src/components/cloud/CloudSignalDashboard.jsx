@@ -5,7 +5,7 @@ import { LogOut, Lock, TrendingUp, Zap, Clock3, GraduationCap, HelpCircle } from
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
 import { PaymentMethodModal } from "../BankTransferFlow";
-import { useSignalCheckout } from "@/lib/signalCheckout";
+import { useSignalCheckout, useBotCheckout } from "@/lib/signalCheckout";
 import { API } from "@/lib/api";
 import * as UI from "@/lib/ui";
 // Academy and Support are bot-independent (both routes require only
@@ -208,7 +208,7 @@ function PlanUpgradeTile({ label, price, sub, onClick }) {
   );
 }
 
-function BillingSection({ billing, entitlement, onChoosePlanWeekly, onChoosePlanMonthly }) {
+function BillingSection({ billing, entitlement, onChoosePlanWeekly, onChoosePlanMonthly, onBuyBot }) {
   const plans = billing.data?.plans;
   const history = billing.data?.payment_history || [];
   return (
@@ -220,7 +220,7 @@ function BillingSection({ billing, entitlement, onChoosePlanWeekly, onChoosePlan
           <div className="mb-5 grid gap-2.5 sm:grid-cols-3">
             <PlanUpgradeTile label="Weekly Signals" price={formatNaira(plans?.signals_weekly?.price_kobo)} sub="/ week" onClick={onChoosePlanWeekly} />
             <PlanUpgradeTile label="Monthly Signals" price={formatNaira(plans?.signals_monthly?.price_kobo)} sub="/ month" onClick={onChoosePlanMonthly} />
-            <PlanUpgradeTile label="XauCloud Bot (Lifetime)" price={formatNaira(plans?.bot_lifetime?.price_kobo)} sub="one-time" onClick={() => { window.location.href = "/#purchase"; }} />
+            <PlanUpgradeTile label="XauCloud Bot (Lifetime)" price={formatNaira(plans?.bot_lifetime?.price_kobo)} sub="one-time" onClick={onBuyBot} />
           </div>
 
           {entitlement?.subscription && (
@@ -253,7 +253,7 @@ function BillingSection({ billing, entitlement, onChoosePlanWeekly, onChoosePlan
   );
 }
 
-function LockedBotTeasers() {
+function LockedBotTeasers({ onBuyBot }) {
   const rows = [
     { label: "Bot Operations", sub: "Remote pause/resume and live positions" },
     { label: "Automated MT5 execution", sub: "Trades placed automatically by the licensed EA" },
@@ -274,7 +274,7 @@ function LockedBotTeasers() {
           </div>
         ))}
         <p className="pt-1 text-[11.5px] text-white/40">This feature requires the XauCloud automated trading bot.</p>
-        <button onClick={() => { window.location.href = "/#purchase"; }}
+        <button onClick={onBuyBot}
           className="no-select mt-1 w-full rounded-xl bg-gold-300 py-2.5 text-[12px] font-black text-black">
           Get XauCloud Bot
         </button>
@@ -352,6 +352,10 @@ export default function CloudSignalDashboard({ entitlement: initialEntitlement }
 
   // Weekly/Monthly checkout -- shared with the public PurchaseSection.
   const signalCheckout = useSignalCheckout(API);
+  // Bot lifetime checkout -- in-app, never a homepage redirect. See
+  // useBotCheckout: same anonymous /purchase/* endpoints PurchaseSection
+  // uses, just with buyer_name/buyer_email prefilled from `me` below.
+  const botCheckout = useBotCheckout(API);
 
   // If the visitor picked Weekly/Monthly on the homepage while logged out,
   // PurchaseSection stashed the intent so it can resume here once the
@@ -469,9 +473,10 @@ export default function CloudSignalDashboard({ entitlement: initialEntitlement }
           entitlement={entitlement}
           onChoosePlanWeekly={() => signalCheckout.openPlan("SIGNALS_WEEKLY")}
           onChoosePlanMonthly={() => signalCheckout.openPlan("SIGNALS_MONTHLY")}
+          onBuyBot={botCheckout.open}
         />
 
-        <LockedBotTeasers />
+        <LockedBotTeasers onBuyBot={botCheckout.open} />
 
         <div className="flex items-center gap-1.5 text-[10.5px] text-white/25">
           <Clock3 className="h-3 w-3" /> Signals refresh automatically. This page shows plain-English status only -- no trading advice or profit guarantee.
@@ -493,6 +498,24 @@ export default function CloudSignalDashboard({ entitlement: initialEntitlement }
       {signalCheckout.error && !signalCheckout.showModal && (
         <div className="mx-auto mt-4 max-w-md text-center font-mono text-[12px] text-rose-400" data-testid="signal-dashboard-purchase-error">
           {signalCheckout.error}
+        </div>
+      )}
+
+      {botCheckout.showModal && (
+        <PaymentMethodModal
+          api={API}
+          priceDisplay={formatNaira(billing.data?.plans?.bot_lifetime?.price_kobo)}
+          buyerName={me?.full_name || ""}
+          buyerEmail={me?.email || ""}
+          subtitle={`${formatNaira(billing.data?.plans?.bot_lifetime?.price_kobo)} · ${me?.email || ""}`}
+          onPaystack={() => { botCheckout.closeModal(); botCheckout.payByPaystack(me?.full_name || "", me?.email || ""); }}
+          onNomba={() => { botCheckout.closeModal(); botCheckout.payByNomba(me?.full_name || "", me?.email || ""); }}
+          onClose={botCheckout.closeModal}
+        />
+      )}
+      {botCheckout.error && !botCheckout.showModal && (
+        <div className="mx-auto mt-4 max-w-md text-center font-mono text-[12px] text-rose-400" data-testid="bot-dashboard-purchase-error">
+          {botCheckout.error}
         </div>
       )}
     </div>

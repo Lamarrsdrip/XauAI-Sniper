@@ -56,3 +56,42 @@ export function useSignalCheckout(api) {
 
   return { planId, showModal, busy, error, openPlan, closeModal, payByPaystack, payByNomba, bankTransferProps, setError };
 }
+
+// Shared lifetime-bot-license checkout logic. This is the SAME anonymous
+// checkout PurchaseSection (the public homepage) has always used --
+// /purchase/paystack/initialize, /purchase/initialize (Nomba), and
+// PaymentMethodModal's default bank-transfer path all require no auth, so
+// they work unchanged from an authenticated Command Center session too.
+// The only difference here is buyer_name/buyer_email come from the already
+// -known cloud user instead of a form, so a logged-in customer is never
+// bounced to the public homepage to buy the bot (see CloudSignalDashboard).
+export function useBotCheckout(api) {
+  const [showModal, setShowModal] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const open = useCallback(() => { setError(""); setShowModal(true); }, []);
+  const closeModal = useCallback(() => { setShowModal(false); setError(""); }, []);
+
+  const payViaProvider = useCallback(async (endpoint, buyerName, buyerEmail) => {
+    if (busy) return;
+    setError("");
+    setBusy(true);
+    try {
+      const res = await axios.post(
+        `${api}${endpoint}`,
+        { buyer_name: buyerName, buyer_email: buyerEmail, origin_url: window.location.origin },
+      );
+      if (res.data.authorization_url) window.location.href = res.data.authorization_url;
+    } catch (e) {
+      setError(e.response?.data?.detail || e.response?.data?.message || "Payment failed. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }, [api, busy]);
+
+  const payByPaystack = useCallback((buyerName, buyerEmail) => payViaProvider("/purchase/paystack/initialize", buyerName, buyerEmail), [payViaProvider]);
+  const payByNomba = useCallback((buyerName, buyerEmail) => payViaProvider("/purchase/initialize", buyerName, buyerEmail), [payViaProvider]);
+
+  return { showModal, busy, error, open, closeModal, payByPaystack, payByNomba, setError };
+}

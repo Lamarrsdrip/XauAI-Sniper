@@ -27,3 +27,19 @@ export function computeIsComplete(completedLessonIds: readonly string[]): boolea
   const done = new Set(completedLessonIds);
   return REQUIRED_LESSON_IDS.every((id) => done.has(id));
 }
+
+/**
+ * Certificate wording describing what a given curriculum_version actually
+ * covered, so a printed certificate never claims completion of topics that
+ * weren't part of the version the recipient earned. Keyed by
+ * CURRICULUM_VERSION; add a new entry whenever the version bumps rather than
+ * editing an existing one, so already-issued certificates keep rendering
+ * the description they were actually earned under.
+ */
+const CURRICULUM_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  v1: "Having completed the required XauCloud Forex Academy curriculum and assessments covering financial markets, market mechanics, risk management, price action, trading psychology, Gold/XAUUSD and trading systems.",
+};
+
+export function curriculumDescription(version: string): string {
+  return CURRICULUM_DESCRIPTIONS[version] ?? CURRICULUM_DESCRIPTIONS["v1"]!;
+}

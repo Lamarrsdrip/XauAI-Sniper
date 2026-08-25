@@ -73,6 +73,7 @@ export async function registerAcademyRoutes(app: FastifyInstance): Promise<void>
       certificateId: cert.certificate_id,
       completedAtIso: cert.completed_at,
       verifyUrl: certificateVerifyUrl(cert.certificate_id),
+      curriculumVersion: cert.curriculum_version,
     });
     return { cert, pdf };
   }
