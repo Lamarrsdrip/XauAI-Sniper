@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { getDb } from "../../db.js";
 import { requireGptAction } from "./gptEmailActions.js";
+import { publicDraft } from "../../services/adminEmailCampaign.js";
 import { readinessSnapshot } from "../../services/readiness.js";
 import { recentDiagnostics, diagnosticByRequest } from "../../services/diagnostics.js";
 import {
@@ -119,6 +120,55 @@ export async function registerAdminOpsActionRoutes(app: FastifyInstance): Promis
 
   app.get("/admin/actions/ops/releases", cfg("listReleases","admin.read"), async()=>{requireActionPermission("admin.read");const m=await loadEaReleaseManifest();return{current_version:m.current_version,releases:Object.entries(m.releases??{}).map(([version,r])=>({version,...(r as Record<string,unknown>)}))};});
   app.get("/admin/actions/ops/releases/production", cfg("getProductionRelease","admin.read"), async()=>{requireActionPermission("admin.read");return releaseSummary();});
+  // POST /admin/actions/ops/releases/version-email-draft -- the "automatic bot-version
+  // email system": auto-drafts a real, ready-to-review email from the CURRENT production
+  // release's own release_notes (already written in customer-safe plain English at
+  // promotion time -- never developer jargon), targeting the existing "active_license"
+  // audience. It only ever produces a DRAFT in admin_email_drafts -- sending still goes
+  // through the existing preview -> prepare-send -> confirm flow (POST /admin/actions/
+  // email/drafts/:id/{preview,prepare-send,send}), so a human always reviews and approves
+  // before anything reaches a customer. Idempotent per version: calling this again for a
+  // version that already has a draft returns the existing draft instead of duplicating it.
+  app.post("/admin/actions/ops/releases/version-email-draft", cfg("draftBotVersionEmail","admin.email.write"), async()=>{
+    requireActionPermission("admin.email.write");
+    const release = await releaseSummary();
+    const current = release["current"] as Record<string, unknown> | null;
+    if (!current) throw Object.assign(new Error("No current production release is set."), { statusCode: 409 });
+    const version = String(current["version"] ?? release["current_version"] ?? "");
+    const db = getDb();
+    const existing = await db.collection("admin_email_drafts").findOne({ source: "bot_version_release", source_version: version }, { projection: { _id: 0 } });
+    if (existing) return { ...publicDraft(existing), duplicate: true };
+
+    const notes = String(current["release_notes"] ?? "").trim();
+    const now = new Date().toISOString();
+    const doc = {
+      id: `draft-${randomUUID()}`,
+      campaign_id: null,
+      title: `Bot update ${version}`,
+      subject: "A new XauCloud Bot update is available",
+      preview_text: "The latest production EA is ready to download.",
+      sender_name: "", reply_to: "",
+      audience: "active_license",
+      to: "", selected_recipients: [],
+      document: {
+        version: 1,
+        theme: { width: 640, background: "#08080A", contentBackground: "#FFFFFF", accent: "#D6B35A", radius: 10, spacing: "normal" },
+        blocks: [
+          { id: `ve-hero-${randomUUID()}`, type: "hero", badge: "Production update", title: "A new XauCloud Bot update is available", subtitle: `Version ${version}` },
+          { id: `ve-body-${randomUUID()}`, type: "text", html: `<p>Hi {{first_name}},</p><p>We've released a new production version of the XauCloud Bot.</p><p>${notes || "This update improves the trading engine."}</p><p>If your bot updates automatically, no action is required. Otherwise, download the latest build from Command Center and replace your current EA.</p>` },
+          { id: `ve-cta-${randomUUID()}`, type: "button", text: "OPEN COMMAND CENTER", url: "https://xaucloud.io/command", style: "gold" },
+          { id: `ve-risk-${randomUUID()}`, type: "risk", html: "<p>Educational tool. Trading involves risk of loss. Past or historical results do not guarantee future performance.</p>" },
+        ],
+      },
+      source: "bot_version_release",
+      source_version: version,
+      created_by: "system:release_promotion",
+      updated_by: "system:release_promotion",
+      created_at: now, updated_at: now,
+    };
+    await db.collection("admin_email_drafts").insertOne({ ...doc });
+    return { ...publicDraft(doc), duplicate: false };
+  });
   app.get("/admin/actions/ops/bot/status", cfg("getBotStatus","admin.read"), async()=>{requireActionPermission("admin.read");const hb=await getDb().collection("cloud_bot_heartbeats").findOne({},{projection:{_id:0},sort:{ts:-1}});return{latest_heartbeat:hb??null};});
   app.get("/admin/actions/ops/bot/instances", cfg("getConnectedInstances","admin.read"), async()=>{requireActionPermission("admin.read");const rows=await getDb().collection("cloud_bot_heartbeats").aggregate([{$sort:{ts:-1}},{$group:{_id:"$pin",latest:{$first:"$$ROOT"}}},{$limit:100}]).toArray();return{instances:rows.map(r=>{const x={...(r["latest"] as Record<string,unknown>)};delete x["_id"];return x;})};});
 
