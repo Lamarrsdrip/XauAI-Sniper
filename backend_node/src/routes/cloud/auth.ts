@@ -19,6 +19,7 @@ import {
   consumePasswordResetToken,
   verifyEmailToken,
 } from "../../services/accountRecovery.js";
+import { sendPasswordChangedEmail } from "../../services/accountLifecycleEmails.js";
 
 const CloudSignupSchema = z.object({
   email: z.string(),
@@ -190,6 +191,8 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
       { $set: { password_hash: await hashPassword(body.new_password), updated_at: new Date().toISOString() }, $inc: { session_version: 1 } },
     );
     if (result.matchedCount === 0) return reply.code(404).send({ detail: "Account no longer exists." });
+    const user = await db.collection("cloud_users").findOne({ id: userId }, { projection: { _id: 0, email: 1, full_name: 1 } });
+    if (user?.["email"]) await sendPasswordChangedEmail(String(user["email"]), String(user["full_name"] ?? ""));
     return { ok: true, message: "Password updated. You can now log in with your new password." };
   });
 

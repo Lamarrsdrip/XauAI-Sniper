@@ -48,4 +48,22 @@ describe("XauCloud Admin controlled gateway", () => {
       expect(schema).toContain(`operationId: ${op}`);
     }
   });
+
+  // 2026-08-25 email-system audit: executeLicenseAction's four operations
+  // (transfer/deactivate/activate/reset) each now send license_status. This
+  // file has no Fastify-inject harness (single-request, compressed-style
+  // route bodies) -- behavioral coverage for the shared send/idempotency
+  // logic lives in accountLifecycleEmails.test.ts and admin/pins.test.ts,
+  // which exercise byte-identical conditions via the human-admin path.
+  it("wires license_status email sends into every executeLicenseAction branch", () => {
+    const startIdx = source.indexOf('"/admin/actions/gateway/licenses/execute"');
+    const endIdx = source.indexOf('"/admin/actions/gateway/orders/execute"');
+    const executeLicenseBlock = source.slice(startIdx, endIdx);
+    for (const branch of ["transfer_license", "deactivate_license", "activate_license", "reset_activation"]) {
+      const branchIdx = executeLicenseBlock.indexOf(`"${branch}"`);
+      expect(branchIdx, `${branch} branch not found`).toBeGreaterThan(-1);
+    }
+    expect(executeLicenseBlock).toContain("sendLicenseStatusEmail(");
+    expect((executeLicenseBlock.match(/sendLicenseStatusEmail\(/g) ?? []).length).toBe(4);
+  });
 });

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getDb } from "../../db.js";
 import { requireAdmin, verifyPassword } from "../../auth.js";
 import { generateUniquePin } from "../../services/paymentFulfillment.js";
+import { maskLicensePin as maskPin, sendLicenseStatusEmail } from "../../services/accountLifecycleEmails.js";
 
 const PinGenerateRequestSchema = z.object({
   count: z.number().int().default(1),
@@ -81,16 +82,25 @@ export async function registerAdminPinsRoutes(app: FastifyInstance): Promise<voi
   // PUT /admin/pins/:pin/revoke -- server.py:3570
   app.put("/admin/pins/:pin/revoke", { preHandler: requireAdmin }, async (request, reply) => {
     const { pin } = request.params as { pin: string };
-    const r = await getDb().collection("pin_licenses").updateOne({ pin }, { $set: { is_active: false } });
-    if (r.matchedCount === 0) return reply.code(404).send({ detail: "Not found" });
+    const before = await getDb().collection("pin_licenses").findOne({ pin }, { projection: { _id: 0, is_active: 1, buyer_email: 1, buyer_name: 1 } });
+    if (!before) return reply.code(404).send({ detail: "Not found" });
+    await getDb().collection("pin_licenses").updateOne({ pin }, { $set: { is_active: false } });
+    // Idempotent against a repeated revoke click: only email on a genuine transition.
+    if (before["is_active"] !== false && before["buyer_email"]) {
+      await sendLicenseStatusEmail(String(before["buyer_email"]), String(before["buyer_name"] ?? ""), "deactivated", maskPin(pin));
+    }
     return { revoked: true };
   });
 
   // PUT /admin/pins/:pin/activate -- server.py:3576
   app.put("/admin/pins/:pin/activate", { preHandler: requireAdmin }, async (request, reply) => {
     const { pin } = request.params as { pin: string };
-    const r = await getDb().collection("pin_licenses").updateOne({ pin }, { $set: { is_active: true } });
-    if (r.matchedCount === 0) return reply.code(404).send({ detail: "Not found" });
+    const before = await getDb().collection("pin_licenses").findOne({ pin }, { projection: { _id: 0, is_active: 1, buyer_email: 1, buyer_name: 1 } });
+    if (!before) return reply.code(404).send({ detail: "Not found" });
+    await getDb().collection("pin_licenses").updateOne({ pin }, { $set: { is_active: true } });
+    if (before["is_active"] !== true && before["buyer_email"]) {
+      await sendLicenseStatusEmail(String(before["buyer_email"]), String(before["buyer_name"] ?? ""), "activated", maskPin(pin));
+    }
     return { activated: true };
   });
 
@@ -133,6 +143,9 @@ export async function registerAdminPinsRoutes(app: FastifyInstance): Promise<voi
     });
     if (previousAccount) {
       await db.collection("cloud_direction_reservations").deleteMany({ account: previousAccount, licenseId: lic["id"] ?? "" });
+    }
+    if (lic["buyer_email"]) {
+      await sendLicenseStatusEmail(String(lic["buyer_email"]), String(lic["buyer_name"] ?? ""), "activation_reset", maskPin(pin));
     }
     return { reset: true, pin, previous_account: previousAccount };
   });

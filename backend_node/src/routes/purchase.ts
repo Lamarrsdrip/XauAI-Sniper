@@ -12,6 +12,7 @@ import { createCheckoutOrder, extractOrderReference, extractWebhookSignatureFiel
 import type { NombaEnvBlock } from "../services/nombaConfig.js";
 import { fulfillNombaPayment, fulfillPayment, transitionPaymentState, bankTransferEffectiveStatus, PAYSTACK_BASE_URL } from "../services/paymentFulfillment.js";
 import { notifyAdminBankTransferSubmitted, notifyAdminPaymentStarted, sendBankTransferInstructionsEmail } from "../services/paymentEmails.js";
+import { sendPaymentFailedEmail } from "../services/accountLifecycleEmails.js";
 import { TRIAL_MARKET_DAY_LIMIT } from "../services/signalTrial.js";
 import type { SignalPlan } from "../services/signalSubscriptions.js";
 
@@ -538,7 +539,16 @@ export async function registerPurchaseRoutes(app: FastifyInstance): Promise<void
     if (eventType === "payment_success") {
       await fulfillNombaPayment(orderRef, "webhook");
     } else if (eventType === "payment_failed") {
-      await transitionPaymentState(orderRef, ["PENDING", "VERIFYING"], "FAILED");
+      // `won` guards idempotency: a replayed webhook for an order already in
+      // FAILED (or that raced to a different state) does not match `fromStates`,
+      // so modifiedCount stays 0 and no duplicate email is sent -- same pattern
+      // every other transitionPaymentState() caller in this file relies on.
+      const won = await transitionPaymentState(orderRef, ["PENDING", "VERIFYING"], "FAILED");
+      if (won) {
+        const tx = await getDb().collection("payment_transactions").findOne({ reference: orderRef }, { projection: { _id: 0, buyer_email: 1, buyer_name: 1 } });
+        const buyerEmail = String(tx?.["buyer_email"] ?? "");
+        if (buyerEmail) await sendPaymentFailedEmail(buyerEmail, String(tx?.["buyer_name"] ?? ""), orderRef);
+      }
     } else if (eventType === "payment_reversal") {
       const db = getDb();
       await db

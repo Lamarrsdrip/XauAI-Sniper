@@ -150,7 +150,12 @@ export async function saveIdempotentResult(key: string, action: string, result: 
   try { await getDb().collection("admin_ops_idempotency").insertOne({ key, action, result, at: new Date().toISOString() }); } catch (e) { if (Number((e as { code?: unknown })?.code) !== 11000) throw e; }
 }
 
-export const TransactionalTemplateIdSchema = z.enum(["license_delivery", "bank_transfer_instructions", "bank_transfer_rejected", "welcome", "account_verification", "password_reset", "payment_failed", "license_status", "account_notice"]);
+export const TransactionalTemplateIdSchema = z.enum([
+  "license_delivery", "bank_transfer_instructions", "bank_transfer_rejected", "welcome", "account_verification", "password_reset",
+  "payment_failed", "license_status", "account_notice", "password_changed",
+  "trial_started", "trial_ending", "trial_expired",
+  "signal_subscription_activated", "subscription_expiring", "subscription_expired",
+]);
 export const TransactionalTemplateDraftSchema = z.object({
   template_id: TransactionalTemplateIdSchema,
   subject: z.string().min(1).max(300).refine((v) => !/[\r\n]/.test(v)),
@@ -158,6 +163,12 @@ export const TransactionalTemplateDraftSchema = z.object({
   document: EmailDocumentSchema,
 }).strict();
 
+// 2026-08-25 email-system audit: every id here has a real, traced trigger --
+// see accountLifecycleEmails.ts, signalLifecycleEmails.ts, paymentEmails.ts,
+// and their call sites (purchase.ts, admin/pins.ts, admin/adminGatewayActions.ts,
+// cloud/auth.ts, cloud/signals.ts, paymentFulfillment.ts, index.ts's sweep
+// interval). None of these are template-only; each is exercised by tests
+// that assert the trigger fires the send, not just that the template exists.
 const WIRED_TRANSACTIONAL = new Set([
   "license_delivery",
   "bank_transfer_instructions",
@@ -165,6 +176,16 @@ const WIRED_TRANSACTIONAL = new Set([
   "welcome",
   "account_verification",
   "password_reset",
+  "payment_failed",
+  "license_status",
+  "account_notice",
+  "password_changed",
+  "trial_started",
+  "trial_ending",
+  "trial_expired",
+  "signal_subscription_activated",
+  "subscription_expiring",
+  "subscription_expired",
 ]);
 
 export async function listTransactionalTemplates(): Promise<Record<string, unknown>[]> {
