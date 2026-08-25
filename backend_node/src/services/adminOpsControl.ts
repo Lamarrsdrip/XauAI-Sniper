@@ -155,6 +155,7 @@ export const TransactionalTemplateIdSchema = z.enum([
   "payment_failed", "license_status", "account_notice", "password_changed",
   "trial_started", "trial_ending", "trial_expired",
   "signal_subscription_activated", "subscription_expiring", "subscription_expired",
+  "academy_certificate_issued",
 ]);
 export const TransactionalTemplateDraftSchema = z.object({
   template_id: TransactionalTemplateIdSchema,
@@ -186,6 +187,7 @@ const WIRED_TRANSACTIONAL = new Set([
   "signal_subscription_activated",
   "subscription_expiring",
   "subscription_expired",
+  "academy_certificate_issued",
 ]);
 
 export async function listTransactionalTemplates(): Promise<Record<string, unknown>[]> {
