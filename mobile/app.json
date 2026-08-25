@@ -1,0 +1,74 @@
+{
+  "expo": {
+    "name": "XauCloud",
+    "slug": "xaucloud-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "xaucloud",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#0B0D10",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "io.xaucloud.mobile",
+      "buildNumber": "1",
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "remote-notification"
+        ],
+        "NSFaceIDUsageDescription": "XauCloud uses Face ID to let you sign in quickly and securely.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "io.xaucloud.mobile",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0D10",
+        "foregroundImage": "./assets/android-icon-foreground.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT",
+        "POST_NOTIFICATIONS",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-font",
+      "expo-local-authentication",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#BF8F26"
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 220,
+          "resizeMode": "contain",
+          "backgroundColor": "#0B0D10",
+          "dark": {
+            "image": "./assets/splash-icon.png",
+            "backgroundColor": "#0B0D10"
+          }
+        }
+      ]
+    ],
+    "owner": "emriz.eth",
+    "extra": {
+      "eas": {
+        "projectId": "56b4a0c0-6f10-40a6-8c03-5f06b13bf20a"
+      }
+    }
+  }
+}
