@@ -74,7 +74,8 @@ export async function publishM10SignalFromActivity(licenseKey: string, account: 
   // Keeps the subscriber "10-minute engine" view current for WATCHING/BLOCKED/EXPIRED
   // states too, not just final actionable signals. No-op for every account except
   // the configured subscriber-signal source; never affects this account's own flow.
-  await mirrorSubscriberSignal(account, m10EventAsSubscriberSignal(eventDoc)).catch(() => {});
+  const rawM10Signal = (evidence?.["m10_signal"] as Record<string, unknown> | undefined) ?? undefined;
+  await mirrorSubscriberSignal(account, m10EventAsSubscriberSignal(eventDoc, rawM10Signal)).catch(() => {});
 
   if (!canonical["actionable"]) return null;
 

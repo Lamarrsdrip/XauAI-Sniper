@@ -155,25 +155,25 @@ export async function mirrorSubscriberSignal(account: string, input: SubscriberS
  * the dashboard needs, and exactly why Recent Signals doesn't flood with
  * near-identical WATCHING rows every few seconds.
  */
-export async function mirrorSubscriberM10Evaluation(account: string, m10: Record<string, unknown>, eventTime: unknown): Promise<void> {
-  if (!(await isConfiguredSubscriberSource(account))) return;
-  if (!m10 || Object.keys(m10).length === 0) return;
-
-  const decision = String(m10["decision"] ?? m10["final_decision"] ?? "").toUpperCase();
-  const preferredDir = String(m10["preferred_direction"] ?? m10["direction"] ?? "").toUpperCase();
-  const status: SubscriberSignalStatus = ["BUY_CANDIDATE", "SELL_CANDIDATE", "ALLOW_CORE"].includes(decision)
+function m10StatusFromDecision(decision: string): SubscriberSignalStatus {
+  return ["BUY_CANDIDATE", "SELL_CANDIDATE", "ALLOW_CORE"].includes(decision)
     ? "ACTIONABLE"
     : decision.startsWith("BLOCK") ? "BLOCKED"
     : decision === "EXPIRED" || decision === "STALE" ? "EXPIRED"
     : "WATCHING";
-  const direction = status === "ACTIONABLE" && ["BUY", "SELL"].includes(preferredDir) ? preferredDir : (["BUY", "SELL"].includes(preferredDir) ? preferredDir : "NONE");
+}
 
-  const db = getDb();
-  const collection = db.collection("subscriber_signals");
-  const latest = await collection.findOne({ engine: "M10_ENGINE" }, { sort: { updated_at: -1 } });
-
-  const nowIso = new Date().toISOString();
-  const evidenceFields = {
+/**
+ * Shared evidence extractor -- used by BOTH the continuous per-heartbeat
+ * evaluation mirror below AND the candidate/notification-gated path
+ * (m10EventAsSubscriberSignal, when handed the raw m10_signal payload). Both
+ * paths write to the same "current M10_ENGINE state" doc space and are
+ * compared by updated_at to decide what's "latest" -- if only one of them
+ * populated these fields, whichever path happened to write last would
+ * silently blank the evidence panel even though a real evaluation just ran.
+ */
+function buildM10EvidenceFields(m10: Record<string, unknown>, decision: string) {
+  return {
     confidence: typeof m10["confidence"] === "number" ? (m10["confidence"] as number) : null,
     buy_evidence: typeof m10["buy_case_score"] === "number" ? (m10["buy_case_score"] as number) : null,
     sell_evidence: typeof m10["sell_case_score"] === "number" ? (m10["sell_case_score"] as number) : null,
@@ -187,6 +187,23 @@ export async function mirrorSubscriberM10Evaluation(account: string, m10: Record
     evidence_id: (m10["evidence_id"] as number | string | undefined) ?? null,
     bar_time: typeof m10["bar_time"] === "string" ? (m10["bar_time"] as string) : null,
   };
+}
+
+export async function mirrorSubscriberM10Evaluation(account: string, m10: Record<string, unknown>, eventTime: unknown): Promise<void> {
+  if (!(await isConfiguredSubscriberSource(account))) return;
+  if (!m10 || Object.keys(m10).length === 0) return;
+
+  const decision = String(m10["decision"] ?? m10["final_decision"] ?? "").toUpperCase();
+  const preferredDir = String(m10["preferred_direction"] ?? m10["direction"] ?? "").toUpperCase();
+  const status = m10StatusFromDecision(decision);
+  const direction = status === "ACTIONABLE" && ["BUY", "SELL"].includes(preferredDir) ? preferredDir : (["BUY", "SELL"].includes(preferredDir) ? preferredDir : "NONE");
+
+  const db = getDb();
+  const collection = db.collection("subscriber_signals");
+  const latest = await collection.findOne({ engine: "M10_ENGINE" }, { sort: { updated_at: -1 } });
+
+  const nowIso = new Date().toISOString();
+  const evidenceFields = buildM10EvidenceFields(m10, decision);
 
   const sameState = latest && latest["engine"] === "M10_ENGINE" && latest["status"] === status && latest["direction"] === direction;
 
@@ -259,9 +276,20 @@ export function outlookDocAsSubscriberSignal(doc: Record<string, unknown>, engin
 }
 
 /** Maps a cloud_outlook_signal_events row (the M10 lifecycle event, before it necessarily becomes an actionable publication) into the sanitized subscriber shape -- used to keep the subscriber "10-minute engine" view current even for WATCHING/BLOCKED states that never produce a notification. */
-export function m10EventAsSubscriberSignal(eventDoc: Record<string, unknown>): SubscriberSignalInput {
+/**
+ * `rawM10` (the same details.m10_signal payload mirrorSubscriberM10Evaluation
+ * reads) is optional but should always be passed when available -- without
+ * it, this candidate/notification-gated write only carries direction/
+ * confidence/status, and since it and the continuous evaluation mirror both
+ * write to the same "current M10_ENGINE state" doc space (compared by
+ * updated_at), whichever one wrote LAST would blank the evidence panel even
+ * though a real evaluation just ran. See buildM10EvidenceFields.
+ */
+export function m10EventAsSubscriberSignal(eventDoc: Record<string, unknown>, rawM10?: Record<string, unknown>): SubscriberSignalInput {
   const eventType = String(eventDoc["event_type"] ?? "");
   const status: SubscriberSignalStatus = eventType === "ACTIONABLE_SIGNAL" ? "ACTIONABLE" : eventType === "BLOCKED" ? "BLOCKED" : eventType === "EXPIRED" ? "EXPIRED" : "WATCHING";
+  const decision = String(rawM10?.["decision"] ?? rawM10?.["final_decision"] ?? "").toUpperCase();
+  const evidenceFields = rawM10 ? buildM10EvidenceFields(rawM10, decision) : {};
   return {
     signal_id: String(eventDoc["candidate_id"] ?? ""),
     engine: "M10_ENGINE",
@@ -278,6 +306,7 @@ export function m10EventAsSubscriberSignal(eventDoc: Record<string, unknown>): S
     effective_at: String(eventDoc["event_time"] ?? new Date().toISOString()),
     expires_at: null,
     isNewActionable: false,
+    ...evidenceFields,
   };
 }
 

@@ -7,7 +7,7 @@ vi.mock("./notifications.js", () => ({
   sendSubscriberSignalNotification: vi.fn(async (signal: Record<string, unknown>) => { state.notifyCalls.push(signal); return 1; }),
 }));
 
-const { mirrorSubscriberSignal, isConfiguredSubscriberSource, subscriberSourceHealth, outlookDocAsSubscriberSignal, mirrorSubscriberM10Evaluation } = await import("./subscriberSignalFeed.js");
+const { mirrorSubscriberSignal, isConfiguredSubscriberSource, subscriberSourceHealth, outlookDocAsSubscriberSignal, mirrorSubscriberM10Evaluation, m10EventAsSubscriberSignal } = await import("./subscriberSignalFeed.js");
 
 function baseSignal(overrides: Record<string, unknown> = {}) {
   return {
@@ -159,6 +159,37 @@ describe("mirrorSubscriberM10Evaluation -- continuous freshness (2026-08-25 fix)
     const rows = state.db.collection("subscriber_signals").docs;
     expect(rows).toHaveLength(2);
     expect(rows.some((r) => r["status"] === "ACTIONABLE")).toBe(true);
+  });
+});
+
+describe("m10EventAsSubscriberSignal carries the same rich evidence -- 2026-08-25 regression", () => {
+  // Production bug found via live verification: mirrorSubscriberM10Evaluation
+  // (continuous, every heartbeat) and the candidate-gated path
+  // (publishM10SignalFromActivity -> m10EventAsSubscriberSignal ->
+  // mirrorSubscriberSignal) both write to the same "current M10_ENGINE
+  // state" doc space and are compared by updated_at. Before this fix,
+  // m10EventAsSubscriberSignal never carried buy/sell evidence, trend/
+  // structure/location state, reason, evidence_id, or bar_time -- so
+  // whichever path wrote last determined whether the customer's evidence
+  // panel was populated or silently blank, even though a real evaluation
+  // had just run either way.
+  it("without a raw m10 payload, only the narrow fields are set (documents the gap this fix closes)", () => {
+    const mapped = m10EventAsSubscriberSignal({ candidate_id: "c1", event_type: "WATCHING", direction: "BUY", confidence: 70, event_time: new Date().toISOString() });
+    expect(mapped.buy_evidence).toBeUndefined();
+  });
+
+  it("with the raw m10 payload, carries the exact same evidence fields the continuous evaluation mirror does", () => {
+    const rawM10 = {
+      decision: "WAIT_FOR_BUY_RETRACE", buy_case_score: 55, sell_case_score: 12,
+      freshness_state: "FRESH", trend_state: "UP", structure_state: "HH_HL", location_state: "MID_RANGE",
+      exhaustion_decision: "NONE", reason: "Buy evidence forming.", evidence_id: 77, bar_time: "2026.08.25 23:00",
+    };
+    const mapped = m10EventAsSubscriberSignal({ candidate_id: "c1", event_type: "WATCHING", direction: "BUY", confidence: 55, event_time: new Date().toISOString() }, rawM10);
+    expect(mapped.buy_evidence).toBe(55);
+    expect(mapped.sell_evidence).toBe(12);
+    expect(mapped.trend_state).toBe("UP");
+    expect(mapped.evidence_id).toBe(77);
+    expect(mapped.bar_time).toBe("2026.08.25 23:00");
   });
 });
 
