@@ -18,8 +18,13 @@ class FakeCursor {
 class FakeCollection {
   docs: Doc[] = [];
   throwOnFind: Error | null = null;
+  /** Throw only starting from the Nth .find() call (1-indexed) instead of every call. */
+  throwOnFindFromCallN: number | null = null;
+  findCallCount = 0;
   find(query: Doc) {
+    this.findCallCount += 1;
     if (this.throwOnFind) throw this.throwOnFind;
+    if (this.throwOnFindFromCallN !== null && this.findCallCount >= this.throwOnFindFromCallN) throw new Error("timeout on later query");
     const rows = this.docs
       .filter((d) => Object.entries(query).every(([k, v]) => {
         if (v && typeof v === "object" && "$gt" in (v as Doc)) {
@@ -167,6 +172,21 @@ describe("Manual Trading market-feed read status", () => {
       const result = await readMarketDataWithStatus();
       expect(result.code).toBe("DATABASE_READ_TIMEOUT");
       expect(result.data).toBeNull();
+    });
+
+    it("falls back to the cache when the SECOND read (windowed snapshots) throws, not just the first", async () => {
+      // Regression: the first version of this fallback only wrapped the
+      // initial "newest quote" lookup. cloud_bot_activity's second call (the
+      // windowed snapshot read) is a separate round-trip that can fail on
+      // its own -- and did, in production, while the first happened to
+      // succeed. The fallback must cover the whole read, not just call #1.
+      state.db.collection("cloud_bot_activity").docs.push(freshQuoteDoc(new Date().toISOString()));
+      state.db.collection("cloud_bot_activity").throwOnFindFromCallN = 2;
+      recordLiveQuote({ account: "476396807", normalizedSymbol: "XAUUSD", bid: 4630.2, ask: 4630.7, mid: 4630.45, sourceAtIso: new Date().toISOString(), receivedAtIso: new Date().toISOString() });
+
+      const result = await readMarketDataWithStatus();
+      expect(result.code).toBe("LIVE_MARKET_OK");
+      expect(result.data).not.toBeNull();
     });
 
     it("prefers a genuine durable read over the cache when Mongo is healthy", async () => {

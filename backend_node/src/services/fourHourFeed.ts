@@ -165,22 +165,28 @@ function cachedQuoteAsMarketData(): MarketData | null {
 }
 
 async function readMarketDataInner(): Promise<MarketData | null> {
-  const db = getDb();
-  // Select one live broker stream. The earlier implementation combined all
-  // accounts in one candle series, which is invalid whenever feeds differ.
-  let newest: Record<string, unknown> | null;
+  // A transient failure on ANY of the three reads below (the initial quote
+  // lookup, the windowed snapshot query, or the candle read) must not blank
+  // the card when the backend already holds a fresh, verified quote from the
+  // heartbeat path that just succeeded moments ago -- see liveQuoteCache.ts.
+  // Scoped to this one function, not a blanket catch-and-hope: only a
+  // genuinely fresh, symbol-matched, already-validated quote is ever used.
   try {
-    newest = await db.collection("cloud_bot_activity")
-      .find({ normalized_symbol: "XAUUSD", "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } }, { projection: PROJECTION })
-      .sort({ ts: -1 }).limit(1).next() as Record<string, unknown> | null;
+    return await readMarketDataFromDb();
   } catch (error) {
-    // A transient failure on exactly this read must not blank the card when
-    // the backend already holds a fresh, verified quote from the heartbeat
-    // path that just succeeded moments ago -- see liveQuoteCache.ts.
     const fallback = cachedQuoteAsMarketData();
     if (fallback) return fallback;
     throw error;
   }
+}
+
+async function readMarketDataFromDb(): Promise<MarketData | null> {
+  const db = getDb();
+  // Select one live broker stream. The earlier implementation combined all
+  // accounts in one candle series, which is invalid whenever feeds differ.
+  const newest = await db.collection("cloud_bot_activity")
+    .find({ normalized_symbol: "XAUUSD", "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } }, { projection: PROJECTION })
+    .sort({ ts: -1 }).limit(1).next() as Record<string, unknown> | null;
   if (!newest || !str(newest["account"])) {
     const fallback = cachedQuoteAsMarketData();
     if (fallback) return fallback;
@@ -196,7 +202,11 @@ async function readMarketDataInner(): Promise<MarketData | null> {
   // and an honest history-accumulation/no-setup state.  Three transient
   // activity documents are not a market-data requirement and deduplication
   // can legitimately leave fewer than three while the terminal is live.
-  if (snaps.length === 0) return null;
+  if (snaps.length === 0) {
+    const fallback = cachedQuoteAsMarketData();
+    if (fallback) return fallback;
+    return null;
+  }
   const latest = snaps.at(-1)!;
   const priceSeries = snaps.map(({ ts, mid }) => ({ t: ts, mid }));
   const stored = await db.collection("manual_trading_broker_candles")
