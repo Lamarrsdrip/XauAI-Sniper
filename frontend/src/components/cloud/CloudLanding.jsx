@@ -1,9 +1,11 @@
-import React from "react";
-import { Link } from "react-router-dom";
-import { ArrowRight, Check, KeyRound, Lock, RadioTower, Shield, Smartphone, Terminal, Activity } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import axios from "axios";
+import { ArrowRight, Check, KeyRound, Lock, RadioTower, Shield, Smartphone, Terminal, Activity, Loader2 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
 import Seo from "../Seo";
+import { API } from "@/lib/api";
 
 const FEATURES = [
   { icon: Smartphone, title: "Phone-first", body: "Add to your home screen. Check bot status, open trades, and alerts without opening MT5." },
@@ -23,7 +25,41 @@ const INCLUDED = [
   "Mobile-first dashboard",
 ];
 
+// This is the LOGGED-OUT marketing page for the authenticated product --
+// pricing/features/screenshots, matching the public website's own pattern
+// (public site for discovery, one dashboard once signed in). Bug fix
+// (2026-08-25, platform-unification audit): this page never checked auth
+// state, so an already-signed-in user landed back here -- including every
+// time they tapped their OWN dashboard's header logo (AppShell links here)
+// -- and saw "Log in / Create account" instead of their real dashboard.
+// Redirects straight to /command/dashboard when a session already exists;
+// renders normally (not stuck loading) if the check fails/times out, since
+// a false negative here must never trap a logged-out visitor.
+function useRedirectIfAuthenticated() {
+  const navigate = useNavigate();
+  const [checking, setChecking] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    axios.get(`${API}/cloud/auth/me`, { withCredentials: true, timeout: 5000 })
+      // Success: stay in the "checking" (spinner) state -- setChecking(false)
+      // here would flash the marketing page for one frame before the
+      // navigate takes effect. Only the failure path releases the spinner.
+      .then(() => { if (!cancelled) navigate("/command/dashboard", { replace: true }); })
+      .catch(() => { if (!cancelled) setChecking(false); });
+    return () => { cancelled = true; };
+  }, [navigate]);
+  return checking;
+}
+
 export default function CloudLanding() {
+  const checkingAuth = useRedirectIfAuthenticated();
+  if (checkingAuth) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#060609] text-white">
+        <Loader2 className="h-6 w-6 animate-spin text-gold-300" />
+      </div>
+    );
+  }
   return (
     <div className="min-h-screen bg-[#060609] text-white">
       <Seo

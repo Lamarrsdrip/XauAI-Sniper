@@ -591,7 +591,7 @@ function AppShell({ active, setActive, children, logout, statusText, online, eaV
       {/* Header */}
       <header className="sticky top-0 z-40 border-b border-white/[0.07] bg-[#050507]/90 backdrop-blur-2xl">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 pb-3 pt-safe-top">
-          <Link to="/command" className="flex min-w-0 items-center gap-2.5">
+          <Link to="/command/dashboard" className="flex min-w-0 items-center gap-2.5">
             <XauAiLogo size={30} className="flex-none" />
             <div className="min-w-0">
               <div className="truncate text-[14px] font-bold leading-none">XauCloud</div>
