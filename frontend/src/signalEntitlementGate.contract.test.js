@@ -61,7 +61,7 @@ describe("ONE Command Center architecture contract (2026-08-25)", () => {
 
   test("a licensed customer can actually reach a Billing view -- not just signal-only users", () => {
     expect(dashboard).toContain('active==="billing"');
-    expect(dashboard).toContain("function BillingPage()");
+    expect(dashboard).toMatch(/function BillingPage\(/);
     expect(dashboard).toMatch(/label="Billing"[\s\S]{0,80}setActive\("billing"\)/);
     expect(dashboard).toContain("/cloud/billing");
   });

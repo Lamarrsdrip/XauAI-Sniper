@@ -802,7 +802,7 @@ function LicensedCloudDashboard({ entitlement, entFailed }) {
       {active==="activity"     && (ownsBot ? <ActivityPage events={events} filter={filter} setFilter={setFilter} onForceOpen={setModalCommand} /> : <SubscriberActivityPage />)}
       {active==="control"      && (ownsBot ? <ControlPage heartbeat={heartbeat} online={online} commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true; propFirmIdempotencyKey.current=null;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} /> : <BotRequiredPage title="Control" onBuyBot={botCheckout.open} />)}
       {active==="license"      && <LicensePage license={license} licenseInput={licenseInput} setLicenseInput={setLicenseInput} linkLicense={linkLicense} commandMsg={commandMsg} heartbeat={heartbeat} me={me} status={status} />}
-      {active==="billing"      && <BillingPage />}
+      {active==="billing"      && <BillingPage setActive={setActive} />}
       {active==="settings"     && <SettingsPage me={me} heartbeat={heartbeat} licenseInfo={licenseInfo} logout={logout} status={status} />}
       {active==="more"         && <MorePage setActive={setActive} me={me} status={status} openNotifications={()=>setNotifOpen(true)} logout={logout} />}
       {active==="education"    && <EducationPage setActive={setActive} />}
@@ -2244,7 +2244,30 @@ function billingNaira(kobo) {
 // bot license status and full payment history here, not just signal
 // subscribers (who reach this same Billing page through the identical
 // shared Command Center nav).
-function BillingPage() {
+/** Inline "Check status" for a pending bank-transfer row in payment history -- reuses the existing GET /purchase/bank-transfer/:reference/status endpoint (the same one BankTransferPanel polls while an order is open), no new checkout logic. */
+function PendingTransferStatus({ reference }) {
+  const [status, setStatus] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const check = async () => {
+    setChecking(true);
+    try {
+      const { data } = await commandAxios.get(`/purchase/bank-transfer/${reference}/status`, { withCredentials: false });
+      setStatus(data.status);
+    } catch {
+      setStatus("UNKNOWN");
+    } finally {
+      setChecking(false);
+    }
+  };
+  if (status) return <span className="text-[10px] font-bold text-white/45">{status}</span>;
+  return (
+    <button type="button" onClick={check} disabled={checking} className="no-select text-[10px] font-bold text-gold-300/80 underline underline-offset-2 hover:text-gold-200 disabled:opacity-50">
+      {checking ? "Checking…" : "Check status"}
+    </button>
+  );
+}
+
+function BillingPage({ setActive }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const load = useCallback(() => {
@@ -2277,8 +2300,21 @@ function BillingPage() {
         {ent && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {ent.bot_license && <span className="rounded-full bg-emerald-400/15 px-3 py-1 text-[11px] font-bold text-emerald-300">XauCloud Bot — Lifetime license active</span>}
+            {ent.bot_license && setActive && (
+              <button type="button" onClick={() => setActive("license")} className="no-select rounded-full bg-white/[0.06] px-3 py-1 text-[11px] font-bold text-white/60 hover:bg-white/[0.1]">
+                Manage license
+              </button>
+            )}
             {!ent.bot_license && ent.source === "trial" && <span className="rounded-full bg-gold-300/15 px-3 py-1 text-[11px] font-bold text-gold-200">Free Signal Trial · {(ent.trial?.days_remaining ?? 0) === 0 ? "Last day" : `${ent.trial?.days_remaining ?? 0} market day${(ent.trial?.days_remaining ?? 0) === 1 ? "" : "s"} left`}</span>}
-            {!ent.bot_license && ent.source === "subscription" && <span className="rounded-full bg-gold-300/15 px-3 py-1 text-[11px] font-bold text-gold-200">{ent.subscription?.plan === "WEEKLY" ? "Weekly Signals" : "Monthly Signals"} · active until {fmtDate(ent.subscription?.expires_at)}</span>}
+            {!ent.bot_license && ent.source === "subscription" && (
+              <>
+                <span className="rounded-full bg-gold-300/15 px-3 py-1 text-[11px] font-bold text-gold-200">{ent.subscription?.plan === "WEEKLY" ? "Weekly Signals" : "Monthly Signals"} · active until {fmtDate(ent.subscription?.expires_at)}</span>
+                <button type="button" onClick={() => signalCheckout.openPlan(ent.subscription?.plan === "WEEKLY" ? "SIGNALS_WEEKLY" : "SIGNALS_MONTHLY")} data-testid="renew-subscription-btn"
+                  className="no-select rounded-full bg-white/[0.06] px-3 py-1 text-[11px] font-bold text-white/60 hover:bg-white/[0.1]">
+                  Renew now
+                </button>
+              </>
+            )}
             {!ent.bot_license && ent.source === "none" && <span className="rounded-full bg-white/[0.08] px-3 py-1 text-[11px] font-bold text-white/50">No signal plan active</span>}
           </div>
         )}
@@ -2329,9 +2365,13 @@ function BillingPage() {
                   <div className="truncate font-mono text-white/70">{p.reference}</div>
                   <div className="text-white/35">{p.plan_id || "BOT_LIFETIME"} · {fmtDate(p.created_at)}</div>
                 </div>
-                <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${p.payment_status === "FULFILLED" ? "bg-emerald-400/15 text-emerald-300" : /FAILED|REJECTED|EXPIRED/.test(String(p.payment_status)) ? "bg-rose-400/15 text-rose-300" : "bg-white/[0.08] text-white/50"}`}>
-                  {p.payment_status}
-                </span>
+                {p.provider === "BANK_TRANSFER" && !/FULFILLED|FAILED|REJECTED|EXPIRED/.test(String(p.payment_status)) ? (
+                  <PendingTransferStatus reference={p.reference} />
+                ) : (
+                  <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${p.payment_status === "FULFILLED" ? "bg-emerald-400/15 text-emerald-300" : /FAILED|REJECTED|EXPIRED/.test(String(p.payment_status)) ? "bg-rose-400/15 text-rose-300" : "bg-white/[0.08] text-white/50"}`}>
+                    {p.payment_status}
+                  </span>
+                )}
               </div>
             ))}
           </div>
