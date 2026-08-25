@@ -7,7 +7,7 @@ import {
   LogOut, Menu, Pause, Play, RefreshCw, Settings, Shield,
   SlidersHorizontal, TerminalSquare, TrendingUp, Wifi, XCircle, AlertTriangle, Search, Zap,
   Bell, GraduationCap, HelpCircle, Download, User, BookOpen, MessageCircle, ShieldCheck, Rocket, ArrowLeft, ChevronRight, Target,
-  Trophy, Eye,
+  Trophy, Eye, Lock, Check,
 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
@@ -16,9 +16,9 @@ import AIMarketOutlookCard from "./AIMarketOutlookCard";
 import FourHourOutlookCard from "./FourHourOutlookCard";
 import M10VsOutlookCard, { M10_DECISION_LABELS, M30_LIFECYCLE_LABELS, FRESHNESS_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
-import CloudSignalDashboard from "./CloudSignalDashboard";
+import { signalAxios, SignalCard, RecentSignalsCard, planSummary } from "./SubscriberSignalCards";
 import { PaymentMethodModal } from "../BankTransferFlow";
-import { useSignalCheckout } from "@/lib/signalCheckout";
+import { useSignalCheckout, useBotCheckout } from "@/lib/signalCheckout";
 import { API } from "@/lib/api";
 import * as UI from "@/lib/ui";
 import * as AK from "@/lib/appkit";
@@ -224,6 +224,52 @@ function Empty({ title, body, icon:Icon=Bot }) {
       <div className="text-[14px] font-semibold">{title}</div>
       <p className="mx-auto mt-2 max-w-sm text-[12px] leading-5 text-white/38">{body}</p>
     </div>
+  );
+}
+
+// ─── Bot-required gate ──────────────────────────────────────────────────────
+// The ONE Command Center product rule (2026-08-25): a customer who hasn't
+// bought the XauCloud bot still sees every normal page/nav item -- only the
+// functionality that genuinely requires their own connected MT5/EA is
+// locked, in place, with a real in-app purchase CTA (never a homepage
+// redirect -- see useBotCheckout). This is the shared locked-state building
+// block for both a compact Home teaser card and a full locked page.
+function BotRequiredGate({ title = "XauCloud Bot Required", body, bullets = [], onBuyBot }) {
+  return (
+    <div className="rounded-2xl bg-panel p-5" data-testid="bot-required-gate">
+      <div className="flex items-center gap-2 text-[13.5px] font-semibold text-white/90">
+        <Lock className="h-4 w-4 text-gold-300" /> {title}
+      </div>
+      <p className="mt-2 text-[12.5px] leading-5 text-white/50">{body}</p>
+      {bullets.length > 0 && (
+        <ul className="mt-3 space-y-1.5">
+          {bullets.map((b) => (
+            <li key={b} className="flex items-start gap-2 text-[12px] text-white/55">
+              <Check className="mt-0.5 h-3.5 w-3.5 flex-none text-gold-300" /> {b}
+            </li>
+          ))}
+        </ul>
+      )}
+      <button onClick={onBuyBot} className="no-select mt-4 w-full rounded-xl bg-gold-300 py-2.5 text-[12.5px] font-black text-black" data-testid="bot-required-gate-cta">
+        Get XauCloud Bot
+      </button>
+    </div>
+  );
+}
+
+const BOT_FEATURE_BULLETS = ["Automated XAUUSD execution", "Your live MT5 positions", "Personal bot analytics", "Risk controls", "Bot activity and monitoring"];
+
+/** Full-page version -- used for whole nav tabs (Trading, Analytics, AI Brain, Control) that are entirely personal-bot data. The nav item itself always stays visible and reachable; only what's behind it is locked. */
+function BotRequiredPage({ title, sub, onBuyBot }) {
+  return (
+    <AK.Screen>
+      <AK.ScreenHeader title={title} sub={sub || "Requires the XauCloud automated trading bot"} />
+      <BotRequiredGate
+        body="This feature connects directly to your personal XauCloud trading bot and MT5 account."
+        bullets={BOT_FEATURE_BULLETS}
+        onBuyBot={onBuyBot}
+      />
+    </AK.Screen>
   );
 }
 
@@ -586,15 +632,32 @@ function AppShell({ active, setActive, children, logout, statusText, online, eaV
 }
 
 // ─── Main controller ──────────────────────────────────────────────────────────
-// Renamed from the old default export (2026-08) when entitlement gating was
-// added below -- this function's internals are UNCHANGED. It renders the
-// existing, fully-featured, bot-licensed Command Center dashboard exactly
-// as it always has. The new default export at the bottom of this file
-// decides, from GET /cloud/entitlement, whether a signed-in user sees this
-// (bot_license === true) or the new lightweight signal/trial dashboard.
-function LicensedCloudDashboard() {
+// The ONE Command Center shell (2026-08-25) -- every signed-in user renders
+// this exact same component: same AppShell, same nav, same page router. The
+// only thing that changes per user is `ownsBot`, computed below from the
+// `entitlement` prop the default export at the bottom of this file fetches
+// once from GET /cloud/entitlement. `ownsBot` decides, per nav tab, whether
+// a genuinely bot-personal page (Trading/Analytics/AI Brain/Control) renders
+// for real or as a BotRequiredPage lock, and swaps Home's personal-bot
+// widgets for the subscriber-safe Market Outlook/10-Minute Engine/Recent
+// Signals cards plus a single purchase teaser. It never renders a second,
+// smaller dashboard component -- see the CRITICAL PRODUCT RULE this
+// replaced (previously: entitlement.bot_license selected between this
+// function and a separate, now-deleted CloudSignalDashboard component).
+function LicensedCloudDashboard({ entitlement, entFailed }) {
   useAuthGuard();
   const navigate = useNavigate();
+  // Fail-safe (unchanged from the previous router): a transient entitlement
+  // fetch failure never locks anything for an existing customer.
+  const ownsBot = entFailed || Boolean(entitlement?.bot_license);
+  const botCheckout = useBotCheckout(API);
+  const [botCheckoutMe, setBotCheckoutMe] = useState(null);
+  const [botLifetimePriceKobo, setBotLifetimePriceKobo] = useState(null);
+  useEffect(() => {
+    if (ownsBot) return;
+    commandAxios.get("/cloud/auth/me").then((r) => setBotCheckoutMe(r.data)).catch(() => {});
+    commandAxios.get("/cloud/billing").then((r) => setBotLifetimePriceKobo(r.data?.plans?.bot_lifetime?.price_kobo ?? null)).catch(() => {});
+  }, [ownsBot]);
   const [active, setActive] = useState("home");
   const [notifOpen, setNotifOpen] = useState(false);
   const [me, setMe] = useState(null);
@@ -732,12 +795,12 @@ function LicensedCloudDashboard() {
 
   return (
     <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online} eaVersion={eaVersion} notifOpen={notifOpen} setNotifOpen={setNotifOpen}>
-      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} openCommand={setModalCommand} commands={commands} analytics={analytics} />}
-      {active==="trading"      && <TradingPage heartbeat={heartbeat} events={events} online={online} tradingOk={tradingOk} linked={Boolean(license?.linked||status?.license?.linked)} openCommand={setModalCommand} />}
-      {active==="analytics"    && <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} analytics={analytics} />}
-      {active==="intelligence" && <IntelligencePage heartbeat={heartbeat} events={events} status={status} />}
-      {active==="activity"     && <ActivityPage events={events} filter={filter} setFilter={setFilter} onForceOpen={setModalCommand} />}
-      {active==="control"      && <ControlPage heartbeat={heartbeat} online={online} commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true; propFirmIdempotencyKey.current=null;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} />}
+      {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} openCommand={setModalCommand} commands={commands} analytics={analytics} ownsBot={ownsBot} entitlement={entitlement} onBuyBot={botCheckout.open} />}
+      {active==="trading"      && (ownsBot ? <TradingPage heartbeat={heartbeat} events={events} online={online} tradingOk={tradingOk} linked={Boolean(license?.linked||status?.license?.linked)} openCommand={setModalCommand} /> : <BotRequiredPage title="Trading" onBuyBot={botCheckout.open} />)}
+      {active==="analytics"    && (ownsBot ? <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} analytics={analytics} /> : <BotRequiredPage title="Analytics" onBuyBot={botCheckout.open} />)}
+      {active==="intelligence" && (ownsBot ? <IntelligencePage heartbeat={heartbeat} events={events} status={status} /> : <BotRequiredPage title="AI Brain" onBuyBot={botCheckout.open} />)}
+      {active==="activity"     && (ownsBot ? <ActivityPage events={events} filter={filter} setFilter={setFilter} onForceOpen={setModalCommand} /> : <SubscriberActivityPage />)}
+      {active==="control"      && (ownsBot ? <ControlPage heartbeat={heartbeat} online={online} commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true; propFirmIdempotencyKey.current=null;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} /> : <BotRequiredPage title="Control" onBuyBot={botCheckout.open} />)}
       {active==="license"      && <LicensePage license={license} licenseInput={licenseInput} setLicenseInput={setLicenseInput} linkLicense={linkLicense} commandMsg={commandMsg} heartbeat={heartbeat} me={me} status={status} />}
       {active==="billing"      && <BillingPage />}
       {active==="settings"     && <SettingsPage me={me} heartbeat={heartbeat} licenseInfo={licenseInfo} logout={logout} status={status} />}
@@ -746,6 +809,22 @@ function LicensedCloudDashboard() {
       {active==="support"      && <SupportCenterPage setActive={setActive} me={me} />}
       {active==="patterns"     && <PatternScannerPage setActive={setActive} events={events} heartbeat={heartbeat} />}
       <CommandModal command={modalCommand} onCancel={()=>setModalCommand(null)} onSubmit={queueCommand} busy={commandBusy} message={commandMsg} licenseKey={licenseInfo.activation_key} />
+
+      {botCheckout.showModal && (
+        <PaymentMethodModal
+          api={API}
+          priceDisplay={billingNaira(botLifetimePriceKobo)}
+          buyerName={botCheckoutMe?.full_name || ""}
+          buyerEmail={botCheckoutMe?.email || ""}
+          subtitle={`${billingNaira(botLifetimePriceKobo)} · ${botCheckoutMe?.email || ""}`}
+          onPaystack={() => { botCheckout.closeModal(); botCheckout.payByPaystack(botCheckoutMe?.full_name || "", botCheckoutMe?.email || ""); }}
+          onNomba={() => { botCheckout.closeModal(); botCheckout.payByNomba(botCheckoutMe?.full_name || "", botCheckoutMe?.email || ""); }}
+          onClose={botCheckout.closeModal}
+        />
+      )}
+      {botCheckout.error && !botCheckout.showModal && (
+        <div className="mx-auto mt-4 max-w-md px-4 text-center font-mono text-[12px] text-rose-400">{botCheckout.error}</div>
+      )}
     </AppShell>
   );
 }
@@ -1310,12 +1389,162 @@ function BotControlCard({ heartbeat, online, linked, openTrades, openCommand, co
   );
 }
 
-function HomePage({ status, heartbeat, licenseInfo, online, equityPoints, events, setActive, openCommand, commands, analytics }) {
+// ── Continue Learning (Home) ────────────────────────────────────────────────
+function ContinueLearningCard({ academy, setActive }) {
+  const total = academy?.required_count || 0;
+  const done = academy?.completed_count || 0;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  return (
+    <AK.Panel>
+      <div className="p-4">
+        <div className="flex items-center justify-between">
+          <span className={MONO_LABEL}>Continue Learning</span>
+          <GraduationCap className="h-4 w-4 text-gold-300/60" />
+        </div>
+        <div className="mt-1.5 text-[14px] font-bold">XauCloud Forex Academy</div>
+        <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-white/[0.08]">
+          <div className="h-full rounded-full bg-gold-300" style={{ width: `${Math.max(4, Math.min(100, pct))}%` }} />
+        </div>
+        <div className="mt-1.5 text-[11.5px] text-white/45">{pct}% complete · {done}/{total || "—"} lessons</div>
+        <button onClick={() => setActive("education")} className="no-select mt-3 w-full rounded-xl bg-white/[0.06] py-2 text-[12px] font-bold text-white/80 transition hover:bg-white/[0.09]">
+          {done > 0 ? "Continue Learning" : "Start Learning for Free"}
+        </button>
+      </div>
+    </AK.Panel>
+  );
+}
+
+// ── Subscriber/trial Home (no bot license) ──────────────────────────────────
+// Same Command Center shell, nav and page components as a bot owner --
+// this is ONLY the Home page body for a signed-in user who hasn't bought
+// the bot. Global XauCloud intelligence (Market Outlook, 10-Minute Engine,
+// Recent Signals, Manual Trading, Academy) works exactly the same way it
+// does for a bot owner (their entitlement grants the same signal APIs via
+// license OR trial OR subscription -- see entitlements.ts). Only "my bot"
+// widgets (equity, positions, on/off control) are replaced by one
+// BotRequiredGate teaser. See CRITICAL PRODUCT RULE, 2026-08-25.
+function SubscriberHomePage({ entitlement, setActive, onBuyBot }) {
+  const [localEntitlement, setLocalEntitlement] = useState(entitlement);
+  useEffect(() => { setLocalEntitlement(entitlement); }, [entitlement]);
+
+  const [outlook, setOutlook] = useState({ loading: true, data: null, locked: false, unavailable: false, error: "" });
+  const [engine, setEngine] = useState({ loading: true, data: null, locked: false, unavailable: false, error: "" });
+  const [recent, setRecent] = useState({ loading: true, signals: [], locked: false, error: "" });
+  const [academy, setAcademy] = useState(null);
+  const [trialBusy, setTrialBusy] = useState(false);
+  const [trialError, setTrialError] = useState("");
+
+  const fetchSignal = useCallback((path, setState) => {
+    signalAxios.get(path)
+      .then((r) => setState({ loading: false, data: r.data, locked: false, unavailable: !r.data.available, error: "" }))
+      .catch((e) => {
+        if (e.response?.status === 403 && e.response?.data?.reason === "NOT_ENTITLED") {
+          setState({ loading: false, data: null, locked: true, unavailable: false, error: "" });
+        } else {
+          setState({ loading: false, data: null, locked: false, unavailable: false, error: "Could not load this right now." });
+        }
+      });
+  }, []);
+
+  useEffect(() => {
+    const load = () => {
+      fetchSignal("/cloud/signals/outlook", setOutlook);
+      fetchSignal("/cloud/signals/engine", setEngine);
+      signalAxios.get("/cloud/signals/recent")
+        .then((r) => setRecent({ loading: false, signals: r.data.signals || [], locked: false, error: "" }))
+        .catch((e) => {
+          if (e.response?.status === 403 && e.response?.data?.reason === "NOT_ENTITLED") setRecent({ loading: false, signals: [], locked: true, error: "" });
+          else setRecent({ loading: false, signals: [], locked: false, error: "Could not load recent signals." });
+        });
+      signalAxios.get("/cloud/academy/progress").then((r) => setAcademy(r.data)).catch(() => {});
+    };
+    load();
+    const id = setInterval(load, 20000);
+    return () => clearInterval(id);
+  }, [fetchSignal]);
+
+  const startTrial = async () => {
+    setTrialBusy(true); setTrialError("");
+    try {
+      const r = await signalAxios.post("/cloud/signals/trial/start", {});
+      setLocalEntitlement(r.data.entitlement);
+      fetchSignal("/cloud/signals/outlook", setOutlook);
+      fetchSignal("/cloud/signals/engine", setEngine);
+    } catch (e) {
+      setTrialError(e.response?.data?.message || e.response?.data?.detail || "Could not start your trial. Please try again.");
+    } finally {
+      setTrialBusy(false);
+    }
+  };
+
+  const summary = planSummary(localEntitlement);
+
+  return (
+    <div className="space-y-3 pt-1">
+      <AK.Panel>
+        <div className="flex flex-wrap items-center justify-between gap-4 p-4">
+          <div className="min-w-0">
+            <div className="font-mono text-[10px] uppercase tracking-widest text-white/35">Your plan</div>
+            <div className="mt-1 text-[16px] font-bold" data-testid="subscriber-plan-title">{summary.title}</div>
+            {summary.sub && <div className="mt-1 text-[12px] text-white/45">{summary.sub}</div>}
+          </div>
+          {summary.showStartTrial && <AK.Button size="sm" onClick={startTrial} disabled={trialBusy} data-testid="subscriber-start-trial">{trialBusy ? "Starting…" : "Start 3-Day Trial"}</AK.Button>}
+          {summary.showUpgrade && !summary.showStartTrial && <AK.Button size="sm" onClick={() => setActive("billing")}>Subscribe</AK.Button>}
+        </div>
+        {trialError && <div className="px-4 pb-3 text-[12px] text-rose-400">{trialError}</div>}
+      </AK.Panel>
+
+      <NotificationPrompt />
+      <CommandToolsStrip setActive={setActive} />
+
+      <SignalCard title="Market Outlook" icon={LineChart} state={outlook} />
+      <SignalCard title="10-Minute Engine" icon={Zap} state={engine} />
+      <FourHourOutlookCard />
+      <RecentSignalsCard state={recent} />
+
+      {academy && <ContinueLearningCard academy={academy} setActive={setActive} />}
+
+      <BotRequiredGate
+        body="Own MT5 execution, live positions and personal analytics by purchasing the XauCloud bot."
+        bullets={BOT_FEATURE_BULLETS}
+        onBuyBot={onBuyBot}
+      />
+    </div>
+  );
+}
+
+// ── Recent Signals (Activity tab, subscriber/trial) ─────────────────────────
+function SubscriberActivityPage() {
+  const [recent, setRecent] = useState({ loading: true, signals: [], locked: false, error: "" });
+  useEffect(() => {
+    const load = () => {
+      signalAxios.get("/cloud/signals/recent")
+        .then((r) => setRecent({ loading: false, signals: r.data.signals || [], locked: false, error: "" }))
+        .catch((e) => {
+          if (e.response?.status === 403 && e.response?.data?.reason === "NOT_ENTITLED") setRecent({ loading: false, signals: [], locked: true, error: "" });
+          else setRecent({ loading: false, signals: [], locked: false, error: "Could not load recent signals." });
+        });
+    };
+    load();
+    const id = setInterval(load, 20000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <AK.Screen>
+      <AK.ScreenHeader title="Recent Signals" sub="XauCloud Market Outlook and 10-Minute Engine history" />
+      <RecentSignalsCard state={recent} />
+    </AK.Screen>
+  );
+}
+
+function HomePage({ status, heartbeat, licenseInfo, online, equityPoints, events, setActive, openCommand, commands, analytics, ownsBot = true, entitlement, onBuyBot }) {
   const [homeOutlook, setHomeOutlook] = useState(null);
   const openTrades = online ? Number(status?.open_trades || heartbeat.open_positions || 0) : 0;
   const pnlNum = Number(heartbeat.daily_pnl || 0);
   const pnlPos = pnlNum >= 0;
   const linked = Boolean(licenseInfo.activation_key);
+
+  if (!ownsBot) return <SubscriberHomePage entitlement={entitlement} setActive={setActive} onBuyBot={onBuyBot} />;
   const winRate = analytics?.sufficient_data ? analytics.win_rate : null;
   const ddNum = Number(heartbeat.drawdown || 0);
 
@@ -2013,8 +2242,8 @@ function billingNaira(kobo) {
 // returns entitlement + payment history + plans generically off the
 // authenticated user, so a lifetime-licensed customer correctly sees their
 // bot license status and full payment history here, not just signal
-// subscribers (who also reach this same data via CloudSignalDashboard's
-// inline Billing card).
+// subscribers (who reach this same Billing page through the identical
+// shared Command Center nav).
 function BillingPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
@@ -2028,6 +2257,13 @@ function BillingPage() {
   const signalCheckout = useSignalCheckout(API);
   const signalPlanMeta = signalCheckout.planId === "SIGNALS_WEEKLY" ? data?.plans?.signals_weekly : data?.plans?.signals_monthly;
   const signalPriceDisplay = billingNaira(signalPlanMeta?.price_kobo);
+
+  // Bot lifetime -- in-app checkout, never a homepage redirect (see
+  // useBotCheckout / CRITICAL PRODUCT RULE, 2026-08-25).
+  const botCheckout = useBotCheckout(API);
+  const [me, setMe] = useState(null);
+  useEffect(() => { commandAxios.get("/cloud/auth/me").then((r) => setMe(r.data)).catch(() => {}); }, []);
+  const botPriceDisplay = billingNaira(data?.plans?.bot_lifetime?.price_kobo);
 
   const ent = data?.entitlement;
   const history = data?.payment_history || [];
@@ -2064,13 +2300,23 @@ function BillingPage() {
               <div className="mt-0.5 text-[10.5px] text-white/35">{p.sub}</div>
             </button>
           ))}
-          <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
-            <div className="text-[12px] font-semibold text-white/80">XauCloud Bot (Lifetime)</div>
-            <div className="mt-1 font-mono text-[16px] font-black text-gold-200">{billingNaira(data?.plans?.bot_lifetime?.price_kobo)}</div>
-            <div className="mt-0.5 text-[10.5px] text-white/35">{ent?.bot_license ? "Already active" : "one-time · see homepage"}</div>
-          </div>
+          {ent?.bot_license ? (
+            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
+              <div className="text-[12px] font-semibold text-white/80">XauCloud Bot (Lifetime)</div>
+              <div className="mt-1 font-mono text-[16px] font-black text-gold-200">{botPriceDisplay}</div>
+              <div className="mt-0.5 text-[10.5px] text-white/35">Already active</div>
+            </div>
+          ) : (
+            <button type="button" onClick={botCheckout.open} data-testid="upgrade-tile-xaucloud-bot-lifetime"
+              className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4 text-left transition hover:border-gold-300/30 hover:bg-white/[0.05]">
+              <div className="text-[12px] font-semibold text-white/80">XauCloud Bot (Lifetime)</div>
+              <div className="mt-1 font-mono text-[16px] font-black text-gold-200">{botPriceDisplay}</div>
+              <div className="mt-0.5 text-[10.5px] text-white/35">one-time · lifetime execution</div>
+            </button>
+          )}
         </div>
         {signalCheckout.error && <div className="mt-3 text-[12px] text-rose-400">{signalCheckout.error}</div>}
+        {botCheckout.error && <div className="mt-3 text-[12px] text-rose-400">{botCheckout.error}</div>}
       </Card>
 
       <Card title="Payment history">
@@ -2101,6 +2347,19 @@ function BillingPage() {
           onNomba={() => { signalCheckout.closeModal(); signalCheckout.payByNomba(); }}
           onClose={signalCheckout.closeModal}
           bankTransfer={signalCheckout.bankTransferProps}
+        />
+      )}
+
+      {botCheckout.showModal && (
+        <PaymentMethodModal
+          api={API}
+          priceDisplay={botPriceDisplay}
+          buyerName={me?.full_name || ""}
+          buyerEmail={me?.email || ""}
+          subtitle={`${botPriceDisplay} · ${me?.email || ""}`}
+          onPaystack={() => { botCheckout.closeModal(); botCheckout.payByPaystack(me?.full_name || "", me?.email || ""); }}
+          onNomba={() => { botCheckout.closeModal(); botCheckout.payByNomba(me?.full_name || "", me?.email || ""); }}
+          onClose={botCheckout.closeModal}
         />
       )}
     </div>
@@ -3115,22 +3374,20 @@ function PatternScannerPage({ setActive, events, heartbeat }) {
 }
 
 // ─── Entitlement gate ──────────────────────────────────────────────────────
-// The single new decision point for this whole feature: every signed-in
-// Command Center visit fetches GET /cloud/entitlement once and branches on
-// it. bot_license === true is the ONLY condition that renders the
-// pre-existing LicensedCloudDashboard above -- and it renders completely
-// unmodified, with its own independent auth/data fetching exactly as
-// before. Everyone else (never purchased anything, on an active/expired
-// free trial, or on an active/expired Weekly/Monthly signal subscription)
-// gets the new, much smaller CloudSignalDashboard.
+// ONE Command Center (2026-08-25): every signed-in user renders the exact
+// same LicensedCloudDashboard shell -- same nav, same pages, same
+// components. GET /cloud/entitlement is fetched once here and passed down
+// as a prop; LicensedCloudDashboard uses it ONLY to decide, per nav tab,
+// whether to show the real bot-personal page or a BotRequiredPage lock
+// (Trading/Analytics/AI Brain/Control) and to swap Home's bot widgets for
+// the subscriber-safe Market Outlook/10-Minute Engine/Recent Signals cards
+// plus a single "Get XauCloud Bot" teaser. It never renders a second,
+// smaller dashboard component for non-bot-owning users.
 //
 // Fail-safe: if this entitlement fetch itself errors (network blip, etc.,
-// as opposed to a 401 which means "not logged in"), this falls back to
-// LicensedCloudDashboard rather than to a broken/locked screen -- that is
-// exactly the dashboard every signed-in user already saw before this
-// feature existed (it already tolerates "no license linked yet" with an
-// empty state), so a transient entitlement-fetch failure can never regress
-// an existing customer below their pre-existing experience.
+// as opposed to a 401 which means "not logged in"), ownsBot defaults to
+// true inside LicensedCloudDashboard (entFailed) -- a transient fetch
+// failure can never lock a feature for an existing paying customer.
 export default function CloudDashboard() {
   const navigate = useNavigate();
   const [entitlement, setEntitlement] = useState(null);
@@ -3159,7 +3416,5 @@ export default function CloudDashboard() {
     </div>
   );
 
-  if (entFailed || entitlement?.bot_license) return <LicensedCloudDashboard />;
-
-  return <CloudSignalDashboard entitlement={entitlement} />;
+  return <LicensedCloudDashboard entitlement={entitlement} entFailed={entFailed} />;
 }

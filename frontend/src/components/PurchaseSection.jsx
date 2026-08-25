@@ -115,7 +115,7 @@ export default function PurchaseSection({ api }) {
   };
 
   // ── Weekly / Monthly signal subscriptions -- shared checkout logic with
-  // CloudSignalDashboard's billing section (see @/lib/signalCheckout). ──
+  // CloudDashboard's Billing section (see @/lib/signalCheckout). ──
   const signalCheckout = useSignalCheckout(api);
   const chooseSignalPlan = (planId) => {
     if (cloudUser === undefined) return;

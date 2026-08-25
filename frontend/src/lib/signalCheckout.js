@@ -3,7 +3,7 @@ import axios from "axios";
 
 // Shared signal-subscription (Weekly/Monthly) checkout logic, used by both
 // the public homepage PurchaseSection plan cards and the authenticated
-// CloudSignalDashboard billing section -- one place that knows how to call
+// Command Center Billing section -- one place that knows how to call
 // POST /purchase/signals/{paystack,nomba}/initialize and how to hand off to
 // <PaymentMethodModal>'s bank-transfer path, so the two call sites can't
 // drift on request shape. Every /purchase/signals/* call requires the
@@ -64,7 +64,7 @@ export function useSignalCheckout(api) {
 // they work unchanged from an authenticated Command Center session too.
 // The only difference here is buyer_name/buyer_email come from the already
 // -known cloud user instead of a form, so a logged-in customer is never
-// bounced to the public homepage to buy the bot (see CloudSignalDashboard).
+// bounced to the public homepage to buy the bot.
 export function useBotCheckout(api) {
   const [showModal, setShowModal] = useState(false);
   const [busy, setBusy] = useState(false);

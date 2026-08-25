@@ -152,7 +152,7 @@ export function PaymentMethodModal({ api, priceDisplay, buyerName, buyerEmail, s
 
 // `initiateEndpoint`/`initiatePayload`/`withCredentials` default to the
 // original anonymous lifetime-bot flow. The signal-subscription flow (see
-// PurchaseSection and CloudSignalDashboard) passes
+// PurchaseSection and CloudDashboard's Home/Billing sections) passes
 // `/purchase/signals/bank-transfer/initiate`, `{ plan_id, origin_url }`,
 // and `withCredentials: true` instead -- everything after the order is
 // created (countdown, submitted/proof/status polling) is reference-scoped
