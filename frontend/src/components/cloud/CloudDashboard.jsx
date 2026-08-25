@@ -16,7 +16,7 @@ import AIMarketOutlookCard from "./AIMarketOutlookCard";
 import FourHourOutlookCard from "./FourHourOutlookCard";
 import M10VsOutlookCard, { M10_DECISION_LABELS, M30_LIFECYCLE_LABELS, FRESHNESS_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
-import { signalAxios, SignalCard, RecentSignalsCard, planSummary, relTime } from "./SubscriberSignalCards";
+import { signalAxios, SignalCard, RecentSignalsCard, planSummary, relTime, formatDate as fmtDate } from "./SubscriberSignalCards";
 import { PaymentMethodModal } from "../BankTransferFlow";
 import { useSignalCheckout, useBotCheckout } from "@/lib/signalCheckout";
 import { API } from "@/lib/api";

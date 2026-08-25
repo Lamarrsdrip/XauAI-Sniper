@@ -52,7 +52,7 @@ describe("ONE Command Center architecture contract (2026-08-25)", () => {
   });
 
   test("Home reuses the real Market Outlook/10-Minute Engine/Recent Signals cards for a non-bot user -- not a cheaper fork", () => {
-    expect(dashboard).toMatch(/import \{ signalAxios, SignalCard, RecentSignalsCard, planSummary, relTime \} from "\.\/SubscriberSignalCards"/);
+    expect(dashboard).toMatch(/import \{ signalAxios, SignalCard, RecentSignalsCard, planSummary, relTime, formatDate as fmtDate \} from "\.\/SubscriberSignalCards"/);
     expect(dashboard).toContain("<SignalCard title=\"Market Outlook\"");
     expect(dashboard).toContain("<SignalCard title=\"10-Minute Engine\"");
     expect(dashboard).toContain("<RecentSignalsCard");
