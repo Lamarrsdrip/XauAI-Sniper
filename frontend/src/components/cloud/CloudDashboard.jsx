@@ -16,7 +16,7 @@ import AIMarketOutlookCard from "./AIMarketOutlookCard";
 import FourHourOutlookCard from "./FourHourOutlookCard";
 import M10VsOutlookCard, { M10_DECISION_LABELS, M30_LIFECYCLE_LABELS, FRESHNESS_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
-import { signalAxios, SignalCard, RecentSignalsCard, planSummary } from "./SubscriberSignalCards";
+import { signalAxios, SignalCard, RecentSignalsCard, planSummary, relTime } from "./SubscriberSignalCards";
 import { PaymentMethodModal } from "../BankTransferFlow";
 import { useSignalCheckout, useBotCheckout } from "@/lib/signalCheckout";
 import { API } from "@/lib/api";
@@ -1276,12 +1276,84 @@ function StatChips({ online, ddNum, winRate, spread, openTrades }) {
 // the same `events` data HomePage already receives (no new API call),
 // filtered to plain-language trade lifecycle events only.
 const clockTime = (iso) => { try { return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }); } catch { return ""; } };
-function HomeRecentActivity({ events = [], onOpenFull }) {
-  const meaningful = (events || []).filter((e) => ["entries", "exits"].includes(eventCategory(e))).slice(0, 3);
-  if (!meaningful.length) return null;
+// ── Collapsible summary card ────────────────────────────────────────────────
+// Compact-by-default pattern for list-heavy Home sections (Recent Signals,
+// Closed Trades) so the page doesn't grow unbounded with every new item.
+// Session-only open state (resets on reload -- not worth persisting), fully
+// keyboard/aria accessible (the whole summary row is the button, not just
+// the chevron), and renders no expand affordance at all when there's
+// nothing to expand.
+function Collapsible({ title, icon: Icon, summary, emptyText, count, testId, children }) {
+  const [open, setOpen] = useState(false);
+  if (!count) {
+    return (
+      <AK.Panel>
+        <div className="flex items-center gap-2.5 px-4 py-3.5">
+          {Icon && <Icon className="h-4 w-4 flex-none text-white/25" />}
+          <div className="min-w-0 flex-1">
+            <div className="text-[13.5px] font-semibold text-white/70">{title}</div>
+            <div className="mt-0.5 text-[11.5px] text-white/35">{emptyText}</div>
+          </div>
+        </div>
+      </AK.Panel>
+    );
+  }
   return (
     <AK.Panel>
-      <AK.PanelHead title="Recent activity" onMore={onOpenFull} />
+      <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid={testId}
+        className="no-select flex w-full items-center gap-2.5 px-4 py-3.5 text-left transition hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-300/40">
+        {Icon && <Icon className="h-4 w-4 flex-none text-gold-300/60" />}
+        <div className="min-w-0 flex-1">
+          <div className="text-[13.5px] font-semibold">{title}</div>
+          <div className="mt-0.5 truncate text-[11.5px] text-white/45">{summary}</div>
+        </div>
+        <ChevronDown className={`h-4 w-4 flex-none text-white/30 transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="animate-in fade-in slide-in-from-top-1 border-t border-white/[0.06] px-4 pb-2 pt-1 duration-150">
+          {children}
+        </div>
+      )}
+    </AK.Panel>
+  );
+}
+
+// Collapsible wrapper around the real RecentSignalsCard (see
+// SubscriberSignalCards.jsx) for Home specifically -- the Activity tab's
+// own use of RecentSignalsCard stays a full, uncollapsed list; this is only
+// about keeping Home short. No new fetch: reuses the same `state` Home
+// already loads from GET /cloud/signals/recent.
+function RecentSignalsSummary({ state }) {
+  const { loading, signals, locked, error } = state;
+  if (loading) return <UI.Card title="Recent Signals"><UI.Skeleton className="h-16 w-full" /></UI.Card>;
+  if (locked || error) return <RecentSignalsCard state={state} />;
+  const count = signals?.length || 0;
+  if (count === 0) return <Collapsible title="Recent Signals" icon={Clock3} count={0} emptyText="No recent signals" />;
+  const latest = signals[0];
+  const summary = `${count} item${count === 1 ? "" : "s"} · Latest: ${latest.symbol} ${String(latest.direction || "").replace(/_/g, " ")} · ${latest.engine === "OUTLOOK" ? "Market Outlook" : "10-Minute Engine"} · ${relTime(latest.updated_at)}`;
+  return (
+    <Collapsible title="Recent Signals" icon={Clock3} count={count} summary={summary} testId="recent-signals-toggle">
+      <RecentSignalsCard state={state} />
+    </Collapsible>
+  );
+}
+
+function HomeRecentActivity({ events = [], onOpenFull }) {
+  const todayStr = new Date().toDateString();
+  const closedToday = (events || []).filter((e) => eventCategory(e) === "exits" && new Date(e.ts || e.timestamp || 0).toDateString() === todayStr);
+  const wins = closedToday.filter((e) => Number(getEventField(e, "profit", 0)) >= 0).length;
+  const losses = closedToday.length - wins;
+  const meaningful = (events || []).filter((e) => ["entries", "exits"].includes(eventCategory(e))).slice(0, 10);
+  if (!meaningful.length) {
+    return <Collapsible title="Closed Trades" icon={History} count={0} emptyText="No closed trades today" />;
+  }
+
+  const summary = closedToday.length > 0
+    ? `${closedToday.length} trade${closedToday.length === 1 ? "" : "s"} · ${wins}W / ${losses}L`
+    : "No closed trades today";
+
+  return (
+    <Collapsible title="Closed Trades" icon={History} count={meaningful.length} summary={summary} testId="closed-trades-toggle">
       <div className="pb-1.5" data-testid="home-recent-activity">
         {meaningful.map((e, i) => {
           const opened = eventCategory(e) === "entries";
@@ -1299,8 +1371,13 @@ function HomeRecentActivity({ events = [], onOpenFull }) {
             />
           );
         })}
+        {onOpenFull && (
+          <button onClick={onOpenFull} className="no-select mt-2 w-full rounded-xl bg-white/[0.04] py-2 text-center text-[11.5px] font-semibold text-white/50 hover:bg-white/[0.07]">
+            View all activity
+          </button>
+        )}
       </div>
-    </AK.Panel>
+    </Collapsible>
   );
 }
 
@@ -1500,7 +1577,7 @@ function SubscriberHomePage({ entitlement, setActive, onBuyBot }) {
       <SignalCard title="Market Outlook" icon={LineChart} state={outlook} />
       <SignalCard title="10-Minute Engine" icon={Zap} state={engine} />
       <FourHourOutlookCard />
-      <RecentSignalsCard state={recent} />
+      <RecentSignalsSummary state={recent} />
 
       {academy && <ContinueLearningCard academy={academy} setActive={setActive} />}
 
