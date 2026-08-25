@@ -13,7 +13,6 @@ import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
 import AIThoughtFeed from "./AIThoughtFeed";
 import AIMarketOutlookCard from "./AIMarketOutlookCard";
-import FourHourOutlookCard from "./FourHourOutlookCard";
 import M10VsOutlookCard, { M10_DECISION_LABELS, M30_LIFECYCLE_LABELS, FRESHNESS_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
 import { signalAxios, SignalCard, RecentSignalsCard, planSummary, relTime, formatDate as fmtDate } from "./SubscriberSignalCards";
@@ -1556,7 +1555,6 @@ function SubscriberHomePage({ entitlement, setActive, onBuyBot }) {
 
       <SignalCard title="Market Outlook" icon={LineChart} state={outlook} />
       <SignalCard title="10-Minute Engine" icon={Zap} state={engine} />
-      <FourHourOutlookCard />
       <RecentSignalsCard state={recent} scroll />
 
       {academy && <ContinueLearningCard academy={academy} setActive={setActive} />}
@@ -1626,9 +1624,6 @@ function HomePage({ status, heartbeat, licenseInfo, online, equityPoints, events
 
       {/* M10 Signal Engine · Evidence — always on the dashboard (waiting state until a fresh reading) */}
       {linked && <M10SignalCard events={events} heartbeat={heartbeat} online={online} />}
-
-      {/* Manual Trading Intelligence (4H) — sits directly beneath the M10 Signal Engine */}
-      <FourHourOutlookCard />
 
       {/* Focused open-position module (only when a trade is live) */}
       <PositionModule linked={linked} online={online} onDetails={() => setActive("trading")} />

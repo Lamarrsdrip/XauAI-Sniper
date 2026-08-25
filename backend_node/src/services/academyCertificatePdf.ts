@@ -50,6 +50,15 @@ export interface CertificatePdfInput {
   curriculumVersion?: string;
 }
 
+/** "https://xaucloud.io/verify-certificate/XC-..." -> "xaucloud.io/verify" */
+function verifyDomainLabel(verifyUrl: string): string {
+  try {
+    return `${new URL(verifyUrl).host}/verify`;
+  } catch {
+    return "xaucloud.io/verify";
+  }
+}
+
 function fmtDate(iso: string): string {
   try {
     return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
@@ -97,14 +106,32 @@ function drawOrnamentalRule(doc: PDFKit.PDFDocument, centerX: number, y: number,
   drawDiamond(doc, centerX, y, 3, GOLD_LIGHT);
 }
 
-/** Official completion seal: engraved-style concentric rings with a radial tick band and stacked centered wordmark. */
+/** Award-medal seal: engraved-style medallion (concentric rings, radial tick band, stacked wordmark) with two gold ribbon tails hanging below it, V-notched. */
 function drawSeal(doc: PDFKit.PDFDocument, cx: number, cy: number): void {
   const rOuter = 42;
   const rTick = 36;
   const rInner = 31;
 
+  // Ribbon tails, drawn first so the medallion overlaps their top edge.
   doc.save();
-  doc.lineWidth(1.6).strokeColor(GOLD).circle(cx, cy, rOuter).stroke();
+  const tailTop = cy + rOuter - 6;
+  const tailW = 15;
+  const tailLen = 46;
+  for (const dx of [-1, 1] as const) {
+    const xOuter = cx + dx * 5;
+    const xInner = cx + dx * (5 + tailW);
+    doc.moveTo(xOuter, tailTop)
+      .lineTo(xInner, tailTop)
+      .lineTo(xInner, tailTop + tailLen)
+      .lineTo(cx + dx * (5 + tailW / 2), tailTop + tailLen - 11)
+      .lineTo(xOuter, tailTop + tailLen)
+      .closePath()
+      .fill(dx < 0 ? GOLD : GOLD_DEEP);
+  }
+  doc.restore();
+
+  doc.save();
+  doc.lineWidth(1.6).circle(cx, cy, rOuter).fillAndStroke(IVORY, GOLD);
   doc.lineWidth(0.5).strokeColor(GOLD_DEEP).circle(cx, cy, rInner).stroke();
 
   doc.lineWidth(0.5).strokeColor(GOLD);
@@ -123,6 +150,33 @@ function drawSeal(doc: PDFKit.PDFDocument, cx: number, cy: number): void {
   doc.font("Helvetica-Bold").fontSize(6).fillColor(GOLD_DEEP).text("FOREX ACADEMY", cx - rInner, cy - 6, { width: rInner * 2, align: "center", characterSpacing: 0.5 });
   drawDiamond(doc, cx, cy + 3, 2, GOLD_LIGHT);
   doc.font("Helvetica").fontSize(5).fillColor(CHARCOAL_SOFT).text("CERTIFIED COMPLETION", cx - rInner, cy + 9, { width: rInner * 2, align: "center", characterSpacing: 0.7 });
+}
+
+/** Small rounded-rect calendar glyph, top-left anchored at (x, y), ~9x9. */
+function drawCalendarIcon(doc: PDFKit.PDFDocument, x: number, y: number, color: string): void {
+  doc.save();
+  doc.lineWidth(0.7).strokeColor(color);
+  doc.roundedRect(x, y + 1.5, 9, 8, 1).stroke();
+  doc.moveTo(x, y + 4).lineTo(x + 9, y + 4).stroke();
+  doc.moveTo(x + 2.3, y).lineTo(x + 2.3, y + 2.5).stroke();
+  doc.moveTo(x + 6.7, y).lineTo(x + 6.7, y + 2.5).stroke();
+  doc.restore();
+}
+
+/** Small shield-with-checkmark glyph, top-left anchored at (x, y), ~9x9. */
+function drawShieldCheckIcon(doc: PDFKit.PDFDocument, x: number, y: number, color: string): void {
+  doc.save();
+  doc.lineWidth(0.7).strokeColor(color);
+  doc.moveTo(x + 4.5, y)
+    .lineTo(x + 9, y + 1.6)
+    .lineTo(x + 9, y + 5)
+    .quadraticCurveTo(x + 9, y + 8.5, x + 4.5, y + 10)
+    .quadraticCurveTo(x, y + 8.5, x, y + 5)
+    .lineTo(x, y + 1.6)
+    .closePath()
+    .stroke();
+  doc.moveTo(x + 2.4, y + 5.1).lineTo(x + 4, y + 6.8).lineTo(x + 6.7, y + 3.3).stroke();
+  doc.restore();
 }
 
 export async function renderCertificatePdf(input: CertificatePdfInput): Promise<Buffer> {
@@ -160,7 +214,7 @@ export async function renderCertificatePdf(input: CertificatePdfInput): Promise<
 
   // ── Title ────────────────────────────────────────────────────────────
   const titleY = cursorY + 50;
-  doc.font("Times-Bold").fontSize(40).fillColor(CHARCOAL).text("Certificate", 0, titleY, { align: "center", width: W });
+  doc.font("Times-Bold").fontSize(40).fillColor(CHARCOAL).text("CERTIFICATE", 0, titleY, { align: "center", width: W });
   doc.font("Helvetica-Bold").fontSize(12.5).fillColor(GOLD_DEEP).text("O F   C O M P L E T I O N", 0, titleY + 48, { align: "center", width: W, characterSpacing: 2 });
 
   drawOrnamentalRule(doc, W / 2, titleY + 70, 30);
@@ -190,7 +244,7 @@ export async function renderCertificatePdf(input: CertificatePdfInput): Promise<
   const description = curriculumDescription(input.curriculumVersion ?? "v1");
   doc.font("Helvetica").fontSize(9.5).fillColor(CHARCOAL_SOFT).text(description, 130, y, { align: "center", width: W - 260, lineGap: 3 });
 
-  // ── Bottom row: seal | completion + authorization | QR + certificate id ──
+  // ── Bottom row: ribbon medal | signature + completed/cert-id | QR + verify ──
   const footerY = H - 158;
   const colW = (W - contentInset * 2) / 3;
   const col1X = contentInset;
@@ -199,21 +253,31 @@ export async function renderCertificatePdf(input: CertificatePdfInput): Promise<
 
   drawSeal(doc, col1X + colW / 2, footerY + 30);
 
-  doc.font("Helvetica").fontSize(7.5).fillColor(MUTED).text("COMPLETED", col2X, footerY, { width: colW, align: "center", characterSpacing: 1.5 });
-  doc.font("Helvetica-Bold").fontSize(11).fillColor(CHARCOAL).text(fmtDate(input.completedAtIso), col2X, footerY + 13, { width: colW, align: "center" });
-
-  doc.font("Times-Italic").fontSize(15).fillColor(GOLD_DEEP).text("XauCloud Team", col2X, footerY + 40, { width: colW, align: "center" });
+  doc.font("Times-Italic").fontSize(15).fillColor(GOLD_DEEP).text("XauCloud Team", col2X, footerY, { width: colW, align: "center" });
   doc.save();
   doc.lineWidth(0.6).strokeColor(CHARCOAL_SOFT);
-  doc.moveTo(col2X + colW / 2 - 55, footerY + 63).lineTo(col2X + colW / 2 + 55, footerY + 63).stroke();
+  doc.moveTo(col2X + colW / 2 - 55, footerY + 23).lineTo(col2X + colW / 2 + 55, footerY + 23).stroke();
   doc.restore();
-  doc.font("Helvetica").fontSize(7).fillColor(MUTED).text("AUTHORIZED CERTIFICATION", col2X, footerY + 69, { width: colW, align: "center", characterSpacing: 1.5 });
+  doc.font("Helvetica").fontSize(7).fillColor(MUTED).text("AUTHORIZED CERTIFICATION", col2X, footerY + 29, { width: colW, align: "center", characterSpacing: 1.5 });
+
+  const infoY = footerY + 48;
+  const subColW = colW / 2;
+  const completedDate = fmtDate(input.completedAtIso);
+  const completedIconX = col2X + subColW / 2 - (doc.font("Helvetica-Bold").fontSize(9).widthOfString(completedDate) / 2) - 12;
+  drawCalendarIcon(doc, completedIconX, infoY + 1, GOLD_DEEP);
+  doc.font("Helvetica").fontSize(6.5).fillColor(MUTED).text("COMPLETED", col2X, infoY, { width: subColW, align: "center", characterSpacing: 1 });
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(CHARCOAL).text(completedDate, col2X, infoY + 11, { width: subColW, align: "center" });
+
+  const certIdX = col2X + subColW;
+  const certIdIconX = certIdX + subColW / 2 - (doc.font("Courier-Bold").fontSize(8).widthOfString(input.certificateId) / 2) - 12;
+  drawShieldCheckIcon(doc, certIdIconX, infoY + 1, GOLD_DEEP);
+  doc.font("Helvetica").fontSize(6.5).fillColor(MUTED).text("CERTIFICATE ID", certIdX, infoY, { width: subColW, align: "center", characterSpacing: 1 });
+  doc.font("Courier-Bold").fontSize(8).fillColor(CHARCOAL).text(input.certificateId, certIdX, infoY + 11, { width: subColW, align: "center" });
 
   const qrSize = 68;
   doc.image(qrPng, col3X + colW / 2 - qrSize / 2, footerY - 6, { width: qrSize, height: qrSize });
   doc.font("Helvetica").fontSize(6.5).fillColor(MUTED).text("SCAN TO VERIFY", col3X, footerY + qrSize - 2, { width: colW, align: "center", characterSpacing: 1.2 });
-  doc.font("Helvetica").fontSize(6.5).fillColor(MUTED).text("CERTIFICATE ID", col3X, footerY + qrSize + 16, { width: colW, align: "center", characterSpacing: 1.2 });
-  doc.font("Courier-Bold").fontSize(8.5).fillColor(CHARCOAL).text(input.certificateId, col3X, footerY + qrSize + 27, { width: colW, align: "center" });
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(GOLD_DEEP).text(verifyDomainLabel(input.verifyUrl), col3X, footerY + qrSize + 12, { width: colW, align: "center" });
 
   // ── Legal footer ─────────────────────────────────────────────────────
   doc.font("Helvetica").fontSize(7).fillColor(MUTED).text(

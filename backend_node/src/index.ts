@@ -58,11 +58,9 @@ import { registerAdminXPostingRoutes } from "./routes/admin/xPosting.js";
 import { registerCloudPerformanceAnalyticsRoutes } from "./routes/cloud/performanceAnalytics.js";
 import { registerLocalAiRoutes } from "./routes/localAi.js";
 import { hourlyGenerationTick } from "./services/marketOutlookHourlyTick.js";
-import { registerFourHourOutlookRoutes } from "./routes/fourHourOutlook.js";
 import { registerAcademyRoutes } from "./routes/cloud/academy.js";
 import { registerAcademyVerifyRoutes } from "./routes/academyVerify.js";
 import { ensureAcademyInfrastructure } from "./services/academyCertificates.js";
-import { fourHourOutlookLoop } from "./services/fourHourOutlookService.js";
 import { trackOutlookLifecycleTick } from "./services/marketOutlookTick.js";
 import { enqueueIfActionable } from "./services/outlookExecution.js";
 import { runStartupTasks } from "./services/startup.js";
@@ -240,7 +238,6 @@ async function main(): Promise<void> {
       await registerAdminXPostingRoutes(api);
       await registerCloudPerformanceAnalyticsRoutes(api);
       await registerLocalAiRoutes(api);
-      await registerFourHourOutlookRoutes(api);
       await registerAcademyRoutes(api);
       await registerAcademyVerifyRoutes(api);
       // Every server.py + market_outlook_routes.py endpoint now has a
@@ -327,9 +324,6 @@ async function main(): Promise<void> {
 
   void outlookHourlyLoop();
   void outlookLifecycleLoop();
-  // XauCloud 4H Outlook: display/notification-only manual-trader forecast.
-  // Fully isolated from execution -- reviews every 3 min, refreshes on 4h expiry.
-  void fourHourOutlookLoop({ info: (m) => app.log.info(m), warn: (m) => app.log.warn(m) });
 }
 
 process.on("SIGTERM", async () => {

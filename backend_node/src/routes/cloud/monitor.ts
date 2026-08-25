@@ -4,11 +4,8 @@ import { getDb } from "../../db.js";
 import { normalizeLicenseKey, resolveMonitorLicense } from "../../services/license.js";
 import { storeBotActivity } from "../../services/botActivity.js";
 import { BotHeartbeatReqSchema } from "../../models/cloudMonitor.js";
-import { asIso, extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
+import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
 import { normalizeGoldSymbol } from "../../services/goldSymbol.js";
-import { ensureFourHourOutlookReview, getFourHourCurrent } from "../../services/fourHourOutlookService.js";
-import { recordDiagnostic } from "../../services/diagnostics.js";
-import { recordLiveQuote } from "../../services/liveQuoteCache.js";
 
 const NOISY_STALE_ERRORS = new Set(["MQL ERROR 5035"]);
 
@@ -105,19 +102,6 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
       state: "NO_VALID_BID_ASK",
     };
     if (quote.valid && account && req.symbol) {
-      // Cache this verified quote in memory independent of the Mongo write
-      // below -- Manual Trading's read path falls back to it if a durable
-      // read times out, so a transient database hiccup can't blank the card
-      // when the backend already has a genuinely fresh, validated quote.
-      recordLiveQuote({
-        account,
-        normalizedSymbol: normalizeGoldSymbol(req.symbol),
-        bid: quote.bid ?? 0,
-        ask: quote.ask ?? 0,
-        mid: quote.mid ?? 0,
-        sourceAtIso: asIso(quote.quote_at) ?? now.toISOString(),
-        receivedAtIso: now.toISOString(),
-      });
       const marketActivity = await storeBotActivity(
         "MARKET_HEARTBEAT",
         "INFO",
@@ -143,18 +127,6 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
         evidence_timestamp: receipt["sourceAt"] ?? quote.quote_at ?? null,
         close: receipt["close"] ?? quote.mid ?? null,
       };
-      if (receipt["persisted"] === true) {
-        // Reuse the one existing 4H engine. When its current output is absent
-        // or stale, let the first successful broker write review immediately
-        // instead of leaving the UI unavailable until a background-loop tick.
-        void (async () => {
-          try {
-            if (!(await getFourHourCurrent())) await ensureFourHourOutlookReview();
-          } catch (error) {
-            recordDiagnostic("warning", "manual-trading-intelligence", error, { code: "IMMEDIATE_REVIEW_FAILED" });
-          }
-        })();
-      }
     }
 
     const noisyStaleError = NOISY_STALE_ERRORS.has(String(req.last_error || "").trim().toUpperCase());
