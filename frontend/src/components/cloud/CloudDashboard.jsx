@@ -643,7 +643,7 @@ function AppShell({ active, setActive, children, logout, statusText, online, eaV
 // Signals cards plus a single purchase teaser. It never renders a second,
 // smaller dashboard component -- see the CRITICAL PRODUCT RULE this
 // replaced (previously: entitlement.bot_license selected between this
-// function and a separate, now-deleted CloudSignalDashboard component).
+// function and a separate, smaller, now-deleted signal-only dashboard).
 function LicensedCloudDashboard({ entitlement, entFailed }) {
   useAuthGuard();
   const navigate = useNavigate();
