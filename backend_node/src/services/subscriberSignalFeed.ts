@@ -205,14 +205,25 @@ export async function mirrorSubscriberM10Evaluation(account: string, m10: Record
   const nowIso = new Date().toISOString();
   const evidenceFields = buildM10EvidenceFields(m10, decision);
 
-  const sameState = latest && latest["engine"] === "M10_ENGINE" && latest["status"] === status && latest["direction"] === direction;
+  // While still WATCHING, the leaning direction can genuinely flip every few
+  // seconds as buy/sell evidence hovers near a tie -- that is not a
+  // "genuinely distinct signal event" for Recent Signals (owner directive,
+  // 2026-08-25: "avoid duplicating... unless they represent genuinely
+  // distinct signal events"), so a direction wobble alone never creates a
+  // new row while the status itself hasn't changed. Only true status
+  // transitions (into/out of ACTIONABLE/BLOCKED/EXPIRED) -- or a direction
+  // change once ACTIONABLE -- do.
+  const sameState = latest && latest["engine"] === "M10_ENGINE" && latest["status"] === status
+    && (status === "WATCHING" || latest["direction"] === direction);
 
   if (sameState) {
-    // Routine re-evaluation, nothing customer-visible changed -- refresh in
-    // place. Never touches created_at (last state change) or effective_at.
+    // Routine re-evaluation -- refresh in place. `direction` can still have
+    // moved (a WATCHING-status wobble is deliberately not a "state change"
+    // above), so it's refreshed here too; created_at (last state change)
+    // and effective_at are the only fields left untouched.
     await collection.updateOne(
       { signal_id: latest!["signal_id"], engine: "M10_ENGINE" },
-      { $set: { ...evidenceFields, last_evaluated_at: nowIso, updated_at: nowIso } },
+      { $set: { ...evidenceFields, direction, last_evaluated_at: nowIso, updated_at: nowIso } },
     );
     return;
   }

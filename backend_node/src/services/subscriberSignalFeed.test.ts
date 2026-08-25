@@ -147,6 +147,14 @@ describe("mirrorSubscriberM10Evaluation -- continuous freshness (2026-08-25 fix)
     expect(rows[0]!["created_at"]).toBe(firstCreatedAt); // last-state-change timestamp untouched
   });
 
+  it("a direction wobble while still WATCHING (evidence hovering near a tie) updates in place -- not a distinct Recent Signals event", async () => {
+    await mirrorSubscriberM10Evaluation("SOURCE-ACC", watching({ evidence_id: 201, preferred_direction: "BUY" }), new Date().toISOString());
+    await mirrorSubscriberM10Evaluation("SOURCE-ACC", watching({ evidence_id: 202, preferred_direction: "SELL", decision: "WAIT_FOR_SELL_RETRACE" }), new Date().toISOString());
+    const rows = state.db.collection("subscriber_signals").docs;
+    expect(rows).toHaveLength(1); // still one doc, direction flip did not fork a new row
+    expect(rows[0]!["direction"]).toBe("SELL"); // but the current reading is correctly up to date
+  });
+
   it("never sends a notification -- notification ownership stays with mirrorSubscriberSignal's candidate-gated path", async () => {
     await mirrorSubscriberM10Evaluation("SOURCE-ACC", watching(), new Date().toISOString());
     await mirrorSubscriberM10Evaluation("SOURCE-ACC", { ...watching(), decision: "BUY_CANDIDATE" }, new Date().toISOString());
