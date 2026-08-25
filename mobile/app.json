@@ -11,7 +11,6 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "io.xaucloud.mobile",
-      "buildNumber": "1",
       "infoPlist": {
         "UIBackgroundModes": [
           "remote-notification"
@@ -22,7 +21,6 @@
     },
     "android": {
       "package": "io.xaucloud.mobile",
-      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#0B0D10",
         "foregroundImage": "./assets/android-icon-foreground.png"
@@ -31,9 +29,7 @@
       "permissions": [
         "USE_BIOMETRIC",
         "USE_FINGERPRINT",
-        "POST_NOTIFICATIONS",
-        "android.permission.USE_BIOMETRIC",
-        "android.permission.USE_FINGERPRINT"
+        "POST_NOTIFICATIONS"
       ]
     },
     "web": {
