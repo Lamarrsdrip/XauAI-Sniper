@@ -4,10 +4,11 @@ import { env } from "../env.js";
 import { getSettings } from "./settings.js";
 import { NAMESPACE_URL, uuidV5 } from "./uuidV5.js";
 import { sendWebPushToUser, getVapidPublicKey } from "./webPush.js";
+import { sendExpoPushToUser } from "./expoPush.js";
 import { buildResultConversion } from "./marketOutlookCore.js";
 import { isMarketOpen } from "./marketCalendar.js";
 
-/** Customer notification dispatch. First-party VAPID Web Push is the only delivery authority. */
+/** Customer notification dispatch. First-party VAPID Web Push and native (iOS/Android) Expo push are the two delivery channels; both are best-effort and independent. */
 
 const ONESIGNAL_API_URL = "https://api.onesignal.com/notifications";
 
@@ -455,24 +456,33 @@ function modernizeCustomerPush(input: Record<string, unknown>): Record<string, u
 
 async function sendUserPush(userId: string, payload: Record<string, unknown>): Promise<SendResult> {
   payload = modernizeCustomerPush(payload);
-  try {
-    const sent = await sendWebPushToUser(String(userId), {
-      title: String(payload["title"] ?? "XauCloud"),
-      body: String(payload["body"] ?? ""),
-      deep_link: String(payload["deep_link"] ?? (payload["outlook_id"] ? "/ai-market-outlook" : "/command/dashboard")),
-      tag: String(
-        payload["notification_key"] ??
-        payload["tag"] ??
-        payload["event"] ??
-        "xaucloud"
-      ),
-      category: String(payload["category"] ?? notificationCategory(String(payload["event"] ?? ""))),
-    });
-    if (sent > 0) return { ok: true, failureClass: null, provider: { channel: "web_push", sent } };
-    return { ok: false, failureClass: NO_ACTIVE_WEB_PUSH_RECIPIENT, provider: { channel: "web_push", sent: 0 } };
-  } catch {
-    return { ok: false, failureClass: TEMPORARY_DELIVERY_FAILURE, provider: { channel: "web_push", error: "send_failed" } };
+  const title = String(payload["title"] ?? "XauCloud");
+  const body = String(payload["body"] ?? "");
+  const deepLink = String(payload["deep_link"] ?? (payload["outlook_id"] ? "/ai-market-outlook" : "/command/dashboard"));
+  const category = String(payload["category"] ?? notificationCategory(String(payload["event"] ?? "")));
+
+  const [webResult, nativeResult] = await Promise.allSettled([
+    sendWebPushToUser(String(userId), {
+      title,
+      body,
+      deep_link: deepLink,
+      tag: String(payload["notification_key"] ?? payload["tag"] ?? payload["event"] ?? "xaucloud"),
+      category,
+    }),
+    sendExpoPushToUser(String(userId), { title, body, data: { category, deep_link: deepLink, event: payload["event"] ?? null } }),
+  ]);
+
+  const webSent = webResult.status === "fulfilled" ? webResult.value : 0;
+  const nativeSent = nativeResult.status === "fulfilled" ? nativeResult.value : 0;
+  const totalSent = webSent + nativeSent;
+
+  if (totalSent > 0) {
+    return { ok: true, failureClass: null, provider: { channel: "web_push+native_push", web_push_sent: webSent, native_push_sent: nativeSent } };
   }
+  if (webResult.status === "rejected" && nativeResult.status === "rejected") {
+    return { ok: false, failureClass: TEMPORARY_DELIVERY_FAILURE, provider: { channel: "web_push+native_push", error: "send_failed" } };
+  }
+  return { ok: false, failureClass: NO_ACTIVE_WEB_PUSH_RECIPIENT, provider: { channel: "web_push+native_push", web_push_sent: 0, native_push_sent: 0 } };
 }
 
 const HEARTBEAT_STALE_SECONDS = 90;

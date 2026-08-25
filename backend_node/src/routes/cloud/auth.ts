@@ -89,7 +89,11 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
     // either signup email.
     await Promise.allSettled([sendSignupTransactionalEmails(doc)]);
     const { password_hash: _ph, ...userOut } = doc;
-    return { ok: true, user: userOut };
+    // `token` is additive for native mobile clients, which have no httpOnly
+    // cookie jar to rely on and must store the JWT themselves (SecureStore)
+    // and send it as `Authorization: Bearer`, a path extractToken() already
+    // supports. Web clients keep using the cookie and ignore this field.
+    return { ok: true, user: userOut, token };
   });
 
   // POST /cloud/auth/login -- server.py:6428
@@ -116,7 +120,8 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
     const token = createCloudToken(String(u["id"]), String(u["email"]), Number(u["session_version"] ?? 0));
     setCloudSessionCookie(reply, token);
     const { _id, password_hash, ...userOut } = u;
-    return { ok: true, user: userOut };
+    // See signup handler above: additive `token` field for native mobile Bearer auth.
+    return { ok: true, user: userOut, token };
   });
 
   // POST /cloud/auth/logout -- server.py:6456

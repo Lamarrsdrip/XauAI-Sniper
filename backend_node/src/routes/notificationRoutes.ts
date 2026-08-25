@@ -4,6 +4,7 @@ import { getDb } from "../db.js";
 import { rateLimit, requireCloudUser } from "../auth.js";
 import { getUserLicense } from "../services/commandLicense.js";
 import { getVapidPublicKey, saveSubscription, removeSubscription, sendWebPushToUser } from "../services/webPush.js";
+import { registerDeviceToken, removeDeviceToken, sendExpoPushToUser } from "../services/expoPush.js";
 import {
   NOTIFICATION_CATEGORIES,
   completeActiveDevices,
@@ -118,6 +119,26 @@ export async function registerNotificationRoutes(app: FastifyInstance): Promise<
   app.post("/notifications/web-push/test", { preHandler: requireCloudUser }, async (request) => {
     const user = cloudUser(request);
     const sent = await sendWebPushToUser(String(user["id"]), { title: "XauCloud", body: "Push notifications are working on this device.", deep_link: "/command/dashboard", category: "SYSTEM" });
+    return { ok: true, sent };
+  });
+
+  // ── Native (iOS/Android) push via Expo — additive, sits beside VAPID web push, same sendUserPush() fan-out ──
+  const DeviceTokenSchema = z.object({ token: z.string().min(10).max(400), platform: z.enum(["ios", "android"]) });
+  app.post("/cloud/notifications/device-token", { preHandler: requireCloudUser }, async (request, reply) => {
+    const user = cloudUser(request);
+    const body = DeviceTokenSchema.parse(request.body);
+    await registerDeviceToken(String(user["id"]), body.token, body.platform);
+    return reply.code(201).send({ ok: true });
+  });
+  app.post("/cloud/notifications/device-token/remove", { preHandler: requireCloudUser }, async (request) => {
+    const user = cloudUser(request);
+    const body = z.object({ token: z.string().min(10).max(400) }).parse(request.body);
+    await removeDeviceToken(String(user["id"]), body.token);
+    return { ok: true };
+  });
+  app.post("/cloud/notifications/device-token/test", { preHandler: requireCloudUser }, async (request) => {
+    const user = cloudUser(request);
+    const sent = await sendExpoPushToUser(String(user["id"]), { title: "XauCloud", body: "Native push notifications are working on this device." });
     return { ok: true, sent };
   });
 
