@@ -1333,6 +1333,18 @@ function HomeRecentActivity({ events = [], heartbeat, onOpenFull }) {
 }
 
 // Simple push on/off toggle, surfaced on the dashboard. First-party (VAPID).
+// Bug fix (2026-08-25): this toggle only ever registered the raw browser
+// push subscription (device-level). It never set cloud_notification_prefs'
+// `tier`, which is the field sendSubscriberSignalNotification/
+// sendOutlookNotification actually check before delivering anything --
+// with no prefs row at all, delivery silently skips the user forever
+// (`if (!prefs) continue`). Only the bot-owner-only Outlook settings page
+// ever wrote that field, so a free/trial/subscriber user who enabled this
+// exact toggle could never actually receive a signal notification. Now
+// mirrors the minimum tier that unlocks delivery (see TIER_RANK in
+// notifications.ts) whenever this toggle turns on, and turns it back off
+// when disabled, so the toggle's label ("On for this device") is true both
+// for the device registration and for actual delivery.
 function NotificationPrompt() {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -1342,7 +1354,13 @@ function NotificationPrompt() {
     if (busy) return;
     setBusy(true);
     try {
-      if (next) await enableWebPush(commandAxios); else await disableWebPush(commandAxios);
+      if (next) {
+        await enableWebPush(commandAxios);
+        await commandAxios.post("/outlook/notifications/prefs", { tier: "HOURLY_ONLY" });
+      } else {
+        await commandAxios.post("/outlook/notifications/prefs", { tier: "OFF" }).catch(() => {});
+        await disableWebPush(commandAxios);
+      }
       setStatus(await webPushStatus());
     } catch { /* keep last state */ } finally { setBusy(false); }
   };
