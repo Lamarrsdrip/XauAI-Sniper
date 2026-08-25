@@ -1587,6 +1587,20 @@ function HomePage({ status, heartbeat, licenseInfo, online, equityPoints, events
         </AK.Panel>
       )}
 
+      {/* Post-purchase nudge -- points at the real, existing, backend-
+          authoritative setup checklist (Settings > see SetupHealth, fed by
+          GET /cloud/monitor/status's setup_checks), rather than duplicating
+          it here or inventing a new wizard. Surfaces on Home for a bot
+          owner whose license is linked but no EA heartbeat has arrived
+          yet -- exactly the "what do I do next after buying" moment. */}
+      {linked && !online && (
+        <AK.Panel>
+          <AK.Empty icon={KeyRound} title="Finish setup"
+            body="Your license is linked. Attach the XauCloud EA in MT5 to start streaming live data here."
+            action={<AK.Button size="sm" onClick={() => setActive("settings")}>View setup checklist</AK.Button>} />
+        </AK.Panel>
+      )}
+
       {/* Hidden fetcher — keeps /outlook/current flowing into OutlookModule
           without rendering the old full card. Detail lives on the Outlook screen. */}
       <div className="hidden"><AIMarketOutlookCard linked={linked} online={online} onOutlookChange={setHomeOutlook} onStatusChange={() => {}} /></div>
