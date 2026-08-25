@@ -8,6 +8,7 @@
  */
 import { getDb } from "../db.js";
 import { recordDiagnostic } from "./diagnostics.js";
+import { getCachedLiveQuote } from "./liveQuoteCache.js";
 
 export interface Candle { t: number; o: number; h: number; l: number; c: number; }
 export interface EaSnapshot {
@@ -131,14 +132,60 @@ export async function readMarketData(): Promise<MarketData | null> {
 
 export function marketDataReadError(): string | null { return lastReadError; }
 
+// Matches EA_STALE_SEC in fourHourOutlookService.ts -- a cached heartbeat
+// quote older than this is not "fresh" either, so the fallback below must
+// not accept it just because Mongo happened to be unreachable at the time.
+const CACHE_FALLBACK_STALE_SEC = 10 * 60;
+
+/**
+ * Degrade to the most recent quote the heartbeat path already validated in
+ * memory (see liveQuoteCache.ts), when the durable "newest broker quote"
+ * read failed or found nothing. Never fabricates a price: only a quote the
+ * EA genuinely sent and the backend genuinely validated is ever returned
+ * here, and only while it is still within the same freshness window a
+ * database-backed read would have required.
+ */
+function cachedQuoteAsMarketData(): MarketData | null {
+  const cached = getCachedLiveQuote();
+  if (!cached || cached.normalizedSymbol !== "XAUUSD") return null;
+  const ts = new Date(cached.sourceAtIso || cached.receivedAtIso).getTime() / 1000;
+  const ageSec = Date.now() / 1000 - ts;
+  if (!Number.isFinite(ts) || !(ageSec >= 0 && ageSec <= CACHE_FALLBACK_STALE_SEC)) return null;
+  if (!(cached.mid >= GOLD_MIN && cached.mid <= GOLD_MAX)) return null;
+  const snap: EaSnapshot = {
+    ts, mid: cached.mid, thesisDir: "", preferredDir: "", buyP: 0, sellP: 0, trendHealth: 0, location: 0,
+    exhaustion: 0, moveConsumed: 0, buyRoomR: 0, sellRoomR: 0, structuralSl: 0, atr: 0, structureState: "",
+    trendState: "", buyCase: 0, sellCase: 0, freshness: "", invalidated: false,
+  };
+  return {
+    price: cached.mid, latestTs: ts, ageSec, candlesH1: [], candlesH4: [], candlesD1: [],
+    snapshots: [snap], latest: snap, account: cached.account, source: "ea-stream(spot)",
+    dataStatus: "ACCUMULATING_BROKER_HISTORY", dataCoverage: { h1: 0, h4: 0, d1: 0, complete: false },
+  };
+}
+
 async function readMarketDataInner(): Promise<MarketData | null> {
   const db = getDb();
   // Select one live broker stream. The earlier implementation combined all
   // accounts in one candle series, which is invalid whenever feeds differ.
-  const newest = await db.collection("cloud_bot_activity")
-    .find({ normalized_symbol: "XAUUSD", "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } }, { projection: PROJECTION })
-    .sort({ ts: -1 }).limit(1).next() as Record<string, unknown> | null;
-  if (!newest || !str(newest["account"])) return null;
+  let newest: Record<string, unknown> | null;
+  try {
+    newest = await db.collection("cloud_bot_activity")
+      .find({ normalized_symbol: "XAUUSD", "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } }, { projection: PROJECTION })
+      .sort({ ts: -1 }).limit(1).next() as Record<string, unknown> | null;
+  } catch (error) {
+    // A transient failure on exactly this read must not blank the card when
+    // the backend already holds a fresh, verified quote from the heartbeat
+    // path that just succeeded moments ago -- see liveQuoteCache.ts.
+    const fallback = cachedQuoteAsMarketData();
+    if (fallback) return fallback;
+    throw error;
+  }
+  if (!newest || !str(newest["account"])) {
+    const fallback = cachedQuoteAsMarketData();
+    if (fallback) return fallback;
+    return null;
+  }
   const account = str(newest["account"]);
   const since = new Date(Date.now() - RAW_WINDOW_HOURS * 3600_000).toISOString();
   const rows = await db.collection("cloud_bot_activity")

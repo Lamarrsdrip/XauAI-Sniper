@@ -4,10 +4,11 @@ import { getDb } from "../../db.js";
 import { normalizeLicenseKey, resolveMonitorLicense } from "../../services/license.js";
 import { storeBotActivity } from "../../services/botActivity.js";
 import { BotHeartbeatReqSchema } from "../../models/cloudMonitor.js";
-import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
+import { asIso, extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
 import { normalizeGoldSymbol } from "../../services/goldSymbol.js";
 import { ensureFourHourOutlookReview, getFourHourCurrent } from "../../services/fourHourOutlookService.js";
 import { recordDiagnostic } from "../../services/diagnostics.js";
+import { recordLiveQuote } from "../../services/liveQuoteCache.js";
 
 const NOISY_STALE_ERRORS = new Set(["MQL ERROR 5035"]);
 
@@ -104,6 +105,19 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
       state: "NO_VALID_BID_ASK",
     };
     if (quote.valid && account && req.symbol) {
+      // Cache this verified quote in memory independent of the Mongo write
+      // below -- Manual Trading's read path falls back to it if a durable
+      // read times out, so a transient database hiccup can't blank the card
+      // when the backend already has a genuinely fresh, validated quote.
+      recordLiveQuote({
+        account,
+        normalizedSymbol: normalizeGoldSymbol(req.symbol),
+        bid: quote.bid ?? 0,
+        ask: quote.ask ?? 0,
+        mid: quote.mid ?? 0,
+        sourceAtIso: asIso(quote.quote_at) ?? now.toISOString(),
+        receivedAtIso: now.toISOString(),
+      });
       const marketActivity = await storeBotActivity(
         "MARKET_HEARTBEAT",
         "INFO",

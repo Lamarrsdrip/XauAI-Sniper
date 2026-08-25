@@ -56,6 +56,7 @@ vi.mock("../db.js", () => ({ getDb: () => state.db }));
 vi.mock("./diagnostics.js", () => ({ recordDiagnostic: vi.fn() }));
 
 const { readMarketDataWithStatus } = await import("./fourHourFeed.js");
+const { recordLiveQuote, _resetLiveQuoteCacheForTests } = await import("./liveQuoteCache.js");
 
 function freshQuoteDoc(tsIso: string, account = "476396807"): Doc {
   return {
@@ -67,7 +68,7 @@ function freshQuoteDoc(tsIso: string, account = "476396807"): Doc {
 }
 
 describe("Manual Trading market-feed read status", () => {
-  beforeEach(() => { state.db = new FakeDb(); });
+  beforeEach(() => { state.db = new FakeDb(); _resetLiveQuoteCacheForTests(); });
 
   it("reports LIVE_MARKET_OK with data when a fresh EA quote exists", async () => {
     const now = new Date().toISOString();
@@ -121,5 +122,62 @@ describe("Manual Trading market-feed read status", () => {
     expect(result.data).toBeNull();
     // No hardcoded/synthetic price anywhere in a missing-feed result.
     expect(JSON.stringify(result)).not.toMatch(/\b1900(\.0+)?\b|\b2000(\.0+)?\b/);
+  });
+
+  // v6.28.2 (2026-08-25 production incident): the "newest broker quote" read
+  // was intermittently timing out against one specific Atlas node while the
+  // heartbeat write path kept succeeding continuously. LIVE_MARKET_OK must
+  // survive that using the quote the heartbeat already validated in memory
+  // -- never a fabricated price, and never past its own freshness window.
+  describe("in-memory live-quote fallback (survives a transient DB read failure)", () => {
+    it("falls back to the heartbeat-cached quote when the durable read throws", async () => {
+      const err = new Error("connection 4 to 65.62.2.183:27017 timed out");
+      err.name = "MongoServerSelectionError";
+      state.db.collection("cloud_bot_activity").throwOnFind = err;
+      recordLiveQuote({ account: "476396807", normalizedSymbol: "XAUUSD", bid: 4630.2, ask: 4630.7, mid: 4630.45, sourceAtIso: new Date().toISOString(), receivedAtIso: new Date().toISOString() });
+
+      const result = await readMarketDataWithStatus();
+      expect(result.code).toBe("LIVE_MARKET_OK");
+      expect(result.data?.price).toBeCloseTo(4630.45, 2);
+      expect(result.data?.source).toBe("ea-stream(spot)");
+      expect(result.data?.dataStatus).toBe("ACCUMULATING_BROKER_HISTORY");
+    });
+
+    it("falls back to the cache when the durable read succeeds but finds nothing yet", async () => {
+      recordLiveQuote({ account: "476396807", normalizedSymbol: "XAUUSD", bid: 4630.2, ask: 4630.7, mid: 4630.45, sourceAtIso: new Date().toISOString(), receivedAtIso: new Date().toISOString() });
+      const result = await readMarketDataWithStatus();
+      expect(result.code).toBe("LIVE_MARKET_OK");
+      expect(result.data?.account).toBe("476396807");
+    });
+
+    it("does not use a stale cached quote (older than the freshness window) as a fallback", async () => {
+      state.db.collection("cloud_bot_activity").throwOnFind = new Error("timeout");
+      const staleIso = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+      recordLiveQuote({ account: "476396807", normalizedSymbol: "XAUUSD", bid: 4630.2, ask: 4630.7, mid: 4630.45, sourceAtIso: staleIso, receivedAtIso: staleIso });
+
+      const result = await readMarketDataWithStatus();
+      expect(result.code).toBe("DATABASE_READ_TIMEOUT");
+      expect(result.data).toBeNull();
+    });
+
+    it("does not fall back to a cached quote for a different symbol", async () => {
+      state.db.collection("cloud_bot_activity").throwOnFind = new Error("timeout");
+      recordLiveQuote({ account: "1", normalizedSymbol: "EURUSD", bid: 1.08, ask: 1.081, mid: 1.0805, sourceAtIso: new Date().toISOString(), receivedAtIso: new Date().toISOString() });
+
+      const result = await readMarketDataWithStatus();
+      expect(result.code).toBe("DATABASE_READ_TIMEOUT");
+      expect(result.data).toBeNull();
+    });
+
+    it("prefers a genuine durable read over the cache when Mongo is healthy", async () => {
+      const dbTs = new Date(Date.now() - 5000).toISOString();
+      state.db.collection("cloud_bot_activity").docs.push(freshQuoteDoc(dbTs, "999999"));
+      recordLiveQuote({ account: "476396807", normalizedSymbol: "XAUUSD", bid: 1.0, ask: 1.0, mid: 1.0, sourceAtIso: new Date().toISOString(), receivedAtIso: new Date().toISOString() });
+
+      const result = await readMarketDataWithStatus();
+      expect(result.code).toBe("LIVE_MARKET_OK");
+      expect(result.data?.account).toBe("999999");
+      expect(result.data?.price).not.toBeCloseTo(1.0, 2);
+    });
   });
 });
