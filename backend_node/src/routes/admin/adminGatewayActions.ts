@@ -27,7 +27,7 @@ import { diagnosticByRequest, recentDiagnostics } from "../../services/diagnosti
 import { getSettings } from "../../services/settings.js";
 import { fulfillNombaPayment, fulfillPayment } from "../../services/paymentFulfillment.js";
 import { sendPinEmail } from "../../services/paymentEmails.js";
-import { maskLicensePin, sendLicenseStatusEmail } from "../../services/accountLifecycleEmails.js";
+import { maskLicensePin, sendAccountNoticeEmail, sendLicenseStatusEmail } from "../../services/accountLifecycleEmails.js";
 import {
   retryCanonicalTransactionalDelivery,
   sendPasswordResetEmailForUser,
@@ -523,7 +523,18 @@ export async function registerAdminGatewayActionRoutes(app: FastifyInstance): Pr
         );
         await getDb().collection("support_reply_drafts").updateOne({id:b.draft_id},{$set:{status:"sent",sent_at:at,transport:"command_center_thread"}});
         await getDb().collection("support_ticket_events").insertOne({id:`support-event-${randomUUID()}`,ticket_id:b.ticket_id,event:"support_reply",message_id:message.id,at,source:"chatgpt_action"});
-        result={sent:true,transport:"command_center_thread",message_id:message.id,email_sent:false};
+        // Gap found during platform-unification audit (2026-08-25): a
+        // customer whose ticket got a reply here was never actually told --
+        // this branch used to unconditionally report no email was sent.
+        // Best-effort now, never blocks the reply itself if the send fails.
+        const ticketEmail=String(ticket["customer_email"]??"").trim();
+        const ticketName=String(ticket["customer_name"]??"there");
+        let emailSent=false;
+        if(ticketEmail){
+          try{emailSent=await sendAccountNoticeEmail(ticketEmail,ticketName,"New reply on your XauCloud support ticket",`${body}\n\nReply from inside Command Center → Support to continue the conversation.`);}
+          catch{/* best-effort */}
+        }
+        result={sent:true,transport:"command_center_thread",message_id:message.id,email_sent:emailSent};
       }else if(b.operation==="close_ticket"){
         await getDb().collection("support_tickets").updateOne({id:b.ticket_id},{$set:{status:"closed",closed_at:nowIso(),updated_at:nowIso()}});
         result={closed:true};

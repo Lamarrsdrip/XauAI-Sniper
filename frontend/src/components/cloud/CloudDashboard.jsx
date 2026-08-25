@@ -234,7 +234,12 @@ function Empty({ title, body, icon:Icon=Bot }) {
 // locked, in place, with a real in-app purchase CTA (never a homepage
 // redirect -- see useBotCheckout). This is the shared locked-state building
 // block for both a compact Home teaser card and a full locked page.
-function BotRequiredGate({ title = "XauCloud Bot Required", body, bullets = [], onBuyBot }) {
+// `onLinkLicense` covers the customer who already owns a XauCloud bot
+// license (bought before this account existed, or bought separately) --
+// without it, their only path forward here was the anonymous purchase
+// flow, which would have sold them a license they already have. Every
+// bot-locked surface offers both: buy new, or link what you already own.
+function BotRequiredGate({ title = "XauCloud Bot Required", body, bullets = [], onBuyBot, onLinkLicense }) {
   return (
     <div className="rounded-2xl bg-panel p-5" data-testid="bot-required-gate">
       <div className="flex items-center gap-2 text-[13.5px] font-semibold text-white/90">
@@ -253,6 +258,11 @@ function BotRequiredGate({ title = "XauCloud Bot Required", body, bullets = [], 
       <button onClick={onBuyBot} className="no-select mt-4 w-full rounded-xl bg-gold-300 py-2.5 text-[12.5px] font-black text-black" data-testid="bot-required-gate-cta">
         Get XauCloud Bot
       </button>
+      {onLinkLicense && (
+        <button onClick={onLinkLicense} className="no-select mt-2 w-full rounded-xl bg-white/[0.06] py-2.5 text-[12px] font-bold text-white/70 hover:bg-white/[0.1]" data-testid="bot-required-gate-link-license">
+          Already own XauCloud? Link license
+        </button>
+      )}
     </div>
   );
 }
@@ -260,7 +270,7 @@ function BotRequiredGate({ title = "XauCloud Bot Required", body, bullets = [], 
 const BOT_FEATURE_BULLETS = ["Automated XAUUSD execution", "Your live MT5 positions", "Personal bot analytics", "Risk controls", "Bot activity and monitoring"];
 
 /** Full-page version -- used for whole nav tabs (Trading, Analytics, AI Brain, Control) that are entirely personal-bot data. The nav item itself always stays visible and reachable; only what's behind it is locked. */
-function BotRequiredPage({ title, sub, onBuyBot }) {
+function BotRequiredPage({ title, sub, onBuyBot, onLinkLicense }) {
   return (
     <AK.Screen>
       <AK.ScreenHeader title={title} sub={sub || "Requires the XauCloud automated trading bot"} />
@@ -268,6 +278,7 @@ function BotRequiredPage({ title, sub, onBuyBot }) {
         body="This feature connects directly to your personal XauCloud trading bot and MT5 account."
         bullets={BOT_FEATURE_BULLETS}
         onBuyBot={onBuyBot}
+        onLinkLicense={onLinkLicense}
       />
     </AK.Screen>
   );
@@ -796,11 +807,11 @@ function LicensedCloudDashboard({ entitlement, entFailed }) {
   return (
     <AppShell active={active} setActive={setActive} logout={logout} statusText={statusText} online={online} eaVersion={eaVersion} notifOpen={notifOpen} setNotifOpen={setNotifOpen}>
       {active==="home"         && <HomePage status={status} heartbeat={heartbeat} licenseInfo={licenseInfo} online={online} tradingOk={tradingOk} equityPoints={equityPoints} hasSufficientAnalytics={hasSufficientAnalytics} events={events} setActive={setActive} refresh={fetchAll} openCommand={setModalCommand} commands={commands} analytics={analytics} ownsBot={ownsBot} entitlement={entitlement} onBuyBot={botCheckout.open} />}
-      {active==="trading"      && (ownsBot ? <TradingPage heartbeat={heartbeat} events={events} online={online} tradingOk={tradingOk} linked={Boolean(license?.linked||status?.license?.linked)} openCommand={setModalCommand} /> : <BotRequiredPage title="Trading" onBuyBot={botCheckout.open} />)}
-      {active==="analytics"    && (ownsBot ? <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} analytics={analytics} /> : <BotRequiredPage title="Analytics" onBuyBot={botCheckout.open} />)}
-      {active==="intelligence" && (ownsBot ? <IntelligencePage heartbeat={heartbeat} events={events} status={status} /> : <BotRequiredPage title="AI Brain" onBuyBot={botCheckout.open} />)}
+      {active==="trading"      && (ownsBot ? <TradingPage heartbeat={heartbeat} events={events} online={online} tradingOk={tradingOk} linked={Boolean(license?.linked||status?.license?.linked)} openCommand={setModalCommand} /> : <BotRequiredPage title="Trading" onBuyBot={botCheckout.open} onLinkLicense={() => setActive("license")} />)}
+      {active==="analytics"    && (ownsBot ? <AnalyticsPage heartbeat={heartbeat} events={events} equityPoints={equityPoints} analytics={analytics} /> : <BotRequiredPage title="Analytics" onBuyBot={botCheckout.open} onLinkLicense={() => setActive("license")} />)}
+      {active==="intelligence" && (ownsBot ? <IntelligencePage heartbeat={heartbeat} events={events} status={status} /> : <BotRequiredPage title="AI Brain" onBuyBot={botCheckout.open} onLinkLicense={() => setActive("license")} />)}
       {active==="activity"     && (ownsBot ? <ActivityPage events={events} filter={filter} setFilter={setFilter} onForceOpen={setModalCommand} /> : <SubscriberActivityPage />)}
-      {active==="control"      && (ownsBot ? <ControlPage heartbeat={heartbeat} online={online} commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true; propFirmIdempotencyKey.current=null;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} /> : <BotRequiredPage title="Control" onBuyBot={botCheckout.open} />)}
+      {active==="control"      && (ownsBot ? <ControlPage heartbeat={heartbeat} online={online} commands={commands} openCommand={setModalCommand} commandMsg={commandMsg} licenseKey={licenseInfo.activation_key} linked={Boolean(license?.linked||status?.license?.linked)} setActive={setActive} propFirm={propFirm} propFirmForm={propFirmForm} setPropFirmForm={setPropFirmForm} markDirty={()=>{propFirmDirty.current=true; propFirmIdempotencyKey.current=null;}} propFirmConfirmed={propFirmConfirmed} setPropFirmConfirmed={setPropFirmConfirmed} propFirmBusy={propFirmBusy} applyPropFirm={applyPropFirm} /> : <BotRequiredPage title="Control" onBuyBot={botCheckout.open} onLinkLicense={() => setActive("license")} />)}
       {active==="license"      && <LicensePage license={license} licenseInput={licenseInput} setLicenseInput={setLicenseInput} linkLicense={linkLicense} commandMsg={commandMsg} heartbeat={heartbeat} me={me} status={status} />}
       {active==="billing"      && <BillingPage setActive={setActive} />}
       {active==="settings"     && <SettingsPage me={me} heartbeat={heartbeat} licenseInfo={licenseInfo} logout={logout} status={status} />}
@@ -1554,6 +1565,7 @@ function SubscriberHomePage({ entitlement, setActive, onBuyBot }) {
         body="Own MT5 execution, live positions and personal analytics by purchasing the XauCloud bot."
         bullets={BOT_FEATURE_BULLETS}
         onBuyBot={onBuyBot}
+        onLinkLicense={() => setActive("license")}
       />
     </div>
   );
@@ -2523,8 +2535,11 @@ function PushSettings() {
   const refresh = useCallback(async () => { try { setState(await webPushStatus()); } catch { /* ignore */ } }, []);
   useEffect(() => { refresh(); }, [refresh]);
   if (!webPushSupported()) return null;
-  const enable = async () => { setBusy(true); setMsg(""); try { await enableWebPush(commandAxios); setMsg("Push enabled on this device."); await refresh(); } catch (e) { setMsg(e?.message || "Could not enable push."); } finally { setBusy(false); } };
-  const disable = async () => { setBusy(true); setMsg(""); try { await disableWebPush(commandAxios); setMsg("Push turned off on this device."); await refresh(); } catch (e) { setMsg(e?.message || "Could not turn off push."); } finally { setBusy(false); } };
+  // Same bug/fix as NotificationPrompt above: enabling the device
+  // subscription alone never turns on actual delivery (the backend checks
+  // cloud_notification_prefs.tier, which nothing here used to set).
+  const enable = async () => { setBusy(true); setMsg(""); try { await enableWebPush(commandAxios); await commandAxios.post("/outlook/notifications/prefs", { tier: "HOURLY_ONLY" }); setMsg("Push enabled on this device."); await refresh(); } catch (e) { setMsg(e?.message || "Could not enable push."); } finally { setBusy(false); } };
+  const disable = async () => { setBusy(true); setMsg(""); try { await commandAxios.post("/outlook/notifications/prefs", { tier: "OFF" }).catch(() => {}); await disableWebPush(commandAxios); setMsg("Push turned off on this device."); await refresh(); } catch (e) { setMsg(e?.message || "Could not turn off push."); } finally { setBusy(false); } };
   const test = async () => { setBusy(true); setMsg(""); try { const r = await testWebPush(commandAxios); setMsg(r?.sent ? "Test sent — check your notifications." : "No active subscription on this device yet."); } catch { setMsg("Could not send test."); } finally { setBusy(false); } };
   return (
     <AK.Panel>

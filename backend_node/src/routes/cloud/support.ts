@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getDb } from "../../db.js";
 import { requireCloudUser, rateLimit } from "../../auth.js";
 import { resolveSupportLinks } from "../../services/customerTradingTelemetry.js";
+import { sendAccountNoticeEmail } from "../../services/accountLifecycleEmails.js";
 
 const CategorySchema = z.enum([
   "account",
@@ -161,6 +162,12 @@ export async function registerCloudSupportRoutes(app: FastifyInstance): Promise<
       event: "ticket_created",
       at: now,
     });
+
+    // Best-effort confirmation -- never blocks ticket creation on a send failure.
+    try {
+      await sendAccountNoticeEmail(email, name, "We received your XauCloud support request",
+        `We've received your support ticket:\n\n"${body.subject}"\n\nOur team will reply as soon as possible. You can track this ticket and add more detail anytime from Command Center → Support.`);
+    } catch { /* best-effort */ }
 
     return reply.code(201).send({ ok: true, ticket: safeTicket(doc) });
   });

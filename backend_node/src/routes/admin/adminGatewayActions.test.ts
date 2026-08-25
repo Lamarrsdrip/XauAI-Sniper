@@ -66,4 +66,17 @@ describe("XauCloud Admin controlled gateway", () => {
     expect(executeLicenseBlock).toContain("sendLicenseStatusEmail(");
     expect((executeLicenseBlock.match(/sendLicenseStatusEmail\(/g) ?? []).length).toBe(4);
   });
+
+  // 2026-08-25 platform-unification audit: send_reply's own result object
+  // used to hardcode email_sent:false -- an admin sending a support reply
+  // never actually notified the customer. Fixed to send a real email and
+  // report the real outcome.
+  it("send_reply actually emails the customer instead of hardcoding email_sent:false", () => {
+    const startIdx = source.indexOf('app.post("/admin/actions/gateway/support/execute"');
+    const endIdx = source.indexOf("}else if(b.operation===\"close_ticket\")", startIdx);
+    const sendReplyBlock = source.slice(startIdx, endIdx);
+    expect(sendReplyBlock).toContain("sendAccountNoticeEmail(");
+    expect(sendReplyBlock).not.toContain("email_sent:false");
+    expect(sendReplyBlock).toMatch(/email_sent:\s*emailSent/);
+  });
 });

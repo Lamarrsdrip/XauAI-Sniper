@@ -80,6 +80,19 @@ describe("ONE Command Center architecture contract (2026-08-25)", () => {
     expect(dashboard).toContain("NOT_ENTITLED");
     expect(dashboard).toMatch(/locked:\s*true/);
   });
+
+  // 2026-08-25 platform-unification audit: every bot-locked surface must
+  // offer BOTH buying a new bot AND linking one already owned -- otherwise a
+  // customer who already has a XauCloud license gets funneled into buying a
+  // second one they don't need.
+  test("every bot-locked surface offers 'Already own XauCloud? Link license', not just Buy", () => {
+    expect(dashboard).toContain("Already own XauCloud? Link license");
+    const gateFn = dashboard.slice(dashboard.indexOf("function BotRequiredGate("), dashboard.indexOf("const BOT_FEATURE_BULLETS"));
+    expect(gateFn).toContain("onLinkLicense");
+    for (const tab of ["Trading", "Analytics", "AI Brain", "Control"]) {
+      expect(dashboard).toMatch(new RegExp(`<BotRequiredPage title="${tab}"[^>]*onLinkLicense=\\{\\(\\) => setActive\\("license"\\)\\}`));
+    }
+  });
 });
 
 describe("admin bank transfer visibility contract", () => {
