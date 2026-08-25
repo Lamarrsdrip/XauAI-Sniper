@@ -1,227 +1,30 @@
-import React, { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import axios from "axios";
-import { ArrowRight, Check, KeyRound, Lock, RadioTower, Shield, Smartphone, Terminal, Activity, Loader2 } from "lucide-react";
-import InstallAppPrompt from "./InstallAppPrompt";
-import XauAiLogo from "./XauAiLogo";
-import Seo from "../Seo";
+import { Loader2 } from "lucide-react";
 import { API } from "@/lib/api";
 
-const FEATURES = [
-  { icon: Smartphone, title: "Phone-first", body: "Add to your home screen. Check bot status, open trades, and alerts without opening MT5." },
-  { icon: Terminal,   title: "Your MT5 / VPS", body: "The EA runs on your own terminal. The dashboard monitors and queues safe commands remotely." },
-  { icon: Activity,   title: "Live heartbeat", body: "See the bot state, open trades, daily P&L, AI decisions, and any errors — all in real time." },
-  { icon: Lock,       title: "PIN protected", body: "Dangerous actions need license key, confirmation, command queue, EA validation, and audit log." },
-];
-
-const INCLUDED = [
-  "Live bot heartbeat",
-  "MT5 / VPS ready",
-  "License activation",
-  "AI Director status",
-  "ML learning state",
-  "PIN-safe remote commands",
-  "Structured activity feed",
-  "Mobile-first dashboard",
-];
-
-// This is the LOGGED-OUT marketing page for the authenticated product --
-// pricing/features/screenshots, matching the public website's own pattern
-// (public site for discovery, one dashboard once signed in). Bug fix
-// (2026-08-25, platform-unification audit): this page never checked auth
-// state, so an already-signed-in user landed back here -- including every
-// time they tapped their OWN dashboard's header logo (AppShell links here)
-// -- and saw "Log in / Create account" instead of their real dashboard.
-// Redirects straight to /command/dashboard when a session already exists;
-// renders normally (not stuck loading) if the check fails/times out, since
-// a false negative here must never trap a logged-out visitor.
-function useRedirectIfAuthenticated() {
+// Product decision (2026-08-25): XauCloud has exactly ONE homepage. This
+// used to render its own separate marketing page for the authenticated
+// product (pricing/features copy distinct from the real public homepage at
+// "/") -- a visitor bounced between two different "welcome to XauCloud"
+// pages depending on which URL they landed on. "/command" is now a pure
+// routing gate that never renders content of its own: authenticated ->
+// straight into the dashboard; unauthenticated -> straight to the login
+// form. The real homepage at "/" is the only page that introduces XauCloud.
+export default function CloudLanding() {
   const navigate = useNavigate();
-  const [checking, setChecking] = useState(true);
   useEffect(() => {
     let cancelled = false;
     axios.get(`${API}/cloud/auth/me`, { withCredentials: true, timeout: 5000 })
-      // Success: stay in the "checking" (spinner) state -- setChecking(false)
-      // here would flash the marketing page for one frame before the
-      // navigate takes effect. Only the failure path releases the spinner.
       .then(() => { if (!cancelled) navigate("/command/dashboard", { replace: true }); })
-      .catch(() => { if (!cancelled) setChecking(false); });
+      .catch(() => { if (!cancelled) navigate("/command/login", { replace: true }); });
     return () => { cancelled = true; };
   }, [navigate]);
-  return checking;
-}
 
-export default function CloudLanding() {
-  const checkingAuth = useRedirectIfAuthenticated();
-  if (checkingAuth) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-[#060609] text-white">
-        <Loader2 className="h-6 w-6 animate-spin text-gold-300" />
-      </div>
-    );
-  }
   return (
-    <div className="min-h-screen bg-[#060609] text-white">
-      <Seo
-        title="XauCloud Command Center — Gold Signals, Market Outlook & Bot Monitoring"
-        description="Create a free Command Center account for a 3-market-day gold signal trial, then continue with a Weekly or Monthly signal plan — or buy the licensed XauCloud EA for live heartbeat, AI Director decisions, ML state, trade activity, and PIN-protected remote commands."
-        path="/command"
-      />
-      <InstallAppPrompt />
-
-      {/* Nav */}
-      <nav className="sticky top-0 z-40 border-b border-white/[0.08] bg-[#060609]/90 backdrop-blur-2xl">
-        <div className="mx-auto flex h-[60px] max-w-7xl items-center justify-between gap-3 px-4 md:px-8">
-          <Link to="/" className="flex min-w-0 items-center gap-2.5" data-testid="cloud-logo-link">
-            <XauAiLogo size={32} className="flex-none" />
-            <span className="min-w-0">
-              <span className="block truncate text-[15px] font-semibold">XauCloud Command Center</span>
-              <span className="block truncate font-mono text-[9px] uppercase tracking-[0.22em] text-white/35">Published release · M10 production</span>
-            </span>
-          </Link>
-          <div className="flex items-center gap-2">
-            <Link to="/command/login" className="rounded-full px-3 py-2 text-[13px] font-medium text-white/55 transition hover:text-white" data-testid="nav-login">Log in</Link>
-            <Link to="/command/signup" className="rounded-full bg-emerald-400 px-4 py-2 text-[13px] font-bold text-black transition hover:bg-emerald-300" data-testid="nav-signup">Create account</Link>
-          </div>
-        </div>
-      </nav>
-
-      <main>
-        {/* Hero */}
-        <section className="mx-auto grid max-w-7xl gap-10 px-4 py-12 md:px-8 md:py-16 lg:grid-cols-2 lg:items-center">
-          <div>
-            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-emerald-300" data-testid="hero-badge">
-              <RadioTower className="h-3 w-3" /> Command Center
-            </div>
-            <h1 className="max-w-2xl font-heading text-4xl font-semibold leading-[1.08] tracking-tight sm:text-5xl lg:text-6xl" data-testid="hero-title">
-              Gold signals and bot monitoring from anywhere.
-            </h1>
-            <p className="mt-5 max-w-xl text-[15px] leading-7 text-white/55" data-testid="hero-subtitle">
-              Create a free Command Center account for a 3-market-day gold signal trial, then continue with a Weekly or Monthly signal plan. Already own the licensed XauCloud EA? Use the same Command Center for live heartbeat, AI Director decisions, ML state, trade activity, and PIN-protected remote commands.
-            </p>
-            <div className="mt-7 flex flex-col gap-3 sm:flex-row">
-              <Link to="/command/signup"
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-400 px-6 py-3.5 text-[13px] font-bold text-black transition hover:bg-emerald-300"
-                data-testid="hero-cta-signup">
-                Start free 3-day trial <ArrowRight className="h-4 w-4" />
-              </Link>
-              <Link to="/command/login"
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-white/[0.1] bg-white/[0.04] px-6 py-3.5 text-[13px] font-semibold text-white transition hover:bg-white/[0.08]"
-                data-testid="hero-cta-login">
-                Log in
-              </Link>
-            </div>
-            <p className="mt-3 text-[11px] leading-5 text-white/35">
-              Signal plans (free trial, Weekly, Monthly) cover Market Outlook and the 10-minute signal engine only. The licensed XauCloud EA is a separate lifetime purchase for automated MT5 execution — see <Link to="/#purchase" className="text-emerald-300 hover:underline">plans and pricing</Link>.
-            </p>
-            <p className="mt-4 text-[11px] leading-5 text-white/28">Trading is risky. Start on demo. Verify broker execution before going live.</p>
-          </div>
-
-          {/* Dashboard preview */}
-          <div>
-            <div className="rounded-[28px] border border-white/[0.09] bg-[#0c0d11] p-4 shadow-2xl shadow-black/50">
-              <div className="mb-3 rounded-lg border border-sky-300/20 bg-sky-300/[0.06] px-3 py-2 font-mono text-[9px] uppercase tracking-[0.2em] text-sky-200">
-                Illustrative interface preview · not live account data
-              </div>
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <div className="font-mono text-[9px] uppercase tracking-[0.24em] text-white/30">Bot status</div>
-                  <div className="mt-0.5 flex items-center gap-2 font-mono text-xl font-black text-emerald-300">
-                    <span className="h-2 w-2 rounded-full bg-sky-300" /> DEMO PREVIEW
-                  </div>
-                </div>
-                <div className="rounded-full border border-gold-300/20 bg-gold-300/[0.08] px-3 py-1.5 text-[11px] font-bold text-gold-200">
-                  <KeyRound className="mr-1 inline h-3 w-3" /> PIN safe
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2 mb-3">
-                {[["Equity","—"],["AI conf.","—"],["State","Example"]].map(([k,v]) => (
-                  <div key={k} className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-2.5 py-2">
-                    <div className="font-mono text-[9px] uppercase tracking-widest text-white/30">{k}</div>
-                    <div className="mt-1 font-mono text-[12px] font-bold">{v}</div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="rounded-xl border border-white/[0.07] bg-black/25 p-3 mb-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="font-mono text-[9px] uppercase tracking-widest text-white/30">AI Director feed</span>
-                  <span className="h-1.5 w-1.5 rounded-full bg-sky-300" />
-                </div>
-                <div className="space-y-2 text-[11px] leading-5 text-white/52">
-                  <p><span className="font-mono text-violet-300">EXAMPLE</span> · advisory AI status appears here</p>
-                  <p><span className="font-mono text-gold-200">CANDIDATE</span> · one entry timer lifecycle</p>
-                  <p><span className="font-mono text-sky-300">RESULT</span> · cancelled or broker-confirmed</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-xl bg-sky-300 px-3 py-2.5 text-center text-[12px] font-bold text-black">Control preview</div>
-                <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 text-center text-[12px] font-semibold">Sync preview</div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Feature cards */}
-        <section className="mx-auto max-w-7xl px-4 pb-12 md:px-8">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {FEATURES.map(({ icon: Icon, title, body }) => (
-              <div key={title} className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-5">
-                <Icon className="mb-4 h-5 w-5 text-gold-200" />
-                <h3 className="text-[14px] font-semibold">{title}</h3>
-                <p className="mt-2 text-[13px] leading-6 text-white/48">{body}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* How it works + What you get */}
-        <section className="mx-auto max-w-7xl px-4 pb-12 md:px-8">
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="rounded-[24px] border border-white/[0.08] bg-white/[0.03] p-6">
-              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-gold-200 mb-2">How it works</div>
-              <h2 className="text-2xl font-semibold tracking-tight mb-5">Start free, upgrade when ready.</h2>
-              <div className="space-y-2.5">
-                {["Create a free account and start your 3-market-day signal trial — no card required", "Continue with a Weekly or Monthly signal plan, or buy the licensed EA for automated execution", "Open /command — see your signals, Market Outlook, and (if licensed) live bot heartbeat, trades, and alerts"].map((step, i) => (
-                  <div key={step} className="flex items-center gap-3 rounded-xl bg-black/[0.18] px-3 py-3">
-                    <span className="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-emerald-400 font-mono text-[11px] font-black text-black">{i + 1}</span>
-                    <span className="text-[13px] text-white/75">{step}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-[24px] border border-emerald-300/20 bg-emerald-300/[0.05] p-6">
-              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-emerald-300 mb-2">What you get</div>
-              <h2 className="text-2xl font-semibold tracking-tight mb-5">Everything in one dashboard.</h2>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {INCLUDED.map((item) => (
-                  <div key={item} className="flex items-center gap-2.5 rounded-xl border border-white/[0.07] bg-black/[0.14] px-3 py-2.5">
-                    <Check className="h-3.5 w-3.5 flex-none text-emerald-400" />
-                    <span className="text-[13px] text-white/72">{item}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* CTA */}
-        <section className="mx-auto max-w-3xl px-4 pb-16 text-center md:px-8">
-          <div className="rounded-[24px] border border-white/[0.08] bg-white/[0.04] p-8">
-            <Shield className="mx-auto mb-4 h-7 w-7 text-gold-200" />
-            <h2 className="text-2xl font-semibold tracking-tight">Run the bot locally. See everything remotely.</h2>
-            <p className="mx-auto mt-3 max-w-lg text-[13px] leading-6 text-white/48">
-              The Command Center is for licensed users who want live status, AI Director decisions, ML state, alerts, and queue-based safe controls — without sitting beside MT5.
-            </p>
-            <Link to="/command/signup" className="mt-6 inline-flex items-center gap-2 rounded-full bg-emerald-400 px-7 py-3.5 text-[13px] font-bold text-black hover:bg-emerald-300 transition">
-              Create Command Center <ArrowRight className="h-4 w-4" />
-            </Link>
-          </div>
-        </section>
-      </main>
+    <div className="flex min-h-screen items-center justify-center bg-[#060609] text-white">
+      <Loader2 className="h-6 w-6 animate-spin text-gold-300" />
     </div>
   );
 }
