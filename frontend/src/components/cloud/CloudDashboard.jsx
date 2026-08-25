@@ -7,6 +7,7 @@ import {
   LogOut, Menu, Pause, Play, RefreshCw, Settings, Shield,
   SlidersHorizontal, TerminalSquare, TrendingUp, Wifi, XCircle, AlertTriangle, Search, Zap,
   Bell, GraduationCap, HelpCircle, Download, User, BookOpen, MessageCircle, ShieldCheck, Rocket, ArrowLeft, ChevronRight, Target,
+  Trophy, Eye,
 } from "lucide-react";
 import InstallAppPrompt from "./InstallAppPrompt";
 import XauAiLogo from "./XauAiLogo";
@@ -2773,15 +2774,50 @@ function EducationPage({ setActive }) {
   const [topicId, setTopicId] = useState(null);
   const [faqOpen, setFaqOpen] = useState(null);
   const [query, setQuery] = useState("");
+  // localStorage remains a same-device instant-paint cache only. The backend
+  // (academy_progress) is the sole source of truth for certificate
+  // eligibility -- see /cloud/academy/progress below, which reconciles this
+  // on load and after every toggle.
   const [completed, setCompleted] = useState(() => {
     try { return JSON.parse(localStorage.getItem("xaucloud_edu_completed") || "[]"); } catch { return []; }
   });
+  const [certStatus, setCertStatus] = useState(null); // { eligible, issued, needs_name, certificate, completed_count, required_count }
+  const [nameInput, setNameInput] = useState("");
+  const [issuing, setIssuing] = useState(false);
+  const [certError, setCertError] = useState("");
   const topic = FOREX_CURRICULUM.find((t) => t.id === topicId);
 
+  const refreshCertStatus = useCallback(() => {
+    commandAxios.get("/cloud/academy/certificate").then((r) => setCertStatus(r.data)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    commandAxios.get("/cloud/academy/progress").then((r) => {
+      setCompleted(r.data.completed_lesson_ids || []);
+      try { localStorage.setItem("xaucloud_edu_completed", JSON.stringify(r.data.completed_lesson_ids || [])); } catch {}
+    }).catch(() => {});
+    refreshCertStatus();
+  }, [refreshCertStatus]);
+
   const toggleComplete = (id) => {
-    const next = completed.includes(id) ? completed.filter((x) => x !== id) : [...completed, id];
+    const wasComplete = completed.includes(id);
+    const next = wasComplete ? completed.filter((x) => x !== id) : [...completed, id];
     setCompleted(next);
     try { localStorage.setItem("xaucloud_edu_completed", JSON.stringify(next)); } catch {}
+    const call = wasComplete
+      ? commandAxios.post(`/cloud/academy/lessons/${encodeURIComponent(id)}/uncomplete`)
+      : commandAxios.post(`/cloud/academy/lessons/${encodeURIComponent(id)}/complete`);
+    call.then(() => refreshCertStatus()).catch(() => {});
+  };
+
+  const confirmNameAndIssue = () => {
+    const name = nameInput.trim();
+    if (name.length < 2) { setCertError("Enter the name to appear on your certificate."); return; }
+    setIssuing(true); setCertError("");
+    commandAxios.post("/cloud/academy/certificate/confirm-name", { name })
+      .then((r) => setCertStatus((prev) => ({ ...prev, issued: true, needs_name: false, certificate: r.data.certificate })))
+      .catch((e) => setCertError(e?.response?.data?.detail || "Could not issue certificate. Try again."))
+      .finally(() => setIssuing(false));
   };
 
   if (topic) {
@@ -2843,6 +2879,53 @@ function EducationPage({ setActive }) {
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/[0.06]"><div className="h-full bg-gold-300" style={{ width: `${progress}%` }} /></div>
         </div>
       </div>
+
+      <AK.Panel className="p-4">
+        {certStatus?.issued && certStatus.certificate ? (
+          <div>
+            <div className="flex items-center gap-2 text-[13px] font-black text-emerald-300">
+              <Trophy className="h-4 w-4" /> ACADEMY COMPLETE ✓
+            </div>
+            <p className="mt-1.5 text-[12px] leading-5 text-white/55">
+              Congratulations — you've completed the XauCloud Forex Academy. Your certificate is issued in the name of{" "}
+              <span className="font-semibold text-white/85">{certStatus.certificate.recipient_name}</span>.
+            </p>
+            <div className="mt-3 flex gap-2">
+              <a href={`${API}/cloud/academy/certificate/view`} target="_blank" rel="noreferrer"
+                className="no-select inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-white/[0.06] py-2.5 text-[11.5px] font-bold text-white/85">
+                <Eye className="h-3.5 w-3.5" /> View Certificate
+              </a>
+              <a href={`${API}/cloud/academy/certificate/download`}
+                className="no-select inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-gold-300 py-2.5 text-[11.5px] font-black text-black">
+                <Download className="h-3.5 w-3.5" /> Download Certificate
+              </a>
+            </div>
+            <p className="mt-2 text-[10px] text-white/30">Certificate ID: {certStatus.certificate.certificate_id}</p>
+          </div>
+        ) : certStatus?.eligible && certStatus.needs_name ? (
+          <div>
+            <div className="flex items-center gap-2 text-[13px] font-black text-gold-300"><Trophy className="h-4 w-4" /> Academy complete — one step left</div>
+            <p className="mt-1.5 text-[12px] leading-5 text-white/55">Enter the name to appear on your certificate. This becomes permanent once issued.</p>
+            <div className="mt-3 flex gap-2">
+              <input value={nameInput} onChange={(e) => setNameInput(e.target.value)} placeholder="Full name for certificate"
+                className="min-w-0 flex-1 rounded-xl bg-white/[0.06] px-3 py-2.5 text-[12.5px] text-white outline-none placeholder:text-white/30" />
+              <button onClick={confirmNameAndIssue} disabled={issuing}
+                className="no-select flex-none rounded-xl bg-gold-300 px-4 py-2.5 text-[11.5px] font-black text-black disabled:opacity-50">
+                {issuing ? "Issuing…" : "Get Certificate"}
+              </button>
+            </div>
+            {certError && <p className="mt-1.5 text-[11px] text-loss">{certError}</p>}
+          </div>
+        ) : (
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 flex-none items-center justify-center rounded-xl bg-white/[0.05] text-white/30"><Trophy className="h-4 w-4" /></span>
+            <div>
+              <div className="text-[12.5px] font-bold text-white/70">Certificate</div>
+              <p className="text-[11px] text-white/40">Complete the Academy to unlock your certificate.</p>
+            </div>
+          </div>
+        )}
+      </AK.Panel>
 
       <div className="flex items-center gap-2 rounded-2xl bg-[#0C0D12] px-3">
         <Search className="h-4 w-4 flex-none text-white/25" />

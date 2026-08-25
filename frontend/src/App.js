@@ -24,6 +24,7 @@ import CloudDashboard from "@/components/cloud/CloudDashboard";
 import AIMarketOutlookPage from "@/pages/AIMarketOutlookPage";
 import LabsPage from "@/pages/LabsPage";
 import PerformancePage from "@/pages/PerformancePage";
+import CertificateVerifyPage from "@/pages/CertificateVerifyPage";
 import PerformanceHistoryPage from "@/pages/PerformanceHistoryPage";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { API } from "@/lib/api";
@@ -99,6 +100,7 @@ function App() {
           <Route path="/labs" element={<LabsPage />} />
           <Route path="/performance" element={<PerformancePage />} />
           <Route path="/performance/history" element={<PerformanceHistoryPage />} />
+          <Route path="/verify-certificate/:certificateId" element={<CertificateVerifyPage />} />
           <Route path="/cloud" element={<Navigate to="/command" replace />} />
           <Route path="/cloud/signup" element={<Navigate to="/command/signup" replace />} />
           <Route path="/cloud/login" element={<Navigate to="/command/login" replace />} />
