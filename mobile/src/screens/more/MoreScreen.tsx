@@ -20,7 +20,7 @@ export const MoreScreen: React.FC<Props> = ({ navigation }) => {
     <Screen>
       <Header title="More" large />
 
-      <Card onPress={() => {}} style={{ marginBottom: spacing.md }}>
+      <Card onPress={() => navigation.navigate('Profile')} style={{ marginBottom: spacing.md }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
           <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.brandMuted, alignItems: 'center', justifyContent: 'center' }}>
             <Text variant="h3" color="brand">{(user?.full_name?.[0] ?? user?.email[0] ?? '?').toUpperCase()}</Text>

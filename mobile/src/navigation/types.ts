@@ -22,6 +22,7 @@ export type AcademyStackParamList = {
 
 export type MoreStackParamList = {
   More: undefined;
+  Profile: undefined;
   Notifications: undefined;
   Support: undefined;
   TicketThread: { id: string; subject: string };

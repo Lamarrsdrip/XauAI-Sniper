@@ -11,6 +11,7 @@ import { ActivityScreen } from '../screens/activity/ActivityScreen';
 import { AcademyScreen } from '../screens/academy/AcademyScreen';
 import { LessonScreen } from '../screens/academy/LessonScreen';
 import { MoreScreen } from '../screens/more/MoreScreen';
+import { ProfileScreen } from '../screens/more/ProfileScreen';
 import { NotificationsScreen } from '../screens/more/NotificationsScreen';
 import { SupportScreen } from '../screens/more/SupportScreen';
 import { TicketThreadScreen } from '../screens/more/TicketThreadScreen';
@@ -57,6 +58,7 @@ const MoreStack = createNativeStackNavigator<MoreStackParamList>();
 export const MoreNavigator: React.FC = () => (
   <MoreStack.Navigator screenOptions={noHeader}>
     <MoreStack.Screen name="More" component={MoreScreen} />
+    <MoreStack.Screen name="Profile" component={ProfileScreen} />
     <MoreStack.Screen name="Notifications" component={NotificationsScreen} />
     <MoreStack.Screen name="Support" component={SupportScreen} />
     <MoreStack.Screen name="TicketThread" component={TicketThreadScreen} />

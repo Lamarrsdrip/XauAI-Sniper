@@ -74,11 +74,12 @@ export const BotLicenseScreen: React.FC<Props> = ({ navigation }) => {
           <Text variant="caption" color="tertiary" style={{ marginTop: 4 }}>EA v{lic.ea_version}</Text>
         )}
 
-        <View style={{ marginTop: spacing.lg, gap: spacing.sm, width: '100%' }}>
-          {linked && <Button label="Manage License" variant="secondary" fullWidth />}
-          {!linked && <Button label="Get XauCloud Bot" fullWidth />}
-          {!linked && <Button label="Already own it? Link License" variant="secondary" fullWidth onPress={() => setSheetOpen(true)} />}
-        </View>
+        {!linked && (
+          <View style={{ marginTop: spacing.lg, gap: spacing.sm, width: '100%' }}>
+            <Button label="Get XauCloud Bot" fullWidth />
+            <Button label="Already own it? Link License" variant="secondary" fullWidth onPress={() => setSheetOpen(true)} />
+          </View>
+        )}
       </Card>
 
       <Card style={{ marginTop: spacing.md, backgroundColor: colors.brandMuted, borderColor: 'transparent' }}>
