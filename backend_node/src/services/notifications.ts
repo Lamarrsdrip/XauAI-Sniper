@@ -47,21 +47,21 @@ const EVENT_MIN_TIER: Record<string, string> = {
   PATTERN_CONFIRMED: "ALL_UPDATES",
 };
 
-export const NOTIFICATION_CATEGORIES = ["TRADES", "MARKET_OUTLOOK", "SIGNALS", "LICENSE", "BOT_UPDATES", "PAYMENTS", "MARKETING", "SYSTEM", "SUPPORT"];
+export const NOTIFICATION_CATEGORIES = ["TRADES", "MARKET_OUTLOOK", "M10_ENGINE", "NEW_SIGNALS", "SIGNAL_OUTCOMES", "SIGNALS", "LICENSE", "BOT_UPDATES", "PAYMENTS", "ACADEMY", "MARKETING", "SYSTEM", "SUPPORT"];
 const EVENT_CATEGORY: Record<string, string> = {
   OUTLOOK_PUBLISHED: "MARKET_OUTLOOK",
   TRACKING_STARTED: "MARKET_OUTLOOK",
-  HALF_R_REACHED: "SIGNALS",
-  TIMEOUT_60M: "SIGNALS",
-  TP1_HIT: "SIGNALS",
-  TP2_HIT: "SIGNALS",
-  TP3_HIT: "SIGNALS",
-  SL_HIT: "SIGNALS",
+  HALF_R_REACHED: "SIGNAL_OUTCOMES",
+  TIMEOUT_60M: "SIGNAL_OUTCOMES",
+  TP1_HIT: "SIGNAL_OUTCOMES",
+  TP2_HIT: "SIGNAL_OUTCOMES",
+  TP3_HIT: "SIGNAL_OUTCOMES",
+  SL_HIT: "SIGNAL_OUTCOMES",
   TRADE_OPENED: "TRADES",
   TRADE_CLOSED: "TRADES",
   AUTOMATED_TRADE_RESULT: "TRADES",
   PATTERN_CONFIRMED: "SIGNALS",
-  SUBSCRIBER_SIGNAL: "SIGNALS",
+  SUBSCRIBER_SIGNAL: "NEW_SIGNALS",
 };
 
 export function notificationCategory(event: string): string {
@@ -70,7 +70,10 @@ export function notificationCategory(event: string): string {
 
 function categoryMuted(prefs: Record<string, unknown>, category: string): boolean {
   const muted = (prefs["muted_categories"] as string[] | undefined) ?? [];
-  return muted.includes(category);
+  // Existing customers may already have muted the old umbrella category.
+  // Honour that choice while allowing new granular controls to distinguish
+  // new signals, M10 and outcome milestones going forward.
+  return muted.includes(category) || (muted.includes("SIGNALS") && ["NEW_SIGNALS", "M10_ENGINE", "SIGNAL_OUTCOMES"].includes(category));
 }
 
 function idempotencyKey(outlookId: string, event: string, userId: string): string {
@@ -727,7 +730,8 @@ export async function sendSubscriberSignalNotification(signal: Record<string, un
       if (!prefs) continue; // opt-in only -- same rule as the account-based notification path
       const tier = String(prefs["tier"] ?? "OFF");
       if ((TIER_RANK[tier] ?? 0) < (TIER_RANK["HOURLY_ONLY"] ?? 99)) continue;
-      if (categoryMuted(prefs, notificationCategory(event))) continue;
+      const category = signal["engine"] === "M10_ENGINE" ? "M10_ENGINE" : notificationCategory(event);
+      if (categoryMuted(prefs, category)) continue;
 
       const idemKey = idempotencyKey(signalId, event, userId);
       const already = await db.collection("cloud_notification_log").findOne({ idempotency_key: idemKey });
@@ -741,7 +745,7 @@ export async function sendSubscriberSignalNotification(signal: Record<string, un
         user_id: userId,
         outlook_id: signalId,
         notification_type: event,
-        category: notificationCategory(event),
+        category,
         title: payload["title"],
         body: payload["body"],
         scheduled_time: already?.["scheduled_time"] ?? new Date().toISOString(),

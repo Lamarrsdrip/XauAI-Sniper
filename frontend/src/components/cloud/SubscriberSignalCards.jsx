@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import axios from "axios";
 import { Lock } from "lucide-react";
 import { API } from "@/lib/api";
@@ -43,7 +43,8 @@ export function relTime(iso) {
 }
 
 export const PLAN_LABEL = { WEEKLY: "Weekly Signals", MONTHLY: "Monthly Signals" };
-const STATUS_TONE = { WATCHING: "info", ACTIONABLE: "profit", BLOCKED: "loss", EXPIRED: "neutral" };
+const STATUS_TONE = { WATCHING: "info", ACTIONABLE: "profit", ACTIVE: "profit", BLOCKED: "loss", EXPIRED: "neutral", TP1_HIT: "profit", TP2_HIT: "profit", TP3_HIT: "profit", SL_HIT: "loss", CLOSED: "neutral", INVALIDATED: "loss" };
+const statusLabel = (status) => String(status || "—").replace(/_/g, " ");
 
 // Plain-English summary of "your plan" from the entitlement object -- every
 // call site derives its header/CTA from this one function so they never
@@ -107,7 +108,7 @@ function SignalDetail({ signal }) {
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[15px] font-bold">{signal.symbol}</span>
         <UI.Pill tone={signal.direction === "SELL" ? "loss" : "profit"}>{String(signal.direction || "").replace(/_/g, " ")}</UI.Pill>
-        <UI.Pill tone={STATUS_TONE[signal.status] || "neutral"}>{signal.status}</UI.Pill>
+        <UI.Pill tone={STATUS_TONE[signal.status] || "neutral"}>{statusLabel(signal.status)}</UI.Pill>
         {signal.confidence != null && <span className="font-mono text-[11px] text-white/35">Confidence {signal.confidence}%</span>}
       </div>
       {rows.length > 0 && (
@@ -121,6 +122,14 @@ function SignalDetail({ signal }) {
         </div>
       )}
       {signal.rationale && <p className="mt-3 text-[12px] leading-5 text-white/45">{signal.rationale}</p>}
+      {Array.isArray(signal.outcome_timeline) && signal.outcome_timeline.length > 0 && (
+        <div className="mt-3 rounded-xl bg-white/[0.03] p-3">
+          <div className="font-mono text-[9px] uppercase tracking-widest text-white/30">Outcome timeline</div>
+          <div className="mt-2 space-y-1.5">
+            {signal.outcome_timeline.map((event, index) => <div key={`${event.event}-${index}`} className="flex items-center justify-between gap-3 text-[11px]"><span className="text-white/65">{event.event}</span><span className="text-white/35">{relTime(event.at)}</span></div>)}
+          </div>
+        </div>
+      )}
       <div className="mt-2 text-[10.5px] text-white/25">Updated {relTime(signal.updated_at)}</div>
     </div>
   );
@@ -156,6 +165,7 @@ export function SignalCard({ title, icon: Icon, state }) {
 export function RecentSignalsCard({ state, scroll = false }) {
   const { loading, signals, locked, error } = state;
   const count = signals?.length || 0;
+  const [selectedId, setSelectedId] = useState(null);
   return (
     <UI.Card title="Recent Signals" subtitle={!loading && !locked && !error && count > 0 ? `${count} item${count === 1 ? "" : "s"}` : undefined}>
       {loading && <UI.Skeleton className="h-16 w-full" />}
@@ -168,19 +178,19 @@ export function RecentSignalsCard({ state, scroll = false }) {
       )}
       {!loading && !locked && !error && count > 0 && (
         <div className={scroll ? "max-h-[320px] divide-y divide-white/[0.06] overflow-y-auto pr-1" : "divide-y divide-white/[0.06]"} data-testid="recent-signals-list">
-          {signals.map((s) => (
-            <div key={s.signal_id} className="flex items-center justify-between gap-3 py-2.5">
-              <div className="min-w-0">
-                <div className="truncate text-[13px] font-semibold">
-                  {s.symbol} · {String(s.direction || "").replace(/_/g, " ")}
+          {signals.map((s) => {
+            const expanded = selectedId === s.signal_id;
+            return <div key={s.signal_id}>
+              <button onClick={() => setSelectedId(expanded ? null : s.signal_id)} className="flex w-full items-center justify-between gap-3 py-2.5 text-left">
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-semibold">{s.symbol} · {String(s.direction || "").replace(/_/g, " ")}</div>
+                  <div className="mt-0.5 text-[11px] text-white/35">{s.engine === "OUTLOOK" ? "Market Outlook" : "10-Minute Engine"} · {relTime(s.outcome_time || s.updated_at)}</div>
                 </div>
-                <div className="mt-0.5 text-[11px] text-white/35">
-                  {s.engine === "OUTLOOK" ? "Market Outlook" : "10-Minute Engine"} · {relTime(s.updated_at)}
-                </div>
-              </div>
-              <UI.Pill tone={STATUS_TONE[s.status] || "neutral"}>{s.status}</UI.Pill>
-            </div>
-          ))}
+                <UI.Pill tone={STATUS_TONE[s.status] || "neutral"}>{statusLabel(s.status)}</UI.Pill>
+              </button>
+              {expanded && <div className="mb-3 rounded-xl border border-white/[0.07] bg-white/[0.025] p-3"><div className="mb-2 font-mono text-[9px] uppercase tracking-widest text-gold-300/60">Signal details</div><SignalDetail signal={s} /></div>}
+            </div>;
+          })}
         </div>
       )}
     </UI.Card>

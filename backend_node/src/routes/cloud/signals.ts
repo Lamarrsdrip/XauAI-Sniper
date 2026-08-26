@@ -30,6 +30,62 @@ function healthReason(health: SubscriberSourceHealth): string {
   return "OK";
 }
 
+/**
+ * Subscriber rows deliberately contain only a safe snapshot of a signal.
+ * Lifecycle truth (TP/SL timestamps, invalidation and terminal outcome) is
+ * maintained by the existing cloud_market_outlooks lifecycle service.  Join
+ * it at read time instead of inventing a second tracker or mutating an
+ * archived signal row.  This makes Recent Signals show only milestones that
+ * are already authoritative in the same record powering Outlook analytics.
+ */
+function withAuthoritativeOutcome(signal: Record<string, unknown>, outcome?: Record<string, unknown>): Record<string, unknown> {
+  if (!outcome) return signal;
+  const iso = (key: string) => typeof outcome[key] === "string" ? outcome[key] as string : null;
+  const tp1At = iso("tp1_hit_at");
+  const tp2At = iso("tp2_hit_at");
+  const tp3At = iso("tp3_hit_at");
+  const slAt = iso("sl_hit_at");
+  const rawState = String(outcome["signal_state"] ?? outcome["status"] ?? "").toUpperCase();
+  const analyticsOutcome = typeof outcome["analytics_outcome"] === "string" ? outcome["analytics_outcome"] : null;
+  const invalidated = rawState.includes("INVALIDAT") || String(outcome["final_result"] ?? "").toUpperCase().includes("INVALIDAT");
+  const status = slAt ? "SL_HIT" : tp3At ? "TP3_HIT" : tp2At ? "TP2_HIT" : tp1At ? "TP1_HIT" : invalidated ? "INVALIDATED" : analyticsOutcome ? "CLOSED" : signal["status"];
+  const timeline = [
+    { event: "Signal opened", at: signal["effective_at"] ?? signal["created_at"] ?? null },
+    ...(tp1At ? [{ event: "TP1 reached", at: tp1At }] : []),
+    ...(tp2At ? [{ event: "TP2 reached", at: tp2At }] : []),
+    ...(tp3At ? [{ event: "TP3 reached", at: tp3At }] : []),
+    ...(slAt ? [{ event: "SL hit", at: slAt }] : []),
+    ...(invalidated ? [{ event: "Signal invalidated", at: iso("invalidated_at") ?? iso("updated_at") }] : []),
+    ...(analyticsOutcome && !tp1At && !tp2At && !tp3At && !slAt ? [{ event: "Signal closed", at: iso("updated_at") ?? iso("last_monitored_at") }] : []),
+  ].filter((entry) => entry.at);
+  return {
+    ...signal,
+    status,
+    source_status: signal["status"],
+    analytics_outcome: analyticsOutcome,
+    signal_state: outcome["signal_state"] ?? null,
+    tp1_hit_at: tp1At,
+    tp2_hit_at: tp2At,
+    tp3_hit_at: tp3At,
+    sl_hit_at: slAt,
+    outcome_time: tp3At ?? tp2At ?? tp1At ?? slAt ?? iso("updated_at") ?? null,
+    outcome_timeline: timeline,
+    latest_update_at: iso("updated_at") ?? signal["updated_at"] ?? null,
+  };
+}
+
+async function recentSignalsWithOutcomes(limit: number): Promise<Record<string, unknown>[]> {
+  const db = getDb();
+  const rows = await db.collection("subscriber_signals").find({}, { projection: { _id: 0 } }).sort({ updated_at: -1 }).limit(limit).toArray() as Record<string, unknown>[];
+  const ids = [...new Set(rows.map((row) => String(row["signal_id"] ?? "")).filter(Boolean))];
+  if (!ids.length) return rows;
+  const outcomes = await db.collection("cloud_market_outlooks")
+    .find({ id: { $in: ids } }, { projection: { _id: 0, id: 1, signal_state: 1, analytics_outcome: 1, final_result: 1, tp1_hit_at: 1, tp2_hit_at: 1, tp3_hit_at: 1, sl_hit_at: 1, invalidated_at: 1, updated_at: 1, last_monitored_at: 1 } })
+    .toArray() as Record<string, unknown>[];
+  const byId = new Map(outcomes.map((outcome) => [String(outcome["id"]), outcome]));
+  return rows.map((row) => withAuthoritativeOutcome(row, byId.get(String(row["signal_id"] ?? ""))));
+}
+
 /** Best-effort welcome+trial-started email -- never blocks trial activation on a send failure. */
 async function sendTrialStartedEmail(toEmail: string, buyerName: string): Promise<void> {
   try {
@@ -166,8 +222,24 @@ export async function registerCloudSignalRoutes(app: FastifyInstance): Promise<v
       const err = e as { statusCode: number; detail: unknown };
       return reply.code(err.statusCode).send(err.detail);
     }
-    const rows = await getDb().collection("subscriber_signals").find({}, { projection: { _id: 0 } }).sort({ updated_at: -1 }).limit(20).toArray();
-    return { signals: rows };
+    return { signals: await recentSignalsWithOutcomes(50) };
+  });
+
+  // The detail payload is the same read-only, subscriber-safe representation
+  // as Recent Signals. Keeping it in the API also lets mobile deep-link a
+  // row without holding a stale client-side copy.
+  app.get("/cloud/signals/recent/:signalId", { preHandler: requireCloudUser }, async (request, reply) => {
+    const entitlement = await effectiveEntitlement(cloudUserOf(request));
+    try { requireCapability(entitlement, "signals_access"); } catch (e) {
+      const err = e as { statusCode: number; detail: unknown };
+      return reply.code(err.statusCode).send(err.detail);
+    }
+    const signalId = String((request.params as { signalId?: string }).signalId ?? "").trim();
+    if (!signalId) return reply.code(400).send({ detail: "signal id is required" });
+    const signals = await recentSignalsWithOutcomes(200);
+    const signal = signals.find((row) => String(row["signal_id"] ?? "") === signalId);
+    if (!signal) return reply.code(404).send({ detail: "Signal not found." });
+    return { signal };
   });
 
   // GET /purchase/plans is registered in routes/purchase.ts (public, no auth needed for pricing).

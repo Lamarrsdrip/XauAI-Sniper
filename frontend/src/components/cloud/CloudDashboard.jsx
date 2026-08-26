@@ -15,6 +15,7 @@ import AIThoughtFeed from "./AIThoughtFeed";
 import AIMarketOutlookCard from "./AIMarketOutlookCard";
 import M10VsOutlookCard, { M10_DECISION_LABELS, M30_LIFECYCLE_LABELS, humanEnumLabel } from "./M10VsOutlookCard";
 import M10EngineCard, { normalizeSubscriberM10Evidence } from "./M10EngineCard";
+import AcademyLearningHub from "./AcademyLearningHub";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
 import { signalAxios, SignalCard, RecentSignalsCard, planSummary, relTime, formatDate as fmtDate } from "./SubscriberSignalCards";
 import { PaymentMethodModal } from "../BankTransferFlow";
@@ -2426,25 +2427,53 @@ function PushSettings() {
   const [state, setState] = useState({ supported: true, permission: "default", subscribed: false });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
-  const refresh = useCallback(async () => { try { setState(await webPushStatus()); } catch { /* ignore */ } }, []);
+  const [prefs, setPrefs] = useState({ tier: "OFF", muted_categories: [] });
+  const [entitlement, setEntitlement] = useState(null);
+  const refresh = useCallback(async () => { try { const [device, pref, grant] = await Promise.all([webPushStatus(), commandAxios.get("/outlook/notifications/prefs"), commandAxios.get("/cloud/entitlement")]); setState(device); setPrefs(pref.data?.prefs || { tier: "OFF", muted_categories: [] }); setEntitlement(grant.data || null); } catch { /* preserve the last known settings */ } }, []);
   useEffect(() => { refresh(); }, [refresh]);
   if (!webPushSupported()) return null;
   // Same bug/fix as NotificationPrompt above: enabling the device
   // subscription alone never turns on actual delivery (the backend checks
   // cloud_notification_prefs.tier, which nothing here used to set).
-  const enable = async () => { setBusy(true); setMsg(""); try { await enableWebPush(commandAxios); await commandAxios.post("/outlook/notifications/prefs", { tier: "HOURLY_ONLY" }); setMsg("Push enabled on this device."); await refresh(); } catch (e) { setMsg(e?.message || "Could not enable push."); } finally { setBusy(false); } };
+  const enable = async () => { setBusy(true); setMsg(""); try { await enableWebPush(commandAxios); await commandAxios.post("/outlook/notifications/prefs", { tier: "ALL_UPDATES", muted_categories: prefs.muted_categories || [] }); setMsg("Push enabled on this device. Choose the categories you want below."); await refresh(); } catch (e) { setMsg(e?.response?.data?.detail?.message || e?.message || "Could not enable push."); } finally { setBusy(false); } };
   const disable = async () => { setBusy(true); setMsg(""); try { await commandAxios.post("/outlook/notifications/prefs", { tier: "OFF" }).catch(() => {}); await disableWebPush(commandAxios); setMsg("Push turned off on this device."); await refresh(); } catch (e) { setMsg(e?.message || "Could not turn off push."); } finally { setBusy(false); } };
   const test = async () => { setBusy(true); setMsg(""); try { const r = await testWebPush(commandAxios); setMsg(r?.sent ? "Test sent — check your notifications." : "No active subscription on this device yet."); } catch { setMsg("Could not send test."); } finally { setBusy(false); } };
+  const categories = [
+    ["MARKET_OUTLOOK", "Market Outlook", "Hourly setup and thesis changes", true],
+    ["M10_ENGINE", "10-Minute Engine", "New execution-engine signals", true],
+    ["NEW_SIGNALS", "New Signals", "Fresh published shared signals", true],
+    ["SIGNAL_OUTCOMES", "Signal Milestones", "TP1, TP2, TP3, SL, close or invalidation", true],
+    ["TRADES", "Bot Alerts", "Personal MT5 trade events", false],
+    ["SYSTEM", "Account Alerts", "Security and account notices", false],
+    ["ACADEMY", "Academy", "Course and certificate updates", false],
+    ["SUPPORT", "Support", "Ticket replies and support updates", false],
+    ["PAYMENTS", "Billing", "Plans, payments and receipts", false],
+  ];
+  const toggleCategory = async (id) => {
+    const muted = new Set(prefs.muted_categories || []); if (muted.has(id)) muted.delete(id); else muted.add(id);
+    setBusy(true); setMsg("");
+    try { const { data } = await commandAxios.post("/outlook/notifications/prefs", { tier: prefs.tier === "OFF" ? "ALL_UPDATES" : prefs.tier, muted_categories: [...muted] }); setPrefs(data.prefs); } catch (e) { setMsg(e?.response?.data?.detail?.message || e?.message || "Could not update notification settings."); } finally { setBusy(false); }
+  };
   return (
     <AK.Panel>
-      <AK.PanelHead title="Push notifications" />
+      <AK.PanelHead title="Notification settings" />
       <div className="px-4 pb-4 pt-1">
-        <p className="text-[12px] leading-5 text-white/50">First-party XauCloud push — trade, outlook, license and system alerts on this device. No third-party account.</p>
+        <p className="text-[12px] leading-5 text-white/50">First-party XauCloud push. Your choices are saved server-side and apply to web and mobile devices on your account.</p>
         <div className="mt-3 flex flex-wrap gap-2">
           {state.subscribed
             ? <AK.Button variant="dark" size="sm" onClick={disable} disabled={busy}>Turn off on this device</AK.Button>
             : <AK.Button variant="primary" size="sm" onClick={enable} disabled={busy}>{busy ? "Working…" : "Enable push"}</AK.Button>}
           {state.subscribed && <AK.Button variant="outline" size="sm" onClick={test} disabled={busy}>Send test</AK.Button>}
+        </div>
+        <div className="mt-4 space-y-2" data-testid="notification-category-settings">
+          {categories.map(([id, label, detail, signalOnly]) => {
+            const locked = signalOnly && !entitlement?.signal_notifications;
+            const enabled = !(prefs.muted_categories || []).includes(id);
+            return <button key={id} disabled={busy || locked} onClick={() => toggleCategory(id)} className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left ${locked ? "bg-white/[0.025] opacity-60" : "bg-white/[0.045]"}`}>
+              <span><span className="block text-[12px] font-semibold">{label}</span><span className="mt-0.5 block text-[10.5px] text-white/40">{locked ? "Available with an active free trial, Signals subscription or Bot license." : detail}</span></span>
+              <span className={`rounded-full px-2 py-1 font-mono text-[9px] ${enabled && !locked ? "bg-emerald-400/15 text-emerald-300" : "bg-white/[0.06] text-white/35"}`}>{locked ? "LOCKED" : enabled ? "ON" : "OFF"}</span>
+            </button>;
+          })}
         </div>
         {msg && <div className="mt-3 rounded-lg bg-white/[0.05] px-3 py-2 text-[12px] text-white/60">{msg}</div>}
       </div>
@@ -3201,8 +3230,10 @@ export function EducationPage({ setActive }) {
           className="min-w-0 flex-1 bg-transparent py-3 text-[12px] text-white outline-none placeholder:text-white/25" />
       </div>
 
+      <AcademyLearningHub api={commandAxios} baseUrl={API} />
+
       <div>
-        <UI.SectionLabel className="mb-2 px-1">Curriculum · {filtered.length} lessons</UI.SectionLabel>
+        <UI.SectionLabel className="mb-2 px-1">Core curriculum · {filtered.length} lessons</UI.SectionLabel>
         <div className="overflow-hidden rounded-2xl bg-[#0C0D12]">
           {filtered.map((t, i) => {
             const done = completed.includes(t.id);

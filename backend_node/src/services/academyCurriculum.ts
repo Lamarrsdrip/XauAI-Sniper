@@ -44,5 +44,8 @@ const CURRICULUM_DESCRIPTIONS: Readonly<Record<string, string>> = {
 };
 
 export function curriculumDescription(version: string): string {
+  if (version.startsWith("course:")) {
+    return "Having completed the named XauCloud Academy course, including its required lessons, module quizzes and final assessment.";
+  }
   return CURRICULUM_DESCRIPTIONS[version] ?? CURRICULUM_DESCRIPTIONS["v1"]!;
 }

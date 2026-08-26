@@ -9,25 +9,14 @@
  * Web and mobile both read this same catalog via GET /cloud/academy/catalog
  * -- there is exactly one course catalog, never a per-client copy.
  *
- * Content-writing status (2026-08-26): course 1 below is the original
- * 21-lesson curriculum, regrouped into modules for navigation only --
- * content and lesson ids are byte-identical to FOREX_CURRICULUM in
- * CloudDashboard.jsx, and completion for those 21 ids continues to flow
- * through the original v1 academy_progress/academy_certificates system,
- * completely unaffected by anything in this file. Course 2 (Gold/XAUUSD
- * Masterclass) is newly written in full for this expansion. The remaining
- * 15 planned major learning areas (Complete Forex, Chart Reading & Market
- * Structure, Price Action Mastery, Technical Analysis, Fundamental & Macro
- * Analysis, Cryptocurrency & Digital Assets, Risk & Money Management,
- * Trading Psychology, Strategy Development & Trading Systems, Backtesting/
- * Journaling/Performance Analysis, Brokers/Execution/MT5, Algorithmic &
- * Automated Trading, AI & Machine Learning in Trading, Trading Security/
- * Fraud/Professional Practice) are queued -- this catalog format and the
- * whole quiz/progress/certificate pipeline below already supports adding
- * them course-by-course without any further infrastructure work.
+ * The pre-existing 21-lesson curriculum remains in academyCurriculum.ts and
+ * continues to use its original progress/certificate records.  The 16 major
+ * courses here are additive: their lessons, assessments and certificates use
+ * separate IDs and collections, so no existing learner is reset or silently
+ * moved into a different completion requirement.
  */
 
-export type QuizQuestionType = "single" | "multi" | "true_false";
+export type QuizQuestionType = "single" | "multi" | "true_false" | "scenario" | "calculation" | "chart";
 
 export interface QuizOption {
   id: string;
@@ -51,7 +40,7 @@ export interface Quiz {
   questions: QuizQuestion[];
 }
 
-export type CourseLevel = "beginner" | "intermediate" | "advanced" | "specialist";
+export type CourseLevel = "beginner" | "foundation" | "intermediate" | "advanced" | "specialist";
 
 export interface Lesson {
   id: string;
@@ -556,6 +545,20 @@ const xauModule4RiskAndSynthesis: Module = {
         "This checklist supports understanding XauCloud's own engines and disciplined manual analysis -- it does not replace either, and it does not guarantee outcomes"],
     },
   ],
+  quiz: {
+    id: "xau-m4-quiz",
+    title: "Module 4 Quiz: Gold Risk Management & Synthesis",
+    passingScorePct: 70,
+    questions: [
+      q("xau-m4-q1", "calculation", "A $5,000 account risks 1% on a trade. What is the maximum planned cash risk before broker rounding?", [
+        { id: "a", text: "$5" }, { id: "b", text: "$50" }, { id: "c", text: "$500" },
+      ], ["b"], "One percent of $5,000 is $50. Position size is then derived from that risk amount, the stop distance and the broker's actual contract specification."),
+      q("xau-m4-q2", "multi", "Which checks belong in a gold pre-trade checklist? (Select all that apply)", [
+        { id: "a", text: "Current session liquidity" }, { id: "b", text: "USD, real-yield and risk-sentiment context" }, { id: "c", text: "Stop realism against current volatility" }, { id: "d", text: "A guarantee that the trade will win" },
+      ], ["a", "b", "c"], "The checklist checks liquidity, macro context and stop/volatility fit. No checklist can guarantee a market outcome."),
+      tf("xau-m4-q3", "After calculating a lot size, the final dollar risk should be rechecked after broker lot-increment rounding.", true, "Rounding to a permitted volume step can change actual cash risk, so it must be checked before the order is submitted."),
+    ],
+  },
 };
 
 export const XAUUSD_MASTERCLASS: Course = {
@@ -608,7 +611,142 @@ export const XAUUSD_MASTERCLASS: Course = {
   certificateEligible: true,
 };
 
-export const ACADEMY_COURSES: Course[] = [XAUUSD_MASTERCLASS];
+/**
+ * The remaining Academy subjects use this compact authoring format rather
+ * than a second, client-side copy of the curriculum.  Each blueprint still
+ * expands to three substantial modules, three lessons per module, an
+ * assessed module quiz and a final assessment.  That gives learners a real
+ * learning path (and gives the API a single source of truth) without turning
+ * the catalog into a brittle 10,000-line hand-maintained list of repeated
+ * React objects.
+ */
+type BlueprintModule = {
+  title: string;
+  concept: string;
+  practice: string;
+  mistake: string;
+  check: string;
+};
+type CourseBlueprint = Omit<Course, "modules" | "finalAssessment" | "certificateEligible"> & { modules: BlueprintModule[] };
+
+const COURSE_BLUEPRINTS: CourseBlueprint[] = [
+  { id: "financial-markets-foundations", title: "Financial Markets & Trading Foundations", level: "beginner", summary: "Build a working model of assets, participants, quotes, orders and the risk taken when a trade is placed.", tags: ["beginner", "markets", "pips", "risk"], modules: [
+    { title: "How markets work", concept: "Primary versus secondary markets, liquidity, bid/ask pricing, and why a quoted price is not a promise of a fill.", practice: "Read a two-sided quote, identify the spread cost, and explain which side you transact on when buying or selling.", mistake: "Treating the chart's last price as the exact price every order will receive.", check: "A market buy order executes against the available ask, not the last chart price." },
+    { title: "Assets and participants", concept: "Stocks, bonds, currencies, commodities and derivatives exist for different economic purposes and attract different participants.", practice: "Compare a gold CFD, a spot FX pair, an ETF and a futures contract before choosing a market to study.", mistake: "Assuming every instrument has the same hours, leverage, contract size or settlement rules.", check: "An instrument's contract specification is part of risk, not an administrative detail." },
+    { title: "Orders, leverage and margin", concept: "Market, limit and stop orders; leverage; margin; and why a small price move can be material in a leveraged account.", practice: "Calculate whether a proposed stop distance and position size fit a fixed cash-risk budget.", mistake: "Choosing a lot size first and only then looking for a stop that makes it fit.", check: "Margin availability does not make a position size appropriate." },
+  ]},
+  { id: "complete-forex-course", title: "Complete Forex Course", level: "foundation", summary: "Learn the structure of the foreign-exchange market, currency-pair mechanics, sessions and a disciplined trade process.", tags: ["forex", "pairs", "sessions", "foundation"], modules: [
+    { title: "Currency-pair mechanics", concept: "Base and quote currencies, major/minor/cross pairs, pips, lots and how exchange-rate changes alter a position.", practice: "Translate a EURUSD or GBPJPY quote into a directional view without confusing base and quote currency.", mistake: "Calling every upward chart move a stronger quote currency without reading the pair convention.", check: "In EURUSD, a rising quote means the euro is gaining value relative to the dollar." },
+    { title: "Sessions and catalysts", concept: "Asia, London and New York liquidity windows; overlaps; scheduled data; and event-risk planning.", practice: "Create a session plan that marks high-impact releases and identifies when spreads may be least representative.", mistake: "Applying a strategy tested in a liquid overlap to thin rollover conditions without adjustment.", check: "Liquidity, spread and volatility can change materially across the forex day." },
+    { title: "From idea to review", concept: "Context, trigger, invalidation, sizing, execution and post-trade review form one repeatable process.", practice: "Write a one-page trade plan before a hypothetical entry, including what would invalidate it.", mistake: "Calling an entry rule a strategy while leaving exits, risk and review undefined.", check: "A trade journal records the decision process as well as the outcome." },
+  ]},
+  { id: "chart-reading-market-structure", title: "Chart Reading & Market Structure", level: "intermediate", summary: "Read price as swings, ranges, trends, levels and changes in acceptance rather than as isolated candles.", tags: ["charts", "structure", "support", "resistance"], modules: [
+    { title: "Swings and trend", concept: "Higher highs/higher lows, lower highs/lower lows, impulse and correction, and the difference between a trend and noise.", practice: "Mark the last confirmed swing sequence on three timeframes before declaring a trend.", mistake: "Labeling a two-candle bounce as a reversal before structure actually changes.", check: "A trend thesis needs an invalidation level, not just a direction label." },
+    { title: "Ranges, levels and liquidity", concept: "Support/resistance are zones of prior acceptance; ranges have edges, midpoints and false-break risk.", practice: "Map a range and state what evidence would distinguish acceptance beyond its edge from a wick rejection.", mistake: "Drawing so many levels that every price is simultaneously support and resistance.", check: "A break becomes more useful when price accepts beyond the level, not merely touches it." },
+    { title: "Multi-timeframe reading", concept: "Higher timeframes provide context while lower timeframes refine execution; neither overrides risk.", practice: "Build a top-down narrative: daily context, hourly location, execution-timeframe trigger.", mistake: "Using a lower timeframe to ignore a nearby higher-timeframe invalidation area.", check: "Timeframes should answer different questions rather than vote as duplicated indicators." },
+  ]},
+  { id: "price-action-mastery", title: "Price Action Mastery", level: "intermediate", summary: "Use candles, rejection, break-and-retest behaviour and context to form falsifiable price-action hypotheses.", tags: ["price-action", "candles", "breakout", "retest"], modules: [
+    { title: "Candles in context", concept: "Bodies, wicks, closes and ranges communicate attempted movement and acceptance only in their structural location.", practice: "Compare the same pin bar at a range edge, mid-range and after a news spike.", mistake: "Treating any named candlestick as a standalone buy or sell signal.", check: "A candle pattern gains meaning from location, prior move and follow-through." },
+    { title: "Breaks, retests and failed moves", concept: "A valid break needs context, room and acceptance; a failure can be valuable information without being an automatic reversal.", practice: "Write separate entry and invalidation plans for a breakout continuation and a failed-break reversal.", mistake: "Entering the first wick through a level and calling it confirmation.", check: "A retest is useful only if it preserves the level's new role." },
+    { title: "Building a price-action playbook", concept: "A playbook defines setup conditions, trigger, no-trade filters, risk and review examples.", practice: "Save annotated examples of valid, invalid and ambiguous versions of one setup.", mistake: "Expanding a playbook after every winner while ignoring the conditions that made the setup different.", check: "A playbook is improved by tagged evidence, not memory alone." },
+  ]},
+  { id: "technical-analysis", title: "Technical Analysis", level: "intermediate", summary: "Use indicators and measurements as descriptive tools, with an emphasis on assumptions, overlap and risk-aware interpretation.", tags: ["technical", "rsi", "moving-average", "atr"], modules: [
+    { title: "Trend and momentum tools", concept: "Moving averages, RSI and MACD describe price transformations; they do not independently confirm the same underlying move.", practice: "Test an RSI condition with and without a structure/location filter on historical charts.", mistake: "Stacking correlated indicators and counting each as independent evidence.", check: "An oscillator can remain extreme while a strong trend continues." },
+    { title: "Volatility and range", concept: "ATR, standard deviation and range measures help set expectations for movement and stop feasibility.", practice: "Compare a proposed stop with current ATR and identify whether it sits inside ordinary noise.", mistake: "Using a fixed-point stop across instruments and volatility regimes.", check: "ATR measures recent range, not future direction." },
+    { title: "Testing indicator rules", concept: "Indicators require explicit inputs, sample size, out-of-sample checks and treatment of costs.", practice: "Specify entry, exit, filter and sizing rules so another person could reproduce a test.", mistake: "Optimizing an indicator setting until it perfectly describes one historical period.", check: "A backtest result without costs and drawdown is incomplete." },
+  ]},
+  { id: "fundamental-macro-analysis", title: "Fundamental & Macro Analysis", level: "advanced", summary: "Connect economic data, central-bank expectations, growth, inflation and risk sentiment to markets without treating headlines as guarantees.", tags: ["macro", "fundamental", "central-banks", "inflation"], modules: [
+    { title: "Economic data and expectations", concept: "Markets react to the gap between actual data and priced expectations, not simply whether a number sounds good or bad.", practice: "Prepare an event card with consensus, prior, scenario paths and the market variable most likely to matter.", mistake: "Buying or selling solely because an economic number is high or low.", check: "A release can move markets opposite its headline if expectations were more extreme." },
+    { title: "Central banks and yields", concept: "Policy rates, forward guidance, nominal versus real yields and currency transmission shape asset pricing.", practice: "Explain a hypothetical gold move using dollar, real-yield and risk-sentiment inputs rather than one headline.", mistake: "Assuming an announced rate change is the first time the market considered it.", check: "Policy expectations can matter before the policy decision itself." },
+    { title: "Macro scenarios", concept: "Scenario planning uses conditional relationships, invalidation and new evidence rather than a permanent narrative.", practice: "Write base, upside and downside scenarios and state what data would make each less likely.", mistake: "Confusing a macro thesis with permission to ignore price, timing or risk.", check: "A sound macro thesis can still produce a poorly timed trade." },
+  ]},
+  { id: "cryptocurrency-digital-assets", title: "Cryptocurrency & Digital Assets", level: "foundation", summary: "Understand digital-asset market structure, custody, token risk and volatility before engaging with crypto markets.", tags: ["crypto", "bitcoin", "custody", "digital-assets"], modules: [
+    { title: "Digital-asset basics", concept: "Blockchain, wallets, exchanges, stablecoins and token supply are distinct concepts with different risks.", practice: "Trace a transaction from exchange account to self-custody wallet and list the irreversible steps.", mistake: "Assuming possession of a platform login is the same as control of private keys.", check: "A wallet stores credentials for assets on-chain; it does not store coins like a physical purse." },
+    { title: "Market structure and volatility", concept: "Crypto trades continuously with fragmented liquidity, leverage venues and different weekend risk from traditional markets.", practice: "Compare spread, depth and liquidation risk between a liquid spot market and a leveraged perpetual contract.", mistake: "Using forex-session assumptions or risk sizing unchanged in a 24/7 market.", check: "Leverage can cause forced liquidation before a long-term thesis has time to play out." },
+    { title: "Due diligence and custody", concept: "Protocol, counterparty, smart-contract, custody and regulatory risks need separate checks.", practice: "Build a pre-transfer checklist: address verification, network selection, amount test and recovery plan.", mistake: "Sending funds based on social-media urgency or an unverified contract address.", check: "A reversible-looking UI action can still create an irreversible on-chain transfer." },
+  ]},
+  { id: "risk-money-management", title: "Risk & Money Management", level: "foundation", summary: "Turn uncertainty into bounded decisions with position sizing, exposure limits, drawdown rules and realistic expectations.", tags: ["risk", "sizing", "drawdown", "money-management"], modules: [
+    { title: "Risk per trade", concept: "Cash risk, stop distance, contract value and quantity determine exposure; leverage is not a sizing method.", practice: "Calculate quantity from a fixed cash risk and an instrument-specific point value.", mistake: "Risking the same lot size across different stop distances or instruments.", check: "Position size should fall when the stop distance grows, all else equal." },
+    { title: "Portfolio and drawdown", concept: "Correlation, concurrent exposure, losing streaks and maximum drawdown matter more than isolated trade wins.", practice: "Set a daily and weekly loss limit with a pause-and-review rule before trading begins.", mistake: "Treating several trades with the same macro driver as independent diversification.", check: "A drawdown limit is a process guardrail, not proof that losses cannot occur." },
+    { title: "Expectancy and survival", concept: "Expectancy combines win rate, average win, average loss and costs; survival comes before optimization.", practice: "Compare two systems using expectancy and drawdown rather than win rate alone.", mistake: "Increasing risk after a short winning streak because confidence feels higher.", check: "A high win rate can still lose money if average losses overwhelm average wins." },
+  ]},
+  { id: "trading-psychology", title: "Trading Psychology", level: "intermediate", summary: "Build habits that reduce impulsive decisions, revenge trading, overconfidence and avoidance under uncertainty.", tags: ["psychology", "discipline", "journal", "process"], modules: [
+    { title: "Bias and emotion", concept: "Loss aversion, confirmation bias, recency bias and FOMO distort judgment most when decisions are rushed.", practice: "Use a pre-trade pause to name the evidence against your idea before entering.", mistake: "Calling an emotional impulse intuition without checking whether the setup meets rules.", check: "Feeling certain does not increase a setup's statistical edge." },
+    { title: "Routine and decision hygiene", concept: "Checklists, timeouts, maximum-trade limits and environmental controls protect execution quality.", practice: "Design a rule for stepping away after a rule breach or a predefined loss limit.", mistake: "Reviewing psychology only after a bad day instead of designing safeguards ahead of time.", check: "A useful routine is observable: another person could tell whether it was followed." },
+    { title: "Reviewing behaviour", concept: "Tag process errors separately from valid losses so learning does not turn into outcome bias.", practice: "Review five trades using fields for plan quality, execution, emotion and result.", mistake: "Changing a valid rule after one loss or keeping a poor rule because one trade won.", check: "A valid loss can be a good decision; a winning trade can still be poor process." },
+  ]},
+  { id: "strategy-development-trading-systems", title: "Strategy Development & Trading Systems", level: "advanced", summary: "Design a complete, testable trading system with explicit rules, filters, risk and change control.", tags: ["strategy", "system", "rules", "testing"], modules: [
+    { title: "From idea to rule set", concept: "A system must specify market, timeframe, setup, trigger, invalidation, exits, sizing and no-trade conditions.", practice: "Convert a discretionary idea into an unambiguous checklist another trader could apply.", mistake: "Leaving critical decisions to 'feel' while claiming a strategy is systematic.", check: "If two testers cannot agree on whether an entry occurred, the rule is not defined enough." },
+    { title: "Edge and robustness", concept: "An apparent edge must survive varied periods, costs, reasonable parameter changes and out-of-sample evaluation.", practice: "Run a sensitivity check on a stop or lookback setting instead of selecting one peak result.", mistake: "Choosing parameters that perfectly fit noise in one sample.", check: "Robustness matters more than the single best backtest number." },
+    { title: "Operations and change control", concept: "Versioning, journals, deployment checks and a written change log prevent silent strategy drift.", practice: "Write a change request with hypothesis, expected impact, test period and rollback condition.", mistake: "Changing rules live after drawdown without recording the decision.", check: "A system update should be testable and reversible before it is trusted." },
+  ]},
+  { id: "backtesting-journaling-performance", title: "Backtesting, Journaling & Performance Analysis", level: "advanced", summary: "Measure a strategy honestly with clean data, realistic costs, sample discipline and actionable performance review.", tags: ["backtesting", "journal", "performance", "expectancy"], modules: [
+    { title: "Backtest design", concept: "Define data source, period, entry/exit rules, spread, commissions, slippage and missing-data treatment before testing.", practice: "Create a test specification that someone else can rerun without asking for interpretation.", mistake: "Looking at the result first and then adjusting rules to explain it.", check: "A backtest is only as trustworthy as its data and execution assumptions." },
+    { title: "Journaling for diagnosis", concept: "A journal connects market context and rule compliance to performance rather than merely listing P/L.", practice: "Tag each trade by setup, session, regime, planned risk, execution quality and outcome.", mistake: "Recording only winners and losses, making it impossible to locate process breakdowns.", check: "A useful journal supports filtering and comparison across meaningful conditions." },
+    { title: "Performance interpretation", concept: "Expectancy, profit factor, drawdown, distribution and sample size each answer different questions.", practice: "Explain why a high profit factor from six trades is not yet reliable evidence.", mistake: "Optimizing to a single headline metric while ignoring drawdown or concentration.", check: "Performance analysis should produce a hypothesis to test, not an automatic live change." },
+  ]},
+  { id: "brokers-execution-mt5", title: "Brokers, Execution & MT5", level: "foundation", summary: "Choose, configure and use a broker and MT5 responsibly while understanding execution, specification and platform risk.", tags: ["brokers", "execution", "mt5", "slippage"], modules: [
+    { title: "Broker due diligence", concept: "Regulation, client-fund protections, contract specifications, fees, withdrawal process and support are separate checks.", practice: "Compare two broker specifications for the same symbol before calculating risk.", mistake: "Choosing solely by leverage or a promotional spread claim.", check: "A broker's contract specification determines the real value of a point and margin requirement." },
+    { title: "Execution mechanics", concept: "Spread, slippage, latency, order type, liquidity and gaps shape actual fills, especially around events.", practice: "Document a planned entry, worst acceptable fill and cancellation condition for a volatile event.", mistake: "Treating a stop-loss as a guaranteed exact exit price in every market condition.", check: "A stop order protects risk directionally but can fill worse than its trigger price." },
+    { title: "MT5 workflow", concept: "Market Watch, specifications, charts, order tickets, history, journals and demo testing form a safe operational workflow.", practice: "Locate a symbol specification and verify point size, volume step and trading hours before a demo order.", mistake: "Running unfamiliar automation on a live account before observing it in a controlled environment.", check: "Platform journals are evidence when diagnosing execution or configuration problems." },
+  ]},
+  { id: "algorithmic-automated-trading", title: "Algorithmic & Automated Trading", level: "advanced", summary: "Understand rule automation, reliability, monitoring, testing and operational controls without treating automation as a profit guarantee.", tags: ["algorithmic", "automation", "systems", "monitoring"], modules: [
+    { title: "Automation design", concept: "Automated systems need explicit inputs, state, failure handling, risk limits and a clear separation between signal and execution.", practice: "Diagram an automated signal path including data validation, decision, risk gate, execution and audit log.", mistake: "Assuming an automated rule is safe because it ran once in a backtest.", check: "Automation removes some manual errors but introduces configuration and integration risk." },
+    { title: "Testing and deployment", concept: "Unit tests, replay tests, demo/forward validation, versioning and rollback protect operational changes.", practice: "Write acceptance criteria for an update that do not depend on a profitable outcome.", mistake: "Deploying multiple untracked changes at once and being unable to attribute a result.", check: "A successful build is not enough; behaviour needs verification against expected data." },
+    { title: "Monitoring and incident response", concept: "Freshness, orders, errors, limits and alerts need observable health checks and an operator response plan.", practice: "Create an incident checklist for stale data, rejected orders and an unexpected position.", mistake: "Discovering monitoring gaps only after an unattended failure.", check: "A monitoring alert needs a named condition and a safe action, not just a dashboard colour." },
+  ]},
+  { id: "ai-machine-learning-trading", title: "AI & Machine Learning in Trading", level: "specialist", summary: "Learn what AI and ML can and cannot contribute to trading research, including leakage, drift, validation and governance.", tags: ["ai", "machine-learning", "data", "validation"], modules: [
+    { title: "ML problem framing", concept: "Prediction target, horizon, label quality, feature availability and decision threshold must be defined before selecting a model.", practice: "Turn a vague 'predict price' request into a measurable classification or ranking question.", mistake: "Training on data that would not have been available at decision time.", check: "A sophisticated model cannot fix a poorly defined target or leaky data." },
+    { title: "Validation and overfitting", concept: "Time-series splits, walk-forward testing, feature leakage, multiple testing and transaction costs determine whether a model is credible.", practice: "Identify why random train/test shuffling can leak future context in market data.", mistake: "Selecting a model by in-sample accuracy without checking trading impact or stability.", check: "Validation must preserve the time order in which real decisions would occur." },
+    { title: "Governance and monitoring", concept: "Models need versioning, explanations where possible, drift checks, human escalation and a safe fallback.", practice: "Define a no-trade/fallback rule for missing features or out-of-distribution data.", mistake: "Treating a model score as a command rather than one input to controlled decision-making.", check: "Model monitoring continues after deployment because market relationships can change." },
+  ]},
+  { id: "trading-security-professional-practice", title: "Trading Security, Fraud & Professional Practice", level: "specialist", summary: "Protect accounts, data and decision quality through security hygiene, fraud awareness, records and professional conduct.", tags: ["security", "fraud", "professional", "privacy"], modules: [
+    { title: "Account security", concept: "Passwords, MFA, device hygiene, withdrawal controls, API keys and recovery methods protect trading accounts.", practice: "Audit an account for unique passwords, MFA, recovery codes and unneeded active sessions.", mistake: "Sharing credentials or screenshots containing account identifiers, balances or API secrets.", check: "MFA reduces risk but does not make phishing or remote-access scams harmless." },
+    { title: "Fraud and manipulation awareness", concept: "Guaranteed-return claims, fake support, impersonation, pressure tactics and unverifiable performance are warning signs.", practice: "Verify a support request through an independently opened official channel before responding.", mistake: "Acting on urgency from a direct message that imitates a broker, educator or platform.", check: "No legitimate provider needs your password, one-time code or private key to help you." },
+    { title: "Professional record keeping", concept: "Risk disclosures, trade records, tax/regulatory advice boundaries and respectful communication protect both trader and audience.", practice: "Write a clear record of a strategy change, data source and known limitations.", mistake: "Presenting educational material or past results as a personalised guarantee.", check: "Professional practice includes stating uncertainty and maintaining auditable records." },
+  ]},
+];
+
+function blueprintQuestion(course: Course, module: BlueprintModule, suffix: string): QuizQuestion {
+  return q(`${course.id}-${suffix}`, "scenario", `A learner is working through ${course.title}: ${module.check} Which response reflects the course process?`, [
+    { id: "a", text: "Verify the rule with the relevant specification, context and documented evidence before acting." },
+    { id: "b", text: "Act immediately because a familiar-looking example guarantees the same result." },
+    { id: "c", text: "Ignore risk controls if the thesis feels compelling." },
+  ], ["a"], "The Academy teaches a repeatable, evidence-led process: verify the relevant context and contract/data assumptions, define risk, then act only if the setup still meets its rules.");
+}
+
+function buildBlueprintCourse(blueprint: CourseBlueprint): Course {
+  const course: Course = { ...blueprint, modules: [], certificateEligible: true };
+  course.modules = blueprint.modules.map((module, index) => {
+    const prefix = `${course.id}-m${index + 1}`;
+    const lessons: Lesson[] = [
+      { id: `${prefix}-concept`, title: `${module.title}: Core Concepts`, estimatedMinutes: 9,
+        objectives: ["Explain the governing concepts in plain language", "Identify the assumptions that make the concept useful"],
+        sections: [["The model", module.concept], ["Why it matters", `This matters in real decisions because ${module.practice.toLowerCase()}`], ["Professional standard", "Treat the concept as a way to form and challenge a hypothesis, never as a promise of a profitable outcome."]],
+        commonMistakes: [module.mistake], keyTakeaways: [module.concept, "Context, invalidation and risk remain necessary even when the concept appears clear."],
+        knowledgeCheck: [tf(`${prefix}-concept-kc`, module.check, true, "This is the course's stated operating principle. The purpose of the check is to make the learner apply it before moving on.")] },
+      { id: `${prefix}-practice`, title: `${module.title}: Practical Workshop`, estimatedMinutes: 10,
+        objectives: ["Apply the module to a documented example", "Separate observation from prediction and risk decision"],
+        sections: [["Worked exercise", module.practice], ["Record the evidence", "Write the inputs, timestamp, source, assumptions, invalidation and risk before deciding. This record makes later review possible."], ["Check the result honestly", "A successful process can still have a losing outcome. Review whether the rule was followed before judging the idea by P/L."]],
+        commonMistakes: ["Skipping the written assumptions and relying on memory after the outcome is known."], keyTakeaways: [module.practice, "A reproducible exercise is more valuable than an unrecorded impression."],
+        knowledgeCheck: [q(`${prefix}-practice-kc`, "calculation", "Before applying a method in a live or simulated decision, what must be fixed first?", [{ id: "a", text: "The evidence, invalidation and risk limit" }, { id: "b", text: "A desired profit number" }, { id: "c", text: "A social-media prediction" }], ["a"], "A process is only testable when its evidence, invalidation and risk limit are defined before the outcome.")] },
+      { id: `${prefix}-review`, title: `${module.title}: Review and Failure Modes`, estimatedMinutes: 8,
+        objectives: ["Recognize common failure modes", "Create a personal checklist for the module"],
+        sections: [["Common failure", module.mistake], ["A better response", `Use the module checklist: ${module.concept} Then document whether the exercise satisfied its preconditions.`], ["When not to act", "If data are stale, assumptions cannot be verified, or the risk limit cannot be met, the correct professional decision is to wait."]],
+        commonMistakes: [module.mistake, "Turning one example into a universal rule without a sufficient sample."], keyTakeaways: ["Waiting is a valid decision when preconditions are not met.", "Post-event review should improve the checklist rather than rationalize the outcome."],
+      },
+    ];
+    return { id: prefix, title: module.title, lessons, quiz: { id: `${prefix}-quiz`, title: `${module.title} — Module Quiz`, passingScorePct: 70, questions: [
+      blueprintQuestion(course, module, `${prefix}-q1`),
+      q(`${prefix}-q2`, "multi", "Which habits are part of the XauCloud Academy process? (Select all that apply)", [{ id: "a", text: "Document assumptions before the outcome" }, { id: "b", text: "Define invalidation and risk" }, { id: "c", text: "Treat a prior winner as a guarantee" }, { id: "d", text: "Review evidence and execution" }], ["a", "b", "d"], "A documented, risk-aware review process is repeatable. A past win never guarantees the next result."),
+      tf(`${prefix}-q3`, "A professional process can produce a losing trade or decision without becoming a bad process.", true, "Outcomes are uncertain. Separate rule quality from one result before changing a method."),
+    ] } };
+  });
+  course.finalAssessment = { id: `${course.id}-final`, title: `${course.title} — Final Assessment`, passingScorePct: 75, questions: blueprint.modules.map((module, index) => blueprintQuestion(course, module, `${course.id}-final-${index + 1}`)) };
+  return course;
+}
+
+export const ACADEMY_COURSES: Course[] = [XAUUSD_MASTERCLASS, ...COURSE_BLUEPRINTS.map(buildBlueprintCourse)];
 
 export function findCourse(courseId: string): Course | undefined {
   return ACADEMY_COURSES.find((c) => c.id === courseId);
@@ -650,18 +788,22 @@ export function publicQuizQuestion(question: QuizQuestion): Omit<QuizQuestion, "
 }
 
 export function publicCatalog(): Array<Omit<Course, "modules" | "finalAssessment"> & {
-  modules: Array<Omit<Module, "quiz"> & { quiz?: Omit<Quiz, "questions"> & { questionCount: number } }>;
-  finalAssessment?: Omit<Quiz, "questions"> & { questionCount: number };
+  modules: Array<Omit<Module, "quiz"> & { quiz?: Omit<Quiz, "questions"> & { questionCount: number; questions: Array<Omit<QuizQuestion, "correctOptionIds" | "explanation">> } }>;
+  finalAssessment?: Omit<Quiz, "questions"> & { questionCount: number; questions: Array<Omit<QuizQuestion, "correctOptionIds" | "explanation">> };
 }> {
   return ACADEMY_COURSES.map((course) => ({
     ...course,
     modules: course.modules.map((m) => ({
       ...m,
-      lessons: m.lessons.map((l) => ({ ...l, knowledgeCheck: l.knowledgeCheck?.map(publicQuizQuestion) as QuizQuestion[] | undefined })),
-      quiz: m.quiz ? { id: m.quiz.id, title: m.quiz.title, passingScorePct: m.quiz.passingScorePct, questionCount: m.quiz.questions.length } : undefined,
+      // Knowledge checks are immediate, untracked lesson feedback rather
+      // than certificate-bearing assessments, so their answer/explanation is
+      // deliberately available to the learner. Module and final quiz keys
+      // below remain server-only until a submission has been graded.
+      lessons: m.lessons.map((l) => ({ ...l })),
+      quiz: m.quiz ? { id: m.quiz.id, title: m.quiz.title, passingScorePct: m.quiz.passingScorePct, questionCount: m.quiz.questions.length, questions: m.quiz.questions.map(publicQuizQuestion) } : undefined,
     })),
     finalAssessment: course.finalAssessment
-      ? { id: course.finalAssessment.id, title: course.finalAssessment.title, passingScorePct: course.finalAssessment.passingScorePct, questionCount: course.finalAssessment.questions.length }
+      ? { id: course.finalAssessment.id, title: course.finalAssessment.title, passingScorePct: course.finalAssessment.passingScorePct, questionCount: course.finalAssessment.questions.length, questions: course.finalAssessment.questions.map(publicQuizQuestion) }
       : undefined,
   }));
 }
