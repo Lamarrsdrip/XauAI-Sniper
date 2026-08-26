@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ACADEMY_COURSES, publicCatalog } from "./academyCatalog.js";
+import { ACADEMY_COURSES, publicCatalog, courseLessonIds } from "./academyCatalog.js";
+import { REQUIRED_LESSON_IDS } from "./academyCurriculum.js";
 
 describe("expanded Academy catalog", () => {
   it("ships all 16 requested major courses as an additive curriculum", () => {
@@ -29,5 +30,21 @@ describe("expanded Academy catalog", () => {
     const question = sample.modules[0]!.quiz!.questions[0]!;
     expect(question).not.toHaveProperty("correctOptionIds");
     expect(question).not.toHaveProperty("explanation");
+  });
+
+  it("folds every original v1 lesson id into exactly one course, as real lesson content -- never dropped, never a second copy", () => {
+    const allLessonIds = ACADEMY_COURSES.flatMap((course) => courseLessonIds(course));
+    for (const legacyId of REQUIRED_LESSON_IDS) {
+      expect(allLessonIds.filter((id) => id === legacyId)).toHaveLength(1);
+    }
+    const coursesCarryingIt = (legacyId: string) => ACADEMY_COURSES.filter((course) => course.legacyLessonIds?.includes(legacyId));
+    for (const legacyId of REQUIRED_LESSON_IDS) {
+      expect(coursesCarryingIt(legacyId)).toHaveLength(1);
+    }
+  });
+
+  it("never issues the same lesson id from two different courses", () => {
+    const allLessonIds = ACADEMY_COURSES.flatMap((course) => courseLessonIds(course));
+    expect(new Set(allLessonIds).size).toBe(allLessonIds.length);
   });
 });

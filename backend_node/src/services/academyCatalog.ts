@@ -70,6 +70,12 @@ export interface Course {
   tags: string[];
   modules: Module[];
   finalAssessment?: Quiz;
+  /** Original v1 lesson ids folded into this course's first module (see
+   * LEGACY_LESSON_ASSIGNMENTS below) -- kept here too so callers can badge
+   * them as "carried over". Their completion records remain in
+   * academy_progress (not academy_course_progress); getCourseProgress
+   * reconciles the two so progress is never contradictory. */
+  legacyLessonIds?: string[];
   /** True only for a course that issues its own certificate on completion (module quizzes passed + final assessment passed). */
   certificateEligible: boolean;
 }
@@ -746,7 +752,197 @@ function buildBlueprintCourse(blueprint: CourseBlueprint): Course {
   return course;
 }
 
-export const ACADEMY_COURSES: Course[] = [XAUUSD_MASTERCLASS, ...COURSE_BLUEPRINTS.map(buildBlueprintCourse)];
+/**
+ * Content for the original 21-lesson v1 curriculum (academyCurriculum.ts /
+ * REQUIRED_LESSON_IDS), transcribed verbatim from
+ * frontend/src/components/cloud/CloudDashboard.jsx's FOREX_CURRICULUM and
+ * mobile/src/state/curriculum.ts's LESSONS (all three must describe the same
+ * 21 ids). These are folded into the relevant course's first module below so
+ * the pre-existing curriculum becomes real, in-place lesson content inside
+ * the unified catalog rather than a second, unrelated "Core Curriculum"
+ * list -- completion of these ids keeps writing to the original
+ * academy_progress collection (see academyCourseProgress.ts), so no existing
+ * learner progress or v1 certificate eligibility is affected.
+ */
+const LEGACY_LESSONS: Array<{ id: string; title: string; sections: Array<[string, string]> }> = [
+  { id: "foundation", title: "Forex Foundations", sections: [
+    ["What forex actually is", "Foreign exchange is the global market where one currency is exchanged for another. Prices move because banks, funds, companies, governments and traders continuously change what they are willing to buy and sell."],
+    ["Currency pairs", "A pair compares two currencies. In EURUSD, EUR is the base and USD is the quote. If EURUSD rises, one euro buys more dollars. Gold is commonly quoted as XAUUSD — the value of one ounce of gold in US dollars."],
+    ["Why markets move", "Price responds to changing expectations about interest rates, inflation, growth, risk, liquidity and positioning. Technical patterns matter because they summarize what buyers and sellers are doing — not because a shape magically predicts the future."],
+    ["Your first rule", "Treat trading as risk management first and prediction second. You can be wrong often and still survive if losses are small; one oversized loss can erase weeks of good decisions."],
+  ]},
+  { id: "quotes", title: "Quotes, Pips & Lots", sections: [
+    ["Bid and ask", "You sell at the bid and buy at the ask. The difference is the spread — an immediate transaction cost. Fast markets and illiquid periods can widen it."],
+    ["Pips and points", "A pip is a standardized unit of price movement. Brokers may display extra decimal points, so always learn your symbol's contract specification instead of assuming every instrument uses the same point value."],
+    ["Lot size", "Position size controls how much money each price movement is worth. A stop distance means nothing without lot size; risk comes from both together."],
+    ["Contract specs matter", "Gold contract size, tick value, minimum lot and margin can differ by broker. Check MT5 Symbol Specification before translating a setup into money risk."],
+  ]},
+  { id: "orders", title: "Orders & Execution", sections: [
+    ["Market orders", "A market order asks to trade now at the best available price. During volatility the fill can differ from the price you saw — this is slippage."],
+    ["Limit orders", "A buy limit sits below current price and a sell limit above. Limits seek a better price but may never fill."],
+    ["Stop orders", "A buy stop sits above current price and a sell stop below. They are often used for breakout participation, but false breaks and slippage are real risks."],
+    ["SL and TP", "A stop-loss defines where the trade thesis is invalidated. A take-profit is a planned exit. Place them because the market structure requires them, then size the trade to that distance — not the other way around."],
+  ]},
+  { id: "margin", title: "Leverage, Margin & Liquidation Risk", sections: [
+    ["Leverage", "Leverage lets you control more market exposure than your deposited cash. It magnifies both gains and losses; it does not improve the quality of a setup."],
+    ["Margin", "Margin is collateral reserved to keep leveraged positions open. Free margin falls as positions lose or as you add exposure."],
+    ["Margin calls", "If equity falls too far, a broker can restrict or close positions. Never build a strategy that depends on being allowed unlimited room to recover."],
+    ["Professional mindset", "Choose position size from your acceptable loss at the stop, then check margin. Never choose the biggest lot your broker permits."],
+  ]},
+  { id: "risk", title: "Risk Management", sections: [
+    ["Risk per trade", "Define the maximum account percentage or cash amount you can lose if the stop is hit. Consistency matters more than chasing a large win."],
+    ["R-multiples", "1R is the amount you planned to risk. A +2R winner makes twice that risk; a -1R loss loses the planned risk. R lets you compare trades independent of lot size."],
+    ["Drawdown", "Drawdown measures decline from a previous equity peak. Recovery gets mathematically harder as drawdown deepens, which is why preventing large losses matters."],
+    ["Correlated risk", "Several trades can be one hidden bet. If instruments respond to the same USD move, total portfolio risk can be much larger than the sum of labels suggests."],
+    ["Risk of ruin", "No setup has a 100% win rate. A position size that cannot survive a normal losing streak is too large, even if the recent backtest looked excellent."],
+  ]},
+  { id: "structure", title: "Market Structure", sections: [
+    ["Trend structure", "Uptrends tend to print higher highs and higher lows; downtrends lower highs and lower lows. Structure is evidence, not a guarantee."],
+    ["Break of structure", "A meaningful break occurs when price decisively moves through a structural swing. A wick alone can be a liquidity probe rather than confirmation."],
+    ["Change of character", "When the market stops behaving like its prior trend, a transition may be starting. Wait for follow-through before treating every countertrend move as a reversal."],
+    ["Context beats labels", "A bullish structure break directly into major resistance is different from the same break after a clean base with room to move."],
+  ]},
+  { id: "sr", title: "Support, Resistance & Liquidity", sections: [
+    ["Zones, not laser lines", "Support and resistance are usually areas where order flow changed before. Treat them as zones with tolerance, not exact prices that must hold to the pip."],
+    ["Liquidity", "Stops and pending orders cluster around obvious highs, lows and range edges. Price can sweep these areas before choosing direction."],
+    ["Role reversal", "Broken resistance can become support and broken support can become resistance, especially when a retest is accepted."],
+    ["Confluence", "A level becomes more useful when structure, trend, session timing and risk-to-reward also support the trade."],
+  ]},
+  { id: "candles", title: "Candlesticks & Price Action", sections: [
+    ["Body and wick", "The body shows the open-to-close move; wicks show extremes rejected or revisited. A long wick is meaningful only relative to nearby structure and recent volatility."],
+    ["Engulfing bars", "An engulfing candle can signal decisive order flow when it appears at a meaningful location. In the middle of random chop, it is just another candle."],
+    ["Pin bars", "A pin bar shows rejection: price explored one side and closed away from it. Confirmation and location determine whether that rejection is useful."],
+    ["Inside bars", "An inside bar represents compression. Breakouts can expand quickly, but both sides may be swept first, so define invalidation before entry."],
+  ]},
+  { id: "patterns", title: "Chart Patterns", sections: [
+    ["Patterns are behavior", "A pattern is a visual shorthand for repeated order-flow behavior. The best question is not 'what shape is this?' but 'who is trapped, who is defending, and where is invalidation?'"],
+    ["Reversal families", "Double tops/bottoms, head-and-shoulders and failed breakouts matter most after an extended move and near a meaningful level."],
+    ["Continuation families", "Flags, pennants and tight consolidations can pause a strong move before continuation. Quality falls when the impulse into the pattern was weak."],
+    ["Failure is information", "A textbook pattern that breaks the wrong way can create an even stronger move because traders positioned for the obvious outcome are forced to exit."],
+  ]},
+  { id: "indicators", title: "Indicators Without Indicator Addiction", sections: [
+    ["Moving averages", "Moving averages smooth price and can describe trend direction or dynamic zones. They lag by design and should not replace price structure."],
+    ["RSI", "RSI measures momentum, not automatic reversal. 'Overbought' can stay overbought through a strong trend."],
+    ["ATR", "Average True Range estimates recent volatility. It is useful for comparing stop distance and expected movement across different market regimes."],
+    ["Use fewer tools", "Several indicators derived from the same price data can create fake confluence. Know what each tool measures and avoid counting the same evidence multiple times."],
+  ]},
+  { id: "timeframes", title: "Multi-Timeframe Analysis", sections: [
+    ["Top-down thinking", "Use a higher timeframe for broad structure, a working timeframe for the setup, and a lower timeframe only when it genuinely improves execution."],
+    ["Avoid timeframe shopping", "If you keep switching charts until one agrees with your bias, you are not doing multi-timeframe analysis — you are searching for confirmation."],
+    ["Conflict is normal", "A lower-timeframe uptrend can exist inside a higher-timeframe downtrend. Decide which timeframe defines your trade thesis before entering."],
+  ]},
+  { id: "sessions", title: "Sessions, News & Volatility", sections: [
+    ["Trading sessions", "London and New York typically bring deeper liquidity to major FX pairs and gold. Session opens can create both genuine expansion and stop-clearing volatility."],
+    ["Economic news", "Rate decisions, CPI, jobs data and central-bank communication can move markets violently. Technical levels may slip or gap during high-impact releases."],
+    ["Gold drivers", "Gold often responds to real yields, USD direction, inflation expectations, risk sentiment and geopolitics. Relationships can weaken or reverse in different regimes."],
+    ["Do not predict headlines", "Your edge should not depend on correctly guessing a number before release. Decide whether your system trades, reduces risk or stands aside around scheduled news."],
+  ]},
+  { id: "xau", title: "Trading Gold (XAUUSD)", sections: [
+    ["Gold moves fast", "XAUUSD can travel large distances quickly and can reverse sharply. Stops, lot size and broker tick values deserve extra attention."],
+    ["Liquidity sweeps", "Gold frequently probes obvious highs and lows before expanding. Entering purely because a level was touched can be expensive."],
+    ["Macro sensitivity", "USD moves, yields, inflation expectations and risk events can dominate technical setups. Context can change in minutes."],
+    ["Respect the spread", "Around rollover and major news, gold spreads can widen significantly. A strategy tested on ideal fills may perform very differently live."],
+  ]},
+  { id: "strategy", title: "Building a Trading Strategy", sections: [
+    ["Define the setup", "Write down market condition, location, trigger, invalidation and target. If two traders cannot apply the rule consistently, it is not defined enough."],
+    ["Separate signal and sizing", "The setup decides whether a trade exists. Risk management decides how large it may be. Do not increase size because you 'feel' more confident."],
+    ["Define no-trade conditions", "Knowing when not to trade is part of the strategy: late entries, poor liquidity, excessive spread, news risk, weak structure or insufficient reward."],
+    ["Measure expectancy", "Expectancy combines win rate and average win/loss. A high win rate with occasional huge losses can still be a bad system."],
+  ]},
+  { id: "execution", title: "Entries, Stops & Targets", sections: [
+    ["Entry location", "Good entries balance confirmation with remaining room. Waiting too long can turn a correct idea into poor risk-to-reward."],
+    ["Stop placement", "Place the stop where the thesis is invalid, then size down if the stop is wide. Tightening a stop only to fit a larger lot is backwards."],
+    ["Targets", "Targets can use structure, liquidity, volatility or R-multiples. A target should have a reason, not just a round profit number."],
+    ["Partial exits", "Scaling out can reduce variance but also reduce average winner size. Test the rule instead of assuming partial profit is always superior."],
+  ]},
+  { id: "management", title: "Trade Management", sections: [
+    ["Break-even is not free", "Moving a stop to entry removes downside on that trade but can also convert normal retests into premature exits."],
+    ["Trailing stops", "A trailing method should match market structure or volatility. A trail that is too tight can destroy a trend-following edge."],
+    ["Let winners breathe", "The goal is not to protect every floating dollar. The goal is to protect the strategy's long-term expectancy."],
+    ["Exit reasons", "Log whether exits were planned, structural, protective or emotional. Mixing discretionary exits with rule-based exits makes performance hard to diagnose."],
+  ]},
+  { id: "psychology", title: "Trading Psychology", sections: [
+    ["FOMO", "Fear of missing out usually appears after price has already moved. Missing a trade is cheaper than entering a bad one."],
+    ["Revenge trading", "After a loss, the desire to immediately win it back changes decision quality. A predefined cooldown rule can protect you from yourself."],
+    ["Outcome bias", "A good trade can lose and a bad trade can win. Judge whether you followed your process before judging the P&L."],
+    ["Boredom", "Many trading mistakes happen because nothing is happening. Professional behavior includes doing nothing when there is no edge."],
+  ]},
+  { id: "journal", title: "Journaling & Statistics", sections: [
+    ["What to record", "Capture setup type, market regime, entry reason, stop, target, result, screenshot and whether every rule was followed."],
+    ["Sample size", "Five wins are not proof of an edge and five losses are not proof a strategy is broken. Evaluate enough trades to include normal variance."],
+    ["Key metrics", "Track expectancy, average R, win rate, profit factor, drawdown, losing streaks and performance by setup or regime."],
+    ["Review mistakes separately", "Separate strategy losses from execution mistakes. Otherwise you may change a good system to solve a discipline problem."],
+  ]},
+  { id: "backtest", title: "Backtesting & Forward Testing", sections: [
+    ["Avoid hindsight", "Define rules before scrolling through history. If the rule changes every time a losing example appears, the test is not valid."],
+    ["Include costs", "Spread, commission, slippage and realistic fill assumptions matter. Tiny theoretical edges can disappear after costs."],
+    ["Out-of-sample", "Build on one period and validate on another. If performance exists only in the data used to invent the rules, it may be overfit."],
+    ["Forward test", "Demo or very small live testing shows how the system behaves with real-time decisions, latency and emotions."],
+  ]},
+  { id: "prop", title: "Prop Firm Risk", sections: [
+    ["Read the actual rules", "Different firms calculate daily drawdown, trailing loss and equity limits differently. Never rely on a generic interpretation."],
+    ["Use a buffer", "Do not trade exactly against the firm's loss threshold. Fees, floating P&L and calculation timing can create accidental breaches."],
+    ["Consistency", "A challenge is a risk-management exercise before it is a profit target. Oversizing to finish faster often reduces the probability of completion."],
+  ]},
+  { id: "xaucloud", title: "Using XauCloud Professionally", sections: [
+    ["Automation is not certainty", "XauCloud can execute a defined process consistently, but no trading system can guarantee profit or eliminate market risk."],
+    ["Bot On / Off", "Bot Off stops new automatic entries while existing positions remain managed. Turning Bot On allows normal qualified entries again; it never forces an immediate trade."],
+    ["Market Outlook", "Outlook is evidence and context, not permission to abandon risk rules. Execution still follows XauCloud's blockers and configured risk controls."],
+    ["Use the data", "Review Analytics, Activity, AI Brain and the Pattern Scanner to understand what the system is seeing rather than judging it from one trade."],
+  ]},
+];
+
+function legacyLessonToLesson(entry: (typeof LEGACY_LESSONS)[number]): Lesson {
+  return {
+    id: entry.id,
+    title: entry.title,
+    estimatedMinutes: entry.sections.length * 2 + 2,
+    objectives: [
+      `Understand the core ideas behind ${entry.title}`,
+      "Apply this lesson before your next live or demo trade",
+    ],
+    sections: entry.sections,
+    commonMistakes: [`Treating "${entry.title}" as background reading instead of a rule you apply before entering a trade.`],
+    keyTakeaways: entry.sections.map(([heading]) => heading),
+  };
+}
+
+/**
+ * Maps each original v1 lesson id to the new course whose subject matter it
+ * belongs under. Every id in academyCurriculum.ts's REQUIRED_LESSON_IDS must
+ * appear exactly once here -- academyCatalog.test.ts enforces that so a
+ * future v1 lesson can never silently go unmapped again.
+ */
+const LEGACY_LESSON_ASSIGNMENTS: Readonly<Record<string, readonly string[]>> = {
+  "financial-markets-foundations": ["foundation", "quotes", "orders", "margin"],
+  "complete-forex-course": ["sessions"],
+  "chart-reading-market-structure": ["structure", "sr", "candles", "patterns", "timeframes"],
+  "xauusd-masterclass": ["xau"],
+  "risk-money-management": ["risk", "prop"],
+  "trading-psychology": ["psychology"],
+  "strategy-development-trading-systems": ["strategy", "execution", "management"],
+  "backtesting-journaling-performance": ["journal", "backtest"],
+  "algorithmic-automated-trading": ["xaucloud"],
+  "technical-analysis": ["indicators"],
+};
+
+/**
+ * Folds a course's assigned legacy lessons into its first module as real
+ * lesson content (not a separate bucket), so they show up naturally in the
+ * unified lesson list -- see the module-level docblock above.
+ */
+export const ACADEMY_COURSES: Course[] = [XAUUSD_MASTERCLASS, ...COURSE_BLUEPRINTS.map(buildBlueprintCourse)].map((course) => {
+  const legacyLessonIds = [...(LEGACY_LESSON_ASSIGNMENTS[course.id] ?? [])];
+  if (legacyLessonIds.length && course.modules[0]) {
+    const legacyLessons = legacyLessonIds.map((id) => {
+      const entry = LEGACY_LESSONS.find((l) => l.id === id);
+      if (!entry) throw new Error(`Missing legacy lesson content for id "${id}".`);
+      return legacyLessonToLesson(entry);
+    });
+    course.modules[0] = { ...course.modules[0], lessons: [...legacyLessons, ...course.modules[0].lessons] };
+  }
+  return { ...course, legacyLessonIds };
+});
 
 export function findCourse(courseId: string): Course | undefined {
   return ACADEMY_COURSES.find((c) => c.id === courseId);
@@ -772,6 +968,7 @@ export function findQuiz(courseId: string, quizId: string): { course: Course; qu
   return undefined;
 }
 
+/** Legacy ids are folded directly into course.modules[0].lessons above, so this is simply every lesson id in the course -- no separate count is added. */
 export function courseLessonIds(course: Course): string[] {
   return course.modules.flatMap((m) => m.lessons.map((l) => l.id));
 }

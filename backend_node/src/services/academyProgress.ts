@@ -30,6 +30,12 @@ async function getOrInitProgress(userId: string): Promise<AcademyProgressDoc> {
   return { user_id: userId, curriculum_version: CURRICULUM_VERSION, completed_lesson_ids: [], updated_at: new Date().toISOString() };
 }
 
+/** Lightweight accessor used by academyCourseProgress.ts to fold v1 completions into a course's progress view without duplicating the completion record. */
+export async function getCompletedLegacyLessonIds(userId: string): Promise<string[]> {
+  const doc = await getOrInitProgress(userId);
+  return doc.completed_lesson_ids;
+}
+
 export async function getAcademyProgress(userId: string): Promise<AcademyProgressSummary> {
   const doc = await getOrInitProgress(userId);
   return {

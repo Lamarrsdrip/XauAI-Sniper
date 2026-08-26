@@ -8,7 +8,9 @@
  */
 import { randomUUID } from "node:crypto";
 import { getDb } from "../db.js";
-import { findCourse, findLesson, findQuiz, courseLessonIds, courseQuizIds, ACADEMY_COURSES } from "./academyCatalog.js";
+import { findCourse, findLesson, findQuiz, courseLessonIds, courseQuizIds, ACADEMY_COURSES, type Course } from "./academyCatalog.js";
+import { isKnownLessonId } from "./academyCurriculum.js";
+import { getCompletedLegacyLessonIds, markLessonComplete, markLessonIncomplete } from "./academyProgress.js";
 
 export interface CourseProgressDoc {
   user_id: string;
@@ -69,11 +71,27 @@ export interface CourseProgressView {
   progress_pct: number;
 }
 
+/**
+ * Reconciles this course's own progress record with any of its folded-in v1
+ * lessons the learner already completed under the original curriculum, so
+ * the unified view is never contradictory (e.g. showing 0/7 on a course that
+ * contains 4 lessons the learner finished years ago under the old Academy).
+ * The v1 record (academy_progress) stays the single source of truth for
+ * those specific ids; this only reads it, it never copies/duplicates it.
+ */
+async function reconciledCompletedLessonIds(userId: string, course: Course, ownCompleted: readonly string[]): Promise<string[]> {
+  if (!course.legacyLessonIds?.length) return [...ownCompleted];
+  const legacyDone = new Set(await getCompletedLegacyLessonIds(userId));
+  const carriedOver = course.legacyLessonIds.filter((id) => legacyDone.has(id));
+  return [...new Set([...ownCompleted, ...carriedOver])];
+}
+
 export async function getCourseProgress(userId: string, courseId: string): Promise<CourseProgressView | null> {
   const course = findCourse(courseId);
   if (!course) return null;
   const progress = await getOrInitProgress(userId, courseId);
-  const completed = new Set(progress.completed_lesson_ids);
+  const completedLessonIds = await reconciledCompletedLessonIds(userId, course, progress.completed_lesson_ids);
+  const completed = new Set(completedLessonIds);
 
   const modules: ModuleProgressView[] = [];
   for (const m of course.modules) {
@@ -99,12 +117,12 @@ export async function getCourseProgress(userId: string, courseId: string): Promi
 
   const allLessonIds = courseLessonIds(course);
   const courseComplete = modules.every((m) => m.module_complete) && finalPassed;
-  const progressPct = allLessonIds.length === 0 ? 0 : Math.round((progress.completed_lesson_ids.length / allLessonIds.length) * 100);
+  const progressPct = allLessonIds.length === 0 ? 0 : Math.round((completedLessonIds.length / allLessonIds.length) * 100);
 
   return {
     course_id: course.id,
-    completed_lesson_ids: progress.completed_lesson_ids,
-    completed_lesson_count: progress.completed_lesson_ids.length,
+    completed_lesson_ids: completedLessonIds,
+    completed_lesson_count: completedLessonIds.length,
     total_lesson_count: allLessonIds.length,
     modules,
     final_assessment_id: course.finalAssessment?.id ?? null,
@@ -114,9 +132,20 @@ export async function getCourseProgress(userId: string, courseId: string): Promi
   };
 }
 
+/**
+ * A folded-in v1 lesson id's completion truth lives in academy_progress
+ * (not academy_course_progress) -- writing it there instead of here keeps
+ * exactly one record per lesson id and means the original v1
+ * curriculum/certificate stay in sync automatically, satisfied by whichever
+ * UI (old lesson view or unified course view) the learner used.
+ */
 export async function markCourseLessonComplete(userId: string, courseId: string, lessonId: string): Promise<CourseProgressView> {
   const found = findLesson(courseId, lessonId);
   if (!found) throw Object.assign(new Error("Unknown course/lesson id."), { statusCode: 400 });
+  if (isKnownLessonId(lessonId) && found.course.legacyLessonIds?.includes(lessonId)) {
+    await markLessonComplete(userId, lessonId);
+    return (await getCourseProgress(userId, courseId))!;
+  }
   await getDb().collection("academy_course_progress").updateOne(
     { user_id: userId, course_id: courseId },
     { $addToSet: { completed_lesson_ids: lessonId }, $set: { updated_at: new Date().toISOString() }, $setOnInsert: { user_id: userId, course_id: courseId } },
@@ -126,6 +155,11 @@ export async function markCourseLessonComplete(userId: string, courseId: string,
 }
 
 export async function markCourseLessonIncomplete(userId: string, courseId: string, lessonId: string): Promise<CourseProgressView> {
+  const found = findLesson(courseId, lessonId);
+  if (found && isKnownLessonId(lessonId) && found.course.legacyLessonIds?.includes(lessonId)) {
+    await markLessonIncomplete(userId, lessonId);
+    return (await getCourseProgress(userId, courseId))!;
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mongodb's PullOperator typing rejects an otherwise-valid $pull on a plain-string array field.
   await getDb().collection("academy_course_progress").updateOne(
     { user_id: userId, course_id: courseId },
