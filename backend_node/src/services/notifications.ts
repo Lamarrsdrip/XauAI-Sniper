@@ -316,25 +316,26 @@ export async function deactivateDeviceRegistration(authenticatedUserId: string, 
 }
 
 export async function completeActiveDevices(userId: string): Promise<Record<string, unknown>[]> {
-  // First-party Web Push is the only notification authority.
-  // Do NOT gate VAPID delivery on legacy OneSignal registration records.
-  return await getDb()
-    .collection("web_push_subscriptions")
-    .find(
-      { user_id: String(userId) },
-      {
-        projection: {
-          _id: 0,
-          endpoint: 1,
-          user_id: 1,
-          updated_at: 1,
-          created_at: 1,
-        },
-      },
-    )
-    .sort({ updated_at: -1 })
-    .limit(100)
-    .toArray();
+  // First-party Web Push and native (iOS/Android) Expo push tokens are the
+  // two delivery authorities -- do NOT gate on legacy OneSignal records.
+  // A mobile-only user (native token, no web push subscription) must count
+  // as having an active device just as much as a web-only user does.
+  const db = getDb();
+  const [webPush, nativePush] = await Promise.all([
+    db
+      .collection("web_push_subscriptions")
+      .find({ user_id: String(userId) }, { projection: { _id: 0, endpoint: 1, user_id: 1, updated_at: 1, created_at: 1 } })
+      .sort({ updated_at: -1 })
+      .limit(100)
+      .toArray(),
+    db
+      .collection("cloud_device_tokens")
+      .find({ user_id: String(userId) }, { projection: { _id: 0, token: 1, user_id: 1, platform: 1, updated_at: 1, created_at: 1 } })
+      .sort({ updated_at: -1 })
+      .limit(100)
+      .toArray(),
+  ]);
+  return [...webPush, ...nativePush];
 }
 
 export async function countCompleteActiveDevices(userId: string): Promise<number> {

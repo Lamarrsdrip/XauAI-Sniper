@@ -12,7 +12,10 @@ import { cloud } from '../../api/cloud';
 import { api, ApiError } from '../../api/client';
 import { USE_MOCK_DATA } from '../../api/config';
 import { isBiometricAvailable, getBiometricEnabled, setBiometricEnabled, authenticateWithBiometrics } from '../../services/biometrics';
+import { NotificationPrefs } from '../../api/types';
 import { Ionicons } from '@expo/vector-icons';
+
+const mockPrefs: NotificationPrefs = { user_id: 'mock', tier: 'HOURLY_PLUS_RESULTS', quiet_hours_start: null, quiet_hours_end: null, notify_all_devices: true, muted_categories: [] };
 
 type Props = NativeStackScreenProps<MoreStackParamList, 'Settings'>;
 
@@ -40,10 +43,46 @@ export const SettingsScreen: React.FC<Props> = ({ navigation }) => {
   const [bioEnabled, setBioEnabled] = useState(false);
   const [changePasswordSent, setChangePasswordSent] = useState(false);
 
+  const [prefs, setPrefs] = useState<NotificationPrefs | null>(USE_MOCK_DATA ? mockPrefs : null);
+  const [prefsError, setPrefsError] = useState<string | null>(null);
+  const [prefsSaving, setPrefsSaving] = useState(false);
+
   useEffect(() => {
     isBiometricAvailable().then(setBioAvailable);
     getBiometricEnabled().then(setBioEnabled);
+    if (!USE_MOCK_DATA) {
+      cloud.notificationPrefs().then((r) => setPrefs(r.prefs)).catch(() => setPrefsError('Could not load notification settings.'));
+    }
   }, []);
+
+  const savePrefs = async (next: NotificationPrefs) => {
+    setPrefs(next); // optimistic
+    if (USE_MOCK_DATA) return;
+    setPrefsSaving(true);
+    setPrefsError(null);
+    try {
+      const res = await cloud.updateNotificationPrefs({ tier: next.tier, muted_categories: next.muted_categories, notify_all_devices: next.notify_all_devices });
+      setPrefs(res.prefs);
+    } catch (e) {
+      setPrefsError(e instanceof ApiError ? e.message : 'Could not save notification settings.');
+    } finally {
+      setPrefsSaving(false);
+    }
+  };
+
+  const pushEnabled = !!prefs && prefs.tier !== 'OFF';
+  const togglePush = () => {
+    if (!prefs) return;
+    savePrefs({ ...prefs, tier: pushEnabled ? 'OFF' : 'HOURLY_PLUS_RESULTS' });
+  };
+  const categoryEnabled = (cat: string) => pushEnabled && !!prefs && !prefs.muted_categories.includes(cat);
+  const toggleCategory = (cat: string) => {
+    if (!prefs || !pushEnabled) return;
+    const muted = prefs.muted_categories.includes(cat)
+      ? prefs.muted_categories.filter((c) => c !== cat)
+      : [...prefs.muted_categories, cat];
+    savePrefs({ ...prefs, muted_categories: muted });
+  };
 
   const toggleBiometric = async () => {
     if (!bioAvailable) return;
@@ -115,15 +154,36 @@ export const SettingsScreen: React.FC<Props> = ({ navigation }) => {
       <Text variant="h3" color="secondary" style={{ marginBottom: spacing.sm }}>NOTIFICATIONS</Text>
       <Card padded={false} style={{ marginBottom: spacing.lg }}>
         <View style={{ paddingHorizontal: spacing.md }}>
-          <Row title="Push Notifications" left={<Ionicons name="notifications-outline" size={19} color={colors.textSecondary} />} showChevron />
+          <Row
+            title="Push Notifications"
+            left={<Ionicons name="notifications-outline" size={19} color={colors.textSecondary} />}
+            right={<Text variant="captionMedium" color={pushEnabled ? 'brand' : 'tertiary'}>{pushEnabled ? 'On' : 'Off'}</Text>}
+            onPress={prefs ? togglePush : undefined}
+          />
           <Divider inset />
-          <Row title="Signal Alerts" left={<Ionicons name="flash-outline" size={19} color={colors.textSecondary} />} showChevron />
+          <Row
+            title="Signal Alerts"
+            left={<Ionicons name="flash-outline" size={19} color={colors.textSecondary} />}
+            right={<Text variant="captionMedium" color={categoryEnabled('SIGNALS') ? 'brand' : 'tertiary'}>{categoryEnabled('SIGNALS') ? 'On' : 'Off'}</Text>}
+            onPress={pushEnabled ? () => toggleCategory('SIGNALS') : undefined}
+          />
           <Divider inset />
-          <Row title="Bot Alerts" left={<Ionicons name="hardware-chip-outline" size={19} color={colors.textSecondary} />} showChevron />
+          <Row
+            title="Bot Alerts"
+            left={<Ionicons name="hardware-chip-outline" size={19} color={colors.textSecondary} />}
+            right={<Text variant="captionMedium" color={categoryEnabled('BOT_UPDATES') ? 'brand' : 'tertiary'}>{categoryEnabled('BOT_UPDATES') ? 'On' : 'Off'}</Text>}
+            onPress={pushEnabled ? () => toggleCategory('BOT_UPDATES') : undefined}
+          />
           <Divider inset />
-          <Row title="Account & Security Alerts" left={<Ionicons name="shield-checkmark-outline" size={19} color={colors.textSecondary} />} showChevron />
+          <Row
+            title="Account & Security Alerts"
+            left={<Ionicons name="shield-checkmark-outline" size={19} color={colors.textSecondary} />}
+            right={<Text variant="captionMedium" color={categoryEnabled('SYSTEM') ? 'brand' : 'tertiary'}>{categoryEnabled('SYSTEM') ? 'On' : 'Off'}</Text>}
+            onPress={pushEnabled ? () => toggleCategory('SYSTEM') : undefined}
+          />
         </View>
       </Card>
+      {prefsError && <Text variant="caption" color="sell" style={{ marginTop: -spacing.sm, marginBottom: spacing.md }}>{prefsError}</Text>}
 
       <Text variant="h3" color="secondary" style={{ marginBottom: spacing.sm }}>SECURITY</Text>
       <Card padded={false} style={{ marginBottom: spacing.lg }}>

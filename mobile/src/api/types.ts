@@ -153,6 +153,16 @@ export interface PerformanceAnalytics {
 }
 export type PerformanceAnalyticsResponse = PerformanceInsufficientData | PerformanceAnalytics;
 
+// Mirrors backend_node/src/routes/notificationRoutes.ts GET/POST /outlook/notifications/prefs
+export interface NotificationPrefs {
+  user_id: string;
+  tier: 'OFF' | 'HOURLY_ONLY' | 'HOURLY_PLUS_RESULTS' | 'ALL_UPDATES';
+  quiet_hours_start: number | null;
+  quiet_hours_end: number | null;
+  notify_all_devices: boolean;
+  muted_categories: string[];
+}
+
 // Mirrors backend_node/src/routes/cloud/signals.ts GET /cloud/billing
 export interface BillingResponse {
   entitlement: Entitlement;
