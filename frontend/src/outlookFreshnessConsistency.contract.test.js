@@ -46,3 +46,23 @@ describe("AI Market Outlook current-signal freshness contract", () => {
     expect(homeCard).toContain("requestId !== requestSeq.current");
   });
 });
+
+// Owner-reported bug (2026-08-26): the Home Outlook card showed Entry and SL
+// for an active signal but never TP1/TP2/TP3, for bot owners AND
+// free/trial subscribers alike -- the take-profit fields existed in the
+// underlying data (both /outlook/current's tp1_price/tp2_price/tp3_price
+// and the subscriber mirror's tp1/tp2/tp3) but the compact card never read
+// them.
+describe("AI Market Outlook Home card shows take-profit levels for an active signal", () => {
+  test("renders TP1 and TP2/TP3 alongside Entry and SL", () => {
+    expect(homeCard).toContain("outlook.tp1_price");
+    expect(homeCard).toMatch(/TP1:/);
+    expect(homeCard).toMatch(/TP2 \/ TP3:/);
+  });
+
+  test("the subscriber data source maps tp1/tp2/tp3 from the mirrored signal doc into the same outlook.tp*_price fields", () => {
+    expect(homeCard).toMatch(/tp1_price:\s*signal\.tp1/);
+    expect(homeCard).toMatch(/tp2_price:\s*signal\.tp2/);
+    expect(homeCard).toMatch(/tp3_price:\s*signal\.tp3/);
+  });
+});

@@ -38,6 +38,9 @@ export function computeIsComplete(completedLessonIds: readonly string[]): boolea
  */
 const CURRICULUM_DESCRIPTIONS: Readonly<Record<string, string>> = {
   v1: "Having completed the required XauCloud Forex Academy curriculum and assessments covering financial markets, market mechanics, risk management, price action, trading psychology, Gold/XAUUSD and trading systems.",
+  // 2026-08-26 Academy expansion: per-course certificates use the
+  // "course:<courseId>" key convention -- see academyCourseCertificates.ts.
+  "course:xauusd-masterclass": "Having completed the XauCloud Gold / XAUUSD Masterclass, covering gold market structure and sessions, the macro and real-yield drivers of gold price action, practical intraday and swing trading approaches, and gold-specific risk management -- including all module quizzes and the course final assessment.",
 };
 
 export function curriculumDescription(version: string): string {

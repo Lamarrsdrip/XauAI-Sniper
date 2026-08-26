@@ -59,8 +59,10 @@ import { registerCloudPerformanceAnalyticsRoutes } from "./routes/cloud/performa
 import { registerLocalAiRoutes } from "./routes/localAi.js";
 import { hourlyGenerationTick } from "./services/marketOutlookHourlyTick.js";
 import { registerAcademyRoutes } from "./routes/cloud/academy.js";
+import { registerAcademyCourseRoutes } from "./routes/cloud/academyCourses.js";
 import { registerAcademyVerifyRoutes } from "./routes/academyVerify.js";
 import { ensureAcademyInfrastructure } from "./services/academyCertificates.js";
+import { ensureAcademyCourseInfrastructure } from "./services/academyCourseProgress.js";
 import { trackOutlookLifecycleTick } from "./services/marketOutlookTick.js";
 import { enqueueIfActionable } from "./services/outlookExecution.js";
 import { runStartupTasks } from "./services/startup.js";
@@ -239,6 +241,7 @@ async function main(): Promise<void> {
       await registerCloudPerformanceAnalyticsRoutes(api);
       await registerLocalAiRoutes(api);
       await registerAcademyRoutes(api);
+      await registerAcademyCourseRoutes(api);
       await registerAcademyVerifyRoutes(api);
       // Every server.py + market_outlook_routes.py endpoint now has a
       // Node.js counterpart -- remaining work is Hostinger deployment +
@@ -316,6 +319,7 @@ async function main(): Promise<void> {
   await runReadinessStep("marketing_actions", () => ensureMarketingActionInfrastructure(), 45_000);
   await runReadinessStep("admin_ops_actions", () => ensureAdminOpsInfrastructure(), 30_000);
   await runReadinessStep("academy", () => ensureAcademyInfrastructure(), 30_000);
+  await runReadinessStep("academy-courses", () => ensureAcademyCourseInfrastructure(), 30_000);
   markApplicationReady();
   app.log.info({ readiness: readinessSnapshot() }, "XauCloud startup initialization complete");
   // Recover/publish existing durable jobs immediately after a process restart;

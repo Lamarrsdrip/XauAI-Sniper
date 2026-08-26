@@ -48,6 +48,8 @@ export interface CertificatePdfInput {
   completedAtIso: string;
   verifyUrl: string;
   curriculumVersion?: string;
+  /** 2026-08-26 course-certificate expansion: defaults to "XauCloud Forex Academy" for the original v1 curriculum; a per-course certificate (see academyCourseCertificates.ts) passes its own course title instead. */
+  programTitle?: string;
 }
 
 /** "https://xaucloud.io/verify-certificate/XC-..." -> "xaucloud.io/verify" */
@@ -238,7 +240,7 @@ export async function renderCertificatePdf(input: CertificatePdfInput): Promise<
   doc.font("Helvetica").fontSize(9.5).fillColor(MUTED).text("HAS SUCCESSFULLY COMPLETED THE", 0, y, { align: "center", width: W, characterSpacing: 2 });
 
   y += 22;
-  doc.font("Times-Bold").fontSize(19).fillColor(GOLD_DEEP).text("XauCloud Forex Academy", 0, y, { align: "center", width: W });
+  doc.font("Times-Bold").fontSize(19).fillColor(GOLD_DEEP).text(input.programTitle ?? "XauCloud Forex Academy", 0, y, { align: "center", width: W });
 
   y += 32;
   const description = curriculumDescription(input.curriculumVersion ?? "v1");

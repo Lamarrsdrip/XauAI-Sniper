@@ -44,6 +44,9 @@ function subscriberSignalToOutlookState(signal) {
     preferred_entry_zone_low: signal.entry_zone_low ?? signal.entry,
     preferred_entry_zone_high: signal.entry_zone_high ?? signal.entry,
     suggested_sl: signal.stop,
+    tp1_price: signal.tp1,
+    tp2_price: signal.tp2,
+    tp3_price: signal.tp3,
     reasoning: signal.rationale,
     automated_entry_approved: signal.automated_entry_approved,
   };
@@ -268,6 +271,10 @@ export default function AIMarketOutlookCard({ linked = true, online = true, onOu
           <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-white/45">
             <div>Entry: <span className="text-white/70">{outlook.preferred_entry_zone_low}–{outlook.preferred_entry_zone_high}</span></div>
             <div>SL: <span className="text-white/70">{outlook.suggested_sl}</span></div>
+            {outlook.tp1_price != null && <div>TP1: <span className="text-white/70">{outlook.tp1_price}</span></div>}
+            {(outlook.tp2_price != null || outlook.tp3_price != null) && (
+              <div>TP2 / TP3: <span className="text-white/70">{[outlook.tp2_price, outlook.tp3_price].filter((v) => v != null).join(" / ")}</span></div>
+            )}
           </div>
           <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-white/35">{outlook.reasoning}</p>
           {lastCheckedText && <p className="mt-2 text-[10px] text-white/25">Last checked: {lastCheckedText}</p>}

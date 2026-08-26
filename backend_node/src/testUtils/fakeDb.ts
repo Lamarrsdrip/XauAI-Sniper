@@ -82,15 +82,31 @@ export class FakeCollection {
     return { acknowledged: true, insertedId: String(doc["id"] ?? this.docs.length) };
   }
 
-  async updateOne(query: Doc, update: { $set?: Doc; $setOnInsert?: Doc }, options: { upsert?: boolean } = {}) {
+  private applyAddToSet(target: Doc, addToSet: Doc): void {
+    for (const [k, v] of Object.entries(addToSet)) {
+      const arr = (target[k] as unknown[] | undefined) ?? (target[k] = []);
+      if (!arr.includes(v)) arr.push(v);
+    }
+  }
+
+  private applyPull(target: Doc, pull: Doc): void {
+    for (const [k, v] of Object.entries(pull)) {
+      if (Array.isArray(target[k])) target[k] = (target[k] as unknown[]).filter((item) => item !== v);
+    }
+  }
+
+  async updateOne(query: Doc, update: { $set?: Doc; $setOnInsert?: Doc; $addToSet?: Doc; $pull?: Doc }, options: { upsert?: boolean } = {}) {
     const found = this.docs.find((d) => matches(d, query));
     if (found) {
       Object.assign(found, structuredClone(update.$set ?? {}));
+      if (update.$addToSet) this.applyAddToSet(found, structuredClone(update.$addToSet));
+      if (update.$pull) this.applyPull(found, structuredClone(update.$pull));
       return { matchedCount: 1, upsertedCount: 0, modifiedCount: 1 };
     }
     if (options.upsert) {
       const { $or, ...rest } = query as { $or?: Doc[] } & Doc;
       const created = { ...structuredClone(rest), ...structuredClone(update.$set ?? {}), ...structuredClone(update.$setOnInsert ?? {}) };
+      if (update.$addToSet) this.applyAddToSet(created, structuredClone(update.$addToSet));
       this.checkUnique(created);
       this.docs.push(created);
       return { matchedCount: 0, upsertedCount: 1, modifiedCount: 0 };
