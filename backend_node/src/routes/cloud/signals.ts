@@ -49,6 +49,9 @@ function withAuthoritativeOutcome(signal: Record<string, unknown>, outcome?: Rec
   const analyticsOutcome = typeof outcome["analytics_outcome"] === "string" ? outcome["analytics_outcome"] : null;
   const invalidated = rawState.includes("INVALIDAT") || String(outcome["final_result"] ?? "").toUpperCase().includes("INVALIDAT");
   const status = slAt ? "SL_HIT" : tp3At ? "TP3_HIT" : tp2At ? "TP2_HIT" : tp1At ? "TP1_HIT" : invalidated ? "INVALIDATED" : analyticsOutcome ? "CLOSED" : signal["status"];
+  const outcomeTime = [tp1At, tp2At, tp3At, slAt, iso("updated_at")]
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
   const timeline = [
     { event: "Signal opened", at: signal["effective_at"] ?? signal["created_at"] ?? null },
     ...(tp1At ? [{ event: "TP1 reached", at: tp1At }] : []),
@@ -68,7 +71,7 @@ function withAuthoritativeOutcome(signal: Record<string, unknown>, outcome?: Rec
     tp2_hit_at: tp2At,
     tp3_hit_at: tp3At,
     sl_hit_at: slAt,
-    outcome_time: tp3At ?? tp2At ?? tp1At ?? slAt ?? iso("updated_at") ?? null,
+    outcome_time: outcomeTime,
     outcome_timeline: timeline,
     latest_update_at: iso("updated_at") ?? signal["updated_at"] ?? null,
   };
