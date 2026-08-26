@@ -58,7 +58,8 @@
             "backgroundColor": "#0B0D10"
           }
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "owner": "emriz.eth",
     "extra": {

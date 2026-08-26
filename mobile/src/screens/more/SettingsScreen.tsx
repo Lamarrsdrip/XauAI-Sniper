@@ -1,13 +1,17 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Pressable } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { MoreStackParamList } from '../../navigation/types';
-import { Screen, Text, Card, Row, Header } from '../../components';
+import { Screen, Text, Card, Row, Header, Input, Button, Sheet } from '../../components';
 import { Divider } from '../../components/Row';
 import { useTheme } from '../../theme/ThemeProvider';
 import { ThemePreference } from '../../theme/ThemeProvider';
 import { useAppState } from '../../state/AppState';
 import { PERSONAS, Persona } from '../../state/mockData';
+import { cloud } from '../../api/cloud';
+import { api, ApiError } from '../../api/client';
+import { USE_MOCK_DATA } from '../../api/config';
+import { isBiometricAvailable, getBiometricEnabled, setBiometricEnabled, authenticateWithBiometrics } from '../../services/biometrics';
 import { Ionicons } from '@expo/vector-icons';
 
 type Props = NativeStackScreenProps<MoreStackParamList, 'Settings'>;
@@ -26,7 +30,55 @@ const PERSONA_OPTIONS: { key: Persona; label: string }[] = [
 
 export const SettingsScreen: React.FC<Props> = ({ navigation }) => {
   const { colors, spacing, radius, preference, setPreference } = useTheme();
-  const { persona, setPersona } = useAppState();
+  const { persona, setPersona, signOut, user } = useAppState();
+  const [deleteSheetOpen, setDeleteSheetOpen] = useState(false);
+  const [password, setPassword] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const [bioAvailable, setBioAvailable] = useState(false);
+  const [bioEnabled, setBioEnabled] = useState(false);
+  const [changePasswordSent, setChangePasswordSent] = useState(false);
+
+  useEffect(() => {
+    isBiometricAvailable().then(setBioAvailable);
+    getBiometricEnabled().then(setBioEnabled);
+  }, []);
+
+  const toggleBiometric = async () => {
+    if (!bioAvailable) return;
+    if (bioEnabled) {
+      await setBiometricEnabled(false);
+      setBioEnabled(false);
+      return;
+    }
+    const ok = await authenticateWithBiometrics('Confirm to enable Face ID / Biometric sign-in');
+    if (ok) {
+      await setBiometricEnabled(true);
+      setBioEnabled(true);
+    }
+  };
+
+  const requestPasswordChange = async () => {
+    if (!user?.email) return;
+    if (!USE_MOCK_DATA) await api.post('/cloud/auth/forgot-password', { email: user.email }).catch(() => {});
+    setChangePasswordSent(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!password) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      if (!USE_MOCK_DATA) await cloud.deleteAccount(password);
+      setDeleteSheetOpen(false);
+      await signOut();
+    } catch (e) {
+      setDeleteError(e instanceof ApiError ? e.message : 'Could not delete your account.');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <Screen>
@@ -76,11 +128,45 @@ export const SettingsScreen: React.FC<Props> = ({ navigation }) => {
       <Text variant="h3" color="secondary" style={{ marginBottom: spacing.sm }}>SECURITY</Text>
       <Card padded={false} style={{ marginBottom: spacing.lg }}>
         <View style={{ paddingHorizontal: spacing.md }}>
-          <Row title="Face ID / Biometric Sign-in" left={<Ionicons name="finger-print-outline" size={19} color={colors.textSecondary} />} showChevron />
+          <Row
+            title="Face ID / Biometric Sign-in"
+            subtitle={!bioAvailable ? 'Not available on this device' : undefined}
+            left={<Ionicons name="finger-print-outline" size={19} color={colors.textSecondary} />}
+            right={<Text variant="captionMedium" color={bioEnabled ? 'brand' : 'tertiary'}>{bioEnabled ? 'On' : 'Off'}</Text>}
+            onPress={bioAvailable ? toggleBiometric : undefined}
+          />
           <Divider inset />
-          <Row title="Change Password" left={<Ionicons name="key-outline" size={19} color={colors.textSecondary} />} showChevron />
+          {changePasswordSent ? (
+            <Row title="Reset link sent — check your email" left={<Ionicons name="mail-outline" size={19} color={colors.textSecondary} />} />
+          ) : (
+            <Row title="Change Password" subtitle="Sends a reset link to your email" left={<Ionicons name="key-outline" size={19} color={colors.textSecondary} />} showChevron onPress={requestPasswordChange} />
+          )}
         </View>
       </Card>
+
+      <Text variant="h3" color="secondary" style={{ marginBottom: spacing.sm }}>ACCOUNT</Text>
+      <Card padded={false} style={{ marginBottom: spacing.lg }}>
+        <View style={{ paddingHorizontal: spacing.md }}>
+          <Row
+            title="Delete Account"
+            destructive
+            left={<Ionicons name="trash-outline" size={19} color={colors.sell} />}
+            showChevron
+            onPress={() => setDeleteSheetOpen(true)}
+          />
+        </View>
+      </Card>
+
+      <Sheet visible={deleteSheetOpen} onClose={() => setDeleteSheetOpen(false)} title="Delete Account">
+        <View style={{ gap: spacing.sm }}>
+          <Text variant="body" color="secondary">
+            This permanently deletes your XauCloud account and cannot be undone. Enter your password to confirm.
+          </Text>
+          <Input label="Password" secureToggle value={password} onChangeText={setPassword} placeholder="••••••••" />
+          {deleteError && <Text variant="caption" color="sell">{deleteError}</Text>}
+          <Button label="Permanently Delete My Account" variant="destructive" fullWidth loading={deleting} onPress={confirmDelete} />
+        </View>
+      </Sheet>
 
       {__DEV__ && (
         <>

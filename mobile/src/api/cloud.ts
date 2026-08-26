@@ -13,6 +13,7 @@ import {
 
 /** Every function here calls the SAME production XauCloud API the website uses — no mobile-only backend, no client-invented entitlement state. */
 export const cloud = {
+  me: () => api.get<import('./types').CloudUser>('/cloud/auth/me'),
   entitlement: () => api.get<Entitlement>('/cloud/entitlement'),
   licenseStatus: () => api.get<LicenseStatusResponse>('/cloud/license/status'),
   billing: () => api.get<BillingResponse>('/cloud/billing'),
@@ -45,6 +46,9 @@ export const cloud = {
   },
   markNotificationRead: (id: string) => api.post<{ ok: true; marked: boolean }>(`/notifications/${id}/read`),
   markAllNotificationsRead: () => api.post<{ ok: true; marked: number }>('/notifications/read-all'),
+
+  linkLicense: (license_key: string) => api.post<{ ok: true; license: Record<string, unknown> }>('/cloud/license/link', { license_key }),
+  deleteAccount: (password: string) => api.post<{ ok: true; message: string }>('/cloud/account/delete', { password, confirm: true }),
 };
 
 /** Derives a customer-facing status label from the real ticket fields — the backend only tracks open/closed plus a messages[] thread, so "answered" / "waiting for you" are computed client-side from who sent the last message, not invented server state. */

@@ -1,17 +1,24 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { MoreStackParamList } from '../../navigation/types';
-import { Screen, Text, Card, Badge, Header, Button } from '../../components';
+import { Screen, Text, Card, Badge, Header, Button, Input, Sheet } from '../../components';
 import { useTheme } from '../../theme/ThemeProvider';
 import { useAppState } from '../../state/AppState';
+import { cloud } from '../../api/cloud';
+import { ApiError } from '../../api/client';
+import { USE_MOCK_DATA } from '../../api/config';
 import { Ionicons } from '@expo/vector-icons';
 
 type Props = NativeStackScreenProps<MoreStackParamList, 'BotLicense'>;
 
 export const BotLicenseScreen: React.FC<Props> = ({ navigation }) => {
   const { colors, spacing } = useTheme();
-  const { license } = useAppState();
+  const { license, refreshEntitlement } = useAppState();
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [licenseKey, setLicenseKey] = useState('');
+  const [linking, setLinking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const linked = !!license?.linked;
   const lic = license?.license;
@@ -24,6 +31,22 @@ export const BotLicenseScreen: React.FC<Props> = ({ navigation }) => {
     ? 'Your XauCloud Bot is licensed and connected to MT5.'
     : 'Your license is active. Connect MT5 to start automated trading.';
   const tone: 'buy' | 'warn' | 'neutral' = !linked ? 'neutral' : connected ? 'buy' : 'warn';
+
+  const submitLink = async () => {
+    if (!licenseKey.trim()) return;
+    setLinking(true);
+    setError(null);
+    try {
+      if (!USE_MOCK_DATA) await cloud.linkLicense(licenseKey.trim());
+      setSheetOpen(false);
+      setLicenseKey('');
+      await refreshEntitlement();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Could not link that license key.');
+    } finally {
+      setLinking(false);
+    }
+  };
 
   return (
     <Screen>
@@ -54,7 +77,7 @@ export const BotLicenseScreen: React.FC<Props> = ({ navigation }) => {
         <View style={{ marginTop: spacing.lg, gap: spacing.sm, width: '100%' }}>
           {linked && <Button label="Manage License" variant="secondary" fullWidth />}
           {!linked && <Button label="Get XauCloud Bot" fullWidth />}
-          {!linked && <Button label="Already own it? Link License" variant="secondary" fullWidth />}
+          {!linked && <Button label="Already own it? Link License" variant="secondary" fullWidth onPress={() => setSheetOpen(true)} />}
         </View>
       </Card>
 
@@ -65,6 +88,15 @@ export const BotLicenseScreen: React.FC<Props> = ({ navigation }) => {
           analytics from your own trading account.
         </Text>
       </Card>
+
+      <Sheet visible={sheetOpen} onClose={() => setSheetOpen(false)} title="Link License">
+        <View style={{ gap: spacing.sm }}>
+          <Text variant="caption" color="secondary">Enter the activation key from your XauCloud purchase.</Text>
+          <Input value={licenseKey} onChangeText={setLicenseKey} placeholder="ASE-XXXX-XXXX" autoCapitalize="characters" />
+          {error && <Text variant="caption" color="sell">{error}</Text>}
+          <Button label="Link License" fullWidth loading={linking} onPress={submitLink} />
+        </View>
+      </Sheet>
     </Screen>
   );
 };

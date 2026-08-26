@@ -9,6 +9,7 @@ import { useCloudData } from '../../api/useCloudData';
 import { cloud } from '../../api/cloud';
 import { mockAcademyProgress } from '../../state/mockData';
 import { CURRICULUM, CourseDef } from '../../state/curriculum';
+import { CertificateCard } from './CertificateCard';
 import { Ionicons } from '@expo/vector-icons';
 
 type Props = NativeStackScreenProps<AcademyStackParamList, 'Academy'>;
@@ -47,6 +48,11 @@ export const AcademyScreen: React.FC<Props> = ({ navigation }) => {
       <Header title="Academy" large />
       <View style={{ flex: 1 }}>
         <View style={{ paddingHorizontal: 16 }}>
+          {progress.is_complete && (
+            <View style={{ marginBottom: spacing.md }}>
+              <CertificateCard isComplete={progress.is_complete} />
+            </View>
+          )}
           {inProgress && (
             <Card
               onPress={() => navigation.navigate('Lesson', { id: inProgress.lessons[courseProgress(inProgress)]?.id ?? inProgress.lessons[0].id, title: inProgress.title })}

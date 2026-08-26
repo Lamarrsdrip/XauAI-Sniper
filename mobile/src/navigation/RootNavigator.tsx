@@ -1,4 +1,5 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect } from 'react';
+import { View, ActivityIndicator, Image } from 'react-native';
 import { NavigationContainer, DefaultTheme, DarkTheme, createNavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { useTheme } from '../theme/ThemeProvider';
@@ -10,9 +11,19 @@ import { registerForPushNotificationsAsync, routeForNotification } from '../serv
 
 export const navigationRef = createNavigationContainerRef();
 
+const BootstrapSplash: React.FC = () => {
+  const { colors } = useTheme();
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+      <Image source={require('../../assets/icon.png')} style={{ width: 64, height: 64, borderRadius: 16 }} resizeMode="contain" />
+      <ActivityIndicator color={colors.brand} />
+    </View>
+  );
+};
+
 export const RootNavigator: React.FC = () => {
   const { colors, scheme } = useTheme();
-  const { signedIn } = useAppState();
+  const { signedIn, bootstrapping } = useAppState();
 
   useEffect(() => {
     if (!signedIn) return;
@@ -38,6 +49,8 @@ export const RootNavigator: React.FC = () => {
       primary: colors.brand,
     },
   };
+
+  if (bootstrapping) return <BootstrapSplash />;
 
   return (
     <NavigationContainer ref={navigationRef} theme={navTheme} linking={signedIn ? linking : undefined}>
