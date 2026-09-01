@@ -1,0 +1,5 @@
+Command: npm run build
+Result after all current frontend edits:
+Compiled successfully.
+main.340e4090.js gzip: 188.66 kB
+main.2dd3047c.css gzip: 15.4 kB

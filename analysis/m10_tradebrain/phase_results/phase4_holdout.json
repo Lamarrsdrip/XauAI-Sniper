@@ -1,0 +1,51 @@
+{
+  "split_date": "2026-07-12T02:08:20",
+  "train_count": 39,
+  "holdout_count": 18,
+  "confusion_matrix": {
+    "losers_blocked": 0,
+    "losers_reduced": 1,
+    "losers_untouched": 2,
+    "winners_blocked": 1,
+    "winners_reduced": 3,
+    "winners_untouched": 11,
+    "avoided_loss_usd": 0.0,
+    "missed_profit_usd": 424.32,
+    "profit_sacrificed_from_reduction_usd": 472.81200000000007,
+    "loss_avoided_from_reduction_usd": 264.00000000000006,
+    "breakevens_seen": 0,
+    "non_trustworthy_seen": 0,
+    "asis_net_profit_usd": 5343.78,
+    "policy_net_profit_usd": 4710.65,
+    "asis_profit_factor": 4.446043722189978,
+    "policy_profit_factor": 4.661030543250174,
+    "total_decisive_losers": 3,
+    "loser_capture_rate_pct": 33.33333333333333,
+    "total_decisive_winners": 15,
+    "winner_false_block_rate_pct": 6.666666666666667
+  },
+  "equity_drawdown": {
+    "asis_ending_balance": 15343.78,
+    "policy_ending_balance": 14710.65,
+    "asis_max_drawdown_usd": 880.0,
+    "policy_max_drawdown_usd": 616.0,
+    "asis_max_drawdown_pct": 8.8,
+    "policy_max_drawdown_pct": 6.16
+  },
+  "role_breakdown": {
+    "CORE": {
+      "n_trades": 16,
+      "n_allow_normal": 11,
+      "n_reduced": 4,
+      "n_blocked": 1,
+      "n_manual_exemptions_applied": 0
+    },
+    "PYRAMID": {
+      "n_trades": 2,
+      "n_allow_normal": 2,
+      "n_reduced": 0,
+      "n_blocked": 0,
+      "n_manual_exemptions_applied": 0
+    }
+  }
+}

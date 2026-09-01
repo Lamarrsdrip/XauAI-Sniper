@@ -1,0 +1,31 @@
+{
+  "grain": "one unique automated candidate/opportunity; tick-level repeated assertions are deduplicated by candidateId+source+direction+decision",
+  "observed_window": {
+    "active_server_start": "2026-07-14 14:57:48",
+    "last_server_event": "2026-07-14 15:30:12"
+  },
+  "active_candidates": 4,
+  "active_block_reason_counts": {
+    "CONTINUATION_QUALIFICATION_BLOCK": 1,
+    "LOCATION_BLOCK": 1,
+    "QUALITY_BLOCK": 1,
+    "RESET_NOT_CONFIRMED": 1
+  },
+  "active_unique_final_assertions": 1,
+  "active_final_assertion_outcomes": {
+    "BLOCK": 1
+  },
+  "raw_final_assertion_lines_all_modes": 112,
+  "missed_move_candidates_ge_1atr": 1,
+  "avoided_loss_candidates_ge_1atr": 1,
+  "healthy_trend_allow_rate_live": null,
+  "healthy_trend_allow_rate_live_reason": "No healthy, low-exhaustion candidate reached final ACTIVE authority in the observed production window.",
+  "wait_for_pullback_release_rate_live": null,
+  "wait_for_pullback_release_rate_live_reason": "v6.23.1 did not persist a candidate-grain WAIT identity through a market-based value reset.",
+  "known_data_limitations": [
+    "Experts final assertions were emitted per tick in v6.23.1, not once per candidate.",
+    "Several requested lifecycle/location fields were absent from pre-ACTIVE block-memory rows.",
+    "Follow-up outcomes are observed price excursion, not simulated order P/L.",
+    "The observed ACTIVE period contains too few candidates for a reliable profitability estimate."
+  ]
+}

@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover" />
+        <meta name="theme-color" content="#050507" />
+        <meta name="description" content="XauCloud is an automated Gold (XAUUSD) trading Expert Advisor for MetaTrader 5. It analyzes the market, qualifies setups, sizes risk, and manages every trade automatically." />
+        <link rel="canonical" href="https://xaucloud.io/" />
+
+        <!-- Open Graph / social preview -->
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="XauCloud" />
+        <meta property="og:title" content="XauCloud — Automated Gold Trading for MetaTrader 5" />
+        <meta property="og:description" content="A Gold-only MT5 Expert Advisor that analyzes XAUUSD, qualifies setups, sizes risk from your account, and manages every trade automatically. No martingale, no grid." />
+        <meta property="og:url" content="https://xaucloud.io/" />
+        <meta property="og:image" content="https://xaucloud.io/xauai-logo.png" />
+        <meta name="twitter:card" content="summary" />
+        <meta name="twitter:title" content="XauCloud — Automated Gold Trading for MetaTrader 5" />
+        <meta name="twitter:description" content="A Gold-only MT5 Expert Advisor that analyzes XAUUSD, qualifies setups, sizes risk from your account, and manages every trade automatically." />
+        <meta name="twitter:image" content="https://xaucloud.io/xauai-logo.png" />
+
+        <!-- PWA manifest -->
+        <link rel="manifest" href="/manifest.json" />
+        <!-- iOS PWA support (Safari requires these instead of manifest) -->
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="XauCloud" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+        <link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png" />
+        <link rel="apple-touch-icon" sizes="512x512" href="/icons/icon-512.png" />
+        <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
+        <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@600&display=swap" rel="stylesheet" />
+        <!--
+        manifest.json provides metadata used when your web app is installed on a
+        user's mobile device or desktop. See https://developers.google.com/web/fundamentals/web-app-manifest/
+        -->
+        <!--
+        Notice the use of %PUBLIC_URL% in the tags above.
+        It will be replaced with the URL of the `public` folder during the build.
+        Only files inside the `public` folder can be referenced from the HTML.
+
+        Unlike "/favicon.ico" or "favicon.ico", "%PUBLIC_URL%/favicon.ico" will
+        work correctly both with client-side routing and a non-root public URL.
+        Learn how to configure a non-root public URL by running `npm run build`.
+        -->
+        <title>XauCloud — Automated Gold Trading EA for MetaTrader 5</title>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Organization",
+          "name": "XauCloud",
+          "alternateName": "XauCloud EA",
+          "url": "https://xaucloud.io/",
+          "logo": "https://xaucloud.io/xauai-logo.png",
+          "description": "XauCloud builds and operates an automated Gold (XAUUSD) trading Expert Advisor for MetaTrader 5."
+        }
+        </script>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "SoftwareApplication",
+          "name": "XauCloud",
+          "url": "https://xaucloud.io/",
+          "brand": { "@type": "Brand", "name": "XauCloud" },
+          "applicationCategory": "FinanceApplication",
+          "operatingSystem": "MetaTrader 5",
+          "description": "Automated Gold (XAUUSD) trading Expert Advisor for MetaTrader 5. Analyzes market conditions, qualifies setups, sizes risk, and manages trades automatically.",
+          "offers": { "@type": "Offer", "priceCurrency": "NGN", "price": "300000" }
+        }
+        </script>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "FAQPage",
+          "mainEntity": [
+            { "@type": "Question", "name": "What is XauCloud?", "acceptedAnswer": { "@type": "Answer", "text": "An automated Expert Advisor for MetaTrader 5 that trades Gold (XAUUSD). It analyzes the market, qualifies setups, and manages approved trades on your behalf." } },
+            { "@type": "Question", "name": "Which platform and symbol does it use?", "acceptedAnswer": { "@type": "Answer", "text": "MetaTrader 5, Gold (XAUUSD) only." } },
+            { "@type": "Question", "name": "Does it use martingale or grid?", "acceptedAnswer": { "@type": "Answer", "text": "No. Position sizing comes from your account risk settings and a defined stop loss." } },
+            { "@type": "Question", "name": "Do I need a VPS?", "acceptedAnswer": { "@type": "Answer", "text": "Recommended but not required to get started. Free remote VPS activation is included after purchase." } },
+            { "@type": "Question", "name": "Are profits guaranteed?", "acceptedAnswer": { "@type": "Answer", "text": "No. No trading system can guarantee profit. Start on demo and risk only what you can afford to lose." } }
+          ]
+        }
+        </script>
+        <script>window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);</script>
+        <!-- Push notifications are first-party (VAPID) — see /push-sw.js and
+             src/lib/webpush.js. No OneSignal / third-party push SDK. -->
+    </head>
+    <body>
+        <noscript>You need to enable JavaScript to run this app.</noscript>
+        <div id="root"></div>
+        <!--
+      This HTML file is a template.
+      If you open it directly in the browser, you will see an empty page.
+
+      You can add webfonts, meta tags, or analytics to this file.
+      The build step will place the bundled scripts into the <body> tag.
+
+      To begin the development, run `npm start` or `yarn start`.
+      To create a production bundle, use `npm run build` or `yarn build`.
+    -->
+        <!-- Badge removed -->
+        <script>
+            !(function (t, e) {
+                var o, n, p, r;
+                e.__SV ||
+                    ((window.posthog = e),
+                    (e._i = []),
+                    (e.init = function (i, s, a) {
+                        function g(t, e) {
+                            var o = e.split(".");
+                            2 == o.length && ((t = t[o[0]]), (e = o[1])),
+                                (t[e] = function () {
+                                    t.push(
+                                        [e].concat(
+                                            Array.prototype.slice.call(
+                                                arguments,
+                                                0,
+                                            ),
+                                        ),
+                                    );
+                                });
+                        }
+                        ((p = t.createElement("script")).type =
+                            "text/javascript"),
+                            (p.crossOrigin = "anonymous"),
+                            (p.async = !0),
+                            (p.src =
+                                s.api_host.replace(
+                                    ".i.posthog.com",
+                                    "-assets.i.posthog.com",
+                                ) + "/static/array.js"),
+                            (r =
+                                t.getElementsByTagName(
+                                    "script",
+                                )[0]).parentNode.insertBefore(p, r);
+                        var u = e;
+                        for (
+                            void 0 !== a ? (u = e[a] = []) : (a = "posthog"),
+                                u.people = u.people || [],
+                                u.toString = function (t) {
+                                    var e = "posthog";
+                                    return (
+                                        "posthog" !== a && (e += "." + a),
+                                        t || (e += " (stub)"),
+                                        e
+                                    );
+                                },
+                                u.people.toString = function () {
+                                    return u.toString(1) + ".people (stub)";
+                                },
+                                o =
+                                    "init me ws ys ps bs capture je Di ks register register_once register_for_session unregister unregister_for_session Ps getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSurveysLoaded onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey canRenderSurveyAsync identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty Es $s createPersonProfile Is opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing Ss debug xs getPageViewId captureTraceFeedback captureTraceMetric".split(
+                                        " ",
+                                    ),
+                                n = 0;
+                            n < o.length;
+                            n++
+                        )
+                            g(u, o[n]);
+                        e._i.push([i, s, a]);
+                    }),
+                    (e.__SV = 1));
+            })(document, window.posthog || []);
+            posthog.init("phc_xAvL2Iq4tFmANRE7kzbKwaSqp1HJjN7x48s3vr0CMjs", {
+                api_host: "https://us.i.posthog.com",
+                person_profiles: "identified_only", // or 'always' to create profiles for anonymous users as well,
+                session_recording: {
+                    recordCrossOriginIframes: true,
+                    capturePerformance: false,
+                },
+            });
+        </script>
+    </body>
+</html>

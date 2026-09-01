@@ -1,0 +1,31 @@
+; Production v6.26.0 R-to-pips/Gold-moves unit migration compatibility preset.
+; Carries forward v6.24.1's overrides unchanged in value -- this migration is
+; a representation change (unit relabeling of internal risk-multiple math),
+; not a strategy redesign, so no override value here needed to change except
+; the one renamed key below.
+; Legacy transition inputs remain serialized for chart compatibility, but
+; direction/personality/timing intelligence no longer owns independent vetoes.
+InpAdaptiveTransitionMode=2
+InpAdaptiveTransitionPresetId=XAUUSD_AI_Sniper_EA_v6.26.0_ACTIVE.set
+InpTransitionPersistenceBars=3
+InpTransitionMatureThreshold=60.0
+InpTransitionExhaustThreshold=70.0
+InpTransitionPreferredOppositeAt=80.0
+InpTransitionProbabilityThreshold=57.0
+InpTransitionReversalThreshold=68.0
+; v6.26.0: renamed from InpTransitionMinRewardR -- value unchanged. This
+; input's "R" suffix meant "Reward" (an ATR-room ratio), not "R-multiple of
+; risk distance" -- it was never part of the R-to-pips risk-unit migration,
+; so unlike every InpXxxPips value elsewhere in this preset's EA defaults,
+; this one is NOT rescaled x100.
+InpTransitionMinRewardPips=1.2
+InpTransitionFastConfirmSeconds=30
+InpTransitionOldConfidenceCap=35.0
+InpTransitionCounterDecayMinutes=120
+InpTransitionActiveExitAuthority=true
+InpTransitionMaxOriginExtensionATR=2.0
+InpTransitionMaxValueDistanceATR=1.0
+InpTransitionMaxConsumedPct=70.0
+InpTransitionPullbackResetATR=0.75
+InpTransitionEvidenceWindowBars=12
+InpTransitionOpportunityMaxBars=36

@@ -1,0 +1,22 @@
+{
+  "NORMAL_STRATEGY_LOSS": {
+    "count": 18,
+    "avg_mae_r": 0.5717,
+    "avg_mfe_r": 0.1378,
+    "avg_seconds_to_mae": 2106.7,
+    "avg_seconds_negative_total": 2588.9,
+    "pct_reached_02r": 100.0,
+    "pct_reached_04r": 66.7,
+    "pct_recovered_after_drawdown": 0.0
+  },
+  "NORMAL_STRATEGY_WIN": {
+    "count": 39,
+    "avg_mae_r": 0.2097,
+    "avg_mfe_r": 0.5885,
+    "avg_seconds_to_mae": 867.1,
+    "avg_seconds_negative_total": 1572.8,
+    "pct_reached_02r": 38.5,
+    "pct_reached_04r": 17.9,
+    "pct_recovered_after_drawdown": 35.9
+  }
+}

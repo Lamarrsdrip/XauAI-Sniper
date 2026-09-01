@@ -1,0 +1,260 @@
+openapi: 3.1.0
+info:
+  title: XauCloud Admin Operations
+  version: 1.0.0
+  description: >-
+    Private XauCloud administrative actions for the owner's ChatGPT GPT. This is a second Action schema and is designed to coexist with the existing XauCloud email/marketing Action schema. Read tools expose sanitized summaries. Consequential writes require prepare -> explicit owner confirmation -> execute with a short-lived confirmation token and idempotency key.
+servers:
+  - url: https://xaucloud.io/api
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Confirmation:
+      type: object
+      required: [confirmation_token, idempotency_key]
+      properties:
+        confirmation_token: { type: string }
+        idempotency_key: { type: string, minLength: 8, maxLength: 128 }
+    Reason:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 2, maxLength: 500 }
+    EmailDocument:
+      type: object
+      additionalProperties: true
+      description: Structured XauCloud email document. Never submit raw arbitrary HTML as a template replacement.
+paths:
+  /admin/actions/ops/capabilities:
+    get:
+      operationId: getAdminCapabilities
+      summary: List safe XauCloud Admin capability groups and safety rules.
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/users:
+    get:
+      operationId: searchUsers
+      summary: Search XauCloud Command Center users by email or name.
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [active, disabled, all], default: all } }
+        - { name: limit, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/users/{id}:
+    get:
+      operationId: getUser
+      summary: Get a sanitized user profile, status, linked license, login summary and activity summary.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { '200': { description: OK }, '404': { description: Not found } }
+  /admin/actions/ops/users/{id}/disable/prepare:
+    post:
+      operationId: prepareDisableUser
+      summary: Prepare disabling a user. This does not disable the account.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Reason' } } } }
+      responses: { '200': { description: Prepared } }
+  /admin/actions/ops/users/{id}/disable:
+    post:
+      operationId: disableUser
+      summary: Disable a real user only after explicit owner approval of the prepared action.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: '#/components/schemas/Confirmation' }
+                - { $ref: '#/components/schemas/Reason' }
+      responses: { '200': { description: Executed } }
+  /admin/actions/ops/licenses:
+    get:
+      operationId: listLicenses
+      summary: Search licenses using sanitized license records.
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/licenses/{id}:
+    get:
+      operationId: getLicense
+      summary: Get license status and audited history without exposing the full PIN by default.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/licenses/{id}/transfer/prepare:
+    post:
+      operationId: prepareTransferLicense
+      summary: Prepare transferring a license to a new customer email.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_email, reason]
+              properties:
+                new_email: { type: string, format: email }
+                reason: { type: string }
+      responses: { '200': { description: Prepared } }
+  /admin/actions/ops/licenses/{id}/transfer:
+    post:
+      operationId: transferLicense
+      summary: Transfer a license after explicit approval.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmation_token, idempotency_key, new_email, reason]
+              properties:
+                confirmation_token: { type: string }
+                idempotency_key: { type: string }
+                new_email: { type: string, format: email }
+                reason: { type: string }
+      responses: { '200': { description: Executed } }
+  /admin/actions/ops/licenses/{id}/resend-email:
+    post:
+      operationId: resendLicenseEmail
+      summary: Re-send the existing XauCloud license delivery email to the license owner.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { '200': { description: Sent or provider rejected } }
+  /admin/actions/ops/orders:
+    get:
+      operationId: listOrders
+      summary: Search purchase orders and payment status.
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/orders/{id}:
+    get:
+      operationId: getOrder
+      summary: Get sanitized order, fulfillment, payment and recorded refund status.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/payments/failed:
+    get:
+      operationId: getFailedPayments
+      summary: List recent payments not in a successful/fulfilled state.
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/email/templates:
+    get:
+      operationId: listEmailTemplates
+      summary: List transactional email templates and whether each one is wired into a real delivery flow.
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/email/templates/{id}:
+    get:
+      operationId: getEmailTemplate
+      summary: Inspect a transactional email template draft/published state.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/email/templates/{id}/drafts:
+    post:
+      operationId: createTransactionalEmailDraft
+      summary: Create/update a structured transactional email draft. Does not publish it.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject, document]
+              properties:
+                subject: { type: string }
+                preheader: { type: string }
+                document: { $ref: '#/components/schemas/EmailDocument' }
+      responses: { '200': { description: Draft saved } }
+  /admin/actions/ops/email/templates/{id}/preview:
+    post:
+      operationId: previewTransactionalEmail
+      summary: Render the current draft/published template with safe sample context.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sample_context: { type: object, additionalProperties: { type: string } }
+      responses: { '200': { description: Rendered preview } }
+  /admin/actions/ops/email/templates/{id}/publish/prepare:
+    post:
+      operationId: prepareTransactionalTemplatePublish
+      summary: Prepare publishing a transactional template. Does not publish.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { '200': { description: Prepared } }
+  /admin/actions/ops/email/templates/{id}/publish:
+    post:
+      operationId: publishTransactionalTemplate
+      summary: Publish a transactional template after explicit owner approval.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Confirmation' } } } }
+      responses: { '200': { description: Published } }
+  /admin/actions/ops/email/deliveries:
+    get:
+      operationId: searchEmailDeliveries
+      summary: Inspect sanitized XauCloud email delivery/broadcast logs. Provider secrets are never returned.
+      parameters: [ { name: limit, in: query, schema: { type: integer, default: 100, maximum: 500 } } ]
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/system/health:
+    get:
+      operationId: getSystemHealth
+      summary: Get readiness and a real database ping separately from the liveness health endpoint.
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/system/errors:
+    get:
+      operationId: getRecentErrors
+      summary: Get recent sanitized runtime errors captured by the current process.
+      parameters: [ { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } } ]
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/system/traces/{id}:
+    get:
+      operationId: getRequestTrace
+      summary: Explain a request/correlation ID using sanitized action audits and diagnostics.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { '200': { description: Trace } }
+  /admin/actions/ops/replays:
+    get:
+      operationId: listReplays
+      summary: List approved available historical replay datasets.
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/replays/{id}:
+    get:
+      operationId: getReplay
+      summary: Get historical replay metadata and summary metrics. Never present as guaranteed live performance.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/replays/{id}/trades:
+    get:
+      operationId: getReplayTrades
+      summary: Get sanitized trade-level historical replay data for real marketing examples.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 100 } }
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/releases/production:
+    get:
+      operationId: getProductionRelease
+      summary: Get current production EA release summary.
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/analytics/dashboard:
+    get:
+      operationId: getDashboardMetrics
+      summary: Get aggregate registrations, licenses, orders and revenue.
+      responses: { '200': { description: OK } }
+  /admin/actions/ops/support/tickets:
+    get:
+      operationId: listSupportTickets
+      summary: List support tickets if the support ticket collection exists. Returns unavailable rather than inventing tickets.
+      parameters: [ { name: limit, in: query, schema: { type: integer, default: 25, maximum: 100 } } ]
+      responses: { '200': { description: OK } }

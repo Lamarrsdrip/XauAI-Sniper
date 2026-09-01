@@ -1,0 +1,16 @@
+# Cloud builders install dependencies from package-lock.json. Keeping local
+# node_modules and Metro cache out of the upload makes release builds fast and
+# deterministic.
+node_modules
+.expo
+dist
+web-build
+*.log
+.DS_Store
+*.tsbuildinfo
+# Local Gradle/CMake outputs are rebuilt in EAS; never upload them with the
+# native source tree. Keeping the generated Android artifacts out cuts the
+# cloud archive substantially without affecting the signed build.
+android/.gradle
+android/build
+android/app/build

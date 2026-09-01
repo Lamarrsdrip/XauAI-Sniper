@@ -1,0 +1,4 @@
+# Backups produced by migration scripts can contain real encrypted
+# credentials and other sensitive data (see 0001_delete_copy_trading.py) --
+# never committed to the repo.
+backups/

@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /command/dashboard
+Disallow: /command/login
+Disallow: /command/signup
+Disallow: /purchase/success
+Disallow: /purchase/cancel
+
+Sitemap: https://xaucloud.io/sitemap.xml

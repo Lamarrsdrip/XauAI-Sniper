@@ -1,0 +1,212 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://api.fontshare.com/v2/css?f[]=clash-display@400,500,600,700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 7%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 7%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 7%;
+    --primary: 0 0% 7%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 20% 98%;
+    --secondary-foreground: 0 0% 7%;
+    --muted: 210 20% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 40 45% 55%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 0 0% 7%;
+    --radius: 24px;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  /* Native-app shell: html/body carry the deep-black app background so the
+     iPhone safe-area (under the Dynamic Island / home indicator) and any
+     overscroll-bounce region are never white. Every page still paints its
+     own surface on top; this only governs the gaps behind fixed content. */
+  html { background-color: #050507; }
+  body {
+    @apply text-[#111111];
+    background-color: #050507;
+    font-family: 'Manrope', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    /* Feel: no tap-highlight flash, no rubber-band page scroll, no iOS
+       auto-zoom of text on rotate. Individual scroll containers opt back
+       into momentum scrolling as needed. */
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    overscroll-behavior-y: none;
+  }
+
+  /* Keep controls app-like without blocking the page's normal pan/scroll. */
+  button, a, input, select, textarea, [role="button"] {
+    touch-action: manipulation;
+  }
+
+  /* Safari zooms the page when a form control's computed type is below 16px.
+     Limit this to phone-sized viewports so desktop form typography is unchanged. */
+  @media (max-width: 767px) {
+    input, textarea, select, [contenteditable="true"] {
+      font-size: 16px !important;
+    }
+  }
+}
+
+@layer base {
+  [data-debug-wrapper="true"] { display: contents !important; }
+}
+
+.font-heading { font-family: 'Clash Display', 'Manrope', sans-serif; }
+.font-mono { font-family: 'JetBrains Mono', monospace; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #F8F9FA; }
+::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
+
+/* Gold text */
+.gold-text { color: #C5A059; }
+.gold-gradient-text {
+  background: linear-gradient(135deg, #C5A059 0%, #D4B76A 50%, #B8934E 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Pulse dot */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16,185,129,0.4); }
+  50% { opacity: 0.7; box-shadow: 0 0 0 4px rgba(16,185,129,0); }
+}
+.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+/* Fade up */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-up {
+  animation: fade-up 0.5s cubic-bezier(0.22,1,0.36,1) forwards;
+  opacity: 0;
+}
+
+/* Card hover */
+.card-hover {
+  transition: box-shadow 250ms ease, transform 150ms ease;
+}
+.card-hover:hover {
+  box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+  transform: translateY(-2px);
+}
+
+/* Glow card for purchase */
+@keyframes glow-gold {
+  0%, 100% { box-shadow: 0 0 0 1px #E5E7EB, 0 4px 20px rgba(197,160,89,0.05); }
+  50% { box-shadow: 0 0 0 1px #C5A059, 0 8px 40px rgba(197,160,89,0.12); }
+}
+.glow-card { animation: glow-gold 4s ease-in-out infinite; }
+
+/* emriz badge */
+.emriz-badge {
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.05);
+}
+.emriz-text {
+  color: #C5A059;
+}
+
+/* Section divider */
+.section-line {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #E5E7EB, transparent);
+}
+
+/* Delays */
+.delay-100 { animation-delay: 100ms; }
+.delay-200 { animation-delay: 200ms; }
+.delay-300 { animation-delay: 300ms; }
+.delay-400 { animation-delay: 400ms; }
+.delay-500 { animation-delay: 500ms; }
+.delay-600 { animation-delay: 600ms; }
+.delay-700 { animation-delay: 700ms; }
+
+/* ── XauCloud native app shell utilities ──────────────────────────────────
+   Safe-area helpers so the shell can sit edge-to-edge under the notch /
+   home indicator. Require viewport-fit=cover in index.html (added). */
+.pt-safe   { padding-top: env(safe-area-inset-top); }
+.pb-safe   { padding-bottom: env(safe-area-inset-bottom); }
+/* ONE authoritative app-header top inset: full-bleed background stays behind
+   the iPhone status bar / Dynamic Island, while the header's CONTENT begins
+   below the safe-area inset. max() keeps it compact on non-notch devices
+   (falls back to normal header padding, never a giant gap). Every app shell
+   header uses this same class — no per-page top-spacing rules. */
+.pt-safe-top { padding-top: max(env(safe-area-inset-top), 0.7rem); }
+.pt-safe-top-lg { padding-top: max(env(safe-area-inset-top), 1rem); }
+.pl-safe   { padding-left: env(safe-area-inset-left); }
+.pr-safe   { padding-right: env(safe-area-inset-right); }
+.mt-safe   { margin-top: env(safe-area-inset-top); }
+/* Header/nav that must clear the inset AND keep their own padding. */
+.h-safe-top    { height: env(safe-area-inset-top); }
+.h-safe-bottom { height: env(safe-area-inset-bottom); }
+
+/* dvh with a vh fallback so the shell always fills the real visible height
+   (iOS Safari URL-bar collapse / standalone). */
+.min-h-app { min-height: 100vh; min-height: 100dvh; }
+.h-app     { height: 100vh; height: 100dvh; }
+
+/* Momentum scroll containers that hide the scrollbar (native feel). */
+.native-scroll {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.native-scroll::-webkit-scrollbar { display: none; }
+
+/* Disable text selection + callout on interactive controls (native feel),
+   while leaving real content selectable. */
+.no-select { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+
+/* Tabular, aligned numerals for all trading figures. */
+.nums { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
+
+/* Dark scrollbar for the app surfaces (the light one above is for the
+   legacy light marketing chrome). */
+.app-dark ::-webkit-scrollbar-track { background: #0D0E13; }
+.app-dark ::-webkit-scrollbar-thumb { background: #2A2D36; }
+.app-dark ::-webkit-scrollbar-thumb:hover { background: #3A3E49; }
+
+/* TipTap in the admin email composer. The delivered email never uses these
+   web styles; it is rendered server-side into table/inline-safe markup. */
+.xc-rich-editor {
+  min-height: 150px;
+  padding: 0.875rem;
+  color: rgba(255,255,255,.78);
+  font-size: 12px;
+  line-height: 1.7;
+  outline: none;
+}
+.xc-rich-editor-compact { min-height: 100px; }
+.xc-rich-editor p { margin: 0 0 .75rem; }
+.xc-rich-editor h1 { margin: .25rem 0 .75rem; font-size: 1.5rem; line-height: 1.25; font-weight: 800; color: white; }
+.xc-rich-editor h2 { margin: .25rem 0 .7rem; font-size: 1.25rem; line-height: 1.3; font-weight: 800; color: white; }
+.xc-rich-editor h3 { margin: .25rem 0 .6rem; font-size: 1rem; line-height: 1.35; font-weight: 800; color: white; }
+.xc-rich-editor ul, .xc-rich-editor ol { margin: 0 0 .75rem; padding-left: 1.25rem; }
+.xc-rich-editor ul { list-style: disc; }
+.xc-rich-editor ol { list-style: decimal; }
+.xc-rich-editor blockquote { margin: .5rem 0 .75rem; border-left: 3px solid #F3C969; padding-left: .8rem; color: rgba(255,255,255,.55); }
+.xc-rich-editor a { color: #F3C969; text-decoration: underline; }
+.xc-rich-editor p:last-child { margin-bottom: 0; }

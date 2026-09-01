@@ -1,0 +1,20 @@
+; Production v6.23.1 adaptive-transition authority override.
+; This file intentionally contains only the reviewed transition inputs so it
+; cannot silently replace unrelated owner risk, timing, exit, or broker inputs.
+InpAdaptiveTransitionMode=2
+InpAdaptiveTransitionPresetId=XAUUSD_AI_Sniper_EA_v6.23.1_ACTIVE.set
+InpTransitionPersistenceBars=3
+InpTransitionMatureThreshold=60.0
+InpTransitionExhaustThreshold=70.0
+InpTransitionPreferredOppositeAt=80.0
+InpTransitionProbabilityThreshold=57.0
+InpTransitionReversalThreshold=68.0
+InpTransitionMinRewardR=1.2
+InpTransitionFastConfirmSeconds=30
+InpTransitionOldConfidenceCap=35.0
+InpTransitionCounterDecayMinutes=120
+InpTransitionActiveExitAuthority=true
+InpTransitionMaxOriginExtensionATR=2.0
+InpTransitionMaxValueDistanceATR=1.0
+InpTransitionMaxConsumedPct=70.0
+InpTransitionPullbackResetATR=0.75

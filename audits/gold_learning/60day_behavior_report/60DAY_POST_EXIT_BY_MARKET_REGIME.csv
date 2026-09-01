@@ -1,0 +1,15 @@
+dimension,value,profitable_core_trades,avg_missed_r_10m,avg_missed_r_20m,total_missed_r_10m
+regime_at_signal,BRKT_DN,6,0.1926,,1.1557
+regime_at_signal,BRKT_UP,4,0.1373,,0.5492
+regime_at_signal,CHOPPY,1,0.2821,,0.2821
+regime_at_signal,TREND_DN,70,0.2874,,20.1154
+regime_at_signal,TREND_UP,42,0.2016,,8.469
+lifecycle_state_at_entry,OPPOSITE_DIRECTION_CONFIRMED,5,0.2658,,1.3288
+lifecycle_state_at_entry,OPPOSITE_DIRECTION_FORMING,47,0.2066,,9.7089
+lifecycle_state_at_entry,TRANSITION_NEUTRAL,26,0.3272,,8.506
+lifecycle_state_at_entry,TREND_EXHAUSTING,3,0.3351,,1.0053
+lifecycle_state_at_entry,TREND_HEALTHY,2,0.6075,,1.2149
+lifecycle_state_at_entry,TREND_MATURE,22,0.2457,,5.4059
+entry_timing_classification,GOOD_TIMING_NEAR_SIGNAL_PRICE,81,0.2727,,22.0851
+entry_timing_classification,LATE_ENTRY_CHASED_DURING_TIMER,12,0.2451,,2.9411
+entry_timing_classification,MODERATE_DRIFT_DURING_TIMER,30,0.1848,,5.5452

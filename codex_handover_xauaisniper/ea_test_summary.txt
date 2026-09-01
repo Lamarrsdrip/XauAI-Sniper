@@ -1,0 +1,13 @@
+Focused v6.25.5 batch:
+90 passed, 13 skipped in 2.93s.
+The 13 skips were Mongo-backed reservation integration cases inside the sandbox.
+
+Mongo-backed reservation authentication/concurrency rerun outside sandbox:
+13 passed in 9.07s.
+
+Frontend authenticated EA-client contract was included in the focused batch; standalone earlier run: 8 passed.
+
+MetaEditor Gold EA: 0 errors, 0 warnings, 61255 ms.
+MetaEditor XauIndex EA: 0 errors, 0 warnings, 45495 ms.
+
+No real broker execution, historical replay, terminal restart, or live M30 trade is claimed by these results.

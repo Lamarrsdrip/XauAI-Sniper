@@ -1,0 +1,617 @@
+"""API routes for the AI Market Outlook feature. Included into server.py's
+existing api_router. All endpoints are scoped to the authenticated
+cloud_users identity via the existing get_cloud_user dependency -- same
+pattern as every other /cloud/monitor/* endpoint.
+
+STRICT SEPARATION: no endpoint here can open/close/block/delay a trade --
+every handler only reads/writes this feature's own collections
+(cloud_market_outlooks, cloud_market_outlook_revisions,
+cloud_market_outlook_outcomes, cloud_notification_prefs,
+cloud_push_subscriptions, cloud_notification_log).
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
+import market_outlook as mo
+import notifications as notif
+
+
+def group_meaningful_history(rows: list) -> list:
+    """Keep signal lifecycle rows; collapse repetitive informational noise."""
+    grouped = []
+    buckets = {}
+    for row in rows:
+        directional = row.get("primary_direction") in ("BUY", "SELL")
+        if directional or row.get("analytics_outcome") in (mo.ANALYTICS_WIN, mo.ANALYTICS_LOSS):
+            grouped.append(row)
+            continue
+        stamp = str(row.get("generated_at") or row.get("published_at") or "")
+        day = stamp[:10]
+        reason = row.get("no_valid_outlook_reason") or row.get("primary_direction") or "INFORMATIONAL"
+        key = (day, reason)
+        if key not in buckets:
+            collapsed = dict(row)
+            collapsed["collapsed_count"] = 1
+            collapsed["history_kind"] = "INFORMATIONAL_GROUP"
+            buckets[key] = collapsed
+            grouped.append(collapsed)
+        else:
+            buckets[key]["collapsed_count"] += 1
+    return grouped
+
+
+def compute_outlook_stats(rows: list) -> dict:
+    """Derive performance only from persisted authoritative outcomes.
+
+    Root-cause fix (2026-08-05): `completed` used to mean "WIN or LOSS"
+    only, which is fine now that a signal below TP1 can genuinely resolve
+    PARTIAL_PROFIT/BREAK_EVEN instead of being forced into one of those two
+    -- those two new outcomes are real, finished results with a genuine R
+    figure and belong in tp-hit-rate/average-R/total-R the same as any
+    other completed signal. win_rate stays strictly wins/(wins+losses):
+    PARTIAL_PROFIT and BREAK_EVEN are deliberately neither a clean win nor
+    a loss (see the owner's classification policy), so they don't move
+    that ratio in either direction.
+    """
+    stats_rows = [o for o in rows if not o.get("excluded_from_stats")]
+    unavailable = [o for o in stats_rows if o.get("historical_repair_status") == mo.ANALYTICS_UNAVAILABLE
+                   or o.get("analytics_outcome") == mo.ANALYTICS_UNAVAILABLE]
+    actionable = [o for o in stats_rows
+                  if o.get("primary_direction") in ("BUY", "SELL")
+                  and not o.get("excluded_from_signal_analytics")
+                  and o not in unavailable]
+    completed = [o for o in actionable if o.get("analytics_outcome") in mo.ANALYTICS_TERMINAL_OUTCOMES]
+    wins = [o for o in completed if o.get("analytics_outcome") == mo.ANALYTICS_WIN]
+    losses = [o for o in completed if o.get("analytics_outcome") == mo.ANALYTICS_LOSS]
+    partial_profits = [o for o in completed if o.get("analytics_outcome") == mo.ANALYTICS_PARTIAL]
+    breakevens = [o for o in completed if o.get("analytics_outcome") == mo.ANALYTICS_BREAKEVEN]
+    active_unresolved = [o for o in actionable if o.get("analytics_outcome") is None]
+    informational = [o for o in stats_rows if o.get("primary_direction") not in ("BUY", "SELL")]
+    tp1_count = sum(1 for o in completed if int(o.get("highest_tp_reached") or 0) >= 1)
+    tp2_count = sum(1 for o in completed if int(o.get("highest_tp_reached") or 0) >= 2)
+    tp3_count = sum(1 for o in completed if int(o.get("highest_tp_reached") or 0) >= 3)
+    resolved_rs = [float(o["analytics_r"]) for o in completed if o.get("analytics_r") is not None]
+    win_rate = round(len(wins) / len(wins + losses), 3) if (wins or losses) else None
+    win_rs = [float(o["analytics_r"]) for o in wins if o.get("analytics_r") is not None]
+    loss_rs = [float(o["analytics_r"]) for o in losses if o.get("analytics_r") is not None]
+    gross_win = sum(win_rs) if win_rs else 0.0
+    gross_loss = abs(sum(loss_rs)) if loss_rs else 0.0
+    # v6.26.0: pips equivalents of the *_r fields above -- the customer-
+    # facing history page must display these, never a bare "R" label.
+    def _pips(o: dict, key: str) -> Optional[float]:
+        val = o.get(key)
+        if val is None:
+            return None
+        conv = mo.build_result_conversion(r=float(val), risk_distance=o.get("risk_distance"))
+        return conv["result_pips"]
+    resolved_pips = [p for p in (_pips(o, "analytics_r") for o in completed) if p is not None]
+    win_pips = [p for p in (_pips(o, "analytics_r") for o in wins) if p is not None]
+    loss_pips = [p for p in (_pips(o, "analytics_r") for o in losses) if p is not None]
+    actionable_mfe_pips = [p for p in (_pips(o, "mfe_r") for o in actionable) if p is not None]
+    actionable_mae_pips = [p for p in (_pips(o, "mae_r") for o in actionable) if p is not None]
+    return {
+        "total_outlooks": len(stats_rows), "actionable_outlooks": len(actionable),
+        "activated_outlooks": len(actionable), "informational_outlooks": len(informational),
+        "green_results": len(wins), "red_results": len(losses), "no_entry_results": 0,
+        "tp1_hit_rate": round(tp1_count / len(completed), 3) if completed else 0,
+        "tp2_hit_rate": round(tp2_count / len(completed), 3) if completed else 0,
+        "tp3_hit_rate": round(tp3_count / len(completed), 3) if completed else 0,
+        "average_r": round(sum(resolved_rs) / len(resolved_rs), 3) if resolved_rs else None,
+        "average_mfe": round(sum(float(o.get("mfe_r", 0) or 0) for o in actionable) / len(actionable), 3) if actionable else None,
+        "average_mae": round(sum(float(o.get("mae_r", 0) or 0) for o in actionable) / len(actionable), 3) if actionable else None,
+        "resolved_count": len(completed), "wins": len(wins), "losses": len(losses),
+        "partial_profits": len(partial_profits), "breakeven": len(breakevens),
+        "no_entry_count": 0, "active_unresolved_count": len(active_unresolved),
+        "unavailable_historical_count": len(unavailable), "win_rate": win_rate,
+        # v6.26.0: *_r fields kept for forensic/internal use only (archived,
+        # never deleted, per the migration's non-destructive rule) -- the
+        # *_pips fields alongside them are what the customer-facing history
+        # page must display.
+        "total_r": round(sum(resolved_rs), 3) if resolved_rs else 0.0,
+        "average_win_r": round(sum(win_rs) / len(win_rs), 3) if win_rs else None,
+        "average_loss_r": round(sum(loss_rs) / len(loss_rs), 3) if loss_rs else None,
+        "total_pips": round(sum(resolved_pips), 1) if resolved_pips else 0.0,
+        "average_pips": round(sum(resolved_pips) / len(resolved_pips), 1) if resolved_pips else None,
+        "average_win_pips": round(sum(win_pips) / len(win_pips), 1) if win_pips else None,
+        "average_loss_pips": round(sum(loss_pips) / len(loss_pips), 1) if loss_pips else None,
+        "average_mfe_pips": round(sum(actionable_mfe_pips) / len(actionable_mfe_pips), 1) if actionable_mfe_pips else None,
+        "average_mae_pips": round(sum(actionable_mae_pips) / len(actionable_mae_pips), 1) if actionable_mae_pips else None,
+        # JSON has no portable Infinity value. An all-win filtered subset
+        # has an undefined/unbounded profit factor, so return null rather
+        # than crashing the entire History endpoint during serialization.
+        "profit_factor": round(gross_win / gross_loss, 3) if gross_loss > 0 else None,
+        "best_result_r": max(resolved_rs) if resolved_rs else None,
+        "worst_result_r": min(resolved_rs) if resolved_rs else None,
+        "best_result_pips": max(resolved_pips) if resolved_pips else None,
+        "worst_result_pips": min(resolved_pips) if resolved_pips else None,
+    }
+
+
+def _outlook_to_signal_card(row: dict) -> dict:
+    conversion = mo.build_result_conversion(r=row.get("analytics_r"), risk_distance=row.get("risk_distance"))
+    # Root-cause fix (2026-08-05): this used to collapse EVERY non-WIN
+    # outcome into "LOSS" for display -- the same binary bug pattern as the
+    # backend classifier itself, just recurring here in the card builder.
+    # The real stored outcome (WIN/LOSS/PARTIAL_PROFIT/BREAK_EVEN) is always
+    # passed through unchanged now.
+    outcome = row.get("analytics_outcome") or "LOSS"
+    return {
+        "id": row.get("id"),
+        "direction": row.get("primary_direction"),
+        "closed_at": row.get("classification_at"),
+        "entry_price": row.get("tracking_entry_price"),
+        "stop_loss": row.get("original_sl") or row.get("suggested_sl"),
+        "take_profit_1": row.get("tp1_price"),
+        "result": outcome,
+        "confidence_pct": row.get("confidence_pct"),
+        "setup_type": row.get("setup_type"),
+        "highest_tp_reached": row.get("highest_tp_reached"),
+        **conversion,
+    }
+
+
+async def build_public_outlook_performance(db, limit: int = 10) -> dict:
+    """Genuinely completed Market Outlook advisory signals, for the public
+    marketing site -- never watching/blocked/active/unavailable/excluded
+    records, and never duplicated repeats (cloud_market_outlooks already
+    holds one row per signal lifecycle, keyed by a deterministic per-slot
+    _id plus a DB-level unique index on id, mutated in place as it
+    progresses, never appended to).
+
+    Deliberately reads analytics_outcome/analytics_r (the advisory
+    tracking's own WIN/LOSS resolution against its own suggested levels),
+    never automated_trade_result (the real account's trade outcome) --
+    those two are owner-directive-separate concepts (see
+    market_outlook.py's automated-trade-result-reconciliation section) and
+    mixing them here would make an advisory opinion look like verified
+    account profit.
+
+    Bug fix (owner audit, 2026-08-04): stats used to be computed from only
+    the most recent `limit` (10) signals -- the same rows being displayed
+    -- so a customer's "win rate"/"total R" silently excluded every older
+    completed signal once more than 10 existed, while still being labeled
+    as overall performance. Stats are now computed from every genuinely
+    completed signal (no limit); `limit` only bounds how many recent
+    signal cards are returned for display.
+    """
+    query = {
+        "primary_direction": {"$in": ["BUY", "SELL"]},
+        "analytics_outcome": {"$in": list(mo.ANALYTICS_TERMINAL_OUTCOMES)},
+        "excluded_from_stats": {"$ne": True},
+        "excluded_from_signal_analytics": {"$ne": True},
+    }
+    all_rows = await db.cloud_market_outlooks.find(
+        query, {"_id": 0}
+    ).sort("classification_at", -1).to_list(None)
+
+    total_pips, total_gold_moves = 0.0, 0.0
+    wins = losses = partial_profits = breakevens = 0
+    rs, win_rs, loss_rs = [], [], []
+    pips_list, win_pips, loss_pips = [], [], []
+    for row in all_rows:
+        conversion = mo.build_result_conversion(r=row.get("analytics_r"), risk_distance=row.get("risk_distance"))
+        outcome = row.get("analytics_outcome")
+        is_win = outcome == mo.ANALYTICS_WIN
+        # Root-cause fix (2026-08-05): this loop used to treat "not a WIN"
+        # as "is a LOSS" -- the exact bug pattern being fixed everywhere
+        # else. PARTIAL_PROFIT/BREAK_EVEN are real, positive-or-neutral
+        # completed results and must not be folded into the loss bucket.
+        if is_win:
+            wins += 1
+        elif outcome == mo.ANALYTICS_LOSS:
+            losses += 1
+        elif outcome == mo.ANALYTICS_PARTIAL:
+            partial_profits += 1
+        elif outcome == mo.ANALYTICS_BREAKEVEN:
+            breakevens += 1
+        if conversion["result_r"] is not None:
+            rs.append(conversion["result_r"])
+            if is_win:
+                win_rs.append(conversion["result_r"])
+            elif outcome == mo.ANALYTICS_LOSS:
+                loss_rs.append(conversion["result_r"])
+        if conversion["result_pips"] is not None:
+            total_pips += conversion["result_pips"]
+            pips_list.append(conversion["result_pips"])
+            if is_win:
+                win_pips.append(conversion["result_pips"])
+            elif outcome == mo.ANALYTICS_LOSS:
+                loss_pips.append(conversion["result_pips"])
+        if conversion["result_gold_moves"] is not None:
+            total_gold_moves += conversion["result_gold_moves"]
+
+    signals = [_outlook_to_signal_card(row) for row in all_rows[:limit]]
+
+    # Cumulative R curve for the performance chart -- chronological
+    # (oldest-first) cumulative sum over every genuinely completed signal,
+    # same underlying rows as the stats above (not the truncated display
+    # window), so the chart can never disagree with the stat cards.
+    cumulative_r_curve = []
+    running = 0.0
+    for row in reversed(all_rows):  # all_rows is newest-first; walk oldest-first
+        conversion = mo.build_result_conversion(r=row.get("analytics_r"), risk_distance=row.get("risk_distance"))
+        if conversion["result_r"] is None:
+            continue
+        running = round(running + conversion["result_r"], 4)
+        cumulative_r_curve.append({"closed_at": row.get("classification_at"), "cumulative_r": running})
+
+    win_rate = round(wins / (wins + losses), 3) if (wins + losses) else None
+    total_count = wins + losses + partial_profits + breakevens
+    return {
+        "signals": signals,
+        "cumulative_r_curve": cumulative_r_curve,
+        "stats": {
+            "count": total_count,
+            "wins": wins,
+            "losses": losses,
+            "partial_profits": partial_profits,
+            "breakevens": breakevens,
+            "win_rate": win_rate,
+            # v6.26.0: total_r/average_r/average_win_r/average_loss_r/
+            # best_trade_r/worst_trade_r are kept for forensic/internal use
+            # only (never removed non-destructively, per the migration's own
+            # archive-don't-delete rule) -- the *_pips siblings below are
+            # what the customer-facing UI must display.
+            "total_r": round(sum(rs), 2) if rs else None,
+            "average_r": round(sum(rs) / len(rs), 2) if rs else None,
+            "total_pips": round(total_pips, 1) if total_count else None,
+            "average_pips": round(sum(pips_list) / len(pips_list), 1) if pips_list else None,
+            "total_gold_moves": round(total_gold_moves, 2) if total_count else None,
+            "average_win_r": round(sum(win_rs) / len(win_rs), 2) if win_rs else None,
+            "average_loss_r": round(sum(loss_rs) / len(loss_rs), 2) if loss_rs else None,
+            "best_trade_r": max(rs) if rs else None,
+            "worst_trade_r": min(rs) if rs else None,
+            "average_win_pips": round(sum(win_pips) / len(win_pips), 1) if win_pips else None,
+            "average_loss_pips": round(sum(loss_pips) / len(loss_pips), 1) if loss_pips else None,
+            "best_trade_pips": max(pips_list) if pips_list else None,
+            "worst_trade_pips": min(pips_list) if pips_list else None,
+        },
+    }
+
+
+def build_router() -> APIRouter:
+    """Called from server.py AFTER server.py's own globals exist, so the
+    real get_cloud_user dependency can be bound here without circularity."""
+    import server as srv
+
+    r = APIRouter()
+
+    @r.get("/outlook/current")
+    async def get_current_outlook(user: dict = Depends(srv.get_cloud_user)):
+        db = srv.db
+        lic = await srv._get_user_license(user)
+        account = str((lic or {}).get("mt5_account") or "").strip()
+        license_key = srv._normalize_license_key((lic or {}).get("pin", "")) if lic else ""
+        if not account and not license_key:
+            return {"outlook": None, "reason": "license_not_linked"}
+        scope = {"$or": [{"account": account}, {"license_key": license_key}]} if account and license_key \
+            else ({"account": account} if account else {"license_key": license_key})
+        doc = await db.cloud_market_outlooks.find_one(scope, {"_id": 0}, sort=[("generated_at", -1)])
+        hourly_doc = await db.cloud_market_outlooks.find_one(
+            {"$and": [scope, {"$or": [{"publication_mode": "HOURLY"}, {"publication_mode": {"$exists": False}}]}]},
+            {"_id": 0}, sort=[("generated_at", -1)],
+        )
+        signal_doc = await db.cloud_market_outlooks.find_one(
+            {"$and": [scope, {"primary_direction": {"$in": ["BUY", "SELL"]}}]},
+            {"_id": 0}, sort=[("generated_at", -1)],
+        )
+        # Phase 9 diagnostics: lets the frontend show real evidence/generation
+        # state instead of guessing from the outlook doc alone -- in
+        # particular so it never renders "connect your EA" while recent
+        # canonical evidence actually exists (evidence_status == "OK").
+        evidence, evidence_reason = await mo._latest_ea_evidence(license_key, account)
+        now = datetime.now(timezone.utc)
+        evidence_age_seconds = None
+        if evidence and evidence.get("ts"):
+            try:
+                evidence_age_seconds = (now - datetime.fromisoformat(str(evidence["ts"]).replace("Z", "+00:00"))).total_seconds()
+            except Exception:
+                evidence_age_seconds = None
+        next_slot = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        latest_notification = None
+        if signal_doc:
+            latest_notification = await db.cloud_notification_log.find_one(
+                {"outlook_id": signal_doc.get("id")}, {"_id": 0}, sort=[("scheduled_time", -1)]
+            )
+        contract = mo.build_authoritative_outlook_contract(
+            evidence, evidence_reason, hourly_doc=hourly_doc, signal_doc=signal_doc,
+            notification=latest_notification, now=now, latest_doc=doc,
+        )
+        # The single authoritative "what counts as current" determination --
+        # see compute_outlook_freshness's own docstring for the exact bug
+        # this replaces: `signal_doc or doc` used to prefer the latest
+        # directional signal even when it was hours older than the
+        # account's real latest publication, letting a stale BUY/SELL
+        # outrank "nothing to show right now." The frontend must read
+        # `freshness` instead of independently guessing staleness from
+        # generated_at age.
+        freshness = mo.compute_outlook_freshness(doc, signal_doc, evidence_reason, now=now)
+        current_outlook = None
+        if freshness["outlook_id"]:
+            current_outlook = (
+                signal_doc if signal_doc and signal_doc.get("id") == freshness["outlook_id"]
+                else doc if doc and doc.get("id") == freshness["outlook_id"]
+                else None
+            )
+        diagnostics = {
+            "last_ea_evidence_at": evidence.get("ts") if evidence else None,
+            "evidence_age_seconds": evidence_age_seconds,
+            "evidence_symbol": evidence.get("symbol") if evidence else None,
+            "evidence_status": evidence_reason,
+            "last_outlook_generated_at": doc.get("generated_at") if doc else None,
+            "next_outlook_at": next_slot.isoformat(),
+            "generation_status": "OK" if evidence else evidence_reason,
+        }
+        # v6.26.0 Phase 4 owner directive -- one shared conversion engine.
+        # Pre-compute pips/Gold-moves for the advisory tracking fields here,
+        # the same way real automated trade results already arrive with
+        # result_pips/result_gold_moves computed server-side, so the
+        # frontend never needs its own copy of the conversion formula.
+        if current_outlook is not None:
+            risk_distance = current_outlook.get("risk_distance")
+            for r_field, pips_field, gold_field in (
+                ("current_r", "current_pips", "current_gold_moves"),
+                ("mfe_r", "mfe_pips", "mfe_gold_moves"),
+                ("mae_r", "mae_pips", "mae_gold_moves"),
+            ):
+                r_val = current_outlook.get(r_field)
+                if r_val is not None and risk_distance:
+                    conv = mo.build_result_conversion(r=float(r_val), risk_distance=risk_distance)
+                    current_outlook[pips_field] = conv["result_pips"]
+                    current_outlook[gold_field] = conv["result_gold_moves"]
+                else:
+                    current_outlook[pips_field] = None
+                    current_outlook[gold_field] = None
+        return {
+            "contract": contract,
+            "freshness": freshness,
+            "outlook": current_outlook,
+            "hourly_context": hourly_doc,
+            "diagnostics": diagnostics,
+        }
+
+    @r.get("/outlook/history")
+    async def get_outlook_history(
+        direction: Optional[str] = Query(None), color: Optional[str] = Query(None),
+        tp: Optional[str] = Query(None), result: Optional[str] = Query(None),
+        min_confidence: Optional[int] = Query(None),
+        max_confidence: Optional[int] = Query(None), from_date: Optional[str] = Query(None),
+        to_date: Optional[str] = Query(None), limit: int = Query(50, ge=1, le=200),
+        user: dict = Depends(srv.get_cloud_user),
+    ):
+        db = srv.db
+        lic = await srv._get_user_license(user)
+        account = str((lic or {}).get("mt5_account") or "").strip()
+        license_key = srv._normalize_license_key((lic or {}).get("pin", "")) if lic else ""
+        if not account and not license_key:
+            return {"outlooks": [], "timeline": [], "signal_events": [], "stats": {}, "reason": "license_not_linked"}
+        scope = {"$or": [{"account": account}, {"license_key": license_key}]} if account and license_key \
+            else ({"account": account} if account else {"license_key": license_key})
+        conditions = [scope]
+        if direction and direction != "All":
+            conditions.append({"primary_direction": direction})
+        if color and color != "All":
+            conditions.append({"color_state": color})
+        if tp:
+            # Audit fix: was an exact match on highest_tp_reached, which
+            # disagreed with the "at least N" semantics the stats block
+            # right above the filter uses for tp1_hit_rate/tp2_hit_rate
+            # (see get_outlook_history's own stats computation below) --
+            # clicking "TP2" used to show a strict subset of what "TP2
+            # rate" counted (excluded outlooks that continued on to TP3).
+            # Now $gte, matching the displayed rate's own definition.
+            conditions.append({"highest_tp_reached": {"$gte": int(tp.replace("TP", ""))}} if tp.startswith("TP") else {"status": tp})
+        if result:
+            # Filter the authoritative state-machine result, never display
+            # text or a generic lifecycle label.
+            conditions.append({"final_result": result})
+        if min_confidence is not None:
+            conditions.append({"confidence_pct": {"$gte": min_confidence}})
+        if max_confidence is not None:
+            conditions.append({"confidence_pct": {"$lte": max_confidence}})
+        if from_date:
+            conditions.append({"generated_at": {"$gte": from_date}})
+        if to_date:
+            conditions.append({"generated_at": {"$lte": to_date}})
+        query = {"$and": conditions}
+        rows = await db.cloud_market_outlooks.find(query, {"_id": 0}).sort("generated_at", -1).to_list(limit)
+
+        # Cards are paged, but analytics must cover the full tenant-scoped
+        # filtered history. Computing stats from only the newest 50/200 rows
+        # silently changed win rate as older records fell off the page.
+        stats_projection = {
+            "_id": 0, "excluded_from_stats": 1, "historical_repair_status": 1,
+            "analytics_outcome": 1, "primary_direction": 1,
+            "excluded_from_signal_analytics": 1, "highest_tp_reached": 1,
+            "analytics_r": 1, "mfe_r": 1, "mae_r": 1, "risk_distance": 1,
+        }
+        stats_rows = await db.cloud_market_outlooks.find(query, stats_projection).to_list(None)
+        stats = compute_outlook_stats(stats_rows)
+        signal_events = await db.cloud_outlook_signal_events.find(
+            scope, {"_id": 0}
+        ).sort("event_time", -1).to_list(limit)
+        return {
+            "outlooks": rows,
+            "timeline": group_meaningful_history(rows),
+            "signal_events": signal_events,
+            "stats": stats,
+        }
+
+    # Public marketing-site feed -- unauthenticated by design (this is what
+    # the homepage shows visitors before they sign up). No caching layer:
+    # queries live so a signal that just resolved is reflected on the next
+    # request, no stale-cache invalidation needed.
+    @r.get("/outlook/public-performance")
+    async def get_public_outlook_performance(request: Request, limit: int = Query(10, ge=1, le=200)):
+        srv._rate_limit(f"outlook_public_performance_ip:{srv._client_ip(request)}", max_requests=60, window_seconds=60)
+        return await build_public_outlook_performance(srv.db, limit=limit)
+
+    @r.get("/outlook/{outlook_id}")
+    async def get_outlook_by_id(outlook_id: str, user: dict = Depends(srv.get_cloud_user)):
+        # Audit fix: this endpoint required AUTHENTICATION (any signed-up
+        # user) but never checked AUTHORIZATION (whether this outlook
+        # belongs to the caller) -- any logged-in user could fetch any
+        # other user's outlook (confidence components, thesis evidence,
+        # entry/SL/TP, account regime/session) just by knowing/guessing an
+        # outlook_id, which isn't secret (it appears in push-notification
+        # deep links and log lines). Every other data-returning endpoint in
+        # this file already scopes by the caller's own account/license_key
+        # -- this one is now brought in line with that same pattern.
+        db = srv.db
+        lic = await srv._get_user_license(user)
+        account = str((lic or {}).get("mt5_account") or "").strip()
+        license_key = srv._normalize_license_key((lic or {}).get("pin", "")) if lic else ""
+        if not account and not license_key:
+            raise HTTPException(status_code=404, detail="outlook not found")
+        scope = {"$or": [{"account": account}, {"license_key": license_key}]} if account and license_key \
+            else ({"account": account} if account else {"license_key": license_key})
+        doc = await db.cloud_market_outlooks.find_one({"$and": [{"id": outlook_id}, scope]}, {"_id": 0})
+        if not doc:
+            raise HTTPException(status_code=404, detail="outlook not found")
+        revisions = await db.cloud_market_outlook_revisions.find({"outlook_id": outlook_id}, {"_id": 0}).sort("revision_time", 1).to_list(200)
+        return {"outlook": doc, "revisions": revisions}
+
+    @r.get("/outlook/notifications/prefs")
+    async def get_notification_prefs(user: dict = Depends(srv.get_cloud_user)):
+        db = srv.db
+        prefs = await db.cloud_notification_prefs.find_one({"user_id": user["id"]}, {"_id": 0})
+        return {"prefs": prefs or {"user_id": user["id"], "tier": "OFF", "notify_all_devices": True, "muted_categories": []}}
+
+    @r.post("/outlook/notifications/prefs")
+    async def set_notification_prefs(body: mo.NotificationPrefsUpdate, user: dict = Depends(srv.get_cloud_user)):
+        db = srv.db
+        if body.tier not in mo.NOTIFICATION_TIERS:
+            raise HTTPException(status_code=400, detail=f"tier must be one of {mo.NOTIFICATION_TIERS}")
+        if body.tier != "OFF" and await notif.count_complete_active_devices(user["id"]) < 1:
+            raise HTTPException(status_code=409, detail={
+                "code": "SUBSCRIPTION_MISSING",
+                "message": "Register and verify this device before enabling notification delivery.",
+            })
+        existing = await db.cloud_notification_prefs.find_one({"user_id": user["id"]}, {"_id": 0})
+        if body.muted_categories is not None:
+            invalid = [c for c in body.muted_categories if c not in notif.NOTIFICATION_CATEGORIES]
+            if invalid:
+                raise HTTPException(status_code=400, detail=f"unknown categories: {invalid}")
+            muted_categories = body.muted_categories
+        else:
+            muted_categories = (existing or {}).get("muted_categories", [])
+        lic = await srv._get_user_license(user)
+        account = str((lic or {}).get("mt5_account") or "").strip()
+        doc = {
+            "user_id": user["id"], "account": account, "tier": body.tier,
+            "quiet_hours_start": body.quiet_hours_start, "quiet_hours_end": body.quiet_hours_end,
+            "notify_all_devices": body.notify_all_devices,
+            "muted_categories": muted_categories,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.cloud_notification_prefs.update_one({"user_id": user["id"]}, {"$set": doc}, upsert=True)
+        return {"ok": True, "prefs": doc}
+
+    # v6.25.3 owner directive 2026-07-17 -- OneSignal App ID is not secret;
+    # the frontend SDK needs it directly to call OneSignal.init(). Replaces
+    # the retired VAPID public-key endpoint.
+    @r.get("/outlook/notifications/onesignal-app-id")
+    async def get_onesignal_app_id():
+        return await notif.get_onesignal_status()
+
+    # v6.25.3 -- the frontend needs the authenticated caller's own user id to
+    # pass to OneSignal.login(userId) client-side, tagging that browser's
+    # OneSignal device registration with our internal identity so later
+    # sends via include_aliases.external_id reach it.
+    @r.get("/outlook/notifications/my-user-id")
+    async def get_my_user_id(user: dict = Depends(srv.get_cloud_user)):
+        return {"user_id": user["id"]}
+
+    # Genuine OneSignal per-device registration. Browser permission is
+    # insufficient: the Subscription ID, token presence, OneSignal ID,
+    # and authenticated external ID must all be verified first.
+    @r.post("/outlook/notifications/subscribe")
+    async def subscribe_push(body: mo.PushSubscriptionIn, request: Request, user: dict = Depends(srv.get_cloud_user)):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        result = await notif.upsert_device_registration(
+            user["id"], payload, request.headers.get("user-agent", ""),
+        )
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail={"code": result.get("code"), "message": result.get("message")})
+        return result
+
+    @r.post("/outlook/notifications/unsubscribe")
+    async def unsubscribe_current_push(body: mo.PushUnsubscribeIn, user: dict = Depends(srv.get_cloud_user)):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        supplied_external = str(payload.get("external_id") or "").strip()
+        if supplied_external and supplied_external != user["id"]:
+            raise HTTPException(status_code=400, detail={"code": "EXTERNAL_ID_MISMATCH", "message": "External ID does not match authenticated user."})
+        return await notif.deactivate_device_registration(user["id"], payload)
+
+    @r.delete("/outlook/notifications/subscribe/{device_id}")
+    async def unsubscribe_push(device_id: str, user: dict = Depends(srv.get_cloud_user)):
+        db = srv.db
+        now_iso = datetime.now(timezone.utc).isoformat()
+        result = await db.cloud_push_subscriptions.update_one(
+            {"id": device_id, "user_id": user["id"]},
+            {"$set": {"active": False, "opted_in": False, "updated_at": now_iso, "deactivated_reason": "USER_REQUEST"}},
+        )
+        return {"ok": True, "deleted": result.modified_count > 0}
+
+    @r.get("/outlook/notifications/history")
+    async def get_notification_history(limit: int = Query(30), user: dict = Depends(srv.get_cloud_user)):
+        db = srv.db
+        rows = await db.cloud_notification_log.find({"user_id": user["id"]}, {"_id": 0}).sort("scheduled_time", -1).to_list(min(limit, 100))
+        return {"log": rows}
+
+    # Notification Center -- grouped-by-category, paginated, read/unread feed
+    # over the same cloud_notification_log every dispatch path already
+    # writes to. "category" here means one of notif.NOTIFICATION_CATEGORIES
+    # (TRADES/MARKET_OUTLOOK/SIGNALS/etc), not the push-tier gate above.
+    @r.get("/notifications/center")
+    async def get_notification_center(
+        category: Optional[str] = Query(None), unread_only: bool = Query(False),
+        page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=100),
+        user: dict = Depends(srv.get_cloud_user),
+    ):
+        if category and category not in notif.NOTIFICATION_CATEGORIES and category != "ALL":
+            raise HTTPException(status_code=400, detail=f"unknown category: {category}")
+        return await notif.get_notification_center_page(
+            user["id"], category=category, unread_only=unread_only, page=page, limit=limit,
+        )
+
+    @r.post("/notifications/{notification_id}/read")
+    async def mark_notification_read_route(notification_id: str, user: dict = Depends(srv.get_cloud_user)):
+        marked = await notif.mark_notification_read(user["id"], notification_id)
+        return {"ok": True, "marked": marked}
+
+    @r.post("/notifications/read-all")
+    async def mark_all_notifications_read_route(category: Optional[str] = Query(None), user: dict = Depends(srv.get_cloud_user)):
+        if category and category not in notif.NOTIFICATION_CATEGORIES and category != "ALL":
+            raise HTTPException(status_code=400, detail=f"unknown category: {category}")
+        count = await notif.mark_all_notifications_read(user["id"], category=category)
+        return {"ok": True, "marked": count}
+
+    # v6.24.18 owner directive 2026-07-16 -- the frontend must never show ON
+    # from the saved preference tier alone. This is the real, authenticated
+    # source of truth: browser permission is a client-side fact the frontend
+    # already knows: everything else (device registration, push-server
+    # readiness, most recent delivery) is server-authoritative and can only
+    # come from here.
+    @r.get("/outlook/notifications/status")
+    async def get_notification_status(user: dict = Depends(srv.get_cloud_user)):
+        return await notif.get_notification_status(user["id"])
+
+    # Real production dispatcher -- uses the exact same _send_webpush() every
+    # hourly/milestone event uses. Never creates an Outlook, never touches
+    # trading state.
+    @r.post("/outlook/notifications/test")
+    async def send_test_notification_route(user: dict = Depends(srv.get_cloud_user)):
+        # Rate-limited per user -- prevents a compromised/scripted Command
+        # Center session from hammering the OneSignal REST API (which is
+        # billed/rate-limited by OneSignal itself) via repeated test sends.
+        srv._rate_limit(f"notification_test_user:{user['id']}", max_requests=5, window_seconds=300)
+        return await notif.send_test_notification(user["id"])
+
+    return r

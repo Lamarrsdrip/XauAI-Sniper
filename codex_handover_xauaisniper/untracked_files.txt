@@ -1,0 +1,10 @@
+audits/CODEX_FULL_PROJECT_FINDINGS.md
+backend/llm_adapter.py
+codex_handover_xauaisniper/branch_state.txt
+codex_handover_xauaisniper/commit_history.txt
+codex_handover_xauaisniper/final_ea_compile.log
+codex_handover_xauaisniper/git_diff_stat.txt
+codex_handover_xauaisniper/git_status.txt
+codex_handover_xauaisniper/xauindex_compile.log
+frontend/src/forensic.contract.test.js
+tests/test_xau_v6255_authenticated_client_contract.py

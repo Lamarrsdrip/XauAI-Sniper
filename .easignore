@@ -1,0 +1,38 @@
+# EAS resolves this file from the repository root but applies paths from the
+# Expo project's mobile/ directory. Cloud builders install dependencies from
+# package-lock.json, so local artifacts must never be uploaded.
+node_modules
+.git/
+.expo
+dist
+web-build
+*.log
+.DS_Store
+*.tsbuildinfo
+
+# This repository contains several independently deployed services and local
+# research artifacts. They are not inputs to mobile/ and dramatically slow
+# Android/iOS cloud uploads.
+/__pycache__/
+/.pytest_cache/
+/.venv/
+/analysis/
+/audit/
+/audits/
+/backend/
+/backend_node/
+/codex_handover_xauaisniper/
+/compile_logs/
+/config/
+/deploy/
+/docs/
+/frontend/
+/memory/
+/mobile-old/
+/research/
+/scripts/
+/test_reports/
+/tester_sandbox/
+/tests/
+*.ex5
+*.mq5

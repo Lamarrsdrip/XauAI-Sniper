@@ -1,0 +1,50 @@
+
+
+C:\XAUResearchMT5\MQL5\Experts\XAUUSD_AI_Sniper_EA_pips_wip.mq5 : information: compiling C:\XAUResearchMT5\MQL5\Experts\XAUUSD_AI_Sniper_EA_pips_wip.mq5
+C:\XAUResearchMT5\MQL5\Experts\XAUUSD_AI_Sniper_EA_pips_wip.mq5 : information: including C:\XAUResearchMT5\MQL5\Include\Trade\Trade.mqh
+C:\XAUResearchMT5\MQL5\Include\Trade\Trade.mqh : information: including C:\XAUResearchMT5\MQL5\Include\Object.mqh
+C:\XAUResearchMT5\MQL5\Include\Object.mqh : information: including C:\XAUResearchMT5\MQL5\Include\StdLibErr.mqh
+C:\XAUResearchMT5\MQL5\Include\Trade\Trade.mqh : information: including C:\XAUResearchMT5\MQL5\Include\Trade\OrderInfo.mqh
+C:\XAUResearchMT5\MQL5\Include\Trade\Trade.mqh : information: including C:\XAUResearchMT5\MQL5\Include\Trade\HistoryOrderInfo.mqh
+C:\XAUResearchMT5\MQL5\Include\Trade\Trade.mqh : information: including C:\XAUResearchMT5\MQL5\Include\Trade\PositionInfo.mqh
+C:\XAUResearchMT5\MQL5\Include\Trade\Trade.mqh : information: including C:\XAUResearchMT5\MQL5\Include\Trade\DealInfo.mqh
+C:\XAUResearchMT5\MQL5\Experts\XAUUSD_AI_Sniper_EA_pips_wip.mq5 : information: including C:\XAUResearchMT5\MQL5\Include\Trade\AccountInfo.mqh
+C:\XAUResearchMT5\MQL5\Experts\XAUUSD_AI_Sniper_EA_pips_wip.mq5 : information: including C:\XAUResearchMT5\MQL5\Experts\lease\XauCloudLeaseClient.mqh
+C:\XAUResearchMT5\MQL5\Experts\lease\XauCloudLeaseClient.mqh : information: including C:\XAUResearchMT5\MQL5\Experts\lease\XauCloudLeaseCrypto.mqh
+C:\XAUResearchMT5\MQL5\Experts\lease\XauCloudLeaseCrypto.mqh : information: including C:\XAUResearchMT5\MQL5\Experts\lease\XauCloudLeaseSha256.mqh
+ : information: generating code
+ : information: generating code 3%
+ : information: generating code 6%
+ : information: generating code 9%
+ : information: generating code 12%
+ : information: generating code 15%
+ : information: generating code 18%
+ : information: generating code 21%
+ : information: generating code 24%
+ : information: generating code 27%
+ : information: generating code 30%
+ : information: generating code 33%
+ : information: generating code 36%
+ : information: generating code 39%
+ : information: generating code 42%
+ : information: generating code 45%
+ : information: generating code 48%
+ : information: generating code 51%
+ : information: generating code 54%
+ : information: generating code 57%
+ : information: generating code 60%
+ : information: generating code 63%
+ : information: generating code 66%
+ : information: generating code 69%
+ : information: generating code 72%
+ : information: generating code 75%
+ : information: generating code 78%
+ : information: generating code 81%
+ : information: generating code 84%
+ : information: generating code 87%
+ : information: generating code 90%
+ : information: generating code 93%
+ : information: generating code 95%
+ : information: generating code 100%
+ : information: code generated
+Result: 0 errors, 0 warnings, 43366 ms elapsed, cpu='X64 Regular'

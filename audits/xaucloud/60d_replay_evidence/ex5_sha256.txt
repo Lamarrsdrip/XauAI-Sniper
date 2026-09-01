@@ -1,0 +1,1 @@
+5e49c067bf3ddbc60339c7ffb5d18a2a87f0a6d4f3b8e052f3f3990d98d498b0  /Users/libertyelectronics/XauAI-Sniper/tester_sandbox/MT5_Isolated/MQL5/Experts/v62524_xaucloud_audit/XauCloud_v62524.ex5

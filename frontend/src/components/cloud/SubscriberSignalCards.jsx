@@ -1,0 +1,198 @@
+import React, { useState } from "react";
+import axios from "axios";
+import { Lock } from "lucide-react";
+import { API } from "@/lib/api";
+import * as UI from "@/lib/ui";
+
+// The canonical, customer-facing "XauCloud Market Outlook" / "10-Minute
+// Engine" / "Recent Signals" cards -- sourced from the sanitized subscriber
+// mirror (GET /cloud/signals/outlook|engine|recent, backed by the
+// subscriber_signals collection; see subscriberSignalFeed.ts). This is the
+// ONE presentation used everywhere a customer sees these features: the
+// unified Command Center Home for a non-bot-owning trial/subscriber user,
+// and (previously) CloudSignalDashboard's own shell before it was merged
+// into CloudDashboard.jsx. Do not fork a second version of these cards --
+// see the "ONE Command Center" product rule (2026-08-25).
+export const signalAxios = axios.create({ baseURL: API, withCredentials: true });
+
+export function formatNaira(koboAmount) {
+  if (koboAmount === null || koboAmount === undefined) return "—";
+  const naira = koboAmount / 100;
+  if (naira === 0) return "Free";
+  return `₦${naira.toLocaleString("en-NG", { maximumFractionDigits: 0 })}`;
+}
+
+export function formatDate(iso) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return "—";
+  }
+}
+
+export function relTime(iso) {
+  if (!iso) return "—";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "just now";
+  const s = ms / 1000;
+  if (s < 60) return `${Math.floor(s)}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+export const PLAN_LABEL = { WEEKLY: "Weekly Signals", MONTHLY: "Monthly Signals" };
+const STATUS_TONE = { WATCHING: "info", ACTIONABLE: "profit", ACTIVE: "profit", BLOCKED: "loss", EXPIRED: "neutral", TP1_HIT: "profit", TP2_HIT: "profit", TP3_HIT: "profit", SL_HIT: "loss", CLOSED: "neutral", INVALIDATED: "loss" };
+const statusLabel = (status) => String(status || "—").replace(/_/g, " ");
+
+// Plain-English summary of "your plan" from the entitlement object -- every
+// call site derives its header/CTA from this one function so they never
+// disagree with each other.
+export function planSummary(entitlement) {
+  if (!entitlement) return { title: "Loading your plan…" };
+  const { source, trial, subscription } = entitlement;
+
+  if (source === "trial" && trial) {
+    const days = trial.days_remaining ?? 0;
+    return {
+      title: "Free Signal Trial",
+      sub: days === 0 ? "Last day" : `${days} market day${days === 1 ? "" : "s"} left`,
+      tone: "gold",
+    };
+  }
+
+  if (source === "subscription" && subscription) {
+    return {
+      title: PLAN_LABEL[subscription.plan] || "Signal Subscription",
+      sub: `Active until ${formatDate(subscription.expires_at)}`,
+      tone: "gold",
+    };
+  }
+
+  if (subscription && !subscription.active) {
+    return {
+      title: `${PLAN_LABEL[subscription.plan] || "Signal Subscription"} expired`,
+      sub: "Renew below to keep receiving Gold signals.",
+      tone: "warn",
+      showUpgrade: true,
+    };
+  }
+  if (trial && trial.status === "EXPIRED") {
+    return {
+      title: "Your free XauCloud signal trial has ended",
+      sub: "Subscribe below to keep receiving Gold signals and Market Outlook.",
+      tone: "warn",
+      showUpgrade: true,
+    };
+  }
+  return {
+    title: "No active plan yet",
+    sub: "Start a free 3-market-day trial -- no card required.",
+    tone: "neutral",
+    showStartTrial: true,
+  };
+}
+
+function SignalDetail({ signal }) {
+  const rows = [
+    ["Entry", signal.entry],
+    ["Stop", signal.stop],
+    ["TP1", signal.tp1],
+    ["TP2", signal.tp2],
+    ["TP3", signal.tp3],
+  ].filter(([, v]) => v !== null && v !== undefined);
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[15px] font-bold">{signal.symbol}</span>
+        <UI.Pill tone={signal.direction === "SELL" ? "loss" : "profit"}>{String(signal.direction || "").replace(/_/g, " ")}</UI.Pill>
+        <UI.Pill tone={STATUS_TONE[signal.status] || "neutral"}>{statusLabel(signal.status)}</UI.Pill>
+        {signal.confidence != null && <span className="font-mono text-[11px] text-white/35">Confidence {signal.confidence}%</span>}
+      </div>
+      {rows.length > 0 && (
+        <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5">
+          {rows.map(([label, value]) => (
+            <div key={label} className="rounded-xl border border-white/[0.07] bg-white/[0.02] px-2.5 py-2">
+              <div className="font-mono text-[9px] uppercase tracking-widest text-white/30">{label}</div>
+              <div className="nums mt-0.5 text-[12px] font-bold">{value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {signal.rationale && <p className="mt-3 text-[12px] leading-5 text-white/45">{signal.rationale}</p>}
+      {Array.isArray(signal.outcome_timeline) && signal.outcome_timeline.length > 0 && (
+        <div className="mt-3 rounded-xl bg-white/[0.03] p-3">
+          <div className="font-mono text-[9px] uppercase tracking-widest text-white/30">Outcome timeline</div>
+          <div className="mt-2 space-y-1.5">
+            {signal.outcome_timeline.map((event, index) => <div key={`${event.event}-${index}`} className="flex items-center justify-between gap-3 text-[11px]"><span className="text-white/65">{event.event}</span><span className="text-white/35">{relTime(event.at)}</span></div>)}
+          </div>
+        </div>
+      )}
+      <div className="mt-2 text-[10.5px] text-white/25">Updated {relTime(signal.updated_at)}</div>
+    </div>
+  );
+}
+
+export function SignalCard({ title, icon: Icon, state }) {
+  const { loading, data, locked, unavailable, error } = state;
+  return (
+    <UI.Card title={title} action={Icon && <Icon className="h-4 w-4 text-gold-300/60" />}>
+      {loading && <UI.Skeleton className="h-20 w-full" />}
+      {!loading && locked && (
+        <UI.EmptyState icon={Lock} title="Not included in your plan" body="Start a free trial or subscribe to see this." />
+      )}
+      {!loading && !locked && error && <div className="text-[12px] text-rose-400">{error}</div>}
+      {!loading && !locked && !error && unavailable && (
+        <div className="text-[12.5px] text-white/45">Signal feed temporarily unavailable.</div>
+      )}
+      {!loading && !locked && !error && !unavailable && !data?.signal && (
+        <div className="text-[12.5px] text-white/45">No signal right now. Check back soon.</div>
+      )}
+      {!loading && !locked && !error && !unavailable && data?.signal && <SignalDetail signal={data.signal} />}
+    </UI.Card>
+  );
+}
+
+// `scroll` -- when true (Home), rows render inside a fixed-height,
+// internally-scrollable container so the section stays visibly open (not
+// collapsed/accordion) without making the page grow with every signal --
+// same pattern as the public homepage's 30-Day Replay trade list
+// (GoldReplaySection.jsx: max-h + overflow-y-auto). When false (the
+// Activity tab's own dedicated page), the full list renders unbounded, as
+// before. Same rows either way -- one implementation, not two.
+export function RecentSignalsCard({ state, scroll = false }) {
+  const { loading, signals, locked, error } = state;
+  const count = signals?.length || 0;
+  const [selectedId, setSelectedId] = useState(null);
+  return (
+    <UI.Card title="Recent Signals" subtitle={!loading && !locked && !error && count > 0 ? `${count} item${count === 1 ? "" : "s"}` : undefined}>
+      {loading && <UI.Skeleton className="h-16 w-full" />}
+      {!loading && locked && (
+        <UI.EmptyState icon={Lock} title="Not included in your plan" body="Start a free trial or subscribe to see your recent signals." />
+      )}
+      {!loading && !locked && error && <div className="text-[12px] text-rose-400">{error}</div>}
+      {!loading && !locked && !error && count === 0 && (
+        <div className="text-[12.5px] text-white/45">No recent signals yet.</div>
+      )}
+      {!loading && !locked && !error && count > 0 && (
+        <div className={scroll ? "max-h-[320px] divide-y divide-white/[0.06] overflow-y-auto pr-1" : "divide-y divide-white/[0.06]"} data-testid="recent-signals-list">
+          {signals.map((s) => {
+            const expanded = selectedId === s.signal_id;
+            return <div key={s.signal_id}>
+              <button onClick={() => setSelectedId(expanded ? null : s.signal_id)} className="flex w-full items-center justify-between gap-3 py-2.5 text-left">
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-semibold">{s.symbol} · {String(s.direction || "").replace(/_/g, " ")}</div>
+                  <div className="mt-0.5 text-[11px] text-white/35">{s.engine === "OUTLOOK" ? "Market Outlook" : "10-Minute Engine"} · {relTime(s.outcome_time || s.updated_at)}</div>
+                </div>
+                <UI.Pill tone={STATUS_TONE[s.status] || "neutral"}>{statusLabel(s.status)}</UI.Pill>
+              </button>
+              {expanded && <div className="mb-3 rounded-xl border border-white/[0.07] bg-white/[0.025] p-3"><div className="mb-2 font-mono text-[9px] uppercase tracking-widest text-gold-300/60">Signal details</div><SignalDetail signal={s} /></div>}
+            </div>;
+          })}
+        </div>
+      )}
+    </UI.Card>
+  );
+}

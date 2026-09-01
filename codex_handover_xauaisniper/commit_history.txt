@@ -1,0 +1,30 @@
+bf82b8c (HEAD -> audit/codex-complete-xauaisniper-forensic-repair, origin/main, origin/audit/codex-complete-xauaisniper-forensic-repair, origin/HEAD) chore(release): publish audited v6.25.5 test candidate
+c710c8a fix(ea): enforce single M30 entry timer lifecycle
+9e4181f (main) fix(ci): v6.25.5 manifest release_notes tripped the source-leak guard test
+f6c59b4 (origin/feature/m30-three-m10-consensus, feature/m30-three-m10-consensus) feat(ea): v6.25.5 -- M30 three-M10-evidence consensus mode (optional, default OFF)
+894a8a0 (origin/release/final-platform-hardening, release/final-platform-hardening) fix(ci): run backend tests one file per process, not one combined pytest run
+0704d36 fix(ci): backend workflow was missing DB_NAME env var
+dc6e348 fix(ci): real installability issues CI immediately caught on first run
+7de11a7 feat(ci): Phase 16 -- GitHub Actions for backend, frontend, EA static checks
+dfb6488 fix(release): Phase 17 -- release identity alignment
+f06e616 fix(security): URGENT P0 -- unauthenticated hive/ML routes, dead endpoint cleanup, honest admin config labeling
+efa5409 feat(security): Phase 6 -- admin MFA/TOTP
+3efd102 fix(ea): URGENT v6.25.4 -- M10 freshness wrongly forced STALE by continuationEntryPaused
+fff9eb8 feat(security): Phase 6 remainder -- password reset, account deletion/export, DB index audit, CSRF cookie hardening
+8d29098 feat(analytics): Phase 7A P0 -- real Command Center equity curve, remove fabricated ai_features block
+70ce33e feat(auth): Phase 6 P0 -- fail-closed JWT secret, dependency-free rate limiting, login audit logging
+724fa55 fix(server): actually include the server.py copy-trading deletion + migration script + tests
+6862243 feat!: delete retired cloud copy-trading subsystem entirely
+96d891c fix(licensing): unify license validation onto one canonical, account-binding service
+69b9bfb fix(downloads): stop public MQ5 source distribution, gate behind license + signed token
+89ebe1a fix(payments): Paystack webhook signature verification + atomic fulfillment state machine
+442f699 feat(notifications): switch push delivery from self-hosted VAPID to OneSignal
+d5f6ecc (origin/fix/v6251-full-repair, fix/v6251-full-repair) feat(admin): live notification system health panel -- no fake "fix it" input
+68c0288 fix(frontend): Command Center audit -- AI confidence/bias dead tiles, false-ON bell, dishonest risk controls
+dab4200 fix(ea): v6.25.2 -- M10 origination fallback for real, previously-discarded candidates
+90645db test(backend): real executable tests for reservation-endpoint authentication
+f99b74a fix(ea+backend): M10 freshness open-time/close-time bug + authenticate direction-reservation endpoints
+dcc4b63 fix(backend+frontend): eliminate duplicate hourly outlook publication and wrong Active count
+e5abf4b fix(backend+ea): self-initializing VAPID web push + M10 stale-skip-reason forensic fix
+e13ae5e fix(ea): stop per-tick log spam in M10/exhaustion evidence functions
+411108a Update project

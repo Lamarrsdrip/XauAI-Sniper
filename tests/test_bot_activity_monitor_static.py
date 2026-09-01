@@ -1,0 +1,104 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8")
+
+
+def test_backend_exposes_bot_monitor_and_command_center_endpoints():
+    server = read("backend/server.py")
+
+    assert "BotHeartbeatReq" in server
+    assert "CloudLicenseLinkReq" in server
+    assert "_verify_command_license" in server
+    assert "@api_router.post(\"/cloud/license/link\")" in server
+    assert "@api_router.get(\"/cloud/license/status\")" in server
+    assert "@api_router.post(\"/cloud/monitor/heartbeat\")" in server
+    assert "@api_router.post(\"/cloud/monitor/activity\")" in server
+    assert "@api_router.get(\"/cloud/monitor/status\")" in server
+    assert "@api_router.get(\"/cloud/monitor/activity\")" in server
+    assert "cloud_bot_heartbeats" in server
+    assert "cloud_bot_activity" in server
+    assert "BOT_OFFLINE_NO_HEARTBEAT" in server
+    assert "Remote monitoring only; this endpoint never executes trades" in server
+    assert "CloudCommandReq" in server
+    assert "SAFE_REMOTE_COMMANDS" in server
+    assert "@api_router.post(\"/cloud/command/request\")" in server
+    assert "@api_router.get(\"/cloud/command/pending\")" in server
+    assert "@api_router.post(\"/cloud/command/ack\")" in server
+    assert "cloud_bot_commands" in server
+    assert "\"/admin/command-center/overview\"" in server
+
+
+def test_ea_sends_live_monitor_heartbeat_and_activity_events():
+    ea = read("backend/ea_code/XAUUSD_AI_Sniper_EA.mq5")
+
+    assert "InpBotMonitorEnable" in ea
+    assert "InpBotMonitorHeartbeatSec = 20" in ea
+    assert "BotMonitorHeartbeat()" in ea
+    assert "BotMonitorActivity(" in ea
+    assert "/api/cloud/monitor/heartbeat" in ea
+    assert "/api/cloud/monitor/activity" in ea
+    assert "BotMonitorPollCommands()" in ea
+    assert "BotMonitorAckCommand(" in ea
+    assert "/api/cloud/command/pending" in ea
+    assert "/api/cloud/command/ack" in ea
+    assert "g_remotePauseNewTrades" in ea
+    assert "PAUSE_NEW_TRADES" in ea
+    assert "CLOSE_ALL_TRADES" in ea
+    assert "algo_trading" in ea
+    assert "trading_allowed" in ea
+    assert "open_positions" in ea
+    assert "last_error" in ea
+
+
+def test_cloud_dashboard_is_repurposed_as_mobile_monitor():
+    dashboard = read("frontend/src/components/cloud/CloudDashboard.jsx")
+
+    assert "Command Center" in dashboard
+    assert "/cloud/monitor/status" in dashboard
+    assert "/cloud/monitor/activity" in dashboard
+    assert "/cloud/license/status" in dashboard
+    assert "/cloud/license/link" in dashboard
+    assert "data-testid=\"bot-monitor-dashboard\"" in dashboard
+    assert "data-testid=\"bot-status-card\"" in dashboard
+    assert "activity-filter-trade" in dashboard
+    assert "No connection" in dashboard
+    assert "Link your license" in dashboard
+    assert "Old cloud records are hidden" in dashboard
+    assert "/cloud/command/request" in dashboard
+    assert "Pause" in dashboard
+    assert "Close all" in dashboard
+    assert "window.prompt" not in dashboard
+    assert "4-6 digit" not in dashboard
+
+
+def test_admin_dashboard_uses_license_and_bot_ops_not_old_cloud_panel():
+    admin = read("frontend/src/components/AdminPortal.jsx")
+
+    assert "admin-command-ops-tab" in admin
+    assert "/admin/command-center/overview" in admin
+    assert "License business overview" in admin
+    assert "Bot operations" in admin
+    assert "tab === \"cloud\"" not in admin
+    assert "CloudAdminTab" not in admin
+    assert "cloud-admin-tab" not in admin
+
+
+def test_command_center_routing_replaces_cloud_public_route():
+    app = read("frontend/src/App.js")
+    landing = read("frontend/src/components/cloud/CloudLanding.jsx")
+    auth = read("frontend/src/components/cloud/CloudAuth.jsx")
+
+    assert "path=\"/command\"" in app
+    assert "path=\"/command/dashboard\"" in app
+    assert "to=\"/command\"" in app
+    assert "copy trading hub" not in landing
+    # XauCloud rebrand (audits/xaucloud/03_rebrand_ledger.md): these were
+    # renamed from "XAU AI Sniper" -- updated here to match, not a
+    # functional regression.
+    assert "Buy the licensed XauCloud EA" in landing
+    assert "XauCloud Command Center" in auth
