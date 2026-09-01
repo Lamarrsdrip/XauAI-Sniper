@@ -21,7 +21,6 @@ import { asUtc, canonicalM10Signal, extractEvidenceQuote, latestEaEvidence } fro
 import { logOutlookShadowComparison } from "./globalBrainShadowServing.js";
 import { evaluateGlobalBrainInfluence, type GlobalBrainInfluenceResult } from "./globalBrainInfluence.js";
 import { computeConfidence, confidenceCategory, confidencePct, computeZoneAndTargets, expectedPath, newOutlookId, synthesizeNarrative } from "./marketOutlookConfidence.js";
-import { fetchLiveGoldPrice } from "./goldPrice.js";
 
 void _BREAK_EVEN_R_TOLERANCE; // referenced by advance_persisted_signal, still pending port
 
@@ -148,29 +147,40 @@ export function resolveHourlyBias(canonicalM10: Record<string, unknown>, thesis:
   const automatedEntryApproved = actionable;
   const automatedBlockReason = actionable ? null : String(canonicalM10["blocker_code"] ?? canonicalM10["execution_status"] ?? "") || null;
 
-  const buyP = Number(thesis["buy_pressure"] ?? 50.0) || 50.0;
-  const sellP = Number(thesis["sell_pressure"] ?? 50.0) || 50.0;
+  const buyRaw = Number(thesis["buy_pressure"]);
+  const sellRaw = Number(thesis["sell_pressure"]);
+  const buyP = Number.isFinite(buyRaw) ? buyRaw : 50.0;
+  const sellP = Number.isFinite(sellRaw) ? sellRaw : 50.0;
   const pressureGap = buyP - sellP;
   const structureState = String(thesis["structure"] ?? "");
 
+  const MIN_FALLBACK_DIRECTION_PRESSURE_GAP = 12.0;
+  const DIRECTION_CONFLICT_PRESSURE_GAP = 15.0;
   let directionalConflict: string | null = null;
   let directionalTransformationApplied = false;
   let directionLabel: string;
-  if (["BUY", "SELL"].includes(rawDir)) directionLabel = rawDir;
-  else if (buyP !== sellP) directionLabel = buyP > sellP ? "BUY" : "SELL";
-  else directionLabel = "BUY";
-  let direction = directionLabel === "BUY" ? 1 : -1;
+  if (["BUY", "SELL"].includes(rawDir)) {
+    directionLabel = rawDir;
+  } else if (Math.abs(pressureGap) >= MIN_FALLBACK_DIRECTION_PRESSURE_GAP) {
+    directionLabel = pressureGap > 0 ? "BUY" : "SELL";
+  } else {
+    // No canonical direction + balanced/weak pressure is not a BUY signal.
+    directionLabel = "NEUTRAL";
+  }
+  let direction = directionLabel === "BUY" ? 1 : directionLabel === "SELL" ? -1 : 0;
 
-  const structuralOverrideBearish = ["STRUCTURE_STRONGLY_SUPPORTS", "STRUCTURE_SUPPORTS"].includes(structureState) && direction === -1;
-  const structuralOverrideBullish = ["STRUCTURE_STRONGLY_SUPPORTS", "STRUCTURE_SUPPORTS"].includes(structureState) && direction === 1;
-  if (directionLabel === "SELL" && pressureGap >= 15.0 && !structuralOverrideBearish) {
-    directionalConflict = `buy pressure (${buyP.toFixed(0)}) outweighs sell pressure (${sellP.toFixed(0)}) with no documented bearish structural override`;
-  } else if (directionLabel === "BUY" && pressureGap <= -15.0 && !structuralOverrideBullish) {
-    directionalConflict = `sell pressure (${sellP.toFixed(0)}) outweighs buy pressure (${buyP.toFixed(0)}) with no documented bullish structural override`;
+  const structureSupportsCandidate = ["STRUCTURE_STRONGLY_SUPPORTS", "STRUCTURE_SUPPORTS"].includes(structureState);
+  if (directionLabel === "SELL" && pressureGap >= DIRECTION_CONFLICT_PRESSURE_GAP && !structureSupportsCandidate) {
+    directionalConflict = `buy pressure (${buyP.toFixed(0)}) materially contradicts the SELL candidate without confirming structure`;
+  } else if (directionLabel === "BUY" && pressureGap <= -DIRECTION_CONFLICT_PRESSURE_GAP && !structureSupportsCandidate) {
+    directionalConflict = `sell pressure (${sellP.toFixed(0)}) materially contradicts the BUY candidate without confirming structure`;
   }
   if (directionalConflict) {
-    directionLabel = pressureGap > 0 ? "BUY" : "SELL";
-    direction = directionLabel === "BUY" ? 1 : -1;
+    // Never manufacture the opposite trade from a conflict.  A contradiction
+    // means WAIT/NEUTRAL; the next fresh evidence cycle can establish a new
+    // canonical direction.  This removes the old flip-flop path.
+    directionLabel = "NEUTRAL";
+    direction = 0;
     directionalTransformationApplied = true;
   }
 
@@ -201,8 +211,8 @@ export function resolveHourlyBias(canonicalM10: Record<string, unknown>, thesis:
     confidence_category: confCategory,
     directional_conflict: directionalConflict,
     directional_transformation_applied: directionalTransformationApplied,
-    automated_entry_approved: automatedEntryApproved,
-    automated_block_reason: automatedBlockReason,
+    automated_entry_approved: automatedEntryApproved && ["BUY", "SELL"].includes(directionLabel),
+    automated_block_reason: ["BUY", "SELL"].includes(directionLabel) ? automatedBlockReason : (directionalConflict ? "DIRECTIONAL_CONFLICT_WAIT" : automatedBlockReason),
   };
 }
 
@@ -221,7 +231,8 @@ const NO_VALID_REASON_TEXT: Record<string, string> = {
   NO_CONNECTED_EA: "No EA has ever reported activity for this account -- connect and run your EA to begin receiving hourly outlooks.",
   STALE_EVIDENCE: "This account's EA has connected before, but has not reported any activity in the last 6 hours -- check that it is still running.",
   INSUFFICIENT_MARKET_EVIDENCE: "The EA is connected and reporting, but its recent events do not yet carry usable market-thesis or entry-readiness data.",
-  INTERNAL_GENERATION_ERROR: "No usable live price is available from the EA or the fallback feed right now, so no outlook could be generated this cycle.",
+  INTERNAL_GENERATION_ERROR: "No usable live broker price is available from the EA right now, so no outlook could be generated this cycle.",
+  BROKER_QUOTE_UNAVAILABLE: "The EA evidence is present, but it does not contain a usable account-specific broker quote. Outlook will not substitute an external XAU feed.",
 };
 
 /** Port of market_outlook.py:1252 `generate_outlook_for_account` -- generates and persists ONE new immutable outlook document, or null if there is genuinely no usable evidence yet. */
@@ -246,12 +257,6 @@ export async function generateOutlookForAccount(opts: {
   if (eaMid > 0) {
     currentPrice = eaMid;
     priceSource = "EA_LIVE_BROKER_PRICE";
-  } else {
-    const priceInfo = await fetchLiveGoldPrice();
-    if (priceInfo.source === "live" && Number(priceInfo.bid ?? 0) > 0) {
-      currentPrice = Number(priceInfo.bid);
-      priceSource = "EXTERNAL_FALLBACK_FEED";
-    }
   }
 
   let outlookId = newOutlookId("PENDING");
@@ -261,7 +266,7 @@ export async function generateOutlookForAccount(opts: {
   const expiryAt = new Date(now.getTime() + OUTLOOK_HORIZON_HOURS * 3600_000).toISOString();
 
   if (!evidence || currentPrice <= 0) {
-    const noValidReason = !evidence ? evidenceReason : "INTERNAL_GENERATION_ERROR";
+    const noValidReason = !evidence ? evidenceReason : "BROKER_QUOTE_UNAVAILABLE";
     const reasonText = NO_VALID_REASON_TEXT[noValidReason] ?? "No recent EA evidence available for this account yet -- nothing to analyze.";
     const doc: Record<string, unknown> = {
       id: outlookId.replace("PENDING", "NO_VALID_OUTLOOK"),

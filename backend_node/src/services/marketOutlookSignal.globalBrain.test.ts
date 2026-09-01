@@ -10,7 +10,6 @@ vi.mock("../db.js", () => ({ getDb: () => state.db }));
 // No EMERGENT_LLM_KEY is set in this file, so synthesizeNarrative and the
 // AI budget guard both take their deterministic no-key fallback paths --
 // no network calls, no LlmChat mocking needed for this test file.
-vi.mock("./goldPrice.js", () => ({ fetchLiveGoldPrice: vi.fn(async () => ({ source: "live", bid: 0, ask: 0 })) }));
 
 const { generateOutlookForAccount } = await import("./marketOutlookSignal.js");
 const { promoteChallenger } = await import("./globalBrainRegistry.js");
@@ -32,6 +31,14 @@ function championInput(bucketKey: string, shrunkRate: number, n = 40) {
   };
 }
 
+function timingChampionInput(regime: string, shrunkRate: number, n = 40) {
+  return {
+    ...championInput(regime, shrunkRate, n),
+    question: "ENTRY_TIMING" as const,
+    dataset_fingerprint: "timing-fp",
+  };
+}
+
 /**
  * Seeds exactly enough real cloud_bot_activity evidence for
  * generateOutlookForAccount to resolve a clean, actionable BUY/SELL outlook
@@ -44,6 +51,7 @@ async function seedEaEvidence(account: string, direction: "BUY" | "SELL", overri
   const ask = direction === "BUY" ? 2650.2 : 2650.4;
   await state.db.collection("cloud_bot_activity").insertOne({
     account,
+    license_key: "lic-1",
     ts: new Date().toISOString(),
     details: {
       session: "LONDON",
@@ -88,13 +96,16 @@ describe("generateOutlookForAccount -- Global Brain M10/OUTLOOK consumer (end-to
       direction_quality_bucket: null,
       direction_quality_shrunk_rate: null,
       direction_quality_n: 0,
+      entry_timing_bucket: null,
+      entry_timing_shrunk_rate: null,
+      entry_timing_n: 0,
     });
     expect(doc!["global_brain_blocked_direction"]).toBeNull();
   });
 
   it("OUTLOOK OFF (default): a REJECT-worthy champion has zero effect on the published BUY", async () => {
     await seedEaEvidence("acct-off", "BUY");
-    await promoteChallenger(championInput(`BUY|LONDON|TRENDING|${SETUP_TYPE}`, 0.1, 40), "seed"); // would REJECT if consulted
+    await promoteChallenger(championInput(`BUY|TRENDING|${SETUP_TYPE}`, 0.1, 40), "seed"); // would REJECT if consulted
     const doc = await generateOutlookForAccount({ license_key: "lic-1", account: "acct-off", account_id: "acct-off" });
     expect(doc!["primary_direction"]).toBe("BUY");
     expect((doc!["global_brain_influence"] as { enabled: boolean }).enabled).toBe(false);
@@ -102,7 +113,7 @@ describe("generateOutlookForAccount -- Global Brain M10/OUTLOOK consumer (end-to
 
   it("OUTLOOK ON + REJECT: downgrades to BLOCKED and neutralizes expected_path/setup_type (regression for the ordering fix)", async () => {
     await seedEaEvidence("acct-reject", "BUY");
-    await promoteChallenger(championInput(`BUY|LONDON|TRENDING|${SETUP_TYPE}`, 0.1, 40), "seed");
+    await promoteChallenger(championInput(`BUY|TRENDING|${SETUP_TYPE}`, 0.1, 40), "seed");
     await updateGlobalBrainSettings({ outlook_learned_influence_enabled: true }, "admin@xaucloud.io");
     const doc = await generateOutlookForAccount({ license_key: "lic-1", account: "acct-reject", account_id: "acct-reject" });
     expect(doc!["primary_direction"]).toBe("BLOCKED");
@@ -118,7 +129,7 @@ describe("generateOutlookForAccount -- Global Brain M10/OUTLOOK consumer (end-to
 
   it("M10 scope isolation: enabling M10 influence has zero effect on an OUTLOOK (HOURLY) publication", async () => {
     await seedEaEvidence("acct-scope-outlook", "BUY");
-    await promoteChallenger(championInput(`BUY|LONDON|TRENDING|${SETUP_TYPE}`, 0.1, 40), "seed");
+    await promoteChallenger(championInput(`BUY|TRENDING|${SETUP_TYPE}`, 0.1, 40), "seed");
     await updateGlobalBrainSettings({ m10_learned_influence_enabled: true }, "admin@xaucloud.io");
     const doc = await generateOutlookForAccount({ license_key: "lic-1", account: "acct-scope-outlook", account_id: "acct-scope-outlook" });
     expect(doc!["primary_direction"]).toBe("BUY"); // unaffected -- this account's publication_mode is HOURLY/OUTLOOK, not M10_SIGNAL
@@ -128,7 +139,7 @@ describe("generateOutlookForAccount -- Global Brain M10/OUTLOOK consumer (end-to
 
   it("OUTLOOK scope isolation: enabling OUTLOOK influence has zero effect on an M10_SIGNAL publication", async () => {
     await seedEaEvidence("acct-scope-m10", "BUY");
-    await promoteChallenger(championInput(`BUY|LONDON|TRENDING|${SETUP_TYPE}`, 0.1, 40), "seed");
+    await promoteChallenger(championInput(`BUY|TRENDING|${SETUP_TYPE}`, 0.1, 40), "seed");
     await updateGlobalBrainSettings({ outlook_learned_influence_enabled: true }, "admin@xaucloud.io");
     const doc = await generateOutlookForAccount({ license_key: "lic-1", account: "acct-scope-m10", account_id: "acct-scope-m10", publication_mode: "M10_SIGNAL" });
     expect(doc!["primary_direction"]).toBe("BUY"); // unaffected -- OUTLOOK switch does not gate M10_SIGNAL publications
@@ -138,11 +149,24 @@ describe("generateOutlookForAccount -- Global Brain M10/OUTLOOK consumer (end-to
 
   it("M10 ON + REJECT (publication_mode=M10_SIGNAL) downgrades to BLOCKED, matching OUTLOOK's own REJECT behavior", async () => {
     await seedEaEvidence("acct-m10-reject", "BUY");
-    await promoteChallenger(championInput(`BUY|LONDON|TRENDING|${SETUP_TYPE}`, 0.1, 40), "seed");
+    await promoteChallenger(championInput(`BUY|TRENDING|${SETUP_TYPE}`, 0.1, 40), "seed");
     await updateGlobalBrainSettings({ m10_learned_influence_enabled: true }, "admin@xaucloud.io");
     const doc = await generateOutlookForAccount({ license_key: "lic-1", account: "acct-m10-reject", account_id: "acct-m10-reject", publication_mode: "M10_SIGNAL" });
     expect(doc!["primary_direction"]).toBe("BLOCKED");
     expect(doc!["setup_type"]).toBe("NONE");
+  });
+
+  it("OUTLOOK ON + validated ENTRY_TIMING WAIT: downgrades the immediate signal to BLOCKED/NO_TRADE without reversing direction", async () => {
+    await seedEaEvidence("acct-wait", "BUY");
+    await promoteChallenger(championInput(`BUY|TRENDING|${SETUP_TYPE}`, 0.8, 40), "seed-direction");
+    await promoteChallenger(timingChampionInput("TRENDING", 0.2, 40), "seed-timing");
+    await updateGlobalBrainSettings({ outlook_learned_influence_enabled: true }, "admin@xaucloud.io");
+    const doc = await generateOutlookForAccount({ license_key: "lic-1", account: "acct-wait", account_id: "acct-wait" });
+    expect(doc!["primary_direction"]).toBe("BLOCKED");
+    expect(doc!["direction"]).toBe(0);
+    expect(doc!["global_brain_blocked_direction"]).toBe("BUY");
+    expect((doc!["global_brain_influence"] as { recommendation: string }).recommendation).toBe("WAIT");
+    expect(doc!["actionable_signal"]).toBe("NO_TRADE_RIGHT_NOW");
   });
 
   it("NO_OPINION (switch on, no champion promoted yet): BUY publishes unaffected, no mutation", async () => {
@@ -158,7 +182,7 @@ describe("generateOutlookForAccount -- Global Brain M10/OUTLOOK consumer (end-to
 
   it("NO_OPINION (switch on, champion exists but this exact bucket has insufficient sample): BUY publishes unaffected", async () => {
     await seedEaEvidence("acct-thin-bucket", "BUY");
-    await promoteChallenger(championInput("SELL|NY|RANGE|OPPOSITE_DIRECTION_REVERSAL", 0.1, 40), "seed"); // a different bucket entirely
+    await promoteChallenger(championInput("SELL|RANGE|OPPOSITE_DIRECTION_REVERSAL", 0.1, 40), "seed"); // a different bucket entirely
     await updateGlobalBrainSettings({ outlook_learned_influence_enabled: true }, "admin@xaucloud.io");
     const doc = await generateOutlookForAccount({ license_key: "lic-1", account: "acct-thin-bucket", account_id: "acct-thin-bucket" });
     expect(doc!["primary_direction"]).toBe("BUY");
@@ -169,7 +193,7 @@ describe("generateOutlookForAccount -- Global Brain M10/OUTLOOK consumer (end-to
 
   it("ENTER_NOW (switch on, healthy champion win rate): BUY publishes unaffected -- ENTER_NOW never mutates a decision", async () => {
     await seedEaEvidence("acct-enter-now", "BUY");
-    await promoteChallenger(championInput(`BUY|LONDON|TRENDING|${SETUP_TYPE}`, 0.8, 40), "seed");
+    await promoteChallenger(championInput(`BUY|TRENDING|${SETUP_TYPE}`, 0.8, 40), "seed");
     await updateGlobalBrainSettings({ outlook_learned_influence_enabled: true }, "admin@xaucloud.io");
     const doc = await generateOutlookForAccount({ license_key: "lic-1", account: "acct-enter-now", account_id: "acct-enter-now" });
     expect(doc!["primary_direction"]).toBe("BUY");
@@ -178,7 +202,7 @@ describe("generateOutlookForAccount -- Global Brain M10/OUTLOOK consumer (end-to
 
   it("REJECT never reverses direction: a REJECT-worthy champion for a SELL setup produces BLOCKED, never BUY", async () => {
     await seedEaEvidence("acct-sell-reject", "SELL");
-    await promoteChallenger(championInput(`SELL|LONDON|TRENDING|${SETUP_TYPE}`, 0.1, 40), "seed");
+    await promoteChallenger(championInput(`SELL|TRENDING|${SETUP_TYPE}`, 0.1, 40), "seed");
     await updateGlobalBrainSettings({ outlook_learned_influence_enabled: true }, "admin@xaucloud.io");
     const doc = await generateOutlookForAccount({ license_key: "lic-1", account: "acct-sell-reject", account_id: "acct-sell-reject" });
     expect(doc!["primary_direction"]).toBe("BLOCKED");

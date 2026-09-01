@@ -105,6 +105,9 @@ describe("POST /ai/analyze -- Global Brain BOT consumer (end-to-end, real route 
       direction_quality_bucket: null,
       direction_quality_shrunk_rate: null,
       direction_quality_n: 0,
+      entry_timing_bucket: null,
+      entry_timing_shrunk_rate: null,
+      entry_timing_n: 0,
     });
   });
 
@@ -134,7 +137,7 @@ describe("POST /ai/analyze -- Global Brain BOT consumer (end-to-end, real route 
 
   it("REJECT never reverses direction: a REJECT-worthy champion for a SELL setup produces SKIP, never BUY", async () => {
     state.verdict = { action: "SELL", confidence: 75, reason: "bearish thesis" };
-    await promoteChallenger(championInput("SELL|LONDON|TRENDING|BREAKOUT", 0.1, 40), "seed");
+    await promoteChallenger(championInput("SELL|TRENDING|BREAKOUT", 0.1, 40), "seed");
     await updateGlobalBrainSettings({ bot_learned_influence_enabled: true }, "admin@xaucloud.io");
     const app = await createApp();
     const res = await app.inject({ method: "POST", url: "/ai/analyze", payload: basePayload("acct-sell-reject") });

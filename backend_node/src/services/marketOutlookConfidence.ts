@@ -16,6 +16,12 @@ export interface ConfidenceComponents {
 }
 
 /** Port of market_outlook.py:807 `_score_component`. */
+
+function finiteNumber(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function scoreComponent(value: number, goodAt: number, badAt: number): number {
   if (goodAt === badAt) return 50.0;
   const t = (value - badAt) / (goodAt - badAt);
@@ -24,13 +30,13 @@ function scoreComponent(value: number, goodAt: number, badAt: number): number {
 
 /** Port of market_outlook.py:816 `_compute_confidence`. */
 export function computeConfidence(direction: number, thesis: Record<string, unknown>, _readiness: Record<string, unknown>): ConfidenceComponents {
-  const buyP = Number(thesis["buy_pressure"] ?? 50.0) || 50.0;
-  const sellP = Number(thesis["sell_pressure"] ?? 50.0) || 50.0;
+  const buyP = finiteNumber(thesis["buy_pressure"], 50.0);
+  const sellP = finiteNumber(thesis["sell_pressure"], 50.0);
   const pressureForUs = direction === 1 ? buyP : sellP;
   const location = String(thesis["location"] ?? "");
   const structure = String(thesis["structure"] ?? "");
-  const exhaustionPct = Number(thesis["exhaustion_pct"] ?? 40.0) || 40.0;
-  const remainingRoom = Number(thesis["remaining_room_r"] ?? 1.0) || 1.0;
+  const exhaustionPct = finiteNumber(thesis["exhaustion_pct"], 40.0);
+  const remainingRoom = finiteNumber(thesis["remaining_room_r"], 1.0);
   let trendHealth = 60.0;
   if ("action" in thesis) trendHealth = thesis["action"] === "ALLOW_CORE" ? 75.0 : 45.0;
 
@@ -105,7 +111,7 @@ export interface ZoneAndTargets {
 /** Port of market_outlook.py:879 `_compute_zone_and_targets`. */
 export function computeZoneAndTargets(direction: number, currentPrice: number, thesis: Record<string, unknown>, atrEstimate: number): ZoneAndTargets {
   const atr = Math.max(0.01, Number(atrEstimate ?? 0) || 0);
-  const consumedPct = Number(thesis["movement_consumed_pct"] ?? thesis["move_consumed_pct"] ?? 40.0) || 40.0;
+  const consumedPct = finiteNumber(thesis["movement_consumed_pct"] ?? thesis["move_consumed_pct"], 40.0);
   const pullbackDepthAtr = consumedPct < 60 ? 0.6 : 1.0;
 
   let zoneLow: number, zoneHigh: number, chaseLimit: number, sl: number;
@@ -126,7 +132,7 @@ export function computeZoneAndTargets(direction: number, currentPrice: number, t
   let riskDist = Math.abs(midEntry - sl);
   if (riskDist <= 0) riskDist = atr;
 
-  let remainingRoomR = Number(thesis["remaining_room_r"] ?? 2.0) || 2.0;
+  let remainingRoomR = finiteNumber(thesis["remaining_room_r"], 2.0);
   remainingRoomR = Math.max(0.5, remainingRoomR);
   const tp1R = Math.min(1.0, remainingRoomR * 0.4);
   const tp2R = Math.min(2.0, remainingRoomR * 0.75);

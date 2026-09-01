@@ -62,12 +62,12 @@ describe("logBotTradeShadowComparison", () => {
   });
 
   it("enriches the existing CANDIDATE ml_shadow_decisions doc with a brain suggestion, never creates a new doc", async () => {
-    await promoteChallenger(championInput("DIRECTION_QUALITY", "SELL||RANGE|REVERSAL"), "seed");
+    await promoteChallenger(championInput("DIRECTION_QUALITY", "SELL|RANGE|REVERSAL"), "seed");
     state.db.collection("ml_shadow_decisions").docs.push({ signature: "sig1", actual_action: "CANDIDATE", decision_time_utc: "2026-01-01T00:00:00.000Z" });
     await logBotTradeShadowComparison({ signature: "sig1", direction: "SELL", regime: "RANGE", setup_type: "REVERSAL" });
     const docs = state.db.collection("ml_shadow_decisions").docs;
     expect(docs).toHaveLength(1);
-    expect((docs[0]!["global_brain_suggestion"] as { bucket_key: string }).bucket_key).toBe("SELL||RANGE|REVERSAL");
+    expect((docs[0]!["global_brain_suggestion"] as { bucket_key: string }).bucket_key).toBe("SELL|RANGE|REVERSAL");
   });
 
   it("does nothing when no champion exists yet", async () => {

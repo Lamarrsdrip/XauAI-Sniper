@@ -59,13 +59,65 @@ export function extractEvidenceQuote(evidence: Record<string, unknown> | null | 
   const thesis = (ev["market_thesis"] as Record<string, unknown> | undefined) ?? {};
   const readiness = (ev["entry_readiness"] as Record<string, unknown> | undefined) ?? {};
   const m10 = (ev["m10_signal"] as Record<string, unknown> | undefined) ?? {};
-  const bid = firstPositiveNumber(thesis["live_bid"], m10["live_bid"], m10["bid"], readiness["live_bid"], readiness["bid"]);
-  const ask = firstPositiveNumber(thesis["live_ask"], m10["live_ask"], m10["ask"], readiness["live_ask"], readiness["ask"]);
-  let mid = firstPositiveNumber(thesis["live_mid"], m10["live_mid"], readiness["live_mid"]);
-  if (!mid && bid > 0 && ask >= bid) mid = (bid + ask) / 2;
-  const quoteAt = thesis["evidence_time_utc"] ?? m10["quote_time"] ?? m10["evidence_time_utc"] ?? readiness["evidence_time_utc"] ?? ev["event_time"] ?? ev["ts"];
-  const valid = bid > 0 && ask >= bid;
-  return { bid: bid || null, ask: ask || null, mid: mid || null, quote_at: quoteAt, valid, spread: valid ? ask - bid : null };
+
+  // Never assemble a synthetic/franken-quote by taking Bid from one payload
+  // and Ask/timestamp from another.  That can create impossible spreads and
+  // make Outlook levels look detached from the account's broker.  Select one
+  // internally-consistent quote bundle, preferring the freshest timestamp.
+  const bundles = [
+    {
+      bid: firstPositiveNumber(m10["live_bid"], m10["bid"]),
+      ask: firstPositiveNumber(m10["live_ask"], m10["ask"]),
+      mid: firstPositiveNumber(m10["live_mid"]),
+      quoteAt: m10["quote_time"] ?? m10["evidence_time_utc"] ?? ev["event_time"] ?? ev["ts"],
+      priority: 3,
+    },
+    {
+      bid: firstPositiveNumber(thesis["live_bid"]),
+      ask: firstPositiveNumber(thesis["live_ask"]),
+      mid: firstPositiveNumber(thesis["live_mid"]),
+      quoteAt: thesis["evidence_time_utc"] ?? ev["event_time"] ?? ev["ts"],
+      priority: 2,
+    },
+    {
+      bid: firstPositiveNumber(readiness["live_bid"], readiness["bid"]),
+      ask: firstPositiveNumber(readiness["live_ask"], readiness["ask"]),
+      mid: firstPositiveNumber(readiness["live_mid"]),
+      quoteAt: readiness["evidence_time_utc"] ?? ev["event_time"] ?? ev["ts"],
+      priority: 1,
+    },
+  ];
+
+  const score = (bundle: (typeof bundles)[number]): [number, number] => {
+    const dt = asUtc(bundle.quoteAt);
+    return [dt ? dt.getTime() : Number.NEGATIVE_INFINITY, bundle.priority];
+  };
+  const complete = bundles
+    .filter((bundle) => bundle.bid > 0 && bundle.ask >= bundle.bid)
+    .sort((a, b) => {
+      const [at, ap] = score(a);
+      const [bt, bp] = score(b);
+      return bt - at || bp - ap;
+    })[0];
+  const selected = complete ?? bundles
+    .filter((bundle) => bundle.mid > 0)
+    .sort((a, b) => {
+      const [at, ap] = score(a);
+      const [bt, bp] = score(b);
+      return bt - at || bp - ap;
+    })[0];
+
+  if (!selected) return { bid: null, ask: null, mid: null, quote_at: ev["event_time"] ?? ev["ts"], valid: false, spread: null };
+  const valid = selected.bid > 0 && selected.ask >= selected.bid;
+  const mid = selected.mid > 0 ? selected.mid : valid ? (selected.bid + selected.ask) / 2 : 0;
+  return {
+    bid: valid ? selected.bid : null,
+    ask: valid ? selected.ask : null,
+    mid: mid || null,
+    quote_at: selected.quoteAt,
+    valid,
+    spread: valid ? selected.ask - selected.bid : null,
+  };
 }
 
 /** Port of market_outlook.py:515 `extract_evidence_quote_from_details`. */
@@ -138,8 +190,11 @@ export interface EaEvidenceResult {
 export async function latestEaEvidence(licenseKey: string, account: string, sourceEventId = ""): Promise<EaEvidenceResult> {
   const db = getDb();
   if (!account && !licenseKey) return { evidence: null, reason: "NO_CONNECTED_EA" };
+  // When both identifiers are known they must identify the SAME activity row.
+  // The previous OR scope could leak another account on the same license into
+  // this account's Outlook, including its direction and broker quote.
   const scope: Record<string, unknown> =
-    account && licenseKey ? { $or: [{ account }, { license_key: licenseKey }] } : account ? { account } : { license_key: licenseKey };
+    account && licenseKey ? { account, license_key: licenseKey } : account ? { account } : { license_key: licenseKey };
 
   const activity = db.collection("cloud_bot_activity");
   const ever = await activity.findOne(scope, { projection: { _id: 0, id: 1 } });
