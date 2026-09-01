@@ -1,0 +1,33 @@
+name: Mobile
+
+on:
+  push:
+    branches: [main, "release/**"]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/mobile.yml"
+  pull_request:
+    branches: [main, "release/**"]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/mobile.yml"
+
+jobs:
+  test-and-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Install dependencies
+        working-directory: mobile
+        run: npm ci
+      - name: Unit tests
+        working-directory: mobile
+        run: npm run test:unit
+      - name: Typecheck
+        working-directory: mobile
+        run: npx tsc --noEmit
