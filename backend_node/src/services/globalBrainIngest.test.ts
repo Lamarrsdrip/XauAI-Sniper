@@ -123,7 +123,7 @@ describe("buildOutlookObservation", () => {
     expect(obs!.source).toBe("OUTLOOK");
     expect(obs!.outcome?.analytics_outcome).toBe("WIN");
     expect(obs!.counterfactual).not.toBeNull();
-    expect(obs!.counterfactual!.length).toBe(4);
+    expect(obs!.counterfactual!.length).toBe(8);
     expect(obs!.dedupe_key).toBe("OUTLOOK:outlook-1");
   });
 

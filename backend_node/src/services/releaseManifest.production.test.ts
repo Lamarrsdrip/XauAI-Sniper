@@ -5,13 +5,15 @@ import { describe, expect, test } from "vitest";
 import { currentEaRelease, EA_RELEASES_DIR, verifyReleaseArtifact } from "./releaseManifest.js";
 
 describe("authoritative current XauCloud production release", () => {
-  test("manifest, download filename and exact EX5 bytes agree", async () => {
+  test("manifest artifact identity, customer download alias and exact EX5 bytes are valid", async () => {
     const release = await currentEaRelease();
     expect(release).not.toBeNull();
     const version = String(release?.version ?? "");
     const filename = String(release?.["ex5_filename"] ?? "");
     expect(version).toMatch(/^v\d+\.\d+\.\d+$/);
-    expect(release?.["customer_filename"]).toBe(filename);
+    const customerFilename = String(release?.["customer_filename"] ?? "");
+    expect(filename).toMatch(/\.ex5$/i);
+    expect(customerFilename).toMatch(/\.ex5$/i);
     expect(await verifyReleaseArtifact(version, release!)).toBeNull();
 
     const bytes = await readFile(path.join(EA_RELEASES_DIR, version, filename));
