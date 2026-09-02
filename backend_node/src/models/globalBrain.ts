@@ -99,6 +99,8 @@ export interface ObservationFeatures {
   hive_win_rate: number | null;
 }
 
+export type ObservationResolutionState = "RESOLVED" | "PENDING_TRACKABLE" | "UNRESOLVABLE_NO_PATH";
+
 export interface ObservationOutcome {
   analytics_outcome: string | null; // WIN | LOSS | PARTIAL_PROFIT | BREAK_EVEN | null (unresolved)
   r_multiple: number | null;
@@ -106,6 +108,10 @@ export interface ObservationOutcome {
   mae_r: number | null;
   highest_tp_reached: number | null;
   time_to_resolution_seconds: number | null;
+  /** Literal executable chronology for TP_BEFORE_SL; separate from Outlook's eventual-direction analytics. */
+  first_terminal_event?: "TP" | "SL" | "TIMEOUT" | null;
+  first_terminal_at?: string | null;
+  tp_before_sl?: boolean | null;
 }
 
 export interface GlobalBrainObservation {
@@ -123,6 +129,8 @@ export interface GlobalBrainObservation {
   decision_at: string;
   /** When the outcome became knowable (terminal classification time). Null while unresolved. This, not decision_at, is what the daily training job sorts/splits on -- an observation must never be used for training before its own outcome existed. */
   resolved_at: string | null;
+  /** Separates genuinely pending evidence from records that have no stored future price path and can never resolve honestly. */
+  resolution_state?: ObservationResolutionState;
   source_ref: { collection: string; id: string };
   created_at: string;
 }

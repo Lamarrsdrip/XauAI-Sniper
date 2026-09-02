@@ -51,8 +51,6 @@ function simulateEntry(quotes: readonly Quote[], geometry: CounterfactualGeometr
   if (!(risk > 0)) return null;
   const geometryValid = targetsHaveValidGeometry(direction, entryPrice, tp1 ?? 0, tp2 ?? 0, tp3 ?? 0);
 
-  let highestTpR = 0;
-  let slHit = false;
   let lastR = 0;
   for (const [bid, ask, ts] of quotes) {
     if (ts.getTime() < entryQuote[2].getTime()) continue;
@@ -60,22 +58,23 @@ function simulateEntry(quotes: readonly Quote[], geometry: CounterfactualGeometr
     const closePrice = direction === "BUY" ? bid : ask;
     const r = direction === "BUY" ? (closePrice - entryPrice) / risk : (entryPrice - closePrice) / risk;
     lastR = r;
+
+    // Entry-timing learning must model an executable trade path. The first
+    // terminal event wins; a position stopped first cannot become a winner
+    // because price reaches a target later in the observation window.
     if (geometryValid) {
       const reached = (target: number) => (direction === "BUY" ? closePrice >= target : closePrice <= target);
-      if (tp3 && reached(tp3)) highestTpR = Math.max(highestTpR, 2.0);
-      else if (tp2 && reached(tp2)) highestTpR = Math.max(highestTpR, 1.0);
-      else if (tp1 && reached(tp1)) highestTpR = Math.max(highestTpR, 0.5);
+      if (tp3 && reached(tp3)) return { entryPrice, achievedR: 2.0 };
+      if (tp2 && reached(tp2)) return { entryPrice, achievedR: 1.0 };
+      if (tp1 && reached(tp1)) return { entryPrice, achievedR: 0.5 };
     }
     if (sl) {
       const hitSl = direction === "BUY" ? closePrice <= sl : closePrice >= sl;
-      if (hitSl) slHit = true;
+      if (hitSl) return { entryPrice, achievedR: -1.0 };
     }
   }
 
-  // Highest TP touched wins over a later SL touch, mirroring the real
-  // signal's own owner-approved classification rule.
-  const achievedR = highestTpR > 0 ? highestTpR : slHit ? -1.0 : lastR;
-  return { entryPrice, achievedR };
+  return { entryPrice, achievedR: lastR };
 }
 
 export function computeCounterfactualTiming(quotes: readonly Quote[], geometry: CounterfactualGeometry): CounterfactualEntryResult[] {

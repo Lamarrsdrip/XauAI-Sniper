@@ -94,7 +94,7 @@ function successOrValidatedDirection(o: GlobalBrainObservation): boolean {
  * fix, resetting in-progress streaks rather than silently carrying them
  * across a semantics change.
  */
-const LABEL_SCHEMA_VERSION = 3; // v3: timing label + less-sparse direction/timing context keys; v2 credited STOP_BEFORE_MOVE to direction/setup quality
+const LABEL_SCHEMA_VERSION = 4; // v4: TP_BEFORE_SL uses literal first-terminal chronology; v3 added timing labels and less-sparse direction/timing context keys
 
 export const QUESTION_SPECS: Record<GlobalBrainQuestion, QuestionSpec> = {
   DIRECTION_QUALITY: {
@@ -104,9 +104,12 @@ export const QUESTION_SPECS: Record<GlobalBrainQuestion, QuestionSpec> = {
     r: (o) => o.outcome!.r_multiple,
   },
   TP_BEFORE_SL: {
-    eligible: (o) => o.decision_action === "EXECUTED" && o.outcome !== null && o.outcome.r_multiple !== null,
+    // Literal executable chronology. Final R cannot answer this because the
+    // Outlook analytics layer intentionally allows eventual TP-after-SL to
+    // validate direction; this learning question must not conflate them.
+    eligible: (o) => o.decision_action === "EXECUTED" && o.outcome !== null && o.outcome.tp_before_sl !== null && o.outcome.tp_before_sl !== undefined,
     bucketKey: (o) => `${o.features.direction}|${o.features.regime}`,
-    isSuccess: (o) => (o.outcome!.r_multiple ?? 0) > 0,
+    isSuccess: (o) => o.outcome!.tp_before_sl === true,
     r: (o) => o.outcome!.r_multiple,
   },
   ENTRY_TIMING: {

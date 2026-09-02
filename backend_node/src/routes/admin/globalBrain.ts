@@ -31,7 +31,14 @@ export async function registerAdminGlobalBrainRoutes(app: FastifyInstance): Prom
       bySource[source] = await observations.countDocuments({ source });
     }
     const resolvedCount = await observations.countDocuments({ resolved_at: { $ne: null } });
-    const pendingCount = totalObservations - resolvedCount;
+    const unresolvableCount = await observations.countDocuments({
+      resolved_at: null,
+      $or: [
+        { resolution_state: "UNRESOLVABLE_NO_PATH" },
+        { resolution_state: { $exists: false }, decision_action: { $in: ["SKIPPED", "EXPIRED"] }, source: { $in: ["BOT_TRADE", "M10"] } },
+      ],
+    });
+    const pendingCount = Math.max(0, totalObservations - resolvedCount - unresolvableCount);
 
     const models: Record<string, unknown> = {};
     for (const question of GLOBAL_BRAIN_QUESTIONS) {
@@ -64,6 +71,7 @@ export async function registerAdminGlobalBrainRoutes(app: FastifyInstance): Prom
       observations_by_source: bySource,
       resolved_observations: resolvedCount,
       pending_observations: pendingCount,
+      unresolvable_observations: unresolvableCount,
       models,
       last_cycle: lastReport[0] ?? null,
       note: "SHADOW/ADVISORY ONLY -- no model here has authority over live trades. See services/globalBrainTraining.ts and globalBrainIngest.ts for the enforced shadow-only boundary.",

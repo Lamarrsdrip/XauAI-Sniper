@@ -188,10 +188,11 @@ export default function GlobalBrain({ api }) {
         {(message || error) && (
           <div className={`mt-3 rounded-lg px-3 py-2 text-[10px] ${error ? "bg-red-500/10 text-red-300" : "bg-emerald-400/10 text-emerald-300"}`}>{error || message}</div>
         )}
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
           <Metric label="Total observations" value={status.total_observations} />
           <Metric label="Resolved" value={status.resolved_observations} />
-          <Metric label="Pending" value={status.pending_observations} />
+          <Metric label="Pending trackable" value={status.pending_observations} sub="has a stored path that can still resolve" />
+          <Metric label="Observation only" value={status.unresolvable_observations ?? 0} sub="no future path; never given a fake label" />
           <Metric label="By source" value={Object.entries(status.observations_by_source || {}).map(([k, v]) => `${k}: ${v}`).join(" · ") || "—"} />
         </div>
       </div>

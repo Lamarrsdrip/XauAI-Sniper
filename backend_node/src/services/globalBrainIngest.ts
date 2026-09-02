@@ -176,6 +176,7 @@ export function buildBotTradeObservation(
     counterfactual: null,
     decision_at: decisionAt,
     resolved_at: resolvedAt,
+    resolution_state: "RESOLVED",
     source_ref: { collection: "trade_journal", id: String(tradeDoc["trade_identity"] ?? "") },
     created_at: new Date().toISOString(),
   };
@@ -214,6 +215,7 @@ export function buildShadowCandidateObservation(shadowDoc: Record<string, unknow
     counterfactual: null,
     decision_at: decisionAt,
     resolved_at: null,
+    resolution_state: "UNRESOLVABLE_NO_PATH",
     source_ref: { collection: "ml_shadow_decisions", id: String(shadowDoc["signature"] ?? "") },
     created_at: new Date().toISOString(),
   };
@@ -256,6 +258,7 @@ export function buildM10CandidateObservation(eventDoc: Record<string, unknown>):
     counterfactual: null,
     decision_at: decisionAt,
     resolved_at: null,
+    resolution_state: "UNRESOLVABLE_NO_PATH",
     source_ref: { collection: "cloud_outlook_signal_events", id: String(eventDoc["candidate_id"] ?? "") },
     created_at: new Date().toISOString(),
   };
@@ -273,6 +276,30 @@ export function buildM10CandidateObservation(eventDoc: Record<string, unknown>):
  * generator) -- both flow through the identical outcome-tracking pipeline,
  * this only labels which decision engine actually produced the signal.
  */
+function terminalChronology(doc: Record<string, unknown>): {
+  first_terminal_event: "TP" | "SL" | "TIMEOUT" | null;
+  first_terminal_at: string | null;
+  tp_before_sl: boolean | null;
+} {
+  const parse = (value: unknown): Date | null => {
+    if (!value) return null;
+    const d = new Date(String(value));
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+  const tpTimes = [doc["tp1_hit_at"], doc["tp2_hit_at"], doc["tp3_hit_at"]]
+    .map(parse)
+    .filter((d): d is Date => d !== null)
+    .sort((a, b) => a.getTime() - b.getTime());
+  const firstTp = tpTimes[0] ?? null;
+  const sl = parse(doc["sl_hit_at"]);
+  if (firstTp && (!sl || firstTp.getTime() < sl.getTime()))
+    return { first_terminal_event: "TP", first_terminal_at: firstTp.toISOString(), tp_before_sl: true };
+  if (sl && (!firstTp || sl.getTime() <= firstTp.getTime()))
+    return { first_terminal_event: "SL", first_terminal_at: sl.toISOString(), tp_before_sl: false };
+  const timeout = parse(doc["classification_at"]);
+  return { first_terminal_event: timeout ? "TIMEOUT" : null, first_terminal_at: timeout?.toISOString() ?? null, tp_before_sl: null };
+}
+
 export function buildOutlookObservation(doc: Record<string, unknown>, quotes: readonly Quote[]): GlobalBrainObservation | null {
   const direction = String(doc["primary_direction"] ?? "").toUpperCase();
   if (direction !== "BUY" && direction !== "SELL") return null;
@@ -290,6 +317,7 @@ export function buildOutlookObservation(doc: Record<string, unknown>, quotes: re
       ? computeCounterfactualTiming(quotes, { direction, tp1, tp2, tp3, sl, publishedQuoteAt, evaluationDeadline })
       : null;
 
+  const chronology = terminalChronology(doc);
   const outcome = {
     analytics_outcome: (doc["analytics_outcome"] as string | null) ?? null,
     r_multiple: doc["analytics_r"] !== undefined && doc["analytics_r"] !== null ? Number(doc["analytics_r"]) : null,
@@ -298,6 +326,7 @@ export function buildOutlookObservation(doc: Record<string, unknown>, quotes: re
     highest_tp_reached: doc["highest_tp_reached"] !== undefined && doc["highest_tp_reached"] !== null ? Number(doc["highest_tp_reached"]) : null,
     time_to_resolution_seconds:
       publishedQuoteAt && doc["classification_at"] ? (new Date(String(doc["classification_at"])).getTime() - publishedQuoteAt.getTime()) / 1000 : null,
+    ...chronology,
   };
 
   const mistake = classifyMistake({
@@ -330,6 +359,7 @@ export function buildOutlookObservation(doc: Record<string, unknown>, quotes: re
     counterfactual,
     decision_at: String(doc["published_at"] ?? doc["generated_at"] ?? new Date().toISOString()),
     resolved_at: String(doc["classification_at"] ?? new Date().toISOString()),
+    resolution_state: "RESOLVED",
     source_ref: { collection: "cloud_market_outlooks", id: String(doc["id"] ?? "") },
     created_at: new Date().toISOString(),
   };
