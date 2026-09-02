@@ -5,6 +5,7 @@ import { env } from "../env.js";
 import { hashPassword, verifyPassword } from "../auth.js";
 import { ensureLocalAiIndexes } from "./localAiRelay.js";
 import { repairMisclassifiedActivityCategories } from "./botActivity.js";
+import { retireStaleOutlookSignalOpenCommands } from "./commandStateMachine.js";
 
 /**
  * Port of server.py's `@app.on_event("startup")` handler (lines 4139-4283):
@@ -92,6 +93,8 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
       { unique: true },
     );
     await db.collection("cloud_outlook_signal_events").createIndex({ account: 1, symbol: 1, signal_bar_time: -1, event_time: -1 });
+    await db.collection("cloud_outlook_thesis").createIndex({ account: 1, symbol: 1, status: 1, generated_at: -1 });
+    await db.collection("cloud_outlook_thesis").createIndex({ account: 1, symbol: 1, outlook_id: 1 }, { unique: true });
   } catch (e) {
     log.warn(`[signal-outlook] could not create lifecycle indexes: ${String(e)}`);
   }
@@ -100,6 +103,14 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
     .collection("cloud_bot_commands")
     .createIndex("dedupe_key", { unique: true, sparse: true })
     .catch((e) => log.warn(`[remote-command] could not create dedupe_key index: ${String(e)}`));
+
+  // Outlook+Aurum Unified Coordination fix (2026-09-02) -- see
+  // retireStaleOutlookSignalOpenCommands's own doc comment.
+  const retiredOutlookCommands = await retireStaleOutlookSignalOpenCommands().catch((e) => {
+    log.warn(`[outlook-thesis] could not retire stale OUTLOOK_SIGNAL_OPEN commands: ${String(e)}`);
+    return 0;
+  });
+  if (retiredOutlookCommands) log.info(`[outlook-thesis] retired ${retiredOutlookCommands} stale pending OUTLOOK_SIGNAL_OPEN command(s)`);
 
   await ensureLocalAiIndexes().catch((e) => log.warn(`[local-ai-remote] could not create queue indexes: ${String(e)}`));
   const repairedActivity = await repairMisclassifiedActivityCategories().catch((e) => {

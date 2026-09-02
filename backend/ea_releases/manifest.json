@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.28.2",
+  "current_version": "v6.28.3",
   "internal_codename": "XauCloud_Aurum",
   "production_branch": "XauCloud_Aurum",
   "production_branch_source_commit": "15bd8f20297de5305e413f44ef586eee4afdf45c",
@@ -261,6 +261,20 @@
       "ex5_sha256": "2847ae3b4d631c2123d2524374500b1a991a746ae44dd42c574a8341e25de03a",
       "customer_filename": "XauCloud-Bot.ex5",
       "release_notes": "XauCloud Aurum production release. EA-local ShadowML runtime removed. Core B1 execution, broker SL/TP, M10 logic, TradeBrain and other established intelligence preserved.",
+      "stable_status": true
+    },
+    "v6.28.3": {
+      "version": "v6.28.3",
+      "edition": "XauCloud Aurum — Outlook+Aurum Unified Coordination",
+      "source_lineage": "v6.28.2 (XauCloud-Aurum.mq5, source_sha256 e3137ce0...) + Outlook+Aurum Unified Coordination fix: OUTLOOK_SIGNAL_OPEN no longer arms an autonomous auto-fire timer; a new OUTLOOK_ALIGNED candidate lane (lane 3 of g_alignedCandidates) converges into the same shared XAU_TimingAuthorityAllows/XAU_FinalEntryArbiter authorities every PRIMARY/RE_ENTRY/PYRAMID candidate must pass. PRIMARY/RE_ENTRY/PYRAMID/OpenTrade/XAU_FinalEntryArbiter/XAU_TimingAuthorityAllows are byte-identical to v6.28.2 (see tests/test_xau_v6283_outlook_aurum_unified.py).",
+      "build_timestamp": "2026-09-02T15:10:00Z",
+      "compiler_result": "0 errors, 0 warnings, 434494 ms elapsed (MetaEditor64.exe via Wine, Mac local build; identical source hash confirmed across 3 separate compiles this session)",
+      "source_filename": "XauCloud-Aurum.mq5",
+      "source_sha256": "e3f1eaf31361cf1352be2b389cc99f5e5205abd4f7722d3933af0863d7fe10f6",
+      "ex5_filename": "XauCloud-Aurum.ex5",
+      "ex5_sha256": "e15fd4ae6f00f65d9ef68077146ad70ba7b5223bb33fe8b89541e3240cc0667c",
+      "customer_filename": "XauCloud-Aurum.ex5",
+      "release_notes": "Market Outlook (the multi-hour directional intelligence) can no longer open a trade by itself. It now provides Aurum with directional thesis context (direction, confidence, preferred entry zone, invalidation, targets, freshness window); Aurum's own entry intelligence continuously evaluates the market and only trades an Outlook-aligned setup once it passes the exact same timing-delay and final-arbiter checks every normal trade must pass -- including reward-room, structure, freshness, news and operational checks. Normal Aurum trading (PRIMARY/RE_ENTRY/PYRAMID) is completely unchanged and continues independently regardless of Outlook state. Outlook can no longer chase an extended price, monopolize trading capacity for its multi-hour horizon, or block/reverse an independent normal trade. All existing production safeguards are unchanged: $10 Gold-move maximum SL, M5/M10 logic, news protection, position limits, duplicate protection, broker margin/spread checks, Trade Brain, Global Brain, and ShadowML remains removed.",
       "stable_status": true
     }
   }

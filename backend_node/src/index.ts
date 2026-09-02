@@ -15,6 +15,7 @@ import { registerAuthRoutes } from "./routes/auth.js";
 import { registerPinRoutes } from "./routes/pins.js";
 import { registerCloudMonitorRoutes } from "./routes/cloud/monitor.js";
 import { registerCloudCommandRoutes } from "./routes/cloud/command.js";
+import { registerCloudOutlookThesisRoutes } from "./routes/cloud/outlookThesis.js";
 import { registerAiRoutes } from "./routes/ai.js";
 import { registerMlRoutes } from "./routes/ml.js";
 import { registerSmartRoutes } from "./routes/smart.js";
@@ -72,7 +73,7 @@ import { registerAcademyVerifyRoutes } from "./routes/academyVerify.js";
 import { ensureAcademyInfrastructure } from "./services/academyCertificates.js";
 import { ensureAcademyCourseInfrastructure } from "./services/academyCourseProgress.js";
 import { trackOutlookLifecycleTick } from "./services/marketOutlookTick.js";
-import { enqueueIfActionable } from "./services/outlookExecution.js";
+import { publishOutlookThesis } from "./services/outlookExecution.js";
 import { runStartupTasks } from "./services/startup.js";
 import { processQueuedXTradePosts } from "./services/xTradePosting.js";
 import { isApplicationReady, markApplicationReady, readinessSnapshot, runReadinessStep } from "./services/readiness.js";
@@ -207,6 +208,7 @@ async function main(): Promise<void> {
       await registerPinRoutes(api);
       await registerCloudMonitorRoutes(api);
       await registerCloudCommandRoutes(api);
+      await registerCloudOutlookThesisRoutes(api);
       await registerAiRoutes(api);
       await registerMlRoutes(api);
       await registerSmartRoutes(api);
@@ -282,7 +284,7 @@ async function main(): Promise<void> {
       try {
         const [published, actionableDocs] = await hourlyGenerationTick();
         if (published) app.log.info(`[outlook-hourly] published ${published} outlook(s)`);
-        for (const doc of actionableDocs) await enqueueIfActionable(doc);
+        for (const doc of actionableDocs) await publishOutlookThesis(doc, "MARKET_OUTLOOK");
       } catch (e) {
         app.log.warn(`[outlook-hourly] ${String(e)}`);
       }

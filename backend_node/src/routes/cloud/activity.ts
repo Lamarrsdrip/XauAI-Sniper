@@ -8,7 +8,7 @@ import { trackOutlookLifecycleTick } from "../../services/marketOutlookTick.js";
 import { publishM10SignalFromActivity } from "../../services/marketOutlookPublish.js";
 import { mirrorSubscriberM10Evaluation } from "../../services/subscriberSignalFeed.js";
 import { hourlyGenerationTick } from "../../services/marketOutlookHourlyTick.js";
-import { enqueueIfActionable } from "../../services/outlookExecution.js";
+import { publishOutlookThesis } from "../../services/outlookExecution.js";
 import { ACTIVITY_DETAIL_FIELDS, BotActivityReqSchema } from "../../models/cloudActivity.js";
 
 /** Port of server.py:7343 `POST /cloud/monitor/activity` -- remote monitoring only, never executes trades. */
@@ -113,10 +113,10 @@ export async function registerCloudActivityRoutes(app: FastifyInstance): Promise
           const m10Decision = String(m10Signal["decision"] ?? m10Signal["final_decision"] ?? "").toUpperCase();
           if (["BUY_CANDIDATE", "SELL_CANDIDATE", "ALLOW_CORE"].includes(m10Decision)) {
             const m10Doc = await publishM10SignalFromActivity(licenseKey, req.account || "", String(doc["id"]));
-            if (m10Doc) await enqueueIfActionable(m10Doc);
+            if (m10Doc) await publishOutlookThesis(m10Doc, "M10_SIGNAL_ENGINE");
           }
           const [, hourlyActionable] = await hourlyGenerationTick(req.account || "");
-          for (const hDoc of hourlyActionable) await enqueueIfActionable(hDoc);
+          for (const hDoc of hourlyActionable) await publishOutlookThesis(hDoc, "MARKET_OUTLOOK");
         } catch {
           /* best-effort, matches Python's logged-but-swallowed exception */
         }

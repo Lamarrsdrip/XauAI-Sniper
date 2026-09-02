@@ -123,3 +123,31 @@ export async function expireStalePendingCommands(now: Date = new Date()): Promis
   }
   return expiredTotal;
 }
+
+/**
+ * Outlook+Aurum Unified Coordination fix (2026-09-02): `OUTLOOK_SIGNAL_OPEN`
+ * is no longer emitted by services/outlookExecution.ts (it publishes a
+ * passive cloud_outlook_thesis row instead). Any command still sitting in
+ * `cloud_bot_commands` with that action and PENDING status is a leftover
+ * from the OLD code path -- a still-connected EA that understands
+ * OUTLOOK_SIGNAL_OPEN would otherwise poll it and self-execute a trade the
+ * new architecture never intended to authorize. Run once at boot (cheap,
+ * idempotent -- matches PENDING only, so it is a no-op once the backlog is
+ * cleared) to retire the backlog safely without touching EXECUTED/FAILED/
+ * SKIPPED/EXPIRED history.
+ */
+export async function retireStaleOutlookSignalOpenCommands(now: Date = new Date()): Promise<number> {
+  const db = getDb();
+  const res = await db.collection("cloud_bot_commands").updateMany(
+    { status: "PENDING", action: "OUTLOOK_SIGNAL_OPEN" },
+    {
+      $set: {
+        status: "SKIPPED",
+        ack_status: "SKIPPED",
+        ack_at: now.toISOString(),
+        ack_message: "Retired: OUTLOOK_SIGNAL_OPEN is no longer an execution command (Outlook+Aurum Unified Coordination fix, 2026-09-02). See cloud_outlook_thesis.",
+      },
+    },
+  );
+  return res.modifiedCount ?? 0;
+}

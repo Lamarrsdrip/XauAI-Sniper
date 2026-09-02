@@ -38,11 +38,11 @@ describe("POST /admin/actions/ops/releases/version-email-draft", () => {
     expect(body.duplicate).toBe(false);
     expect(body.audience).toBe("active_license");
     expect(body.subject).toBe("A new XauCloud Bot update is available");
-    expect(body.title).toContain("v6.28.2");
+    expect(body.title).toContain("v6.28.3");
 
     const stored = await state.db.collection("admin_email_drafts").findOne({ source: "bot_version_release" });
     expect(stored).toBeTruthy();
-    expect(stored?.["source_version"]).toBe("v6.28.2");
+    expect(stored?.["source_version"]).toBe("v6.28.3");
     // Never actually sent -- only ever a draft record, exactly like a
     // human-composed draft would be, so it goes through the same existing
     // preview -> prepare-send -> confirm flow.
