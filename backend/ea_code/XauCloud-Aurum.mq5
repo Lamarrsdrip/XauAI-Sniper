@@ -45334,18 +45334,27 @@ void XAU_FetchOutlookThesis()
 
    string body = CharArrayToString(res);
    // {"ok":true,"thesis":null,...} when nothing is active -- JsonStringField
-   // returns "" for a missing/null field, which XAU_OutlookThesisFresh()
-   // below treats as "not fresh" via the direction/id checks.
+   // returns "" for a missing/null field. The backend saying "nothing
+   // active" must clear g_outlookThesis.active immediately (not just let
+   // the old thesis's own expiryTime eventually lapse), so a superseded/
+   // invalidated thesis can never be mistaken for still-current between
+   // fetches (QA fix 2026-09-03).
    string tDirRaw = JsonStringField(body, "direction");
    string tOutlookId = JsonStringField(body, "outlook_id");
    if(StringLen(tOutlookId) == 0)
    {
+      g_outlookThesis.active = false;
       g_outlookThesis.lastFetchTime = TimeCurrent();
       return; // no active thesis for this account -- Aurum trades normally
    }
    StringToUpper(tDirRaw);
    int tDir = (StringFind(tDirRaw, "BUY") >= 0) ? 1 : (StringFind(tDirRaw, "SELL") >= 0) ? -1 : 0;
-   if(tDir == 0) { g_outlookThesis.lastFetchTime = TimeCurrent(); return; }
+   if(tDir == 0)
+   {
+      g_outlookThesis.active = false;
+      g_outlookThesis.lastFetchTime = TimeCurrent();
+      return;
+   }
 
    bool isNewThesis = (g_outlookThesis.outlookId != tOutlookId);
    g_outlookThesis.active            = true;

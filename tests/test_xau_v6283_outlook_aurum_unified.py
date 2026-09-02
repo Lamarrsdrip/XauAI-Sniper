@@ -138,6 +138,20 @@ def test_outlook_aligned_supports_both_continuation_and_pullback_not_retracement
     assert "thesis.action == ALLOW_CORE || thesis.action == ALLOW_SCALP" in fn
 
 
+def test_fetch_outlook_thesis_clears_active_when_backend_reports_no_active_thesis():
+    # QA fix 2026-09-03: the backend explicitly saying "nothing active"
+    # (empty outlook_id, or an unparseable direction) must clear
+    # g_outlookThesis.active immediately rather than let a stale thesis
+    # linger as active=true until its own original expiryTime lapses.
+    ea = read(EA)
+    fn = fn_body(ea, "void XAU_FetchOutlookThesis()", 2200)
+    empty_id_branch = fn[fn.index("if(StringLen(tOutlookId) == 0)"): fn.index("StringToUpper(tDirRaw)")]
+    assert "g_outlookThesis.active = false;" in empty_id_branch
+    invalid_dir_branch = fn[fn.index("if(tDir == 0)"):]
+    invalid_dir_branch = invalid_dir_branch[: invalid_dir_branch.index("bool isNewThesis")]
+    assert "g_outlookThesis.active = false;" in invalid_dir_branch
+
+
 # ---------------------------------------------------------------------------
 # Outlook can no longer auto-fire (Part 2): the legacy command handler must
 # not arm the old autonomous timer, and the old auto-fire function must no

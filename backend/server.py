@@ -4223,8 +4223,26 @@ async def startup():
         await db.cloud_outlook_signal_events.create_index(
             [("account", 1), ("symbol", 1), ("signal_bar_time", -1), ("event_time", -1)]
         )
+        await db.cloud_outlook_thesis.create_index(
+            [("account", 1), ("symbol", 1), ("status", 1), ("generated_at", -1)]
+        )
+        await db.cloud_outlook_thesis.create_index(
+            [("account", 1), ("symbol", 1), ("outlook_id", 1)], unique=True
+        )
     except Exception as e:
         logger.warning(f"[signal-outlook] could not create lifecycle indexes: {e}")
+
+    # Outlook+Aurum Unified Coordination fix (2026-09-03) -- see
+    # outlook_execution.retire_stale_outlook_signal_open_commands's own
+    # doc comment. Retires any OUTLOOK_SIGNAL_OPEN command left PENDING by
+    # the old code path so a still-connected EA can never pick one up.
+    try:
+        import outlook_execution as _oe
+        retired = await _oe.retire_stale_outlook_signal_open_commands()
+        if retired:
+            logger.info(f"[outlook-thesis] retired {retired} stale pending OUTLOOK_SIGNAL_OPEN command(s)")
+    except Exception as e:
+        logger.warning(f"[outlook-thesis] could not retire stale OUTLOOK_SIGNAL_OPEN commands: {e}")
 
     # v6.25.6 XAU-027 (Codex handover) -- tenant-scoped remote-command
     # idempotency. dedupe_key is "{user_id}:{action}:{client_key}"; the
