@@ -140,7 +140,7 @@
     },
     "v6.28.3": {
       "version": "v6.28.3",
-      "edition": "XauCloud Aurum — Outlook+Aurum Unified Coordination",
+      "edition": "XauCloud Aurum \u2014 Outlook+Aurum Unified Coordination",
       "source_lineage": "v6.28.2 (XauCloud-Aurum.mq5, source_sha256 e3137ce0...) + Outlook+Aurum Unified Coordination fix: OUTLOOK_SIGNAL_OPEN no longer arms an autonomous auto-fire timer; a new OUTLOOK_ALIGNED candidate lane (lane 3 of g_alignedCandidates) converges into the same shared XAU_TimingAuthorityAllows/XAU_FinalEntryArbiter authorities every PRIMARY/RE_ENTRY/PYRAMID candidate must pass. PRIMARY/RE_ENTRY/PYRAMID/OpenTrade/XAU_FinalEntryArbiter/XAU_TimingAuthorityAllows are byte-identical to v6.28.2 (see tests/test_xau_v6283_outlook_aurum_unified.py).",
       "build_timestamp": "2026-09-02T15:10:00Z",
       "compiler_result": "0 errors, 0 warnings, 434494 ms elapsed (MetaEditor64.exe via Wine, Mac local build; identical source hash confirmed across 3 separate compiles this session)",
