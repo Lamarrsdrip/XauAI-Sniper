@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.28.1",
+  "current_version": "v6.28.2",
   "website_product_name": "XauCloud",
   "mt5_market_product_name": "XauCloud",
   "releases": {
@@ -123,6 +123,23 @@
       "customer_filename": "XauCloud-Bot.ex5",
       "release_notes": "Improved trade selection: XauCloud is now more selective about lower-quality continuation setups that historically underperformed (grade-B M10-originated clean-continuation setups, audit-driven -- see repository documentation for the underlying evidence). Profit-target orders are now placed directly with your broker at trade entry for the fixed-target position type, alongside the existing protective stop, instead of being managed by a periodic check -- this keeps the position protected even if XauCloud briefly loses its connection. No change to entry timing, position sizing, or which trades are eligible beyond the continuation-setup filter above.",
       "stable_status": true
+    },
+    "v6.28.2": {
+      "version": "v6.28.2",
+      "edition": "XauCloud Aurum \u2014 No EA ShadowML",
+      "source_commit": "15bd8f20297de5305e413f44ef586eee4afdf45c",
+      "build_timestamp": "2026-09-02T09:57:19Z",
+      "compiler_result": "0 errors, 0 warnings (owner MetaEditor compile)",
+      "source_filename": "XauCloud-Aurum.mq5",
+      "source_sha256": "e3137ce065ca8615261f88c0eaae4a39757ce11b29bfdc0ed283024e73f07279",
+      "ex5_filename": "XauCloud-Aurum.ex5",
+      "ex5_sha256": "2847ae3b4d631c2123d2524374500b1a991a746ae44dd42c574a8341e25de03a",
+      "customer_filename": "XauCloud-Bot.ex5",
+      "release_notes": "XauCloud Aurum production release. EA-local ShadowML runtime removed. Core B1 execution, broker SL/TP, M10 logic, TradeBrain and other established intelligence preserved.",
+      "stable_status": true
     }
-  }
+  },
+  "internal_codename": "XauCloud_Aurum",
+  "production_branch": "XauCloud_Aurum",
+  "production_branch_source_commit": "15bd8f20297de5305e413f44ef586eee4afdf45c"
 }
