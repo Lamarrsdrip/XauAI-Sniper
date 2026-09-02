@@ -83,7 +83,7 @@ function labelsFor(o: GlobalBrainObservation): Record<string, boolean | "N/A"> {
 describe("Phase 0: independent learning labels across the five objectives", () => {
   it("CASE A -- clean win: all applicable objectives GOOD", () => {
     // BUY 5000 -> 5002 -> 5005 -> 5008 -> 5010 (TP), SL 4990. No adverse excursion.
-    const outcome = { analytics_outcome: "WIN", r_multiple: 1.0, mfe_r: 1.0, mae_r: 0.0, highest_tp_reached: 1, time_to_resolution_seconds: 300 };
+    const outcome = { analytics_outcome: "WIN", r_multiple: 1.0, mfe_r: 1.0, mae_r: 0.0, highest_tp_reached: 1, time_to_resolution_seconds: 300, first_terminal_event: "TP" as const, first_terminal_at: "2026-01-01T00:05:00.000Z", tp_before_sl: true };
     const mistake = classifyMistake({ decision_action: "EXECUTED", ...outcome, counterfactual: null });
     expect(mistake).toBe("CLEAN_WIN");
     const o = baseObservation({ outcome, mistake_classification: mistake });
@@ -94,9 +94,16 @@ describe("Phase 0: independent learning labels across the five objectives", () =
     expect(labels["CALIBRATION"]).toBe(true);
   });
 
+  it("v4 guard -- TP_BEFORE_SL is N/A when literal chronology is absent", () => {
+    const outcome = { analytics_outcome: "WIN", r_multiple: 1.0, mfe_r: 1.0, mae_r: 0.0, highest_tp_reached: 1, time_to_resolution_seconds: 300 };
+    const o = baseObservation({ outcome, mistake_classification: "CLEAN_WIN" });
+    expect(QUESTION_SPECS.TP_BEFORE_SL.eligible(o)).toBe(false);
+    expect(labelsFor(o)["TP_BEFORE_SL"]).toBe("N/A");
+  });
+
   it("CASE B -- high-drawdown winner: direction/TP-before-SL still GOOD, but entry timing must NOT equal Case A", () => {
     // BUY 5000, dips to 4991 (MAE -0.9R vs a 10-point stop), recovers, TP 5010.
-    const outcome = { analytics_outcome: "WIN", r_multiple: 1.0, mfe_r: 1.0, mae_r: -0.9, highest_tp_reached: 1, time_to_resolution_seconds: 600 };
+    const outcome = { analytics_outcome: "WIN", r_multiple: 1.0, mfe_r: 1.0, mae_r: -0.9, highest_tp_reached: 1, time_to_resolution_seconds: 600, first_terminal_event: "TP" as const, first_terminal_at: "2026-01-01T00:10:00.000Z", tp_before_sl: true };
     const mistake = classifyMistake({ decision_action: "EXECUTED", ...outcome, counterfactual: null });
     expect(mistake).toBe("HIGH_MAE_WIN");
     expect(mistake).not.toBe("CLEAN_WIN"); // must not equal Case A's label
@@ -112,7 +119,7 @@ describe("Phase 0: independent learning labels across the five objectives", () =
   it("CASE C -- profit first, then SL: direction/setup validated by real favorable movement, NOT collapsed to plain WRONG_DIRECTION", () => {
     // BUY 5000 -> +9pts favorable (MFE preserved as a running max per
     // marketOutlookLifecycle's Math.max) -> reverses -> SL. No TP defined.
-    const outcome = { analytics_outcome: "LOSS", r_multiple: -1.0, mfe_r: 0.9, mae_r: -1.0, highest_tp_reached: 0, time_to_resolution_seconds: 900 };
+    const outcome = { analytics_outcome: "LOSS", r_multiple: -1.0, mfe_r: 0.9, mae_r: -1.0, highest_tp_reached: 0, time_to_resolution_seconds: 900, first_terminal_event: "SL" as const, first_terminal_at: "2026-01-01T00:15:00.000Z", tp_before_sl: false };
     const mistake = classifyMistake({ decision_action: "EXECUTED", ...outcome, counterfactual: null });
     expect(mistake).toBe("STOP_BEFORE_MOVE"); // not WRONG_DIRECTION -- the fix under test
     const o = baseObservation({ outcome, mistake_classification: mistake });
@@ -134,7 +141,7 @@ describe("Phase 0: independent learning labels across the five objectives", () =
   });
 
   it("CASE D -- bad trade: straight to SL, minimal MFE -- all applicable objectives BAD", () => {
-    const outcome = { analytics_outcome: "LOSS", r_multiple: -1.0, mfe_r: 0.0, mae_r: -1.0, highest_tp_reached: 0, time_to_resolution_seconds: 400 };
+    const outcome = { analytics_outcome: "LOSS", r_multiple: -1.0, mfe_r: 0.0, mae_r: -1.0, highest_tp_reached: 0, time_to_resolution_seconds: 400, first_terminal_event: "SL" as const, first_terminal_at: "2026-01-01T00:06:40.000Z", tp_before_sl: false };
     const mistake = classifyMistake({ decision_action: "EXECUTED", ...outcome, counterfactual: null });
     expect(mistake).toBe("WRONG_DIRECTION");
     const o = baseObservation({ outcome, mistake_classification: mistake });
@@ -207,7 +214,7 @@ describe("Phase 0: independent learning labels across the five objectives", () =
 
   it("SECTION 8 -- one observation can produce a genuinely mixed label combination across the five objectives (not all collapsed from one WIN/LOSS boolean)", () => {
     // High-MAE winner with a confirmed setup_type: DIRECTION good, ENTRY bad, TP_BEFORE_SL true, SETUP good, CALIBRATION good.
-    const outcome = { analytics_outcome: "WIN", r_multiple: 1.0, mfe_r: 1.0, mae_r: -0.8, highest_tp_reached: 1, time_to_resolution_seconds: 500 };
+    const outcome = { analytics_outcome: "WIN", r_multiple: 1.0, mfe_r: 1.0, mae_r: -0.8, highest_tp_reached: 1, time_to_resolution_seconds: 500, first_terminal_event: "TP" as const, first_terminal_at: "2026-01-01T00:08:20.000Z", tp_before_sl: true };
     const mistake = classifyMistake({ decision_action: "EXECUTED", ...outcome, counterfactual: null });
     const o = baseObservation({ outcome, mistake_classification: mistake, counterfactual: [cf("IMMEDIATE", 1.0)] });
     const labels = labelsFor(o);
