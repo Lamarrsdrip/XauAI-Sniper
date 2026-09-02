@@ -12,7 +12,7 @@ const ea = readFileSync(resolve(process.cwd(), "../backend/ea_code", sourceFilen
 
 describe("production EA Manual Trading Intelligence contract", () => {
   it("tests the exact source selected by the current production manifest", () => {
-    expect(sourceFilename).toBe("XauCloud-Fixed-B1.mq5");
+    expect(sourceFilename).toBe("XauCloud-Aurum.mq5");
   });
 
   it("puts its own fresh broker quote on every monitoring heartbeat", () => {
