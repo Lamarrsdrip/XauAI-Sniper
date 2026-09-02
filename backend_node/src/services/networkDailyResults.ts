@@ -84,8 +84,12 @@ export function buildNetworkDailyResults(
   requestedDays: number,
   nowUnix = Date.now() / 1000,
 ): NetworkDailyResults {
-  const daysRequested = clampDailyResultDays(requestedDays);
-  const cutoffUnix = nowUnix - daysRequested * 86400;
+  const now = new Date(nowUnix * 1000);
+  const monthStartUnix =
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0) / 1000;
+  const daysRequested =
+    Math.floor((nowUnix - monthStartUnix) / 86400) + 1;
+  const cutoffUnix = monthStartUnix;
   const trades = dedupeByTradeIdentity(
     rawTrades.filter((trade) => isEligibleNetworkClosedTrade(trade) && Number(trade["closed_at"]) >= cutoffUnix),
   );
@@ -183,8 +187,11 @@ export function buildNetworkDailyResults(
 }
 
 export async function getNetworkDailyResults(requestedDays: number, nowUnix = Date.now() / 1000): Promise<NetworkDailyResults> {
-  const days = clampDailyResultDays(requestedDays);
-  const cutoffUnix = nowUnix - days * 86400;
+  const now = new Date(nowUnix * 1000);
+  const cutoffUnix =
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0) / 1000;
+  const days =
+    Math.floor((nowUnix - cutoffUnix) / 86400) + 1;
   const trades = await getDb()
     .collection("trade_journal")
     .find(networkClosedTradeQuery(cutoffUnix), {
