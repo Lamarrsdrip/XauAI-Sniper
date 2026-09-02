@@ -42,7 +42,7 @@ describe("POST /admin/actions/ops/releases/version-email-draft", () => {
 
     const stored = await state.db.collection("admin_email_drafts").findOne({ source: "bot_version_release" });
     expect(stored).toBeTruthy();
-    expect(stored?.["source_version"]).toBe("v6.28.1");
+    expect(stored?.["source_version"]).toBe("v6.28.2");
     // Never actually sent -- only ever a draft record, exactly like a
     // human-composed draft would be, so it goes through the same existing
     // preview -> prepare-send -> confirm flow.
