@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.28.3",
+  "current_version": "v6.28.4",
   "internal_codename": "XauCloud_Aurum",
   "production_branch": "XauCloud_Aurum",
   "production_branch_source_commit": "15bd8f20297de5305e413f44ef586eee4afdf45c",
@@ -251,7 +251,7 @@
     },
     "v6.28.2": {
       "version": "v6.28.2",
-      "edition": "XauCloud Aurum \u2014 No EA ShadowML",
+      "edition": "XauCloud Aurum — No EA ShadowML",
       "source_commit": "15bd8f20297de5305e413f44ef586eee4afdf45c",
       "build_timestamp": "2026-09-02T09:57:19Z",
       "compiler_result": "0 errors, 0 warnings (owner MetaEditor compile)",
@@ -275,6 +275,20 @@
       "ex5_sha256": "eee6b394feecb84f0d3ef7d2aa5661987d9694499f5e7a3ffb54c6f7ad939310",
       "customer_filename": "XauCloud-Aurum.ex5",
       "release_notes": "Market Outlook (the multi-hour directional intelligence) can no longer open a trade by itself. It now provides Aurum with directional thesis context (direction, confidence, preferred entry zone, invalidation, targets, freshness window); Aurum's own entry intelligence continuously evaluates the market and only trades an Outlook-aligned setup once it passes the exact same timing-delay and final-arbiter checks every normal trade must pass -- including reward-room, structure, freshness, news and operational checks. Normal Aurum trading (PRIMARY/RE_ENTRY/PYRAMID) is completely unchanged and continues independently regardless of Outlook state. Outlook can no longer chase an extended price, monopolize trading capacity for its multi-hour horizon, or block/reverse an independent normal trade. All existing production safeguards are unchanged: $10 Gold-move maximum SL, M5/M10 logic, news protection, position limits, duplicate protection, broker margin/spread checks, Trade Brain, Global Brain, and ShadowML remains removed.",
+      "stable_status": true
+    },
+    "v6.28.4": {
+      "version": "v6.28.4",
+      "edition": "XauCloud Aurum — production forensic fix: OUTLOOK_ALIGNED timer churn + legacy auto-fire hard-neutralization",
+      "source_lineage": "v6.28.3 (XauCloud-Aurum.mq5, source_sha256 4f3d84c6...) + two forensic fixes from the 2026-09-03 no-trades production investigation.",
+      "build_timestamp": "2026-09-03T14:05:00Z",
+      "compiler_result": "0 errors, 0 warnings, 58455 ms elapsed, cpu='AVX2 + FMA3' (MetaEditor64.exe via Wine, Mac local build, owner-triggered F7)",
+      "source_filename": "XauCloud-Aurum.mq5",
+      "source_sha256": "b5dd918edf305628e944937e321129df7474cf18413c7fca89a0966864739268",
+      "ex5_filename": "XauCloud-Aurum.ex5",
+      "ex5_sha256": "6c6b91740d1d3857b6d10dd79b7ee6064b604241b366dbbcbbf4aa8496e983d2",
+      "customer_filename": "XauCloud-Aurum.ex5",
+      "release_notes": "Forensic fix from the 2026-09-03 \"no trades since yesterday\" production investigation. Root cause of the no-trades symptom itself was genuine market exhaustion (unrelated, pre-existing logic) — not a bug. Two real, narrowly-scoped defects found and fixed on top of v6.28.3: (1) the OUTLOOK_ALIGNED candidate lane (lane 3) reset its own entry timer on every tick the setup was not immediately executable, so it could never survive long enough to satisfy the shared 120-180s timing authority delay (live evidence: 11 candidate identities created and destroyed in 52 seconds) — fixed to preserve an armed candidate through ordinary wait ticks, mirroring PRIMARY's own caution-gate contract, while the shared timing authority's absolute ceiling remains the only thing that can expire a stale candidate; (2) XAU_ProcessPendingOutlook() (the pre-v6.28.3 auto-fire path) was only made unreachable by removing its OnTick() call site — an interim/WIP compiled build that still had that call wired in picked up a pre-fix armed legacy command and executed a real trade straight to OpenTrade() with zero calls into FinalEntryArbiter/TimingAuthorityAllows. Hard-neutralized at the function itself: any residual/loaded legacy Outlook state is now acknowledged SKIPPED and cleared immediately, and the function can no longer reach OpenTrade() under any circumstance, regardless of what calls it. PRIMARY/RE_ENTRY/PYRAMID/OpenTrade/XAU_FinalEntryArbiter/XAU_TimingAuthorityAllows remain byte-identical to v6.28.2/v6.28.3 (see tests/test_xau_v6283_outlook_aurum_unified.py, 25/25 passing, 7 new regression tests added for these two fixes).",
       "stable_status": true
     }
   }
