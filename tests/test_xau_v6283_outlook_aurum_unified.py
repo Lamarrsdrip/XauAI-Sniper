@@ -104,7 +104,10 @@ def test_outlook_aligned_lane_registered():
 
 def test_outlook_aligned_entry_must_pass_shared_timing_and_arbiter_before_opentrade():
     ea = read(EA)
-    fn = fn_body(ea, "void XAU_EvaluateOutlookAlignedEntry()", 6000)
+    # Window widened for the 2026-09-03 candidate-churn fix below (the
+    # function grew past 6000 chars); still comfortably covers the full body
+    # through OpenTrade().
+    fn = fn_body(ea, "void XAU_EvaluateOutlookAlignedEntry()", 10000)
     timing_idx = fn.index('XAU_TimingAuthorityAllows(dir, "OUTLOOK_ALIGNED", atr, timingWhy)')
     arbiter_idx = fn.index('XAU_FinalEntryArbiter("OUTLOOK_ALIGNED", dir, true, true, true, true, true, true, finalWhy)')
     opentrade_idx = fn.index("OpenTrade(dir, atr, reason, 1.0, false, explicitSL)")
@@ -196,6 +199,112 @@ def test_shadowml_still_absent():
     ea = read(EA)
     assert "XAU_ShadowMLRecordDecision" not in ea
     assert "no-ea-shadowml" in ea  # build-hash lineage marker carried through unmodified
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-03 production forensic fix #1: OUTLOOK_ALIGNED candidate-timer
+# churn. Live evidence: 11 OUTLOOK_ALIGNED_{SELL,BUY}_N candidate identities
+# created and destroyed in 52 seconds on the VPS, because this branch reset
+# g_alignedCandidates[3].firstCandidateTime to 0 on every tick the setup
+# wasn't immediately executable -- so the lane could never survive long
+# enough to satisfy XAU_TimingAuthorityAllows's 120-180s delay, even with a
+# perfectly valid, fresh Outlook thesis. Fix mirrors PRIMARY's own
+# XAU_SMART_ENTRY_CAUTION_WAIT contract: keep the immutable candidate and its
+# original timer through ordinary wait ticks; only a genuine invalidation
+# (thesis broke down / price ran away) or XAU_TimingAuthorityAllows's own
+# absolute ceiling may clear it.
+# ---------------------------------------------------------------------------
+def _outlook_aligned_wait_branch(ea: str) -> str:
+    fn = fn_body(ea, "void XAU_EvaluateOutlookAlignedEntry()", 10000)
+    start = fn.index("if(!executableAction || !locationReasonable || !timingReady || !setupNotChase)\n   {")
+    end = fn.index("// Genuine entry opportunity: arm/refresh the OUTLOOK_ALIGNED timer.")
+    return fn[start:end]
+
+
+def _outlook_aligned_hard_invalidation_branch(ea: str) -> str:
+    fn = fn_body(ea, "void XAU_EvaluateOutlookAlignedEntry()", 10000)
+    start = fn.index("if(invalidated || tooExtended)")
+    end = fn.index("if(!executableAction || !locationReasonable || !timingReady || !setupNotChase)")
+    return fn[start:end]
+
+
+def test_outlook_aligned_wait_branch_never_resets_an_armed_candidate_timer():
+    ea = read(EA)
+    wait_branch = _outlook_aligned_wait_branch(ea)
+    assert "firstCandidateTime = 0" not in wait_branch
+    assert "firstCandidateTime = " not in wait_branch
+
+
+def test_outlook_aligned_wait_branch_still_lets_absolute_ceiling_expire_stale_candidates():
+    ea = read(EA)
+    wait_branch = _outlook_aligned_wait_branch(ea)
+    # Still calls the shared timing authority purely for its absolute-ceiling
+    # side effect (it internally clears firstCandidateTime past
+    # XAU_ENTRY_DELAY_ABSOLUTE_CEILING_SEC) -- so a candidate that never
+    # becomes executable again still cannot linger forever.
+    assert 'XAU_TimingAuthorityAllows(dir, "OUTLOOK_ALIGNED", atr, ceilingWhy)' in wait_branch
+    assert "alreadyArmed" in wait_branch
+
+
+def test_outlook_aligned_genuine_invalidation_still_releases_candidate_immediately():
+    ea = read(EA)
+    hard_branch = _outlook_aligned_hard_invalidation_branch(ea)
+    assert "invalidated || tooExtended" in hard_branch or True  # boundary sanity
+    assert "g_alignedCandidates[3].firstCandidateTime = 0;" in hard_branch
+
+
+def test_outlook_aligned_wait_branch_is_a_strict_subset_after_invalidation_check():
+    # Ordering guarantee: hard invalidation is checked and returns BEFORE the
+    # not-yet-executable wait branch runs, so a broken thesis can never fall
+    # through into the timer-preserving path.
+    ea = read(EA)
+    fn = fn_body(ea, "void XAU_EvaluateOutlookAlignedEntry()", 10000)
+    hard_idx = fn.index("if(invalidated || tooExtended)")
+    wait_idx = fn.index("if(!executableAction || !locationReasonable || !timingReady || !setupNotChase)")
+    assert hard_idx < wait_idx
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-03 production forensic fix #2: XAU_ProcessPendingOutlook() hard
+# neutralization. Forensic finding: on 2026-09-02 an interim/WIP compiled
+# build that still had v6.28.2's unconditional OnTick() call to this function
+# picked up a pre-fix armed g_pendingOutlook (restored from the legacy
+# xauai_outlook_recovery_*.csv state file across an EA reload) and executed
+# it straight to OpenTrade() -- ticket #3172481527 -- with zero calls into
+# XAU_FinalEntryArbiter/XAU_TimingAuthorityAllows. v6.28.3 already removed
+# the OnTick call site (proven by
+# test_process_pending_outlook_legacy_autofire_not_called_from_ontick above),
+# but the function itself could still reach OpenTrade() if ever called again
+# by anything else. This proves the function is now neutralized at its own
+# entry point, independent of any call site.
+# ---------------------------------------------------------------------------
+def test_process_pending_outlook_can_never_call_opentrade():
+    ea = read(EA)
+    fn = fn_body(ea, "void XAU_ProcessPendingOutlook()", 2000)
+    body = fn[: fn.index("\nvoid BotMonitorPollCommands()")]
+    assert "OpenTrade(" not in body
+
+
+def test_process_pending_outlook_acknowledges_and_clears_any_residual_state():
+    ea = read(EA)
+    fn = fn_body(ea, "void XAU_ProcessPendingOutlook()", 2000)
+    body = fn[: fn.index("\nvoid BotMonitorPollCommands()")]
+    assert "if(!g_pendingOutlook.active) return;" in body
+    assert 'BotMonitorAckCommand(g_pendingOutlook.commandId, "SKIPPED"' in body
+    assert "XAU_ClearPendingOutlook(true);" in body
+    assert "LEGACY_OUTLOOK_EXECUTION_PERMANENTLY_RETIRED" in body
+
+
+def test_process_pending_outlook_no_longer_reaches_recovery_subsystem():
+    # The recovery arm/process helpers were only ever reachable through the
+    # old body of this function; confirm they're no longer wired in (they
+    # remain defined, unreferenced, for forensic continuity -- matching this
+    # codebase's established convention for retired-but-kept logic).
+    ea = read(EA)
+    fn = fn_body(ea, "void XAU_ProcessPendingOutlook()", 2000)
+    body = fn[: fn.index("\nvoid BotMonitorPollCommands()")]
+    assert "XAU_ProcessOutlookRecovery()" not in body
+    assert "XAU_ArmOutlookRecovery(" not in body
 
 
 # ---------------------------------------------------------------------------

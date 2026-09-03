@@ -45434,20 +45434,51 @@ void XAU_EvaluateOutlookAlignedEntry()
    bool timingReady = thesis.timing == TIMING_READY;
    bool setupNotChase = setup.type != XAU_TIMING_LATE_CHASE;
 
-   string waitReason = "";
-   if(invalidated) waitReason = "THESIS_INVALIDATED: " + thesis.reason;
-   else if(tooExtended) waitReason = "OUTLOOK_ENTRY_TOO_EXTENDED"; // Part 8 — wait for retrace, never chase
-   else if(!executableAction || !locationReasonable || !timingReady || !setupNotChase)
-      waitReason = StringFormat("WAIT_FOR_RETRACE action=%s location=%s timing=%s setup=%s",
-                                XAU_MarketThesisActionName(thesis.action), XAU_LocationQualityName(thesis.location),
-                                XAU_TimingStateName(thesis.timing), setup.why);
-
-   if(StringLen(waitReason) > 0)
+   // Genuine invalidation (thesis broke down, or price already ran away past
+   // the chase limit) always releases an armed candidate immediately -- same
+   // as PRIMARY's XAU_SMART_ENTRY_CAUTION_HARD_BLOCK path.
+   if(invalidated || tooExtended)
    {
+      string hardReason = invalidated ? ("THESIS_INVALIDATED: " + thesis.reason) : "OUTLOOK_ENTRY_TOO_EXTENDED";
       if(g_alignedCandidates[3].firstCandidateTime > 0)
-         g_alignedCandidates[3].firstCandidateTime = 0; // no genuine setup right now -- release, re-arm later if one forms
+         g_alignedCandidates[3].firstCandidateTime = 0;
       if(TimeCurrent() - g_outlookThesis.lastWaitLogTime >= 30)
       {
+         PrintFormat("OUTLOOK_AURUM_ENTRY_AUDIT | decision=WAIT outlookId=%s dir=%s ageSec=%d referencePrice=%.2f currentPrice=%.2f atr=%.2f setup=%s regime=%s wait_reason=%s",
+                     g_outlookThesis.outlookId, dir == 1 ? "BUY" : "SELL",
+                     (int)(TimeCurrent() - g_outlookThesis.generatedTime), g_outlookThesis.referencePrice, price, atr,
+                     g_outlookThesis.setupType, g_outlookThesis.regime, hardReason);
+         g_outlookThesis.lastWaitLogTime = TimeCurrent();
+      }
+      return;
+   }
+
+   // Not yet executable on THIS tick (location/timing/setup not aligned), but
+   // not invalidated either. Bug fixed here: this branch used to reset
+   // firstCandidateTime on every such tick, so a candidate could never survive
+   // long enough to satisfy XAU_TimingAuthorityAllows's 120-180s delay -- live
+   // proof was 11 OUTLOOK_ALIGNED candidates created and destroyed in 52
+   // seconds on 2026-09-03. PRIMARY's own caution gate never does this
+   // (XAU_SMART_ENTRY_CAUTION_WAIT explicitly "keeps the immutable candidate
+   // and original timer"); mirror that here. An already-armed candidate keeps
+   // its timer through ordinary wobble; XAU_TimingAuthorityAllows's own
+   // absolute ceiling (invoked below whenever a candidate is armed) is the
+   // only thing allowed to expire it -- never a same-tick reset from this gate.
+   if(!executableAction || !locationReasonable || !timingReady || !setupNotChase)
+   {
+      bool alreadyArmed = g_alignedCandidates[3].firstCandidateTime > 0 &&
+                          g_alignedCandidates[3].candidateDirection == dir &&
+                          g_alignedCandidates[3].candidateSetup == "OUTLOOK_ALIGNED";
+      if(alreadyArmed)
+      {
+         string ceilingWhy = "";
+         XAU_TimingAuthorityAllows(dir, "OUTLOOK_ALIGNED", atr, ceilingWhy); // ceiling-expiry side effect only; result unused here
+      }
+      if(TimeCurrent() - g_outlookThesis.lastWaitLogTime >= 30)
+      {
+         string waitReason = StringFormat("WAIT_FOR_RETRACE action=%s location=%s timing=%s setup=%s",
+                                          XAU_MarketThesisActionName(thesis.action), XAU_LocationQualityName(thesis.location),
+                                          XAU_TimingStateName(thesis.timing), setup.why);
          PrintFormat("OUTLOOK_AURUM_ENTRY_AUDIT | decision=WAIT outlookId=%s dir=%s ageSec=%d referencePrice=%.2f currentPrice=%.2f atr=%.2f setup=%s regime=%s wait_reason=%s",
                      g_outlookThesis.outlookId, dir == 1 ? "BUY" : "SELL",
                      (int)(TimeCurrent() - g_outlookThesis.generatedTime), g_outlookThesis.referencePrice, price, atr,
@@ -45679,113 +45710,34 @@ bool XAU_ProcessOutlookRecovery()
 // explicitSL path (which also re-checks owner blockers, direction-exclusivity,
 // duplicate-core, broker/margin/spread and derives the lot from actual entry ->
 // this SL). Never invents/relocates/widens a stop: if invalid, it skips.
+// QA hardening (2026-09-03): this function must NEVER be able to reach
+// OpenTrade(), independent of whatever calls it. v6.28.3 removed its only
+// OnTick() call site (see the comment near that removal above) on the theory
+// that g_pendingOutlook could no longer arm from a live command -- true for
+// the current committed source, but on 2026-09-02 an interim/WIP compiled
+// build that still had the old unconditional OnTick call attached to the live
+// chart between the 11:35 EA reload and the following midnight terminal
+// restart picked up a pre-fix armed g_pendingOutlook (loaded from the legacy
+// xauai_outlook_recovery_*.csv state file) and executed it straight to
+// OpenTrade() -- ticket #3172481527, zero calls into
+// XAU_FinalEntryArbiter/XAU_TimingAuthorityAllows. Neutralizing only the
+// OnTick call site left this function itself still capable of that if ever
+// reintroduced or reached another way (e.g. a future merge, another stray
+// build). Neutralize at the function itself instead: any residual/loaded
+// pending state is acknowledged SKIPPED and cleared immediately -- never
+// executed, never left dangling for a later tick to pick up. The only
+// execution authority for Outlook-aligned entries is
+// XAU_EvaluateOutlookAlignedEntry(), which is gated by the shared
+// XAU_TimingAuthorityAllows()/XAU_FinalEntryArbiter() pipeline.
 void XAU_ProcessPendingOutlook()
 {
    if(!g_pendingOutlook.active) return;
-   if(g_pendingOutlook.recoveryWaiting)
-   {
-      XAU_ProcessOutlookRecovery();
-      return;
-   }
-   if(TimeCurrent() < g_pendingOutlook.armTime) return; // single delay still running
-
-   int    dir       = g_pendingOutlook.dir;
-   string signalId  = g_pendingOutlook.signalId;
-   string commandId = g_pendingOutlook.commandId;
-   double outlookSL = g_pendingOutlook.outlookSL;
-   double chaseLim  = g_pendingOutlook.chaseLimit;
-
-   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-   double price = (dir == 1) ? ask : bid;
-   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
-   long   stopLevel = SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL);
-   double minDist = stopLevel * point;
-   outlookSL = XAU_ClampGoldStopToMaxDistance(price, outlookSL, dir);
-
-   string skipReason = "";
-   // Keep the original server generation time for provenance, but measure
-   // the EA's local execution-expiry window from the moment this terminal
-   // actually approved/armed the Outlook command.
-   datetime executionWindowStart =
-      (g_pendingOutlook.approvedTime > 0)
-         ? g_pendingOutlook.approvedTime
-         : g_pendingOutlook.generatedTime;
-
-   if(TimeCurrent() > executionWindowStart + g_pendingOutlook.delaySeconds + 300)
-      skipReason = "SIGNAL_EXPIRED";                          // local armed window genuinely aged out
-   else if(SymbolInfoInteger(Symbol(), SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_DISABLED)
-      skipReason = "MARKET_NOT_TRADEABLE";
-   else if(bid <= 0.0 || ask <= 0.0)
-      skipReason = "INVALID_BID_ASK";
-   else if(XAU_OutlookSignalAlreadyOpen(signalId))
-      skipReason = "DUPLICATE_ALREADY_OPEN";
-   else if((dir == 1  && !(outlookSL < price - minDist)) ||
-           (dir == -1 && !(outlookSL > price + minDist)))
-      skipReason = "OUTLOOK_SL_NO_LONGER_VALID";             // crossed / wrong side / inside freeze
-   else if(chaseLim > 0.0 && ((dir == 1 && price > chaseLim) || (dir == -1 && price < chaseLim)))
-      skipReason = "PRICE_MOVED_TOO_FAR";                    // chased beyond the signal's limit
-
-   if(skipReason == "PRICE_MOVED_TOO_FAR")
-   {
-      // The thesis was valid and the normal Outlook delay was respected; only
-      // its original location became extended. Preserve the original one-hour
-      // opportunity and wait for current-market timing instead of chasing.
-      XAU_ArmOutlookRecovery(skipReason, price);
-      return;
-   }
-
-   if(StringLen(skipReason) > 0)
-   {
-      string smsg = StringFormat(
-         "OUTLOOK_SKIPPED signalId=%s dir=%s reason=%s execPrice=%.2f outlookSL=%.2f delaySec=%d",
-         signalId, dir == 1 ? "BUY" : "SELL", skipReason, price, outlookSL, g_pendingOutlook.delaySeconds);
-      Print("OUTLOOK_TRACE SKIP | ", smsg);
-      BotMonitorActivity("OUTLOOK_EXECUTION_SKIPPED", "COMMAND", smsg);
-      BotMonitorAckCommand(commandId, "SKIPPED", smsg);
-      XAU_ClearPendingOutlook(true);
-      return;
-   }
-
-   // Fire through the canonical engine; it re-caps against the actual fill.
-   string reason = StringFormat("OUTLOOK_SIGNAL_OPEN signalId=%s (delayed %ds, max-$10 SL %.2f)",
-                                signalId, g_pendingOutlook.delaySeconds, outlookSL);
-   double atrNow = (ArraySize(bufATR) >= 2) ? bufATR[1] : 0.0;
-   bool opened = OpenTrade(dir, atrNow, reason, 1.0, true, outlookSL);
-
-   if(opened)
-   {
-      ulong posId = 0;
-      ulong dealTicket = trade.ResultDeal();
-      if(dealTicket > 0 && HistoryDealSelect(dealTicket))
-         posId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
-      if(posId == 0) posId = trade.ResultOrder();
-      double filledPrice = trade.ResultPrice();
-      double filledLots  = trade.ResultVolume();
-      double actualSL = 0.0;
-      if(posId > 0 && PositionSelectByTicket(posId)) actualSL = PositionGetDouble(POSITION_SL);
-      if(posId > 0) CloudMapAdd(posId, signalId);
-      string emsg = StringFormat(
-         "OUTLOOK_EXECUTED signalId=%s dir=%s ticket=%I64u entryRef=%.2f execPrice=%.2f outlookSL=%.2f actualSL=%.2f lots=%.2f delaySec=%d",
-         signalId, dir == 1 ? "BUY" : "SELL", posId, g_pendingOutlook.entryRef, filledPrice,
-         outlookSL, actualSL, filledLots, g_pendingOutlook.delaySeconds);
-      Print("OUTLOOK_TRACE EXECUTED | ", emsg);
-      BotMonitorActivity("OUTLOOK_EXECUTION_FILLED", "COMMAND", emsg);
-      BotMonitorAckCommand(commandId, "EXECUTED", emsg);
-   }
-   else
-   {
-      // A broker retcode failure is FAILED; any gate/owner-blocker/SL rejection
-      // is a deliberate SKIP (no trade, logged) -- never a reason to invent a stop.
-      string ackStatus = (StringFind(g_lastOpenTradeFailureReason, "RETCODE") >= 0) ? "FAILED" : "SKIPPED";
-      string fmsg = StringFormat(
-         "OUTLOOK_%s signalId=%s dir=%s execPrice=%.2f outlookSL=%.2f openTradeReason=%s skipReason=%s",
-         ackStatus, signalId, dir == 1 ? "BUY" : "SELL", price, outlookSL,
-         g_lastOpenTradeFailureReason, g_lastSkipReason);
-      Print("OUTLOOK_TRACE ", ackStatus, " | ", fmsg);
-      BotMonitorActivity("OUTLOOK_EXECUTION_" + ackStatus, ackStatus == "FAILED" ? "ERROR" : "COMMAND", fmsg);
-      BotMonitorAckCommand(commandId, ackStatus, fmsg);
-   }
+   string retiredMsg = StringFormat(
+      "LEGACY_OUTLOOK_EXECUTION_PERMANENTLY_RETIRED signalId=%s dir=%s -- v6.28.3+ execution authority belongs solely to XAU_EvaluateOutlookAlignedEntry() via the shared TimingAuthority/FinalEntryArbiter pipeline",
+      g_pendingOutlook.signalId, g_pendingOutlook.dir == 1 ? "BUY" : "SELL");
+   Print("OUTLOOK_TRACE | ", retiredMsg);
+   BotMonitorActivity("OUTLOOK_LEGACY_PATH_RETIRED", "COMMAND", retiredMsg);
+   BotMonitorAckCommand(g_pendingOutlook.commandId, "SKIPPED", retiredMsg);
    XAU_ClearPendingOutlook(true);
 }
 
