@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.28.4",
+  "current_version": "v6.28.5",
   "website_product_name": "XauCloud",
   "mt5_market_product_name": "XauCloud",
   "releases": {
@@ -164,6 +164,20 @@
       "ex5_sha256": "6c6b91740d1d3857b6d10dd79b7ee6064b604241b366dbbcbbf4aa8496e983d2",
       "customer_filename": "XauCloud-Aurum.ex5",
       "release_notes": "Forensic fix from the 2026-09-03 \"no trades since yesterday\" production investigation. Root cause of the no-trades symptom itself was genuine market exhaustion (unrelated, pre-existing logic) \u2014 not a bug. Two real, narrowly-scoped defects found and fixed on top of v6.28.3: (1) the OUTLOOK_ALIGNED candidate lane (lane 3) reset its own entry timer on every tick the setup was not immediately executable, so it could never survive long enough to satisfy the shared 120-180s timing authority delay (live evidence: 11 candidate identities created and destroyed in 52 seconds) \u2014 fixed to preserve an armed candidate through ordinary wait ticks, mirroring PRIMARY's own caution-gate contract, while the shared timing authority's absolute ceiling remains the only thing that can expire a stale candidate; (2) XAU_ProcessPendingOutlook() (the pre-v6.28.3 auto-fire path) was only made unreachable by removing its OnTick() call site \u2014 an interim/WIP compiled build that still had that call wired in picked up a pre-fix armed legacy command and executed a real trade straight to OpenTrade() with zero calls into FinalEntryArbiter/TimingAuthorityAllows. Hard-neutralized at the function itself: any residual/loaded legacy Outlook state is now acknowledged SKIPPED and cleared immediately, and the function can no longer reach OpenTrade() under any circumstance, regardless of what calls it. PRIMARY/RE_ENTRY/PYRAMID/OpenTrade/XAU_FinalEntryArbiter/XAU_TimingAuthorityAllows remain byte-identical to v6.28.2/v6.28.3 (see tests/test_xau_v6283_outlook_aurum_unified.py, 25/25 passing, 7 new regression tests added for these two fixes).",
+      "stable_status": true
+    },
+    "v6.28.5": {
+      "version": "v6.28.5",
+      "edition": "XauCloud Aurum — exhaustion sustained-dormancy decay fix (2026-09-04 no-trades production investigation)",
+      "source_lineage": "v6.28.4 (XauCloud-Aurum.mq5, source_sha256 b5dd918e...) + exhaustion ratchet dormancy-decay fix.",
+      "build_timestamp": "2026-09-04T18:36:00Z",
+      "compiler_result": "0 errors, 0 warnings, 87463 ms elapsed, cpu='AVX2 + FMA3' (MetaEditor64.exe via Wine, Mac local build, owner-triggered F7)",
+      "source_filename": "XauCloud-Aurum.mq5",
+      "source_sha256": "8ebe704ec3130ba51bd34553313389dc5c07721a0c585cb9c411850e84f6e8aa",
+      "ex5_filename": "XauCloud-Aurum.ex5",
+      "ex5_sha256": "252bbac3bbd7184f710542c1deae6ec95330eeb44b9017df17af1e95a7951454",
+      "customer_filename": "XauCloud-Aurum.ex5",
+      "release_notes": "Root-cause fix for the 2026-09-02..09-04 near-total trading silence. Forensic finding: XAU_AdaptiveMarketTransitionEngine's exhaustion ratchet (g_transitionPersistentExhaustion) only ever decayed on a direction flip or a strict continuation-confirmed reset -- live production evidence showed it frozen at a stale peak (82.16) for 90+ minutes while the live raw reading had genuinely cooled to the low-60s, starving XAU_SmartEntryCautionGate of any path forward (9 candidates reached the timing-delay gate over 3 days, zero ever reached FinalEntryArbiter). Fix adds a new, strictly more conservative sustained-dormancy decay path: requires 6 consecutive M10 bars (1 hour) of a genuine >=15-point sustained gap below the ratcheted peak, with no active reversal case building, before decaying by only 5 points (half the existing reset's 10-point step) -- inert the instant a new high reforms or real reversal evidence starts building. Does not touch, weaken, or bypass the original 2026-07-14 '86% forgotten' protection, XAU_FinalEntryArbiter, XAU_TimingAuthorityAllows, OpenTrade, or any risk/SL/lot-sizing logic -- all confirmed byte-identical. New EXHAUSTION_DORMANCY_DECAY telemetry event plus a live dormantBars=N/6 field on every EXHAUSTION_CALC line for observability. 16 new regression tests (tests/test_xau_v6285_exhaustion_dormancy_decay.py), 50/51 passing across the full related suite (the 51st was the not-yet-compiled check, now resolved by this release).",
       "stable_status": true
     }
   },

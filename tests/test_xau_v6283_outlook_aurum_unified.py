@@ -34,13 +34,12 @@ def fn_body(ea: str, signature: str, size: int = 6000) -> str:
 # ---------------------------------------------------------------------------
 # Identity
 # ---------------------------------------------------------------------------
-def test_version_identity_is_v6284_production_not_test_or_unified():
-    # v6.28.4 (2026-09-03): OUTLOOK_ALIGNED candidate-timer churn fix +
-    # legacy XAU_ProcessPendingOutlook hard-neutralization, on top of the
-    # v6.28.3 Outlook+Aurum Unified Coordination baseline.
+def test_version_identity_is_v6285_production_not_test_or_unified():
+    # v6.28.5 (2026-09-04): exhaustion sustained-dormancy decay fix, on top
+    # of v6.28.4 (OUTLOOK_ALIGNED timer churn + legacy auto-fire fixes).
     ea = read(EA)
-    assert '#define XAUAI_EA_VERSION "XAUCloud-Aurum_v6.28.4"' in ea
-    assert '#define XAUAI_EA_VERSION_NUM "6.284"' in ea
+    assert '#define XAUAI_EA_VERSION "XAUCloud-Aurum_v6.28.5"' in ea
+    assert '#define XAUAI_EA_VERSION_NUM "6.285"' in ea
     assert "-test" not in ea.split("XAUAI_EA_VERSION")[1][:80]
     assert "Unified_v6" not in ea
 
