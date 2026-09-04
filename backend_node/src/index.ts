@@ -15,6 +15,7 @@ import { registerAuthRoutes } from "./routes/auth.js";
 import { registerPinRoutes } from "./routes/pins.js";
 import { registerCloudMonitorRoutes } from "./routes/cloud/monitor.js";
 import { registerCloudCommandRoutes } from "./routes/cloud/command.js";
+import { registerApexBridgeRoutes } from "./routes/cloud/apexBridge.js";
 import { registerCloudOutlookThesisRoutes } from "./routes/cloud/outlookThesis.js";
 import { registerAiRoutes } from "./routes/ai.js";
 import { registerMlRoutes } from "./routes/ml.js";
@@ -208,6 +209,7 @@ async function main(): Promise<void> {
       await registerPinRoutes(api);
       await registerCloudMonitorRoutes(api);
       await registerCloudCommandRoutes(api);
+      await registerApexBridgeRoutes(api);
       await registerCloudOutlookThesisRoutes(api);
       await registerAiRoutes(api);
       await registerMlRoutes(api);
