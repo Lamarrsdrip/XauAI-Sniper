@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { getDb } from "../../db.js";
-import { normalizeLicenseKey, resolveMonitorLicense } from "../../services/license.js";
+import { LicenseError, normalizeLicenseKey, resolveMonitorLicense } from "../../services/license.js";
 import { storeBotActivity } from "../../services/botActivity.js";
 import { BotHeartbeatReqSchema } from "../../models/cloudMonitor.js";
 import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
@@ -38,7 +38,17 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
 
     const licenseKey = normalizeLicenseKey(req.license_key || req.pin || "");
     const account = req.account_number || "";
-    const lic = await resolveMonitorLicense(licenseKey, account);
+    let lic;
+    try {
+      lic = await resolveMonitorLicense(licenseKey, account);
+    } catch (error) {
+      if (error instanceof LicenseError && licenseKey.startsWith("APEX-")) {
+        const detail = typeof error.detail === "object" ? error.detail : {};
+        const masked = licenseKey.length <= 8 ? "***" : `${licenseKey.slice(0, 5)}...${licenseKey.slice(-4)}`;
+        request.log.warn({ route: "/api/cloud/monitor/heartbeat", license: masked, account, reason: detail["reason"] || "LICENSE_ERROR" }, "Apex license rejected");
+      }
+      throw error;
+    }
     const licenseId = lic?.["id"] ?? "";
 
     const doc: Record<string, unknown> = { ...req };
