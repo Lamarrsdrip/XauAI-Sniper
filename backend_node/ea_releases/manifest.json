@@ -168,7 +168,7 @@
     },
     "v6.28.5": {
       "version": "v6.28.5",
-      "edition": "XauCloud Aurum — exhaustion sustained-dormancy decay fix (2026-09-04 no-trades production investigation)",
+      "edition": "XauCloud Aurum \u2014 exhaustion sustained-dormancy decay fix (2026-09-04 no-trades production investigation)",
       "source_lineage": "v6.28.4 (XauCloud-Aurum.mq5, source_sha256 b5dd918e...) + exhaustion ratchet dormancy-decay fix.",
       "build_timestamp": "2026-09-04T18:36:00Z",
       "compiler_result": "0 errors, 0 warnings, 87463 ms elapsed, cpu='AVX2 + FMA3' (MetaEditor64.exe via Wine, Mac local build, owner-triggered F7)",
