@@ -1,5 +1,5 @@
 {
-  "current_version": "v6.28.5",
+  "current_version": "v6.28.6",
   "internal_codename": "XauCloud_Aurum",
   "production_branch": "XauCloud_Aurum",
   "production_branch_source_commit": "15bd8f20297de5305e413f44ef586eee4afdf45c",
@@ -303,6 +303,20 @@
       "ex5_sha256": "252bbac3bbd7184f710542c1deae6ec95330eeb44b9017df17af1e95a7951454",
       "customer_filename": "XauCloud-Aurum.ex5",
       "release_notes": "Root-cause fix for the 2026-09-02..09-04 near-total trading silence. Forensic finding: XAU_AdaptiveMarketTransitionEngine's exhaustion ratchet (g_transitionPersistentExhaustion) only ever decayed on a direction flip or a strict continuation-confirmed reset -- live production evidence showed it frozen at a stale peak (82.16) for 90+ minutes while the live raw reading had genuinely cooled to the low-60s, starving XAU_SmartEntryCautionGate of any path forward (9 candidates reached the timing-delay gate over 3 days, zero ever reached FinalEntryArbiter). Fix adds a new, strictly more conservative sustained-dormancy decay path: requires 6 consecutive M10 bars (1 hour) of a genuine >=15-point sustained gap below the ratcheted peak, with no active reversal case building, before decaying by only 5 points (half the existing reset's 10-point step) -- inert the instant a new high reforms or real reversal evidence starts building. Does not touch, weaken, or bypass the original 2026-07-14 '86% forgotten' protection, XAU_FinalEntryArbiter, XAU_TimingAuthorityAllows, OpenTrade, or any risk/SL/lot-sizing logic -- all confirmed byte-identical. New EXHAUSTION_DORMANCY_DECAY telemetry event plus a live dormantBars=N/6 field on every EXHAUSTION_CALC line for observability. 16 new regression tests (tests/test_xau_v6285_exhaustion_dormancy_decay.py), 50/51 passing across the full related suite (the 51st was the not-yet-compiled check, now resolved by this release).",
+      "stable_status": true
+    },
+    "v6.28.6": {
+      "version": "v6.28.6",
+      "edition": "XauCloud — production rename + pre-week forensic audit fixes (F1-F6)",
+      "source_lineage": "v6.28.5 (XauCloud-Aurum.mq5, source_sha256 8ebe704e...) + the six defects proven in the 2026-09-06 forensic audit. Renamed from the XauCloud-Aurum lineage to plain \"XauCloud\": this is now the main bot.",
+      "build_timestamp": "2026-09-07T00:00:00Z",
+      "compiler_result": "0 errors, 0 warnings, 140863 ms elapsed, cpu='X64 Regular' (MetaEditor64.exe headless on the production VPS)",
+      "source_filename": "XauCloud.mq5",
+      "source_sha256": "c9317718b39b1af98c459248e9e7c037b15de289cb006e881645195a4f74f5ea",
+      "ex5_filename": "XauCloud.ex5",
+      "ex5_sha256": "43e5e9428a87bbdd7f2e73a3aefa9b5be43aca7295e456c90f9d156760be3735",
+      "customer_filename": "XauCloud.ex5",
+      "release_notes": "Renames the bot to XauCloud and ships the six defects proven from live production journals in the 2026-09-06 forensic audit of the 2026-09-02..09-04 trading silence. F1 (high): XAU_BucketTiming took no candidate direction, so the reversal lane's reversalWaitForPullback/oppositeDisplacement evidence forced DOMINANT-direction candidates into a bounded WAIT_FOR_PULLBACK until their 180s timer expired -- 6 of the 10 candidates that matured over those three days, every one logged with dominant==signal and oppositeEntryAllowed=N. The two reversal-side branches are now applied only to genuinely opposite-side candidates; an unknown direction keeps the exact pre-fix answer. F2 (high): the v6.28.5 sustained-dormancy decay was mathematically inert -- its 15.0 arming gap was never reached in production (observed max 11.79) and its flat 5.0 step was smaller than that gap, so the ratchet asymptoted ~10-15 points above the raw reading and could never track a cooling market. EXHAUSTION_DORMANCY_DECAY appears zero times in every log from 2026-08-30 to 09-05. Now arms at a real 4.0 cool-off and steps by half the remaining gap (floored at 5.0). The 6-bar/one-hour sustain requirement is UNCHANGED -- that is the 2026-07-14 '86% forgotten' protection, and simulation confirms one cool bar, or five, still decays nothing while a re-spike ratchets straight back up. F3 (high): XAU_ComputeStructuralSL only ever considered the single nearest confirmed fractal pivot and hard-refused the entry when it fell outside the [0.5x,4x] ATR sanity bound -- killing the only two candidates in six days that cleared every other gate (both had already logged FINAL_ENTRY_ARBITER decision=ALLOW). It now walks confirmed pivots outward within the same unchanged bound; the ATR-only stop stays prohibited and a window with no qualifying pivot still refuses the trade. F4: the OUTLOOK_ALIGNED lane never set lastSignalSetup/g_pendingBrainGrade, so OpenTrade evaluated owner policy against whatever identity the last PRIMARY candidate left behind. It now publishes its own identity, graded by the same shared engine PRIMARY uses. F5: 'PROFIT_CLOSE | EA_MARKET_CLOSE' was the fallback label meaning no exit reason was recorded; the single close authority now attributes its own ctx after an accepted close, without overwriting richer call-site reasons. F6: the retired legacy Outlook recovery path still held a live OpenTrade(isManualOverride=true) and OnInit could latch restored legacy pending state forever -- both neutralised. No owner policy, risk control, SL/TP rule, timing rule, Trade Brain behaviour or Global Brain influence setting was changed. 91 regression tests pass across the three EA suites.",
       "stable_status": true
     }
   }

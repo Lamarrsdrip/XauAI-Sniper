@@ -17,9 +17,9 @@ OpenTrade authorities), never a new blocker on normal trades.
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "backend" / "ea_code" / "XauCloud-Aurum.mq5"
+EA = ROOT / "backend" / "ea_code" / "XauCloud.mq5"
 BASELINE_V6282 = Path.home() / "Downloads" / "XauCloud-Aurum-v6.28.2.mq5"
-COMPILE_LOG = ROOT / "backend" / "ea_code" / "compile_logs" / "XauCloud-Aurum_v6.28.4_compile.log"
+COMPILE_LOG = ROOT / "backend" / "ea_code" / "compile_logs" / "XauCloud_v6.28.6_compile.log"
 
 
 def read(path: Path) -> str:
@@ -27,8 +27,47 @@ def read(path: Path) -> str:
 
 
 def fn_body(ea: str, signature: str, size: int = 6000) -> str:
-    idx = ea.index(signature)
-    return ea[idx: idx + size]
+    """Return a window starting at the function DEFINITION.
+
+    v6.28.6 added a forward declaration (`void XAU_ProcessPendingOutlook();`)
+    ahead of OnInit(), so a naive first-match lands on the prototype and reads
+    the wrong region entirely. Skip any match that is a declaration.
+    """
+    start = 0
+    while True:
+        idx = ea.index(signature, start)
+        tail = ea[idx: idx + 400]
+        brace, semi = tail.find("{"), tail.find(";")
+        if brace != -1 and (semi == -1 or brace < semi):
+            return ea[idx: idx + size]
+        start = idx + len(signature)
+
+
+def _strip_comments(src: str) -> str:
+    return "\n".join(line.split("//")[0] for line in src.splitlines())
+
+
+def _exact_body(ea: str, signature: str) -> str:
+    """The function's exact body, brace-balanced -- never a fixed-size window
+    that a later edit can silently overrun into the next function."""
+    start = 0
+    while True:
+        idx = ea.index(signature, start)
+        tail = ea[idx: idx + 400]
+        brace, semi = tail.find("{"), tail.find(";")
+        if brace != -1 and (semi == -1 or brace < semi):
+            break
+        start = idx + len(signature)
+    b = ea.index("{", idx)
+    depth = 0
+    for j in range(b, len(ea)):
+        if ea[j] == "{":
+            depth += 1
+        elif ea[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return ea[idx: j + 1]
+    raise AssertionError("unbalanced body: " + signature)
 
 
 # ---------------------------------------------------------------------------
@@ -38,8 +77,11 @@ def test_version_identity_is_v6285_production_not_test_or_unified():
     # v6.28.5 (2026-09-04): exhaustion sustained-dormancy decay fix, on top
     # of v6.28.4 (OUTLOOK_ALIGNED timer churn + legacy auto-fire fixes).
     ea = read(EA)
-    assert '#define XAUAI_EA_VERSION "XAUCloud-Aurum_v6.28.5"' in ea
-    assert '#define XAUAI_EA_VERSION_NUM "6.285"' in ea
+    # v6.28.6 (2026-09-07): forensic pre-week audit fixes + the production
+    # rename of this lineage to plain "XauCloud", now that it is the main bot.
+    assert '#define XAUAI_EA_VERSION "XauCloud_v6.28.6"' in ea
+    assert '#define XAUAI_EA_VERSION_NUM "6.286"' in ea
+    assert "XAUCloud-Aurum_v" not in ea
     assert "-test" not in ea.split("XAUAI_EA_VERSION")[1][:80]
     assert "Unified_v6" not in ea
 
@@ -48,7 +90,7 @@ def test_compile_reports_zero_errors_and_zero_warnings():
     log_bytes = COMPILE_LOG.read_bytes()
     text = log_bytes.decode("utf-16-le", errors="ignore")
     assert "0 errors, 0 warnings" in text
-    assert "XauCloud-Aurum.mq5" in text
+    assert "XauCloud.mq5" in text
 
 
 # ---------------------------------------------------------------------------
@@ -109,10 +151,14 @@ def test_outlook_aligned_entry_must_pass_shared_timing_and_arbiter_before_opentr
     # Window widened for the 2026-09-03 candidate-churn fix below (the
     # function grew past 6000 chars); still comfortably covers the full body
     # through OpenTrade().
-    fn = fn_body(ea, "void XAU_EvaluateOutlookAlignedEntry()", 10000)
+    fn = _exact_body(ea, "void XAU_EvaluateOutlookAlignedEntry()")
     timing_idx = fn.index('XAU_TimingAuthorityAllows(dir, "OUTLOOK_ALIGNED", atr, timingWhy)')
     arbiter_idx = fn.index('XAU_FinalEntryArbiter("OUTLOOK_ALIGNED", dir, true, true, true, true, true, true, finalWhy)')
+    # v6.28.6: unchanged call, still the only OpenTrade in this function.
     opentrade_idx = fn.index("OpenTrade(dir, atr, reason, 1.0, false, explicitSL)")
+    # Count real calls only -- v6.28.6's identity-fix comment block names
+    # OpenTrade() in prose several times.
+    assert _strip_comments(fn).count("OpenTrade(") == 2  # two arms of one ternary, nothing else
     # same shared authorities, in the same order every other lane uses them,
     # strictly before the only OpenTrade call in this function
     assert timing_idx < arbiter_idx < opentrade_idx
@@ -217,14 +263,14 @@ def test_shadowml_still_absent():
 # absolute ceiling may clear it.
 # ---------------------------------------------------------------------------
 def _outlook_aligned_wait_branch(ea: str) -> str:
-    fn = fn_body(ea, "void XAU_EvaluateOutlookAlignedEntry()", 10000)
+    fn = _exact_body(ea, "void XAU_EvaluateOutlookAlignedEntry()")
     start = fn.index("if(!executableAction || !locationReasonable || !timingReady || !setupNotChase)\n   {")
     end = fn.index("// Genuine entry opportunity: arm/refresh the OUTLOOK_ALIGNED timer.")
     return fn[start:end]
 
 
 def _outlook_aligned_hard_invalidation_branch(ea: str) -> str:
-    fn = fn_body(ea, "void XAU_EvaluateOutlookAlignedEntry()", 10000)
+    fn = _exact_body(ea, "void XAU_EvaluateOutlookAlignedEntry()")
     start = fn.index("if(invalidated || tooExtended)")
     end = fn.index("if(!executableAction || !locationReasonable || !timingReady || !setupNotChase)")
     return fn[start:end]
@@ -260,7 +306,7 @@ def test_outlook_aligned_wait_branch_is_a_strict_subset_after_invalidation_check
     # not-yet-executable wait branch runs, so a broken thesis can never fall
     # through into the timer-preserving path.
     ea = read(EA)
-    fn = fn_body(ea, "void XAU_EvaluateOutlookAlignedEntry()", 10000)
+    fn = _exact_body(ea, "void XAU_EvaluateOutlookAlignedEntry()")
     hard_idx = fn.index("if(invalidated || tooExtended)")
     wait_idx = fn.index("if(!executableAction || !locationReasonable || !timingReady || !setupNotChase)")
     assert hard_idx < wait_idx
@@ -312,6 +358,8 @@ def test_process_pending_outlook_no_longer_reaches_recovery_subsystem():
 # ---------------------------------------------------------------------------
 # No duplicate/competing canonical source left behind.
 # ---------------------------------------------------------------------------
-def test_exactly_one_canonical_aurum_source_in_ea_code():
-    matches = sorted(p.name for p in (ROOT / "backend" / "ea_code").glob("XauCloud-Aurum*.mq5"))
-    assert matches == ["XauCloud-Aurum.mq5"]
+def test_exactly_one_canonical_production_source_in_ea_code():
+    # v6.28.6: renamed to XauCloud.mq5. Exactly one copy, and the rename left
+    # no XauCloud-Aurum* variant behind to diverge from it.
+    assert (ROOT / "backend" / "ea_code" / "XauCloud.mq5").is_file()
+    assert sorted(p.name for p in (ROOT / "backend" / "ea_code").glob("XauCloud-Aurum*.mq5")) == []

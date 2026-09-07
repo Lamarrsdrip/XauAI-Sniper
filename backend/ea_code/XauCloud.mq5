@@ -1,6 +1,10 @@
 //+------------------------------------------------------------------+
-//| CURRENT PRODUCTION SOURCE -- XAUCloud-Aurum_v6.28.3               |
-//| (2026-09-02) -- Outlook+Aurum Unified Coordination fix, derived   |
+//| CURRENT PRODUCTION SOURCE -- XauCloud_v6.28.6  (2026-09-07)       |
+//| The main XauCloud trading bot. Renamed from the XauCloud-Aurum    |
+//| lineage at v6.28.6; the historical release notes below keep their |
+//| original names on purpose -- they record what shipped when.       |
+//| v6.28.3 (2026-09-02) -- Outlook+Aurum Unified Coordination fix,   |
+//| derived                                                           |
 //| from the clean production v6.28.2 baseline (itself derived from   |
 //| tracked XauCloud-Fixed.mq5 v6.28.0; see README.md "Owner's B1     |
 //| production trading source" for that lineage's own scope/caveats). |
@@ -2065,8 +2069,8 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 //   10% + widened-SL policy as PRIMARY, no hidden multiplier.
 // ====================================================================
 
-#define XAUAI_EA_VERSION "XAUCloud-Aurum_v6.28.5"
-#define XAUAI_EA_VERSION_NUM "6.285"
+#define XAUAI_EA_VERSION "XauCloud_v6.28.6"
+#define XAUAI_EA_VERSION_NUM "6.286"
 #define XAUAI_BUILD_HASH "xaucloud-fixed-b1-no-ea-shadowml-globalbrain-v4-20260902"
 
 // v6.26.0 owner directive (2026-08-05): permanent migration off the R
@@ -3984,6 +3988,13 @@ datetime g_transitionLastComputedBar = 0;
 double   g_counterTransitionEvidence = 0.0; // signed: +BUY evidence, -SELL evidence
 datetime g_counterTransitionEvidenceAt = 0;
 bool     g_counterTransitionEvidenceLoaded = false;
+// v6.28.6 FIX 4: last regime quality produced by a COMPLETED entry scan's
+// DetectRegime() call. Read-only cache so lanes that run before the per-bar
+// indicator buffers are loaded (OUTLOOK_ALIGNED) can grade a candidate through
+// the shared engine without calling DetectRegime() -- which mutates
+// currentRegime and reads those not-yet-loaded buffers. 0.0 means "no completed
+// scan yet"; consumers must fail closed on that.
+double   g_lastRegimeQuality = 0.0;
 double   g_transitionPersistentExhaustion = 0.0;
 int      g_transitionPersistentDirection = 0;
 int      g_transitionExhaustionDormantBars = 0;   // consecutive M10 bars rawExhaustion has sustained a meaningful gap below the ratchet
@@ -3994,7 +4005,36 @@ datetime g_transitionExhaustionDormancyBarTime = 0; // last bar counted, so dorm
 // building before moving the ratchet at all, and only by 5 points per window
 // -- see XAU_AdaptiveMarketTransitionEngine for why this exists and why it
 // cannot reproduce the 2026-07-14 "86% forgotten" failure.
-#define XAU_EXHAUSTION_DORMANCY_GAP           15.0
+// v6.28.6 FORENSIC FIX 2 (2026-09-06) -- the v6.28.5 dormancy decay was inert.
+// Live proof, VPS 20260904.log, direction=SELL, 21:50->22:30 (5 consecutive
+// M10 bars, running v6.28.5 which DOES contain the decay -- "dormantBars=0/6"
+// is present in every line):
+//   21:50 rawScore=75.10 finalPct=78.65 dormantBars=0/6   gap= 3.55
+//   22:00 rawScore=77.10 finalPct=78.65 dormantBars=0/6   gap= 1.55
+//   22:10 rawScore=71.35 finalPct=78.65 dormantBars=0/6   gap= 7.30
+//   22:20 rawScore=69.79 finalPct=78.65 dormantBars=0/6   gap= 8.86
+//   22:30 rawScore=66.86 finalPct=78.65 dormantBars=0/6   gap=11.79
+// The gap never once reached 15.0, so dormantBars never left 0 and the decay
+// never armed. EXHAUSTION_DORMANCY_DECAY appears 0 times in every production
+// log from 2026-08-30 through 2026-09-05.
+//
+// Worse, the OLD pair was self-extinguishing by construction: a fixed 5.0 step
+// against a 15.0 arming gap means that even when it DID fire, one decay drops
+// the gap to (gap-5) and the counter can only re-arm if the gap is still >=15
+// -- so the ratchet converges to raw+10..15 and can never track a genuinely
+// cooling market. Simulated: ratchet 82.16 with raw held at 63.0 for ten hours
+// decays exactly ONCE, to 77.16, and stays there (still EXHAUSTION_HIGH).
+//
+// Fix: arm on a real, above-noise cool-off (4.0) rather than a gap so large it
+// never occurs, and make the step CONVERGENT -- half the remaining gap, floored
+// at the old 5.0 -- so a dead trend actually releases instead of asymptoting.
+// The 6-bar (one full hour) sustained requirement is deliberately UNCHANGED:
+// that is what preserves the 2026-07-14 "86% -> forgotten -> SELL again"
+// protection the ratchet exists for. Verified by simulation against that exact
+// scenario: one cool bar, or even five cool bars, still decays NOTHING, and a
+// re-spike ratchets straight back up; only a full hour of genuinely sustained
+// dormancy with no reversal buildup moves it at all.
+#define XAU_EXHAUSTION_DORMANCY_GAP            4.0
 #define XAU_EXHAUSTION_DORMANCY_BARS_REQUIRED 6
 #define XAU_EXHAUSTION_DORMANCY_DECAY_STEP    5.0
 string   g_lastAdaptiveDecisionAuditKey = "";
@@ -10142,6 +10182,38 @@ bool AIBlocksClose(string ruleName, ulong ticket, bool isBuy, double openPx, dou
    return false;
 }
 
+// v6.28.6 FORENSIC FIX 5 (2026-09-06) -- UNTRACEABLE EA CLOSES.
+// XAU_ResolveExitReason()'s "PROFIT_CLOSE | EA_MARKET_CLOSE" is NOT an exit
+// trigger -- it is the LAST-RESORT label emitted when the EA closed a position
+// (DEAL_REASON_EXPERT) and neither a per-ticket pending reason NOR the shared
+// lastExitReason global was set. In other words that string means "we closed
+// it and nothing recorded why".
+//
+// Every EA-initiated close funnels through one authority,
+// OWNER_R_EXIT_CLOSE_ONLY(ticket, ctx, ...), and that authority never
+// registered anything. Of its ~36 call sites only about a third set a
+// per-ticket reason first; the rest set only the single shared global
+// lastExitReason (which the next ticket in a basket then inherits), and a
+// large group -- TTM_EXIT, TTM_STRUCTURAL_EXIT, HARD_STOP, HARD_STOP_PIPS,
+// EARLY_ADVERSE, PEAK_RETRACE, MOMENTUM_FADE, QUICK_PROFIT_CAP,
+// PROFIT_CEILING, TIME_EXPIRED, SMART_CUT, STALE_LOSS, STALE_DRIFT,
+// TRI_WEAK_RECOVERY_EXIT, NO_PARTIAL_SMART_LOSS, EXPECTANCY_MAX_LOSS,
+// AI_DIRECTOR_EXIT_CLOSE, CLAUDE_AI -- set neither.
+//
+// Fix: the single close authority now stamps its own ctx as the per-ticket
+// reason immediately before the broker call, but ONLY when no more specific
+// reason has already been registered for that position, so the richer strings
+// the careful call sites already publish are never overwritten. Pure
+// attribution: it changes no threshold, no trigger and no close decision.
+bool XAU_HasPendingExitReason(ulong posId)
+{
+   if(posId == 0) return false;
+   int n = ArraySize(g_pendingExitIds);
+   for(int i = 0; i < n; i++)
+      if(g_pendingExitIds[i] == posId && StringLen(g_pendingExitReasons[i]) > 0) return true;
+   return false;
+}
+
 //+------------------------------------------------------------------+
 //| v6.4.6 audit — broker-side exit attribution                      |
 //| Stores the most recent protective action per MT5 position id so   |
@@ -11454,6 +11526,9 @@ bool XAU_RunNoBreakoutAndSnapshotSelfTests();
 bool XAU_RunPermanentM10CategoryPolicySelfTests();
 void XAU_ReconcilePureM10CycleStateOnInit();
 void XAU_LogRuntimePureM10Gap(datetime lastSeenClose,datetime currentClose);
+// v6.28.6 FIX 6: OnInit() consumes any legacy restored g_pendingOutlook state
+// through the retirement handler, which is defined near the bottom of this file.
+void XAU_ProcessPendingOutlook();
 
 int OnInit()
 {
@@ -11598,6 +11673,13 @@ int OnInit()
    // This is Outlook-only state; normal M10 candidates remain untouched.
    XAU_LoadOutlookConsumedState();
    XAU_LoadPendingOutlookState();
+   // v6.28.6 FIX 6: XAU_LoadPendingOutlookState() can restore a legacy
+   // g_pendingOutlook.active=true from xauai_outlook_recovery_*.csv, but since
+   // v6.28.3 nothing consumes it -- the flag latched for the life of the
+   // terminal and the originating cloud command was never acknowledged. Run the
+   // retirement handler exactly once at startup so restored legacy state is
+   // acked SKIPPED and cleared. It cannot execute anything (see its own header).
+   if(g_pendingOutlook.active) XAU_ProcessPendingOutlook();
 
    // v5.2.1 — startup cooldown: capture boot time + current bar so we can block
    // any premature trade right after EA init/reload (prevents blind shots on
@@ -15030,6 +15112,12 @@ int XAU_SwingSequenceDir(ENUM_TIMEFRAMES tf, int lookbackBars, string &why,
 // [0.5x, 4x] the ATR-floor distance so a thin/illiquid swing read can never
 // produce an unreasonably tight or wide stop -- this is a placement-source
 // choice only; it does not touch the risk-percent formula in OpenTrade().
+// v6.28.6 FIX 3: how many confirmed fractal pivots outward the structural-SL
+// search may examine before it gives up and refuses the entry. 4 keeps the
+// stop inside the same recent-structure window the 30-bar lookback already
+// defines; it does not widen the [0.5x, 4x] ATR-floor sanity bound.
+#define XAU_STRUCTURAL_SL_MAX_PIVOTS 4
+
 void XAU_ComputeStructuralSL(int signal, double atr, double entryPrice, double atrFloorDist,
                              ENUM_XAU_SL_SOURCE &source, double &rawLevel,
                              double &buffer, double &finalDist)
@@ -15040,34 +15128,86 @@ void XAU_ComputeStructuralSL(int signal, double atr, double entryPrice, double a
    finalDist = atrFloorDist;
    if(atr <= 0 || atrFloorDist <= 0) return;
 
-   string why = "";
-   double swingHigh = 0.0, swingLow = 0.0;
-   XAU_SwingSequenceDir(XAU_PRIMARY_DECISION_TF, 30, why, swingHigh, swingLow);
-
-   double candidateDist = 0.0;
-   double candidateLevel = 0.0;
-   bool haveCandidate = false;
-   if(signal == 1 && swingLow > 0.0 && swingLow < entryPrice)
-   {
-      candidateLevel = swingLow;
-      candidateDist  = (entryPrice - swingLow) + buffer;
-      haveCandidate  = true;
-   }
-   else if(signal == -1 && swingHigh > 0.0 && swingHigh > entryPrice)
-   {
-      candidateLevel = swingHigh;
-      candidateDist  = (swingHigh - entryPrice) + buffer;
-      haveCandidate  = true;
-   }
-   if(!haveCandidate) return;
-
+   // v6.28.6 FORENSIC FIX 3 (2026-09-06) -- NEAREST-PIVOT-ONLY DEAD END.
+   // This function only ever considered the SINGLE most recent confirmed
+   // fractal pivot (XAU_SwingSequenceDir's lastSwingHigh/lastSwingLow) and,
+   // when that one pivot fell outside the [0.5x, 4x] ATR-floor sanity bound,
+   // returned with source still SL_EMERGENCY_VOLATILITY_INVALIDATION and
+   // rawLevel still 0.0. OpenTrade() turns that into a HARD refusal
+   // (STRUCTURAL_SL_BLOCK / NO_VALID_CLOSED_M10_SWING_INVALIDATION), because
+   // an ATR-only stop is prohibited as a real-money safety rule -- so a
+   // pivot that is merely too CLOSE kills the trade outright even though
+   // perfectly good, wider structural invalidations exist a few bars back.
+   //
+   // Live proof -- the only two candidates in the whole 2026-08-30..09-04
+   // window that passed EVERY gate (score, grade, owner policy, structure,
+   // freshness, TimingAuthority, SmartEntryCaution, spread, news,
+   // FinalEntryArbiter=ALLOW) died right here, at the last step before
+   // OrderSend, with orderSendReached=false:
+   //   08-31 09:22:32  BUY M10_ORIGINATED_CANDIDATE  rawLevel=0.00 buffer=1.26 atrFloorDist=20.98
+   //   09-04 18:52:30  BUY M10_ORIGINATED_CANDIDATE  rawLevel=0.00 buffer=1.54 atrFloorDist=25.65
+   // (09-04 18:52 had already logged FINAL_ENTRY_ARBITER ... decision=ALLOW.)
+   //
+   // Fix: walk the confirmed fractal pivots outward -- same timeframe, same
+   // closed-bar 3-bar fractal rule, same lookback, same buffer, same
+   // [0.5x, 4x] sanity bound, same SL_M5_SWING_INVALIDATION source -- and
+   // take the FIRST pivot that satisfies the bound instead of giving up on
+   // the nearest one. Deliberately NOT a loosening: nothing outside the
+   // pre-existing bound is ever accepted, the ATR-only fallback stays
+   // prohibited, and if no pivot in the window qualifies the trade is still
+   // refused exactly as before. Only the "a valid wider structural level was
+   // available and we ignored it" case changes.
    double lo = atrFloorDist * 0.5;
    double hi = atrFloorDist * 4.0;
-   if(candidateDist < lo || candidateDist > hi) return; // sanity bound failed -> stay on ATR fallback
 
-   source    = SL_M5_SWING_INVALIDATION;
-   rawLevel  = candidateLevel;
-   finalDist = candidateDist;
+   int    lb = 30;
+   int    pivotsChecked = 0;
+   for(int i = 2; i <= lb - 2 && pivotsChecked < XAU_STRUCTURAL_SL_MAX_PIVOTS; i++)
+   {
+      double lvl = 0.0;
+      if(signal == 1)
+      {
+         double l  = iLow(Symbol(), XAU_PRIMARY_DECISION_TF, i);
+         double lL = iLow(Symbol(), XAU_PRIMARY_DECISION_TF, i - 1);
+         double lR = iLow(Symbol(), XAU_PRIMARY_DECISION_TF, i + 1);
+         if(!(l > 0.0 && l <= lL && l <= lR)) continue;
+         if(l >= entryPrice) continue;              // wrong side of price
+         lvl = l;
+      }
+      else if(signal == -1)
+      {
+         double h  = iHigh(Symbol(), XAU_PRIMARY_DECISION_TF, i);
+         double hL = iHigh(Symbol(), XAU_PRIMARY_DECISION_TF, i - 1);
+         double hR = iHigh(Symbol(), XAU_PRIMARY_DECISION_TF, i + 1);
+         if(!(h > 0.0 && h >= hL && h >= hR)) continue;
+         if(h <= entryPrice) continue;              // wrong side of price
+         lvl = h;
+      }
+      else return;
+
+      pivotsChecked++;
+      double dist = (signal == 1 ? (entryPrice - lvl) : (lvl - entryPrice)) + buffer;
+      if(dist < lo || dist > hi)
+      {
+         PrintFormat("STRUCTURAL_SL_PIVOT_REJECTED | signal=%s pivotIndex=%d level=%.2f dist=%.2f bound=[%.2f,%.2f] reason=%s",
+                     signal == 1 ? "BUY" : "SELL", pivotsChecked, lvl, dist, lo, hi,
+                     dist < lo ? "TOO_TIGHT_TRYING_NEXT_PIVOT" : "TOO_WIDE_TRYING_NEXT_PIVOT");
+         continue;                                  // try the next pivot outward
+      }
+
+      source    = SL_M5_SWING_INVALIDATION;
+      rawLevel  = lvl;
+      finalDist = dist;
+      if(pivotsChecked > 1)
+         PrintFormat("STRUCTURAL_SL_PIVOT_FALLBACK_USED | signal=%s pivotIndex=%d level=%.2f dist=%.2f bound=[%.2f,%.2f] | nearest pivot was outside the sanity bound; a wider CONFIRMED swing invalidation was used instead of refusing the trade",
+                     signal == 1 ? "BUY" : "SELL", pivotsChecked, lvl, dist, lo, hi);
+      return;
+   }
+   // No confirmed pivot in the window satisfies the bound -> unchanged
+   // fail-closed behaviour (source stays SL_EMERGENCY_VOLATILITY_INVALIDATION,
+   // rawLevel stays 0.0, OpenTrade still refuses).
+   PrintFormat("STRUCTURAL_SL_NO_QUALIFYING_PIVOT | signal=%s pivotsExamined=%d lookbackBars=%d bound=[%.2f,%.2f] | entry refused (ATR-only stop remains prohibited)",
+               signal == 1 ? "BUY" : "SELL", pivotsChecked, lb, lo, hi);
 }
 
 // v6.24.4 TRADE HORIZON CLASSIFIER — reads the already-computed
@@ -15124,12 +15264,65 @@ ENUM_XAU_EXHAUSTION_STATE XAU_BucketExhaustion(const XAU_AdaptiveTransitionDecis
    return EXHAUSTION_LOW;
 }
 
-ENUM_XAU_TIMING_STATE XAU_BucketTiming(const XAU_AdaptiveTransitionDecision &td)
+// v6.28.6 FORENSIC FIX 1 (2026-09-06) -- DIRECTION-BLIND REVERSAL TIMING.
+// Runtime-proven root cause of 5 of the 10 matured candidates that reached
+// the entry-delay gate over 2026-09-02..09-04 dying with
+// "BOUNDED_WAIT_FOR_PULLBACK / pullback not complete" while their own
+// SmartEntryCautionGate evidence said the opposite (continuation=Y, votes up
+// to 7, fastOpposition=0, M5+M15 SUPPORTIVE, BOS aligned):
+//
+//   09-04 09:52  ASIA_BREAKOUT  BUY  A+ 7.57  votes=7 fastOpp=0  -> WAIT_FOR_PULLBACK
+//   09-04 10:02  TREND_PULLBACK BUY  A  4.50                     -> WAIT_FOR_PULLBACK
+//   09-04 10:12  TREND_PULLBACK BUY  A+ 5.98                     -> WAIT_FOR_PULLBACK
+//   09-04 10:22  TREND_PULLBACK BUY  A+ 7.45  votes=3 fastOpp=0  -> WAIT_FOR_PULLBACK
+//   09-02 13:42  TREND_PULLBACK BUY  A  5.16  votes=5 fastOpp=1  -> WAIT_FOR_PULLBACK
+//   09-02 15:12  TREND_PULLBACK BUY  A  5.01  votes=5 fastOpp=1  -> WAIT_FOR_PULLBACK
+//
+// Every one of those DIRECTION_TRANSITION_STATE lines reads
+// "signal=BUY ... dominant=BUY ... oppositeEntryAllowed=N oppositeConfirmedNow=N"
+// -- i.e. the candidate was on the DOMINANT side and there was no active
+// opposite/reversal entry at all.
+//
+// td.reversalWaitForPullback and td.oppositeDisplacement/oppositeReclaim are
+// computed inside XAU_AdaptiveMarketTransitionEngine's g_reversalOpportunity
+// block and describe ONLY the OPPOSITE-direction (reversal) trade's entry
+// location -- "the reversal's impulse already extended, a reversal entry here
+// would be chasing". They say nothing about whether the dominant-direction
+// candidate should wait. Because this bucket took no candidate direction, that
+// reversal-side verdict was applied to every candidate, became
+// thesis.timing=TIMING_WAIT_PULLBACK, became XAU_MarketThesisAction's
+// "pullback not complete" WAIT_FOR_PULLBACK (Priority 9), and
+// XAU_SmartEntryCautionGate held the candidate in bounded WAIT until its own
+// 180-second ceiling expired it -- never reaching XAU_FinalEntryArbiter.
+//
+// This is the same class of defect XAU_OwnerDirectionalLocation already exists
+// to fix for LOCATION ("prevents a global dominant-side label from blocking an
+// unrelated opposite candidate"); timing simply never got the same treatment.
+//
+// Fix: the two reversal-side WAIT branches now apply only to a candidate that
+// really is on the opposite side of the dominant campaign. Deliberately
+// minimal and non-weakening:
+//   * candidateDirection==0 (telemetry/snapshot callers, and any caller that
+//     genuinely has no direction) keeps the exact pre-fix behaviour;
+//   * an opposite-side candidate keeps the full pre-fix reversal gating;
+//   * the OPPOSITE_DIRECTION_CONFIRMED->TIMING_READY branch is untouched (making
+//     it directional would ADD a blocker, which is out of scope here);
+//   * a dominant-side candidate now falls through to its OWN evidence
+//     (moveAlreadyConsumedPct / continuationEntryPaused / continuationEntryAllowed),
+//     which can still return TIMING_LATE or TIMING_WAIT_CONFIRMATION. This does
+//     not blanket-approve anything -- it only stops one direction's campaign
+//     from answering the other direction's timing question.
+ENUM_XAU_TIMING_STATE XAU_BucketTiming(const XAU_AdaptiveTransitionDecision &td,
+                                       int candidateDirection = 0)
 {
+   // Unknown direction => preserve historical behaviour exactly (fail-closed).
+   bool reversalSideApplies = (candidateDirection == 0) ||
+                              (td.dominantDirection == 0) ||
+                              (candidateDirection != td.dominantDirection);
    if(td.lifecycle == OPPOSITE_DIRECTION_CONFIRMED && td.oppositeReclaim && td.oppositeRetestHeld)
       return TIMING_READY;
-   if(td.reversalWaitForPullback) return TIMING_WAIT_PULLBACK;
-   if(td.oppositeDisplacement && !td.oppositeReclaim) return TIMING_WAIT_RECLAIM;
+   if(reversalSideApplies && td.reversalWaitForPullback) return TIMING_WAIT_PULLBACK;
+   if(reversalSideApplies && td.oppositeDisplacement && !td.oppositeReclaim) return TIMING_WAIT_RECLAIM;
    if(td.moveAlreadyConsumedPct >= 90.0) return TIMING_LATE;
    if(td.continuationEntryPaused) return TIMING_WAIT_CONFIRMATION;
    if(td.continuationEntryAllowed) return TIMING_READY;
@@ -15269,7 +15462,7 @@ XAU_MarketThesis XAU_ComputeMarketThesis(int signal, bool isPyramidAdd, bool isC
    t.direction = signal;
    t.location    = XAU_BucketLocation(td);
    t.exhaustion  = XAU_BucketExhaustion(td);
-   t.timing      = XAU_BucketTiming(td);
+   t.timing      = XAU_BucketTiming(td, signal); // v6.28.6 FIX 1: reversal-side timing may only judge a reversal-side candidate
    t.htf         = XAU_BucketHTF(signal, td);
    t.pressure    = XAU_BucketPressure(td);
    string smcReason = "";
@@ -18189,7 +18382,15 @@ XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()
             if(g_transitionExhaustionDormantBars>=XAU_EXHAUSTION_DORMANCY_BARS_REQUIRED)
             {
                double before=g_transitionPersistentExhaustion;
-               g_transitionPersistentExhaustion=MathMax(rawExhaustion,g_transitionPersistentExhaustion-XAU_EXHAUSTION_DORMANCY_DECAY_STEP);
+               // v6.28.6 FIX 2: convergent step. A fixed step smaller than the
+               // arming gap can never close the gap (it just re-disarms the
+               // counter), which is why the v6.28.5 ratchet asymptoted ~10-15
+               // points above rawExhaustion forever. Half the remaining gap,
+               // floored at the original constant, converges on raw while
+               // still taking a full hour of sustained dormancy per step.
+               double dormancyStep=MathMax(XAU_EXHAUSTION_DORMANCY_DECAY_STEP,
+                                           (g_transitionPersistentExhaustion-rawExhaustion)*0.5);
+               g_transitionPersistentExhaustion=MathMax(rawExhaustion,g_transitionPersistentExhaustion-dormancyStep);
                g_transitionExhaustionDormantBars=0; // require a fresh full window before decaying again
                PrintFormat("EXHAUSTION_DORMANCY_DECAY | direction=%s before=%.2f after=%.2f rawExhaustion=%.2f gap=%.2f barsRequired=%d",
                            dir==1?"BUY":"SELL", before, g_transitionPersistentExhaustion, rawExhaustion,
@@ -21914,6 +22115,7 @@ void OnTick()
 
    // ============ GATE 1: REGIME ============
    double regimeQuality = DetectRegime();
+   g_lastRegimeQuality = regimeQuality; // v6.28.6 FIX 4: publish for lanes that must not call DetectRegime() themselves
    if(currentRegime == REGIME_DEAD)
       Print("REGIME_CONTEXT_ONLY: DEAD/quiet classification lowers score but does not independently veto");
 
@@ -28342,6 +28544,16 @@ bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = fal
 
    PrintFormat("OWNER_R_EXIT_DECISION | ticket=%I64u | authority=%s | decision=APPROVE | external_manual=%s",
                ticket, ctx, externalManual ? "true" : "false");
+
+   // v6.28.6 FIX 5: resolve the POSITION id (the key XAU_ResolveExitReason
+   // reads) BEFORE the close, while the position still exists.
+   ulong exitPosId = ticket;
+   if(PositionSelectByTicket(ticket))
+   {
+      ulong ident = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+      if(ident > 0) exitPosId = ident;
+   }
+
    bool ok = trade.PositionClose(ticket);
    if(!ok)
    {
@@ -28350,6 +28562,19 @@ bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = fal
       PrintFormat("OWNER_R_EXIT_CLOSE_FAILED | ticket=%I64u | authority=%s | ret=%u | ret_text=%s | err=%d",
                   ticket, ctx, trade.ResultRetcode(), trade.ResultRetcodeDescription(), GetLastError());
       return false;
+   }
+   // v6.28.6 FIX 5: guarantee every EA-initiated close carries a provable
+   // reason. Stamped only AFTER the broker accepted the close (so a rejected
+   // request can never leave a stale attribution behind), and only when no
+   // more specific reason was already registered for this position -- the
+   // richer strings the careful call sites publish are never overwritten.
+   // MT5 queues OnTradeTransaction until this handler returns, so this always
+   // lands before XAU_ResolveExitReason() pops it.
+   if(!XAU_HasPendingExitReason(exitPosId) && StringLen(ctx) > 0)
+   {
+      XAU_SetPendingExitReason(exitPosId, "EA_EXIT_AUTHORITY:" + ctx);
+      PrintFormat("EXIT_REASON_ATTRIBUTED | posId=%I64u | ticket=%I64u | authority=%s | source=CLOSE_AUTHORITY_FALLBACK | note=no call-site reason had been registered for this position",
+                  exitPosId, ticket, ctx);
    }
    PrintFormat("OWNER_R_EXIT_CLOSE_APPROVED | ticket=%I64u | authority=%s | external_manual=%s | ret=%u",
                ticket, externalManual ? "MANUAL_EXTERNAL" : ctx, externalManual ? "true" : "false",
@@ -45587,7 +45812,64 @@ void XAU_EvaluateOutlookAlignedEntry()
       if(slValidSide) explicitSL = clamped;
    }
 
-   string reason = StringFormat("OUTLOOK_ALIGNED outlookId=%s setup=%s regime=%s (Aurum-timed entry, thesis dir=%s)",
+   // v6.28.6 FORENSIC FIX 4 (2026-09-06) -- CROSS-LANE IDENTITY LEAK.
+   // OpenTrade() derives the identity it hands to the owner-policy gate from
+   // two PRIMARY-owned globals:
+   //     funnelSetup = lastSignalSetup      (written only at OnTick ~line 22597 and CheckReEntryOpportunity)
+   //     funnelGrade = g_pendingBrainGrade  (written only at the same two places)
+   // and then passes them to XAU_OwnerEntryPermission("FINAL_EXECUTION", ...),
+   // XAU_PermanentM10CategoryFinalAssertion(...) and XAU_TradeBrainPreEntry(...).
+   // This OUTLOOK_ALIGNED lane never wrote either one, so an Outlook entry was
+   // judged against whatever grade/setup the last PRIMARY or RE_ENTRY candidate
+   // happened to leave behind -- possibly hours old, possibly from the opposite
+   // direction, or an empty string on a freshly (re)started EA. Concretely that
+   // meant the permanent owner policies (PERM_BLOCK_ASIA_NON_A_PLUS,
+   // PERM_BLOCK_A_PLUS_RESET_PENDING, the grade-B category blocks) and the frozen
+   // owner location lookup were all evaluated on the WRONG candidate identity --
+   // XAU_AlignedCandidateLane(lastSignalSetup) resolves to lane 0 (PRIMARY),
+   // never lane 3 (OUTLOOK_ALIGNED), so it read another lane's frozen location.
+   //
+   // Fix: give this lane its own honest identity before OpenTrade() reads it,
+   // graded by the SAME shared engine PRIMARY uses -- no new grading logic, no
+   // new score scale, no bypass. Thesis confidence maps through the existing
+   // XAU_CanonicalM10SetupScore (55->5.0, 100->8.0) and then through the
+   // existing XAU_ComputeCombinedGradeForCandidate with the same live
+   // DetectRegime()/GetSessionQuality() inputs, so an Outlook candidate now
+   // faces the identical owner policy an equivalent PRIMARY candidate would.
+   {
+      // NOTE: DetectRegime() is deliberately NOT called here. It MUTATES the
+      // global currentRegime and reads bufEMAFast/bufATR/bufBB*, and this lane
+      // runs near the very top of OnTick(), BEFORE the entry scan loads those
+      // buffers for the current bar -- calling it would both read stale/unsized
+      // buffers and corrupt the regime the owner gate later relies on. The
+      // cached quality from the last COMPLETED scan is used instead.
+      double outlookSetupScore = XAU_CanonicalM10SetupScore(
+         MathMax(55.0, MathMin(100.0, g_outlookThesis.confidence)));
+      double outlookRegimeQuality  = g_lastRegimeQuality;
+      double outlookSessionQuality = GetSessionQuality();
+      string outlookGrade = "SKIP";
+      double outlookCombined = 0.0;
+      if(outlookRegimeQuality > 0.0)
+         outlookCombined = XAU_ComputeCombinedGradeForCandidate(dir, "OUTLOOK_ALIGNED",
+                                                                outlookSetupScore,
+                                                                outlookRegimeQuality,
+                                                                outlookSessionQuality,
+                                                                outlookGrade);
+      // Always publish the SETUP identity -- that alone fixes the lane lookup
+      // (XAU_AlignedCandidateLane("OUTLOOK_ALIGNED") == 3, not PRIMARY's 0) and
+      // stops a foreign candidate's name reaching the owner gate. The grade is
+      // only published once a completed scan has produced a real regime quality;
+      // until then it stays the fail-closed "SKIP", never an inherited "A+".
+      lastSignalSetup          = "OUTLOOK_ALIGNED";
+      g_pendingBrainGrade      = outlookGrade;
+      g_pendingBrainSetupScore = outlookSetupScore;
+      g_pendingBrainCombinedScore = outlookCombined;
+      PrintFormat("OUTLOOK_ALIGNED_IDENTITY | outlookId=%s dir=%s thesisConfidence=%.1f setupScore=%.2f combined=%.2f grade=%s | ownerPolicyNowEvaluatedOnThisCandidate=true",
+                  g_outlookThesis.outlookId, dir == 1 ? "BUY" : "SELL",
+                  g_outlookThesis.confidence, outlookSetupScore, outlookCombined, outlookGrade);
+   }
+
+   string reason = StringFormat("OUTLOOK_ALIGNED outlookId=%s setup=%s regime=%s (XauCloud-timed entry, thesis dir=%s)",
                                 g_outlookThesis.outlookId, setup.why, g_outlookThesis.regime, dir == 1 ? "BUY" : "SELL");
    bool opened = (explicitSL > 0.0)
                ? OpenTrade(dir, atr, reason, 1.0, false, explicitSL)
@@ -45733,11 +46015,23 @@ bool XAU_ProcessOutlookRecovery()
                                   signalId, dir == 1 ? "BUY" : "SELL", g_pendingOutlook.entryRef, price, remaining, timingWhy);
    Print("OUTLOOK_TRACE | ", readyMsg);
    BotMonitorActivity("OUTLOOK_RECOVERY_BETTER_TIMING", "COMMAND", readyMsg);
-   // No second delay: the original signal already completed its one allowed
-   // delay and this call still enters through canonical OpenTrade safety/SL/risk.
-   double outlookSL = XAU_ClampGoldStopToMaxDistance(price, g_pendingOutlook.outlookSL, dir);
-   bool opened = OpenTrade(dir, atr, "OUTLOOK_RECOVERY signalId=" + signalId + " (immediate current timing)",
-                           1.0, true, outlookSL);
+   // v6.28.6 FORENSIC FIX 6 (2026-09-06) -- LAST UNSANCTIONED OpenTrade PATH.
+   // This function has had no call site since v6.28.3, but it still held a
+   // live OpenTrade(..., isManualOverride=true, explicitSL) -- a manual-override
+   // entry that skips the Exhaustion/Reversal backstop and, like the 2026-09-02
+   // #3172481527 incident, never touches XAU_TimingAuthorityAllows or
+   // XAU_FinalEntryArbiter. Dead code with a loaded gun in it is exactly how
+   // that incident happened (a stray WIP build re-attached the removed call
+   // site). Neutralised at the function, the same way XAU_ProcessPendingOutlook
+   // was: it can no longer send an order under any call pattern, and the
+   // downstream ack/clear bookkeeping below is preserved unchanged so any
+   // residual state is still acknowledged and released rather than dangling.
+   // XAU_EvaluateOutlookAlignedEntry() remains the sole Outlook execution
+   // authority, gated by the shared TimingAuthority/FinalEntryArbiter pipeline.
+   g_lastOpenTradeFailureReason = "LEGACY_OUTLOOK_RECOVERY_EXECUTION_PERMANENTLY_RETIRED";
+   PrintFormat("OUTLOOK_TRACE | LEGACY_OUTLOOK_RECOVERY_EXECUTION_PERMANENTLY_RETIRED signalId=%s dir=%s -- no order sent; execution authority belongs solely to XAU_EvaluateOutlookAlignedEntry()",
+               signalId, dir == 1 ? "BUY" : "SELL");
+   bool opened = false;
    if(opened)
    {
       ulong posId = 0, dealTicket = trade.ResultDeal();
@@ -46025,7 +46319,7 @@ void BotMonitorPollCommands()
          g_outlookThesis.setupType         = "";
          g_outlookThesis.source            = "LEGACY_COMMAND";
          status = "SKIPPED";
-         result = StringFormat("OUTLOOK_CONTEXT_ONLY_NOT_AUTO_EXECUTED signalId=%s dir=%s (v6.28.3: Outlook is thesis context; Aurum's own entry intelligence decides if/when to trade it)",
+         result = StringFormat("OUTLOOK_CONTEXT_ONLY_NOT_AUTO_EXECUTED signalId=%s dir=%s (v6.28.3: Outlook is thesis context; XauCloud's own entry intelligence decides if/when to trade it)",
                                oSignalId, oDir == 1 ? "BUY" : "SELL");
          Print("OUTLOOK_TRACE THESIS_FROM_LEGACY_COMMAND | ", result);
       }

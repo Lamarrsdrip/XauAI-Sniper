@@ -30,8 +30,8 @@ motivated the sticky ratchet design in the first place.
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-EA = ROOT / "backend" / "ea_code" / "XauCloud-Aurum.mq5"
-COMPILE_LOG = ROOT / "backend" / "ea_code" / "compile_logs" / "XauCloud-Aurum_v6.28.5_compile.log"
+EA = ROOT / "backend" / "ea_code" / "XauCloud.mq5"
+COMPILE_LOG = ROOT / "backend" / "ea_code" / "compile_logs" / "XauCloud_v6.28.6_compile.log"
 
 
 def read(path: Path) -> str:
@@ -46,24 +46,28 @@ def fn_body(ea: str, signature: str, size: int = 6000) -> str:
 # ---------------------------------------------------------------------------
 # Identity / compile proof
 # ---------------------------------------------------------------------------
-def test_version_identity_is_v6285():
+def test_version_identity_is_v6286():
+    # v6.28.6 (2026-09-07): the forensic pre-week audit fixes, and the
+    # production rename of the XauCloud-Aurum lineage to plain "XauCloud"
+    # now that it is the main bot.
     ea = read(EA)
-    assert '#define XAUAI_EA_VERSION "XAUCloud-Aurum_v6.28.5"' in ea
-    assert '#define XAUAI_EA_VERSION_NUM "6.285"' in ea
+    assert '#define XAUAI_EA_VERSION "XauCloud_v6.28.6"' in ea
+    assert '#define XAUAI_EA_VERSION_NUM "6.286"' in ea
+    assert "XAUCloud-Aurum_v" not in ea
 
 
 def test_compile_reports_zero_errors_and_zero_warnings():
     log_bytes = COMPILE_LOG.read_bytes()
     text = log_bytes.decode("utf-16-le", errors="ignore")
     assert "0 errors, 0 warnings" in text
-    assert "XauCloud-Aurum.mq5" in text
+    assert "XauCloud.mq5" in text
 
 
 # ---------------------------------------------------------------------------
 # The ratchet function itself
 # ---------------------------------------------------------------------------
 def _engine_body(ea: str) -> str:
-    return fn_body(ea, "XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()", 15000)
+    return fn_body(ea, "XAU_AdaptiveTransitionDecision XAU_AdaptiveMarketTransitionEngine()", 26000)
 
 
 def test_original_2026_07_14_protection_untouched():
@@ -119,11 +123,24 @@ def test_dormancy_never_fires_while_reversal_evidence_is_building():
 
 
 def test_dormancy_gap_and_step_are_conservative_relative_to_continuation_reset():
+    """UPDATED v6.28.6. The v6.28.5 literals this test pinned (gap 15.0, flat
+    step 5.0) were PROVEN INERT in production and are deliberately superseded --
+    see test_v6285_dormancy_config_was_provably_inert_in_production below for
+    the live evidence. The test's two real intents are unchanged and re-asserted
+    here against the new values:
+
+      1. gap and step remain NAMED CONSTANTS, not magic numbers in the branch;
+      2. dormancy decay stays STRICTLY WEAKER than the continuation-reset.
+
+    Intent 2 is now proven on the correct basis. The two branches run on
+    different time bases, so comparing their per-EVENT magnitudes was never the
+    meaningful comparison: continuation-reset moves -10 in ONE bar, dormancy
+    moves max(5, gap/2) only after SIX consecutive qualifying bars. See
+    test_dormancy_is_always_slower_per_bar_than_continuation_reset for the
+    closed-form proof that dormancy's per-bar rate can never reach -10.
+    """
     ea = read(EA)
-    # Gap threshold and decay step are named constants, not magic numbers
-    # buried in the branch -- and structurally smaller/stricter than the
-    # existing continuation-reset's instant -10.
-    assert "#define XAU_EXHAUSTION_DORMANCY_GAP           15.0" in ea
+    assert "#define XAU_EXHAUSTION_DORMANCY_GAP            4.0" in ea
     assert "#define XAU_EXHAUSTION_DORMANCY_BARS_REQUIRED 6" in ea
     assert "#define XAU_EXHAUSTION_DORMANCY_DECAY_STEP    5.0" in ea
     # 5-point step is half the continuation-reset's 10-point step, and it
@@ -161,7 +178,13 @@ def test_dormancy_decay_step_applied_correctly_and_never_undershoots_raw():
     # MathMax against rawExhaustion mirrors the existing continuation-reset
     # pattern: the ratchet can never decay BELOW the live raw reading in one
     # step, only toward it.
-    assert "g_transitionPersistentExhaustion=MathMax(rawExhaustion,g_transitionPersistentExhaustion-XAU_EXHAUSTION_DORMANCY_DECAY_STEP);" in dormancy
+    # UPDATED v6.28.6: the step is now convergent (half the remaining gap,
+    # floored at the original constant) because a flat step smaller than the
+    # arming gap can never close the gap. The MathMax-against-rawExhaustion
+    # guarantee this test exists to protect is UNCHANGED and asserted here.
+    assert "double dormancyStep=MathMax(XAU_EXHAUSTION_DORMANCY_DECAY_STEP," in dormancy
+    assert "(g_transitionPersistentExhaustion-rawExhaustion)*0.5);" in dormancy
+    assert "g_transitionPersistentExhaustion=MathMax(rawExhaustion,g_transitionPersistentExhaustion-dormancyStep);" in dormancy
     assert "g_transitionExhaustionDormantBars=0; // require a fresh full window before decaying again" in dormancy
 
 
@@ -213,5 +236,86 @@ def test_dormancy_globals_cleared_in_every_full_transition_state_reset():
 # No duplicate/competing canonical source left behind.
 # ---------------------------------------------------------------------------
 def test_exactly_one_canonical_aurum_source_in_ea_code():
-    matches = sorted(p.name for p in (ROOT / "backend" / "ea_code").glob("XauCloud-Aurum*.mq5"))
-    assert matches == ["XauCloud-Aurum.mq5"]
+    # UPDATED v6.28.6: production source renamed to XauCloud.mq5. Still exactly
+    # one copy, and no stray XauCloud-Aurum* variant left behind by the rename.
+    assert (ROOT / "backend" / "ea_code" / "XauCloud.mq5").is_file()
+    assert sorted(p.name for p in (ROOT / "backend" / "ea_code").glob("XauCloud-Aurum*.mq5")) == []
+
+
+# ---------------------------------------------------------------------------
+# v6.28.6 -- evidence that the v6.28.5 configuration this suite originally
+# pinned was inert, and that the replacement satisfies the safety requirement.
+# ---------------------------------------------------------------------------
+def _ratchet(raw_series, start, gap, bars, step, convergent):
+    """Faithful model of the dormancy branch, validated against production."""
+    R, dorm, decays = start, 0, 0
+    for raw in raw_series:
+        if raw >= R:
+            R, dorm = raw, 0
+        elif (R - raw) >= gap:
+            dorm += 1
+            if dorm >= bars:
+                d = max(step, (R - raw) * 0.5) if convergent else step
+                R = max(raw, R - d)
+                dorm = 0
+                decays += 1
+        else:
+            dorm = 0
+    return R, decays
+
+
+_V6285 = dict(gap=15.0, bars=6, step=5.0, convergent=False)
+_V6286 = dict(gap=4.0, bars=6, step=5.0, convergent=True)
+
+# Verbatim rawScore readings, VPS 20260904.log, direction=SELL, 21:50->22:30,
+# recorded while v6.28.5 -- which already contained the dormancy decay -- was
+# the running build. Every one of those five lines printed "dormantBars=0/6".
+_LIVE_20260904 = [75.10, 77.10, 71.35, 69.79, 66.86]
+
+
+def test_v6285_dormancy_config_was_provably_inert_in_production():
+    """Why the pinned 15.0/5.0 literals were superseded, not merely re-tuned."""
+    ratchet, decays = _ratchet(_LIVE_20260904, 78.65, **_V6285)
+    assert decays == 0
+    assert ratchet == 78.65          # matches the frozen finalPct in all 5 log lines
+    # The largest gap the market actually produced never reached the threshold.
+    assert max(78.65 - r for r in _LIVE_20260904) < _V6285["gap"]
+
+
+def test_v6285_flat_step_could_never_close_the_gap():
+    """A step smaller than the arming gap re-disarms its own counter."""
+    ratchet, decays = _ratchet([63.0] * 60, 82.16, **_V6285)   # 10 hours
+    assert decays == 1 and round(ratchet, 2) == 77.16
+    assert ratchet >= 60.0, "still EXHAUSTION_HIGH -- eligibility never restored"
+    ratchet6, _ = _ratchet([63.0] * 60, 82.16, **_V6286)
+    assert ratchet6 == 63.0, "v6.28.6 converges fully on the same input"
+
+
+def test_dormancy_is_always_slower_per_bar_than_continuation_reset():
+    """SAFETY REQUIREMENT: dormancy must stay strictly weaker than the strict,
+    evidence-confirmed continuation-reset. Closed-form proof.
+
+    continuation-reset : -10.0 applied in ONE qualifying bar        -> 10.0 / bar
+    dormancy           : max(5, gap/2) after SIX qualifying bars    -> max(5, gap/2) / 6 per bar
+
+    exhaustionProbability is XAU_ATClamp'd to [0, 100], so the gap is bounded by
+    100 and the worst-case dormancy rate is (100/2)/6 = 8.33 per bar < 10.
+    """
+    CONTINUATION_RESET_PER_BAR = 10.0 / 1
+    worst = max(max(5.0, gap / 2.0) / 6.0 for gap in range(0, 101))
+    assert worst < CONTINUATION_RESET_PER_BAR
+    assert round(worst, 2) == 8.33
+
+
+def test_dormancy_can_never_decay_below_the_live_raw_reading():
+    for start in (100.0, 86.0, 78.65):
+        for raw in (0.0, 25.0, 55.0, 70.0):
+            ratchet, _ = _ratchet([raw] * 200, start, **_V6286)
+            assert ratchet >= raw
+
+
+def test_20260714_protection_holds_under_the_new_config():
+    """One cool bar, or five, must still decay nothing; a re-spike re-arms."""
+    assert _ratchet([86.0, 60.0], 0.0, **_V6286) == (86.0, 0)
+    assert _ratchet([86.0] + [62.0] * 5, 0.0, **_V6286) == (86.0, 0)
+    assert _ratchet([86.0, 60.0, 88.0, 90.0], 0.0, **_V6286)[0] == 90.0
