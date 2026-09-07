@@ -12,7 +12,9 @@ const ea = readFileSync(resolve(process.cwd(), "../backend/ea_code", sourceFilen
 
 describe("production EA Manual Trading Intelligence contract", () => {
   it("tests the exact source selected by the current production manifest", () => {
-    expect(sourceFilename).toBe("XauCloud-Aurum.mq5");
+    // Canary: this moves with the manifest on every production rename/promotion.
+    // v6.28.6 (2026-09-07) renamed the XauCloud-Aurum lineage to plain "XauCloud".
+    expect(sourceFilename).toBe("XauCloud.mq5");
   });
 
   it("puts its own fresh broker quote on every monitoring heartbeat", () => {

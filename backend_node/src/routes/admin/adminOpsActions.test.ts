@@ -1,6 +1,19 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeDb } from "../../testUtils/fakeDb.js";
+
+// The draft must reflect whatever release the manifest currently promotes.
+// Derived rather than pinned: hard-coding a version made this test fail on
+// every promotion (it still said v6.28.3 when v6.28.6 shipped), which is noise,
+// not a regression signal. Same manifest-reading convention as
+// services/manualTradingEaContract.test.ts.
+const CURRENT_VERSION = (
+  JSON.parse(readFileSync(resolve(process.cwd(), "../backend/ea_releases/manifest.json"), "utf8")) as {
+    current_version: string;
+  }
+).current_version;
 
 vi.hoisted(() => { process.env["ENVIRONMENT"] = "test"; });
 
@@ -38,11 +51,11 @@ describe("POST /admin/actions/ops/releases/version-email-draft", () => {
     expect(body.duplicate).toBe(false);
     expect(body.audience).toBe("active_license");
     expect(body.subject).toBe("A new XauCloud Bot update is available");
-    expect(body.title).toContain("v6.28.3");
+    expect(body.title).toContain(CURRENT_VERSION);
 
     const stored = await state.db.collection("admin_email_drafts").findOne({ source: "bot_version_release" });
     expect(stored).toBeTruthy();
-    expect(stored?.["source_version"]).toBe("v6.28.3");
+    expect(stored?.["source_version"]).toBe(CURRENT_VERSION);
     // Never actually sent -- only ever a draft record, exactly like a
     // human-composed draft would be, so it goes through the same existing
     // preview -> prepare-send -> confirm flow.
