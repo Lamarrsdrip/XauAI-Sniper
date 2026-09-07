@@ -126,7 +126,7 @@
     },
     "v6.28.2": {
       "version": "v6.28.2",
-      "edition": "XauCloud Aurum — No EA ShadowML",
+      "edition": "XauCloud Aurum \u2014 No EA ShadowML",
       "source_commit": "15bd8f20297de5305e413f44ef586eee4afdf45c",
       "build_timestamp": "2026-09-02T09:57:19Z",
       "compiler_result": "0 errors, 0 warnings (owner MetaEditor compile)",
@@ -140,7 +140,7 @@
     },
     "v6.28.3": {
       "version": "v6.28.3",
-      "edition": "XauCloud Aurum — Outlook+Aurum Unified Coordination",
+      "edition": "XauCloud Aurum \u2014 Outlook+Aurum Unified Coordination",
       "source_lineage": "v6.28.2 (XauCloud-Aurum.mq5, source_sha256 e3137ce0...) + Outlook+Aurum Unified Coordination fix: OUTLOOK_SIGNAL_OPEN no longer arms an autonomous auto-fire timer; a new OUTLOOK_ALIGNED candidate lane (lane 3 of g_alignedCandidates) converges into the same shared XAU_TimingAuthorityAllows/XAU_FinalEntryArbiter authorities every PRIMARY/RE_ENTRY/PYRAMID candidate must pass. PRIMARY/RE_ENTRY/PYRAMID/OpenTrade/XAU_FinalEntryArbiter/XAU_TimingAuthorityAllows are byte-identical to v6.28.2 (see tests/test_xau_v6283_outlook_aurum_unified.py).",
       "build_timestamp": "2026-09-03T00:20:00Z",
       "compiler_result": "0 errors, 0 warnings, 434494 ms elapsed (MetaEditor64.exe via Wine, Mac local build; QA-sweep fix applied 2026-09-03: XAU_FetchOutlookThesis now clears g_outlookThesis.active immediately when the backend reports no active thesis, instead of waiting for the stale thesis's own expiryTime to lapse)",
@@ -154,7 +154,7 @@
     },
     "v6.28.4": {
       "version": "v6.28.4",
-      "edition": "XauCloud Aurum — production forensic fix: OUTLOOK_ALIGNED timer churn + legacy auto-fire hard-neutralization",
+      "edition": "XauCloud Aurum \u2014 production forensic fix: OUTLOOK_ALIGNED timer churn + legacy auto-fire hard-neutralization",
       "source_lineage": "v6.28.3 (XauCloud-Aurum.mq5, source_sha256 4f3d84c6...) + two forensic fixes from the 2026-09-03 no-trades production investigation.",
       "build_timestamp": "2026-09-03T14:05:00Z",
       "compiler_result": "0 errors, 0 warnings, 58455 ms elapsed, cpu='AVX2 + FMA3' (MetaEditor64.exe via Wine, Mac local build, owner-triggered F7)",
@@ -163,7 +163,7 @@
       "ex5_filename": "XauCloud-Aurum.ex5",
       "ex5_sha256": "6c6b91740d1d3857b6d10dd79b7ee6064b604241b366dbbcbbf4aa8496e983d2",
       "customer_filename": "XauCloud-Aurum.ex5",
-      "release_notes": "Forensic fix from the 2026-09-03 \"no trades since yesterday\" production investigation. Root cause of the no-trades symptom itself was genuine market exhaustion (unrelated, pre-existing logic) — not a bug. Two real, narrowly-scoped defects found and fixed on top of v6.28.3: (1) the OUTLOOK_ALIGNED candidate lane (lane 3) reset its own entry timer on every tick the setup was not immediately executable, so it could never survive long enough to satisfy the shared 120-180s timing authority delay (live evidence: 11 candidate identities created and destroyed in 52 seconds) — fixed to preserve an armed candidate through ordinary wait ticks, mirroring PRIMARY's own caution-gate contract, while the shared timing authority's absolute ceiling remains the only thing that can expire a stale candidate; (2) XAU_ProcessPendingOutlook() (the pre-v6.28.3 auto-fire path) was only made unreachable by removing its OnTick() call site — an interim/WIP compiled build that still had that call wired in picked up a pre-fix armed legacy command and executed a real trade straight to OpenTrade() with zero calls into FinalEntryArbiter/TimingAuthorityAllows. Hard-neutralized at the function itself: any residual/loaded legacy Outlook state is now acknowledged SKIPPED and cleared immediately, and the function can no longer reach OpenTrade() under any circumstance, regardless of what calls it. PRIMARY/RE_ENTRY/PYRAMID/OpenTrade/XAU_FinalEntryArbiter/XAU_TimingAuthorityAllows remain byte-identical to v6.28.2/v6.28.3 (see tests/test_xau_v6283_outlook_aurum_unified.py, 25/25 passing, 7 new regression tests added for these two fixes).",
+      "release_notes": "Forensic fix from the 2026-09-03 \"no trades since yesterday\" production investigation. Root cause of the no-trades symptom itself was genuine market exhaustion (unrelated, pre-existing logic) \u2014 not a bug. Two real, narrowly-scoped defects found and fixed on top of v6.28.3: (1) the OUTLOOK_ALIGNED candidate lane (lane 3) reset its own entry timer on every tick the setup was not immediately executable, so it could never survive long enough to satisfy the shared 120-180s timing authority delay (live evidence: 11 candidate identities created and destroyed in 52 seconds) \u2014 fixed to preserve an armed candidate through ordinary wait ticks, mirroring PRIMARY's own caution-gate contract, while the shared timing authority's absolute ceiling remains the only thing that can expire a stale candidate; (2) XAU_ProcessPendingOutlook() (the pre-v6.28.3 auto-fire path) was only made unreachable by removing its OnTick() call site \u2014 an interim/WIP compiled build that still had that call wired in picked up a pre-fix armed legacy command and executed a real trade straight to OpenTrade() with zero calls into FinalEntryArbiter/TimingAuthorityAllows. Hard-neutralized at the function itself: any residual/loaded legacy Outlook state is now acknowledged SKIPPED and cleared immediately, and the function can no longer reach OpenTrade() under any circumstance, regardless of what calls it. PRIMARY/RE_ENTRY/PYRAMID/OpenTrade/XAU_FinalEntryArbiter/XAU_TimingAuthorityAllows remain byte-identical to v6.28.2/v6.28.3 (see tests/test_xau_v6283_outlook_aurum_unified.py, 25/25 passing, 7 new regression tests added for these two fixes).",
       "stable_status": true
     },
     "v6.28.5": {
@@ -182,7 +182,7 @@
     },
     "v6.28.6": {
       "version": "v6.28.6",
-      "edition": "XauCloud — production rename + pre-week forensic audit fixes (F1-F6)",
+      "edition": "XauCloud \u2014 production rename + pre-week forensic audit fixes (F1-F6)",
       "source_lineage": "v6.28.5 (XauCloud-Aurum.mq5, source_sha256 8ebe704e...) + the six defects proven in the 2026-09-06 forensic audit. Renamed from the XauCloud-Aurum lineage to plain \"XauCloud\": this is now the main bot.",
       "build_timestamp": "2026-09-07T00:00:00Z",
       "compiler_result": "0 errors, 0 warnings, 140863 ms elapsed, cpu='X64 Regular' (MetaEditor64.exe headless on the production VPS)",
