@@ -15,6 +15,30 @@ export const BotHeartbeatReqSchema = z.object({
   spread: z.number().optional().default(0),
   equity: z.number().optional().default(0),
   balance: z.number().optional().default(0),
+  // Apex infrastructure telemetry. z.object() strips unknown keys, so without these the
+  // EA's fields were silently dropped before Mongo and the dashboard showed "Free Margin —"
+  // for values the EA was in fact sending. Typed explicitly rather than passthrough.
+  build_id: z.string().optional().default(""),
+  free_margin: z.number().optional().default(0),
+  margin_level: z.number().optional().default(0),
+  basket_volume: z.number().optional().default(0),
+  campaign_active: z.boolean().optional().default(false),
+  campaign_state: z.string().optional().default("IDLE"),
+  layers: z.number().int().nonnegative().optional().default(0),
+  campaign_id: z.string().optional().default(""),
+  applied_revision: z.number().int().nonnegative().optional().default(0),
+  config_hash: z.string().optional().default(""),
+  observer_only: z.boolean().optional().default(false),
+  preflight_block: z.string().optional().default(""),
+  scan_gate: z.string().optional().default(""),
+  symbol_trade_mode: z.number().int().optional().default(0),
+  // v3.8.2 sizing audit: which profile actually ran, what the broker claimed, and what
+  // the owner configured. A margin_at_1_lot of 0 next to a huge broker_reported_leverage
+  // is the pathological signature that makes NORMAL use the reference leverage.
+  account_profile: z.string().optional().default(""),
+  broker_reported_leverage: z.number().optional().default(0),
+  configured_normal_reference_leverage: z.number().optional().default(0),
+  margin_at_1_lot: z.number().optional().default(0),
   daily_pnl: z.number().optional().default(0),
   drawdown: z.number().optional().default(0),
   open_positions: z.number().optional().default(0),
