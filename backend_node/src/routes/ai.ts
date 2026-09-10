@@ -4,7 +4,7 @@ import { appendFile, readFile } from "node:fs/promises";
 import { z } from "zod";
 import { getDb } from "../db.js";
 import { env } from "../env.js";
-import { normalizeLicenseKey, resolveMonitorLicense } from "../services/license.js";
+import { normalizeLicenseKey, resolveEaMonitorLicense } from "../services/license.js";
 import { LlmChat } from "../services/llmClient.js";
 import {
   aiBudgetAllows,
@@ -281,7 +281,7 @@ export async function registerAiRoutes(app: FastifyInstance): Promise<void> {
   app.post("/ai/manage-position", async (request, reply) => {
     const req = PositionCheckRequestSchema.parse(request.body);
     if (!req.account_id) return reply.code(400).send({ detail: "account_id is required" });
-    await resolveMonitorLicense(req.pin, req.account_id);
+    await resolveEaMonitorLicense(req.pin, req.account_id);
 
     try {
       if (!LLM_KEY) return { action: "HOLD", reason: "AI not configured", consensus_source: "local_only_cost_guard" };
@@ -421,7 +421,7 @@ Decision (HOLD / CLOSE / LOCK)? JSON only.`;
   app.post("/ai/analyze", async (request, reply) => {
     const req = AIAnalysisRequestSchema.parse(request.body);
     if (!req.account_id) return reply.code(400).send({ detail: "account_id is required" });
-    await resolveMonitorLicense(req.pin, req.account_id);
+    await resolveEaMonitorLicense(req.pin, req.account_id);
 
     try {
       const { pin: _pin, ...payload } = req;
@@ -648,7 +648,7 @@ Decision (HOLD / CLOSE / LOCK)? JSON only.`;
   app.post("/ai/memory/record", async (request, reply) => {
     const record = TradeMemoryRecordSchema.parse(request.body);
     if (!record.account) return reply.code(400).send({ detail: "account is required" });
-    const lic = await resolveMonitorLicense(record.pin, record.account);
+    const lic = await resolveEaMonitorLicense(record.pin, record.account);
     try {
       const { pin: _pin, ...rest } = record;
       const data: Record<string, unknown> = { ...rest };
@@ -680,7 +680,7 @@ Decision (HOLD / CLOSE / LOCK)? JSON only.`;
   // GET /ai/memory/report -- server.py:5225
   app.get("/ai/memory/report", async (request) => {
     const q = z.object({ pin: z.string().optional().default(""), account: z.string().optional().default(""), limit: z.coerce.number().optional().default(2000) }).parse(request.query);
-    const lic = await resolveMonitorLicense(q.pin, q.account);
+    const lic = await resolveEaMonitorLicense(q.pin, q.account);
     try {
       let rows = await loadTradeMemory(Math.max(100, Math.min(q.limit, 10000)));
       rows = rows.filter(
@@ -734,7 +734,7 @@ Decision (HOLD / CLOSE / LOCK)? JSON only.`;
     const pin = String(data["pin"] ?? "");
     const account = String(data["account_id"] ?? data["account"] ?? "");
     if (!account) return reply.code(400).send({ detail: "account_id is required" });
-    const lic = await resolveMonitorLicense(pin, account);
+    const lic = await resolveEaMonitorLicense(pin, account);
     try {
       const { pin: _pin, ...rest } = data;
       const record = { ...rest, license_id: lic?.["id"] ?? "", account_id: account, recorded_at: new Date().toISOString() };
@@ -753,7 +753,7 @@ Decision (HOLD / CLOSE / LOCK)? JSON only.`;
   // GET /ai/feedback/stats -- server.py:5302
   app.get("/ai/feedback/stats", async (request) => {
     const q = z.object({ pin: z.string().optional().default(""), account: z.string().optional().default("") }).parse(request.query);
-    const lic = await resolveMonitorLicense(q.pin, q.account);
+    const lic = await resolveEaMonitorLicense(q.pin, q.account);
     try {
       if (!existsSync(AI_FEEDBACK_PATH)) return { total: 0, message: "no feedback recorded yet" };
       const content = await readFile(AI_FEEDBACK_PATH, "utf8");

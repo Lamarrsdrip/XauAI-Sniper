@@ -73,37 +73,36 @@ const REQUEST_TIMEOUT_MS = 15000;
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await getToken();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  let res: Response;
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+  if (init.signal?.aborted) controller.abort(); else init.signal?.addEventListener('abort', abortFromCaller, { once: true });
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, REQUEST_TIMEOUT_MS);
   try {
-    res = await fetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(init.headers || {}),
-      },
-    });
-  } catch {
-    throw new ApiError(0, customerErrorMessage(0));
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE_URL}${path}`, { ...init, signal: controller.signal, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.headers || {}) } });
+    } catch (error) {
+      // A caller cancellation is intentional control flow (screen change,
+      // newer request superseding this one), not a customer-facing outage.
+      // The timeout remains a normal network failure and covers body parsing
+      // too because the timer is cleared only in finally.
+      if (!timedOut && init.signal?.aborted) throw error;
+      throw new ApiError(0, customerErrorMessage(0));
+    }
+    const isJson = res.headers.get('content-type')?.includes('application/json');
+    const body = isJson ? await res.json() : null;
+    if (!res.ok) {
+      if (res.status === 401) { await clearToken(); unauthorizedHandler?.(); }
+      const detail = isJson && body && typeof body === 'object' ? (body as Record<string, unknown>)['detail'] : undefined;
+      throw new ApiError(res.status, customerErrorMessage(res.status, detail));
+    }
+    return body as T;
   } finally {
     clearTimeout(timer);
+    init.signal?.removeEventListener('abort', abortFromCaller);
   }
+} // ASTRA_REPAIR_V2_6287 / 018
 
-  const isJson = res.headers.get('content-type')?.includes('application/json');
-  const body = isJson ? await res.json() : null;
-
-  if (!res.ok) {
-    if (res.status === 401) {
-      await clearToken();
-      unauthorizedHandler?.();
-    }
-    const detail = isJson && body && typeof body === 'object' ? (body as Record<string, unknown>)['detail'] : undefined;
-    throw new ApiError(res.status, customerErrorMessage(res.status, detail));
-  }
-  return body as T;
-}
 
 export const api = {
   get: <T>(path: string) => apiFetch<T>(path, { method: 'GET' }),

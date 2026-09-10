@@ -122,6 +122,17 @@ export class FakeCollection {
     return { matchedCount: 0, upsertedCount: 0, modifiedCount: 0 };
   }
 
+  async updateMany(query: Doc, update: { $set?: Doc; $inc?: Doc }) {
+    const rows = this.docs.filter((d) => matches(d, query));
+    for (const row of rows) {
+      Object.assign(row, structuredClone(update.$set ?? {}));
+      for (const [key, value] of Object.entries(update.$inc ?? {})) {
+        row[key] = Number(row[key] ?? 0) + Number(value);
+      }
+    }
+    return { matchedCount: rows.length, modifiedCount: rows.length };
+  }
+
   async findOneAndUpdate(query: Doc, update: { $set?: Doc }) {
     const found = this.docs.find((d) => matches(d, query));
     if (!found) return null;
@@ -138,6 +149,12 @@ export class FakeCollection {
     if (index === -1) return { deletedCount: 0 };
     this.docs.splice(index, 1);
     return { deletedCount: 1 };
+  }
+
+  async deleteMany(query: Doc): Promise<{ deletedCount: number }> {
+    const before = this.docs.length;
+    this.docs = this.docs.filter((d) => !matches(d, query));
+    return { deletedCount: before - this.docs.length };
   }
 
   async createIndex(): Promise<string> { return "fake_index"; }

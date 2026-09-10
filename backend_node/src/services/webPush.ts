@@ -71,40 +71,31 @@ export async function saveSubscription(userId: string, subscription: Record<stri
   }
 }
 
-export async function removeSubscription(endpoint: string): Promise<void> {
-  try { if (endpoint) await getDb().collection(COLL).deleteOne({ endpoint: String(endpoint) }); } catch { /* ignore */ }
-}
+export async function removeSubscription(endpoint: string, userId?: string): Promise<void> {
+  try {
+    if (!endpoint) return;
+    const query: Record<string, unknown> = { endpoint: String(endpoint) };
+    if (userId) query["user_id"] = String(userId);
+    await getDb().collection(COLL).deleteOne(query);
+  } catch { /* explicit unsubscribe/prune remains best-effort */ }
+} // ASTRA_REPAIR_V2_6287 / 026
 
 export interface WebPushPayload { title: string; body: string; deep_link?: string; tag?: string; category?: string }
 
 /** Best-effort push to every subscription a user has. Never throws; prunes dead (404/410) subs. */
 export async function sendWebPushToUser(userId: string, payload: WebPushPayload): Promise<number> {
-  try {
-    const lib = await wp();
-    const keys = await getVapidKeys();
-    if (!lib || !keys) return 0;
-    lib.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
-    const subs = await getDb().collection(COLL).find({ user_id: String(userId) }).toArray();
-    if (!subs.length) return 0;
-    const body = JSON.stringify({
-      title: payload.title,
-      body: payload.body,
-      deep_link: payload.deep_link ?? "/command/dashboard",
-      tag: payload.tag ?? payload.category ?? "xaucloud",
-      category: payload.category ?? "SYSTEM",
-    });
-    let sent = 0;
-    await Promise.all(subs.map(async (sub: any) => {
-      try {
-        await lib.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, body);
-        sent += 1;
-      } catch (err: any) {
-        const code = err?.statusCode;
-        if (code === 404 || code === 410) await removeSubscription(sub.endpoint);
-      }
-    }));
-    return sent;
-  } catch {
-    return 0;
-  }
-}
+  const lib = await wp(); const keys = await getVapidKeys();
+  if (!lib || !keys) return 0;
+  lib.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
+  const subs = await getDb().collection(COLL).find({ user_id: String(userId) }).toArray();
+  if (!subs.length) return 0;
+  const body = JSON.stringify({ title: payload.title, body: payload.body, deep_link: payload.deep_link ?? "/command/dashboard", tag: payload.tag ?? payload.category ?? "xaucloud", category: payload.category ?? "SYSTEM" });
+  const outcomes = await Promise.allSettled(subs.map(async (sub: any) => {
+    try { await lib.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, body); return 1; }
+    catch (err: any) { if (err?.statusCode === 404 || err?.statusCode === 410) { await removeSubscription(sub.endpoint); return 0; } throw err; }
+  }));
+  const sent = outcomes.reduce((n, r) => n + (r.status === "fulfilled" ? r.value : 0), 0);
+  const retryable = outcomes.find((r) => r.status === "rejected");
+  if (sent === 0 && retryable?.status === "rejected") throw retryable.reason;
+  return sent;
+} // ASTRA_REPAIR_V2_6287 / 022

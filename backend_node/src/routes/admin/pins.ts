@@ -131,7 +131,24 @@ export async function registerAdminPinsRoutes(app: FastifyInstance): Promise<voi
 
     const previousAccount = String(lic["mt5_account"] ?? "");
     const nowIso = new Date().toISOString();
-    await db.collection("pin_licenses").updateOne({ pin }, { $set: { mt5_account: null, is_used: false, activated_at: null } });
+    if (previousAccount) {
+      const licenseId = String(lic["id"] ?? "");
+      const authorityRows = await db.collection("lease_terminal_authority").find({}, { projection: { _id: 1 } }).toArray();
+      const prefix = `${licenseId}:`;
+      const accountToken = `:${previousAccount}:`;
+      const authorityIds = authorityRows.map((row) => row["_id"]).filter((id) => String(id ?? "").startsWith(prefix) && String(id ?? "").includes(accountToken));
+      if (authorityIds.length > 0) {
+        await db.collection("lease_terminal_authority").updateMany(
+          { _id: { $in: authorityIds as never[] } },
+          { $set: { surrendered: true, lease_expires_at: nowIso, updated_at: nowIso, reset_revoked_at: nowIso }, $inc: { revocation_epoch: 1 } },
+        );
+      }
+      await db.collection("lease_documents").updateMany(
+        { license_id: licenseId, account_login: previousAccount },
+        { $set: { revoked_at: nowIso, revoked_reason: "LICENSE_ACCOUNT_RESET" } },
+      );
+    }
+    await db.collection("pin_licenses").updateOne({ pin }, { $set: { mt5_account: null, is_used: false, activated_at: null } }); // ASTRA_REPAIR_V2_6287 / 028
     await db.collection("license_reset_audit_log").insertOne({
       id: randomUUID(),
       pin,

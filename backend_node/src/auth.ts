@@ -4,6 +4,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { env } from "./env.js";
 import { getDb } from "./db.js";
 
+import { ObjectId } from "mongodb";
 const JWT_ALGORITHM = "HS256" as const;
 
 // -------------------------------------------------------------------
@@ -78,21 +79,22 @@ export async function requireAdmin(request: FastifyRequest, reply: FastifyReply)
   if (!token) return void reply.code(401).send({ detail: "Not authenticated" });
   try {
     const payload = jwt.verify(token, env.JWT_SECRET, { algorithms: [JWT_ALGORITHM] }) as AccessTokenPayload;
-    const user = await getDb().collection("users").findOne(
-      { email: payload.email },
-      { projection: { _id: 0, password_hash: 0 } },
-    );
-    if (!user || user["role"] !== "admin") {
-      return void reply.code(403).send({ detail: "Admin access required" });
+    if (payload.type !== "access" || typeof payload.sub !== "string" || !ObjectId.isValid(payload.sub)) {
+      return void reply.code(401).send({ detail: "Invalid admin session" });
     }
+    const email = String(payload.email ?? "").trim().toLowerCase();
+    const user = await getDb().collection("users").findOne(
+      { _id: new ObjectId(payload.sub), email, role: "admin", is_active: { $ne: false } },
+      { projection: { password_hash: 0 } },
+    );
+    if (!user) return void reply.code(403).send({ detail: "Admin access required" });
     (request as FastifyRequest & { admin?: Record<string, unknown> }).admin = user;
   } catch (err) {
-    if (err instanceof jwt.TokenExpiredError) {
-      return void reply.code(401).send({ detail: "Token expired" });
-    }
+    if (err instanceof jwt.TokenExpiredError) return void reply.code(401).send({ detail: "Token expired" });
     return void reply.code(401).send({ detail: "Invalid token" });
   }
-}
+} // ASTRA_REPAIR_V2_6287 / 001
+
 
 /** Port of server.py's `get_cloud_user` FastAPI dependency, as a Fastify preHandler. */
 export async function requireCloudUser(request: FastifyRequest, reply: FastifyReply): Promise<void> {

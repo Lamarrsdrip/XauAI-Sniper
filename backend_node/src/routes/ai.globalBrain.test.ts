@@ -18,6 +18,7 @@ vi.mock("../db.js", () => ({ getDb: () => state.db }));
 vi.mock("../services/license.js", () => ({
   normalizeLicenseKey: (k: string) => k,
   resolveMonitorLicense: vi.fn(async () => ({ id: "lic-test" })),
+  resolveEaMonitorLicense: vi.fn(async () => ({ id: "lic-test", mt5_account: "mocked-by-test" })),
 }));
 // The only true external I/O boundary this route has besides Mongo -- stub
 // it to return a deterministic, controllable verdict so the test exercises

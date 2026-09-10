@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { getDb } from "../../db.js";
-import { normalizeLicenseKey, resolveMonitorLicense } from "../../services/license.js";
+import { normalizeLicenseKey, resolveEaMonitorLicense } from "../../services/license.js";
 import { storeBotActivity } from "../../services/botActivity.js";
 import { sendPatternActivityNotification, sendTradeActivityNotification } from "../../services/notifications.js";
 import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
@@ -16,7 +16,7 @@ export async function registerCloudActivityRoutes(app: FastifyInstance): Promise
   app.post("/cloud/monitor/activity", async (request) => {
     const req = BotActivityReqSchema.parse(request.body);
     const licenseKey = normalizeLicenseKey(req.license_key || req.pin || "");
-    const lic = await resolveMonitorLicense(licenseKey, req.account || "");
+    const lic = await resolveEaMonitorLicense(licenseKey, req.account || "");
 
     const details: Record<string, unknown> = { ...(req.details ?? {}) };
     for (const field of ACTIVITY_DETAIL_FIELDS) {

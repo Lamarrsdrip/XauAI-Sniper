@@ -19,6 +19,14 @@ class FakeCollection {
     Object.assign(found, structuredClone(update.$set ?? {}));
     return { matchedCount: 1, modifiedCount: 1 };
   }
+  async updateMany(query: Doc, update: { $set?: Doc; $inc?: Doc }) {
+    const rows = this.docs.filter((d) => Object.entries(query).every(([k, v]) => d[k] === v));
+    for (const row of rows) {
+      Object.assign(row, structuredClone(update.$set ?? {}));
+      for (const [key, value] of Object.entries(update.$inc ?? {})) row[key] = Number(row[key] ?? 0) + Number(value);
+    }
+    return { matchedCount: rows.length, modifiedCount: rows.length };
+  }
   async insertOne(doc: Doc) { this.docs.push(structuredClone(doc)); return { acknowledged: true }; }
   async deleteOne(query: Doc) {
     const i = this.docs.findIndex((d) => Object.entries(query).every(([k, v]) => d[k] === v));
@@ -32,7 +40,7 @@ class FakeCollection {
     return { deletedCount: before - this.docs.length };
   }
   aggregate() { return { toArray: async () => [{}] }; }
-  find() { return { sort: () => ({ limit: () => ({ toArray: async () => this.docs }) }) }; }
+  find() { return { toArray: async () => this.docs, sort: () => ({ limit: () => ({ toArray: async () => this.docs }) }) }; }
 }
 class FakeDb {
   private map = new Map<string, FakeCollection>();

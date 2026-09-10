@@ -8,8 +8,8 @@ break existing installations.
 
 The authoritative production source, customer artifact, and SHA-256 are
 selected exclusively by `backend/ea_releases/manifest.json`. The current
-production release is v6.27.2: `XauCloud-60pips.mq5` and
-`XauCloud-60pips.ex5`.
+production release is v6.28.6: `XauCloud.mq5` and `XauCloud.ex5`.
+The v6.28.7 Astra repair source remains a candidate until a genuine MetaEditor compile and release promotion are recorded. // ASTRA_REPAIR_V2_6287 / 029
 `backend/ea_code/XAUUSD_AI_Sniper_EA.mq5` is a compatibility symlink for
 historical tools and tests, not a second production source.
 

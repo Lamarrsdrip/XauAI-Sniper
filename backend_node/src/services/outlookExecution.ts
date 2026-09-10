@@ -128,26 +128,51 @@ export async function publishOutlookThesis(doc: Record<string, unknown> | null, 
   };
 
   const db = getDb();
-  const collection = db.collection("cloud_outlook_thesis");
-
-  // One active thesis per (account, symbol): a fresh actionable doc
-  // supersedes whatever thesis was previously active for that account, but
-  // never overwrites/erases history -- the prior active row (if any and if
-  // genuinely different) is marked SUPERSEDED rather than deleted, so
-  // Trade Brain / analytics can still see the full lineage.
-  await collection.updateMany(
-    { account, symbol: thesis.symbol, status: "ACTIVE", outlook_id: { $ne: thesis.outlook_id } },
-    { $set: { status: "SUPERSEDED", updated_at: nowIso } },
-  );
-
-  await collection.updateOne(
+  const history = db.collection("cloud_outlook_thesis");
+  const pointers = db.collection("cloud_outlook_current");
+  thesis.id = `thesis:${account}:${thesis.symbol}:${thesis.outlook_id}`;
+  const orderingKey = `${thesis.generated_at}|${thesis.outlook_id}`;
+  const { created_at: _createdAt, status: _status, ...mutableThesis } = thesis;
+  await history.updateOne(
     { account, symbol: thesis.symbol, outlook_id: thesis.outlook_id },
-    { $set: thesis },
+    { $setOnInsert: { created_at: nowIso }, $set: { ...mutableThesis, status: "SUPERSEDED", updated_at: nowIso } },
     { upsert: true },
   );
-
-  return thesis.id;
+  const pointerId = `${account}:${thesis.symbol}`;
+  try {
+    await pointers.updateOne(
+      { _id: pointerId as unknown as never, $or: [{ ordering_key: { $lt: orderingKey } }, { ordering_key: { $exists: false } }] },
+      { $set: { account, symbol: thesis.symbol, outlook_id: thesis.outlook_id, license_key: thesis.license_key, generated_at: thesis.generated_at, ordering_key: orderingKey, expires_at: thesis.expires_at, updated_at: nowIso } },
+      { upsert: true },
+    );
+  } catch (error) {
+    if ((error as { code?: number }).code !== 11000) throw error;
+  }
+  const current = await pointers.findOne({ _id: pointerId as unknown as never });
+  if (String(current?.["outlook_id"] ?? "") === thesis.outlook_id) {
+    await history.updateOne(
+      { account, symbol: thesis.symbol, outlook_id: thesis.outlook_id },
+      { $set: { status: "ACTIVE", updated_at: nowIso } },
+    );
+    await history.updateMany(
+      { account, symbol: thesis.symbol, status: "ACTIVE", outlook_id: { $ne: thesis.outlook_id } },
+      { $set: { status: "SUPERSEDED", updated_at: nowIso } },
+    );
+  }
+  return thesis.id; // ASTRA_REPAIR_V2_6287 / 006
 }
 
 /** Back-compat alias -- see publishOutlookThesis's own doc comment. */
 export const enqueueIfActionable = publishOutlookThesis;
+
+
+export async function revokeOutlookThesis(account: string, symbol: string, outlookId: string, terminalStatus: string): Promise<void> {
+  const db = getDb(); const nowIso = new Date().toISOString();
+  await db.collection("cloud_outlook_thesis").updateOne(
+    { account, symbol, outlook_id: outlookId },
+    { $set: { status: terminalStatus, terminal_at: nowIso, updated_at: nowIso } },
+  );
+  await db.collection("cloud_outlook_current").deleteOne(
+    { _id: `${account}:${symbol}` as unknown as never, outlook_id: outlookId },
+  );
+} // ASTRA_REPAIR_V2_6287 / 007

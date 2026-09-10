@@ -19,15 +19,78 @@ const PLAN_LABEL: Record<SignalPlan, string> = { SIGNALS_WEEKLY: "Weekly Signals
  * fulfillment functions below. Never mints a pin_licenses row -- a signal
  * subscription is a separate product from the lifetime bot license.
  */
-async function activateSubscriptionForReference(reference: string, tx: Record<string, unknown>, gateway: string, amountFormatted: string): Promise<void> {
+async function activateSubscriptionForReference(reference: string, tx: Record<string, unknown>): Promise<Awaited<ReturnType<typeof activateSignalSubscription>>> {
   const planId = tx["plan_id"] as SignalPlan;
-  const planLabel = PLAN_LABEL[planId];
-  const sub = await activateSignalSubscription(reference, tx, planId);
+  return activateSignalSubscription(reference, tx, planId);
+}
+
+const DELIVERY_CLAIM_STALE_MS = 10 * 60_000;
+
+/** Email and admin notification are durable tasks, separate from entitlement creation. */
+async function deliverFulfillmentNotifications(reference: string, tx: Record<string, unknown>, gateway: string, providerReference = reference): Promise<void> {
+  const db = getDb();
   const buyerEmail = String(tx["buyer_email"] ?? "");
   const buyerName = String(tx["buyer_name"] ?? "");
-  const emailSent = await sendSignalSubscriptionEmail(buyerEmail, buyerName, planLabel, sub.activated_at, sub.expires_at);
-  await recordSubscriptionEmailResult(reference, buyerName, buyerEmail, planLabel, emailSent);
-  await notifyAdminNewSignalSale(reference, buyerName, buyerEmail, amountFormatted, planLabel, gateway);
+  const amountFormatted = `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`;
+  const staleBefore = new Date(Date.now() - DELIVERY_CLAIM_STALE_MS).toISOString();
+  const retryableClaim = (field: string, claimedField: string) => ({
+    reference,
+    payment_status: "FULFILLED",
+    $or: [
+      { [field]: { $in: ["PENDING", "RETRYABLE"] } },
+      { [field]: "SENDING", [claimedField]: { $lt: staleBefore } },
+    ],
+  });
+
+  const emailClaim = await db.collection("payment_transactions").updateOne(
+    retryableClaim("fulfillment_email_status", "fulfillment_email_claimed_at"),
+    { $set: { fulfillment_email_status: "SENDING", fulfillment_email_claimed_at: new Date().toISOString() } },
+  );
+  if (emailClaim.modifiedCount === 1) {
+    try {
+      let sent: boolean;
+      if (isSignalPlan(tx["plan_id"])) {
+        const sub = await activateSubscriptionForReference(reference, tx);
+        const label = PLAN_LABEL[tx["plan_id"]];
+        sent = await sendSignalSubscriptionEmail(buyerEmail, buyerName, label, sub.activated_at, sub.expires_at);
+        await recordSubscriptionEmailResult(reference, buyerName, buyerEmail, label, sent);
+      } else {
+        const pin = String(tx["pin_generated"] ?? "");
+        sent = await sendPinEmail(buyerEmail, buyerName, pin);
+        await recordFulfillmentEmailResult(reference, buyerName, buyerEmail, pin, sent);
+      }
+      await db.collection("payment_transactions").updateOne(
+        { reference, fulfillment_email_status: "SENDING" },
+        { $set: { fulfillment_email_status: sent ? "SENT" : "RETRYABLE", fulfillment_email_attempted_at: new Date().toISOString() } },
+      );
+    } catch {
+      await db.collection("payment_transactions").updateOne(
+        { reference, fulfillment_email_status: "SENDING" },
+        { $set: { fulfillment_email_status: "RETRYABLE", fulfillment_email_attempted_at: new Date().toISOString() } },
+      );
+    }
+  }
+
+  const adminClaim = await db.collection("payment_transactions").updateOne(
+    retryableClaim("fulfillment_admin_status", "fulfillment_admin_claimed_at"),
+    { $set: { fulfillment_admin_status: "SENDING", fulfillment_admin_claimed_at: new Date().toISOString() } },
+  );
+  if (adminClaim.modifiedCount === 1) {
+    try {
+      const sent = isSignalPlan(tx["plan_id"])
+        ? await notifyAdminNewSignalSale(reference, buyerName, buyerEmail, amountFormatted, PLAN_LABEL[tx["plan_id"]], gateway)
+        : await notifyAdminNewSale(reference, buyerName, buyerEmail, amountFormatted, String(tx["pin_generated"] ?? ""), gateway, "", providerReference);
+      await db.collection("payment_transactions").updateOne(
+        { reference, fulfillment_admin_status: "SENDING" },
+        { $set: { fulfillment_admin_status: sent === false ? "RETRYABLE" : "SENT", fulfillment_admin_attempted_at: new Date().toISOString() } },
+      );
+    } catch {
+      await db.collection("payment_transactions").updateOne(
+        { reference, fulfillment_admin_status: "SENDING" },
+        { $set: { fulfillment_admin_status: "RETRYABLE", fulfillment_admin_attempted_at: new Date().toISOString() } },
+      );
+    }
+  }
 }
 
 /** Port of server.py:638 `generate_unique_pin`. */
@@ -139,20 +202,20 @@ export async function approveBankTransfer(reference: string, adminEmail: string)
   // must be recognized from payment_status alone -- not just the
   // pin_generated marker, which only applies to BOT_LIFETIME orders.
   if (tx["payment_status"] === "FULFILLED") {
+    await deliverFulfillmentNotifications(reference, tx, "Bank Transfer");
     return { status: "already_fulfilled", pin: tx["pin_generated"] ? String(tx["pin_generated"]) : undefined };
   }
   const effective = await bankTransferEffectiveStatus(tx);
-  if (!["BANK_TRANSFER_SUBMITTED", "UNDER_ADMIN_REVIEW"].includes(effective)) {
+  if (!["BANK_TRANSFER_SUBMITTED", "UNDER_ADMIN_REVIEW", "FULFILLING"].includes(effective)) {
     return { status: "not_ready", effective };
   }
-  const won = await transitionPaymentState(reference, [effective], "FULFILLING");
+  const won = effective === "FULFILLING" || await transitionPaymentState(reference, [effective], "FULFILLING");
   if (!won) {
     const fresh = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
     if (fresh?.["payment_status"] === "FULFILLED") return { status: "already_fulfilled", pin: fresh["pin_generated"] ? String(fresh["pin_generated"]) : undefined };
     return { status: "conflict" };
   }
 
-  const amountFormatted = `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`;
   if (isSignalPlan(tx["plan_id"])) {
     // Same safety ordering as the lifetime-license path below: the actual
     // entitlement artifact (here, the signal_subscriptions row) is created
@@ -160,24 +223,49 @@ export async function approveBankTransfer(reference: string, adminEmail: string)
     // stays in FULFILLING (not falsely marked done), so it is never
     // reported "already_fulfilled" on retry without ever having granted
     // anything.
-    await activateSubscriptionForReference(reference, tx, "Bank Transfer", amountFormatted);
+    const sub = await activateSubscriptionForReference(reference, tx);
     await db.collection("payment_transactions").updateOne(
-      { reference },
-      { $set: { payment_status: "FULFILLED", approved_by: adminEmail, approved_at: new Date().toISOString() } },
+      { reference, payment_status: "FULFILLING" },
+      { $set: { payment_status: "FULFILLED", approved_by: adminEmail, approved_at: new Date().toISOString(), entitlement_fulfilled_at: new Date().toISOString(), signal_activated_at: sub.activated_at, signal_expires_at: sub.expires_at, fulfillment_email_status: "PENDING", fulfillment_admin_status: "PENDING" } },
     );
+    const fresh = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
+    if (fresh) await deliverFulfillmentNotifications(reference, fresh, "Bank Transfer");
     return { status: "approved" };
   }
 
   const pin = await mintLicenseForReference(reference, tx, "BankTransfer", "BANK_TRANSFER");
   await db.collection("payment_transactions").updateOne(
     { reference },
-    { $set: { pin_generated: pin, payment_status: "FULFILLED", approved_by: adminEmail, approved_at: new Date().toISOString() } },
+    { $set: { pin_generated: pin, payment_status: "FULFILLED", approved_by: adminEmail, approved_at: new Date().toISOString(), entitlement_fulfilled_at: new Date().toISOString(), fulfillment_email_status: "PENDING", fulfillment_admin_status: "PENDING" } },
   );
-  const emailSent = await sendPinEmail(String(tx["buyer_email"] ?? ""), String(tx["buyer_name"] ?? ""), pin);
-  await recordFulfillmentEmailResult(reference, String(tx["buyer_name"] ?? ""), String(tx["buyer_email"] ?? ""), pin, emailSent);
-  await notifyAdminNewSale(reference, String(tx["buyer_name"] ?? ""), String(tx["buyer_email"] ?? ""), amountFormatted, pin, "Bank Transfer", "", reference);
+  const fresh = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
+  if (fresh) await deliverFulfillmentNotifications(reference, fresh, "Bank Transfer");
   return { status: "approved", pin };
 }
+
+async function resumeDurableFulfillmentV2(reference: string, tx: Record<string, unknown>, source: string, gatewayLabel: string): Promise<FulfillResult | null> {
+  const db = getDb(); let status = String(tx["payment_status"] ?? "");
+  if (!["PAID", "FULFILLING"].includes(status)) return null;
+  if (status === "PAID") {
+    await transitionPaymentState(reference, ["PAID"], "FULFILLING");
+    const fresh = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
+    if (!fresh) return { status: "not_found" }; tx = fresh; status = String(tx["payment_status"] ?? "");
+  }
+  if (status === "FULFILLED") return { status: "success", pin: tx["pin_generated"] ? String(tx["pin_generated"]) : undefined, buyer_name: String(tx["buyer_name"] ?? "") };
+  if (status !== "FULFILLING") return { status: "pending" };
+  if (isSignalPlan(tx["plan_id"])) {
+    const sub = await activateSubscriptionForReference(reference, tx);
+    await db.collection("payment_transactions").updateOne({ reference, payment_status: "FULFILLING" }, { $set: { payment_status: "FULFILLED", entitlement_fulfilled_at: new Date().toISOString(), signal_activated_at: sub.activated_at, signal_expires_at: sub.expires_at, fulfillment_email_status: "PENDING", fulfillment_admin_status: "PENDING" } });
+    const fresh = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
+    if (fresh) await deliverFulfillmentNotifications(reference, fresh, gatewayLabel);
+    return { status: "success", buyer_name: String(tx["buyer_name"] ?? "") };
+  }
+  const pin = await mintLicenseForReference(reference, tx, source);
+  await db.collection("payment_transactions").updateOne({ reference, payment_status: "FULFILLING" }, { $set: { pin_generated: pin, payment_status: "FULFILLED", entitlement_fulfilled_at: new Date().toISOString(), fulfillment_email_status: "PENDING", fulfillment_admin_status: "PENDING" } });
+  const fresh = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
+  if (fresh) await deliverFulfillmentNotifications(reference, fresh, gatewayLabel);
+  return { status: "success", pin, buyer_name: String(tx["buyer_name"] ?? "") };
+} // ASTRA_REPAIR_V2_6287 / 021
 
 /**
  * Port of server.py:1517 `_fulfill_payment` -- the single canonical
@@ -191,8 +279,11 @@ export async function fulfillPayment(reference: string, source: string): Promise
   let tx = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
   if (!tx) return { status: "not_found" };
   if (tx["payment_status"] === "FULFILLED") {
+    await deliverFulfillmentNotifications(reference, tx, "Paystack");
     return { status: "success", pin: tx["pin_generated"] ? String(tx["pin_generated"]) : undefined, buyer_name: String(tx["buyer_name"] ?? "") };
   }
+  const resumed = await resumeDurableFulfillmentV2(reference, tx, source, "Paystack");
+  if (resumed) return resumed;
 
   const wonVerifying = await transitionPaymentState(reference, ["PENDING"], "VERIFYING");
   if (!wonVerifying) {
@@ -252,16 +343,17 @@ export async function fulfillPayment(reference: string, source: string): Promise
     // entitlement before marking FULFILLED, so a failure here can never be
     // silently reported "already fulfilled" on retry without ever granting
     // anything.
-    await activateSubscriptionForReference(reference, tx, "Paystack", `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`);
-    await db.collection("payment_transactions").updateOne({ reference }, { $set: { payment_status: "FULFILLED" } });
+    const sub = await activateSubscriptionForReference(reference, tx);
+    await db.collection("payment_transactions").updateOne({ reference, payment_status: "FULFILLING" }, { $set: { payment_status: "FULFILLED", entitlement_fulfilled_at: new Date().toISOString(), signal_activated_at: sub.activated_at, signal_expires_at: sub.expires_at, fulfillment_email_status: "PENDING", fulfillment_admin_status: "PENDING" } });
+    const fresh = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
+    if (fresh) await deliverFulfillmentNotifications(reference, fresh, "Paystack");
     return { status: "success", buyer_name: String(tx["buyer_name"] ?? "") };
   }
 
   const pin = await mintLicenseForReference(reference, tx, source);
-  await db.collection("payment_transactions").updateOne({ reference }, { $set: { pin_generated: pin, payment_status: "FULFILLED" } });
-  const emailSent = await sendPinEmail(String(tx["buyer_email"] ?? ""), String(tx["buyer_name"] ?? ""), pin);
-  await recordFulfillmentEmailResult(reference, String(tx["buyer_name"] ?? ""), String(tx["buyer_email"] ?? ""), pin, emailSent);
-  await notifyAdminNewSale(reference, String(tx["buyer_name"] ?? ""), String(tx["buyer_email"] ?? ""), `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`, pin, "Paystack", "", reference);
+  await db.collection("payment_transactions").updateOne({ reference, payment_status: "FULFILLING" }, { $set: { pin_generated: pin, payment_status: "FULFILLED", entitlement_fulfilled_at: new Date().toISOString(), fulfillment_email_status: "PENDING", fulfillment_admin_status: "PENDING" } });
+  const fresh = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
+  if (fresh) await deliverFulfillmentNotifications(reference, fresh, "Paystack");
   return { status: "success", pin, buyer_name: String(tx["buyer_name"] ?? "") };
 }
 
@@ -276,8 +368,11 @@ export async function fulfillNombaPayment(reference: string, source: string): Pr
   let tx = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
   if (!tx) return { status: "not_found" };
   if (tx["payment_status"] === "FULFILLED") {
+    await deliverFulfillmentNotifications(reference, tx, "Nomba");
     return { status: "success", pin: tx["pin_generated"] ? String(tx["pin_generated"]) : undefined, buyer_name: String(tx["buyer_name"] ?? "") };
   }
+  const resumed = await resumeDurableFulfillmentV2(reference, tx, source, "Nomba");
+  if (resumed) return resumed;
 
   const wonVerifying = await transitionPaymentState(reference, ["PENDING"], "VERIFYING");
   if (!wonVerifying) {
@@ -326,28 +421,20 @@ export async function fulfillNombaPayment(reference: string, source: string): Pr
   if (isSignalPlan(tx["plan_id"])) {
     // Same safety ordering as mintLicenseForReference below: grant the
     // entitlement before marking FULFILLED.
-    await activateSubscriptionForReference(reference, tx, "Nomba", `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`);
+    const sub = await activateSubscriptionForReference(reference, tx);
     await db
       .collection("payment_transactions")
-      .updateOne({ reference }, { $set: { payment_status: "FULFILLED", nomba_transaction_id: result.nomba_transaction_id } });
+      .updateOne({ reference, payment_status: "FULFILLING" }, { $set: { payment_status: "FULFILLED", nomba_transaction_id: result.nomba_transaction_id, entitlement_fulfilled_at: new Date().toISOString(), signal_activated_at: sub.activated_at, signal_expires_at: sub.expires_at, fulfillment_email_status: "PENDING", fulfillment_admin_status: "PENDING" } });
+    const fresh = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
+    if (fresh) await deliverFulfillmentNotifications(reference, fresh, "Nomba", result.nomba_transaction_id ?? reference);
     return { status: "success", buyer_name: String(tx["buyer_name"] ?? "") };
   }
 
   const pin = await mintLicenseForReference(reference, tx, source, "NOMBA");
   await db
     .collection("payment_transactions")
-    .updateOne({ reference }, { $set: { pin_generated: pin, payment_status: "FULFILLED", nomba_transaction_id: result.nomba_transaction_id } });
-  const emailSent = await sendPinEmail(String(tx["buyer_email"] ?? ""), String(tx["buyer_name"] ?? ""), pin);
-  await recordFulfillmentEmailResult(reference, String(tx["buyer_name"] ?? ""), String(tx["buyer_email"] ?? ""), pin, emailSent);
-  await notifyAdminNewSale(
-    reference,
-    String(tx["buyer_name"] ?? ""),
-    String(tx["buyer_email"] ?? ""),
-    `₦${(Number(tx["amount_kobo"] ?? 0) / 100).toLocaleString("en-US")}`,
-    pin,
-    "Nomba",
-    "",
-    result.nomba_transaction_id ?? reference,
-  );
+    .updateOne({ reference, payment_status: "FULFILLING" }, { $set: { pin_generated: pin, payment_status: "FULFILLED", nomba_transaction_id: result.nomba_transaction_id, entitlement_fulfilled_at: new Date().toISOString(), fulfillment_email_status: "PENDING", fulfillment_admin_status: "PENDING" } });
+  const fresh = await db.collection("payment_transactions").findOne({ reference }, { projection: { _id: 0 } });
+  if (fresh) await deliverFulfillmentNotifications(reference, fresh, "Nomba", result.nomba_transaction_id ?? reference);
   return { status: "success", pin, buyer_name: String(tx["buyer_name"] ?? "") };
 }

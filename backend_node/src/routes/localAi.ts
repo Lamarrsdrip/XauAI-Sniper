@@ -4,7 +4,7 @@ import { MongoServerError } from "mongodb";
 import { z } from "zod";
 import { getDb } from "../db.js";
 import { clientIp, rateLimit } from "../auth.js";
-import { LicenseError, normalizeLicenseKey, resolveMonitorLicense } from "../services/license.js";
+import { LicenseError, normalizeLicenseKey, resolveEaMonitorLicense } from "../services/license.js";
 import { parseSnapshot, snapshotSignature, SchemaError, type Snapshot } from "../services/localAiSchema.js";
 import {
   CONFIDENCE_THRESHOLD,
@@ -43,7 +43,7 @@ const WorkerCompleteRequestSchema = z.object({
 
 /** Port of remote_relay.py's `tenant()` helper -- resolves the license and rate-limits by tenant + IP. */
 async function tenant(pin: string, account: string, request: FastifyRequest): Promise<{ lic: Record<string, unknown>; licenseId: string }> {
-  const lic = await resolveMonitorLicense(normalizeLicenseKey(pin), account);
+  const lic = await resolveEaMonitorLicense(normalizeLicenseKey(pin), account);
   const licenseId = String(lic["id"] ?? "").trim();
   if (!licenseId) throw new LicenseError(403, "License identity is unavailable.");
   const opaque = createHash("sha256").update(`${licenseId}:${account}`).digest("hex").slice(0, 24);

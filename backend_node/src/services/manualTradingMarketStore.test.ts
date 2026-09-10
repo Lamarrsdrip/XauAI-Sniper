@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type Update = { key: Record<string, unknown>; update: Record<string, unknown>[] };
-const state = vi.hoisted(() => ({ writes: [] as Update[] }));
+const state = vi.hoisted(() => ({ writes: [] as Update[], samples: [] as Record<string, unknown>[] }));
 
 vi.mock("../db.js", () => ({
   getDb: () => ({
-    collection: () => ({
-      updateOne: async (key: Record<string, unknown>, update: Record<string, unknown>[]) => {
-        state.writes.push({ key, update });
+    collection: (name: string) => ({
+      updateOne: async (key: Record<string, unknown>, update: Record<string, unknown>[] | Record<string, unknown>) => {
+        if (name === "manual_trading_broker_quote_samples") state.samples.push(key);
+        else state.writes.push({ key, update: update as Record<string, unknown>[] });
       },
     }),
   }),
@@ -16,7 +17,7 @@ vi.mock("../db.js", () => ({
 const { recordVerifiedManualTradingQuote } = await import("./manualTradingMarketStore.js");
 
 describe("Manual Trading Intelligence broker quote persistence", () => {
-  beforeEach(() => { state.writes = []; });
+  beforeEach(() => { state.writes = []; state.samples = []; });
 
   it("accepts XAUUSDm as canonical XAUUSD and retains its broker symbol", async () => {
     const receipt = await recordVerifiedManualTradingQuote({
@@ -26,10 +27,11 @@ describe("Manual Trading Intelligence broker quote persistence", () => {
     expect(state.writes).toHaveLength(3);
     for (const write of state.writes) {
       expect(write.key).toMatchObject({ account: "476396807", symbol: "XAUUSD" });
-      expect(write.update).toHaveLength(1);
-      expect(write.update[0]?.$set).toMatchObject({ brokerSymbol: "XAUUSDm", source: "ea-stream(spot)", c: 4380.2895 });
-      expect((write.update[0]?.$set as Record<string, unknown>)?.samples).toEqual({ $add: [{ $ifNull: ["$samples", 0] }, 1] });
+      expect(write.update).toHaveLength(2);
+      expect(write.update[0]?.$set).toMatchObject({ source: "ea-stream(spot)" });
+      expect(write.update[1]?.$set).toEqual({ samples: { $size: "$sampleKeys" } });
     }
+    expect(state.samples).toHaveLength(1);
     expect(receipt).toMatchObject({ persisted: true, normalizedSymbol: "XAUUSD", sourceAt: "2026-08-23T12:00:00.000Z", close: 4380.2895 });
   });
 
@@ -39,6 +41,7 @@ describe("Manual Trading Intelligence broker quote persistence", () => {
       marketThesis: { live_bid: 4380, live_ask: 4381 },
     });
     expect(state.writes).toHaveLength(0);
+    expect(state.samples).toHaveLength(0);
     expect(receipt).toMatchObject({ persisted: false, normalizedSymbol: "EURUSD" });
   });
 });

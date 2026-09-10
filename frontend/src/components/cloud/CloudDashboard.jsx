@@ -689,6 +689,8 @@ function LicensedCloudDashboard({ entitlement, entFailed }) {
   const [propFirmBusy, setPropFirmBusy] = useState(false);
   const propFirmDirty = useRef(false);
   const [analytics, setAnalytics] = useState(null);
+  const [pollHealth, setPollHealth] = useState({ lastSuccess: 0, failed: false });
+  const pollSeq = useRef(0); // ASTRA_REPAIR_V2_6287 / 014
   // v6.25.6 XAU-027 (Codex handover) -- stable idempotency key per confirm-
   // dialog instance. Regenerates only when modalCommand itself changes
   // (a genuinely new action/dialog open), so a double-click on the same
@@ -701,27 +703,27 @@ function LicensedCloudDashboard({ entitlement, entFailed }) {
   const propFirmIdempotencyKey = useRef(null);
 
   const fetchAll = useCallback(async () => {
-    try {
-      const [meR, stR, actR, cmdR, licR, pfR, anR] = await Promise.all([
-        commandAxios.get("/cloud/auth/me"),
-        commandAxios.get("/cloud/monitor/status"),
-        commandAxios.get("/cloud/monitor/activity", { params:{ kind:filter, limit:100 } }),
-        commandAxios.get("/cloud/command/recent",   { params:{ limit:20 } }),
-        commandAxios.get("/cloud/license/status"),
-        commandAxios.get("/cloud/prop-firm/config"),
-        commandAxios.get("/cloud/performance/analytics").catch(()=>({ data:null })),
-      ]);
-      setMe(meR.data); setStatus(stR.data);
-      setEvents(actR.data.events||[]); setCommands(cmdR.data.commands||[]);
-      setLicense(licR.data); setPropFirm(pfR.data);
-      setAnalytics(anR.data);
-      if (!propFirmDirty.current && pfR.data?.requested)
-        setPropFirmForm({ ...DEFAULT_PROP, ...pfR.data.requested });
-      if (licR.data?.license?.activation_key) setLicenseInput(licR.data.license.activation_key);
-    } catch (err) {
-      if (err.response?.status===401) navigate("/command/login");
-    } finally { setLoading(false); }
-  }, [filter, navigate]);
+    const seq = ++pollSeq.current;
+    const results = await Promise.allSettled([
+      commandAxios.get("/cloud/auth/me"), commandAxios.get("/cloud/monitor/status"),
+      commandAxios.get("/cloud/monitor/activity", { params:{ kind:filter, limit:100 } }),
+      commandAxios.get("/cloud/command/recent", { params:{ limit:20 } }), commandAxios.get("/cloud/license/status"),
+      commandAxios.get("/cloud/prop-firm/config"), commandAxios.get("/cloud/performance/analytics"),
+    ]);
+    if (seq !== pollSeq.current) return;
+    const [meR, stR, actR, cmdR, licR, pfR, anR] = results;
+    const unauthorized = results.find((r)=>r.status==="rejected" && r.reason?.response?.status===401);
+    if (unauthorized) { navigate("/command/login"); return; }
+    if (meR.status==="fulfilled") setMe(meR.value.data);
+    if (stR.status==="fulfilled") { setStatus(stR.value.data); setPollHealth({ lastSuccess: Date.now(), failed:false }); }
+    else setPollHealth((p)=>({ ...p, failed:true }));
+    if (actR.status==="fulfilled") setEvents(actR.value.data.events||[]);
+    if (cmdR.status==="fulfilled") setCommands(cmdR.value.data.commands||[]);
+    if (licR.status==="fulfilled") { setLicense(licR.value.data); if (licR.value.data?.license?.activation_key) setLicenseInput(licR.value.data.license.activation_key); }
+    if (pfR.status==="fulfilled") { setPropFirm(pfR.value.data); if (!propFirmDirty.current && pfR.value.data?.requested) setPropFirmForm({ ...DEFAULT_PROP, ...pfR.value.data.requested }); }
+    if (anR.status==="fulfilled") setAnalytics(anR.value.data);
+    setLoading(false);
+  }, [filter, navigate]); // ASTRA_REPAIR_V2_6287 / 014
 
   useEffect(()=>{ fetchAll(); const id=setInterval(fetchAll,8000); return()=>clearInterval(id); },[fetchAll]);
 
@@ -771,9 +773,10 @@ function LicensedCloudDashboard({ entitlement, entFailed }) {
 
   const heartbeat   = status?.heartbeat || {};
   const licenseInfo = license?.license || status?.license || {};
-  const online      = Boolean(status && !status.offline && heartbeat.account_number);
+  const pollFresh   = !pollHealth.failed && pollHealth.lastSuccess > 0 && (Date.now()-pollHealth.lastSuccess)<90000;
+  const online      = Boolean(status && !status.offline && heartbeat.account_number && pollFresh);
   const tradingOk   = Boolean(heartbeat.algo_trading && heartbeat.trading_allowed && heartbeat.mt5_connected);
-  const statusText  = online ? humanBotState(heartbeat.bot_state, heartbeat.open_positions||0, tradingOk, online) : "NO HEARTBEAT";
+  const statusText  = pollHealth.failed ? "STALE / POLL FAILED" : (online ? humanBotState(heartbeat.bot_state, heartbeat.open_positions||0, tradingOk, online) : "NO HEARTBEAT");
   // Customer-facing product identity -- ALWAYS from the authoritative
   // release manifest via status.release, never the raw heartbeat.ea_version
   // (an internal EA build/experiment string, e.g.

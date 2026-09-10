@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db.js";
 import { requireAdmin } from "../auth.js";
-import { resolveMonitorLicense } from "../services/license.js";
+import { resolveEaMonitorLicense } from "../services/license.js";
 import { buildShadowCandidateObservation, recordGlobalBrainObservation } from "../services/globalBrainIngest.js";
 import { lookupBucket } from "../services/globalBrainEstimator.js";
 import { getCurrentChampion } from "../services/globalBrainRegistry.js";
@@ -334,7 +334,7 @@ export async function registerMlRoutes(app: FastifyInstance): Promise<void> {
   app.post("/ml/patterns/save", async (request, reply) => {
     const req = PatternDataSchema.parse(request.body);
     if (!req.account_id) return reply.code(400).send({ detail: "account_id is required" });
-    const lic = await resolveMonitorLicense(req.pin, req.account_id);
+    const lic = await resolveEaMonitorLicense(req.pin, req.account_id);
     try {
       const ownerId = lic?.["id"] ?? "";
       const key = `${ownerId}_${req.symbol}`;
@@ -364,7 +364,7 @@ export async function registerMlRoutes(app: FastifyInstance): Promise<void> {
   app.post("/ml/patterns/load", async (request, reply) => {
     const req = PatternDataSchema.parse(request.body);
     if (!req.account_id) return reply.code(400).send({ detail: "account_id is required" });
-    const lic = await resolveMonitorLicense(req.pin, req.account_id);
+    const lic = await resolveEaMonitorLicense(req.pin, req.account_id);
     try {
       const key = `${lic?.["id"] ?? ""}_${req.symbol}`;
       const doc = await getDb().collection("ml_cloud_patterns").findOne({ key }, { projection: { _id: 0 } });

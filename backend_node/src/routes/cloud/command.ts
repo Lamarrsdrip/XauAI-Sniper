@@ -4,7 +4,7 @@ import { MongoServerError } from "mongodb";
 import { z } from "zod";
 import { getDb } from "../../db.js";
 import { requireCloudUser, rateLimit } from "../../auth.js";
-import { normalizeLicenseKey, resolveMonitorLicense } from "../../services/license.js";
+import { normalizeLicenseKey, resolveEaMonitorLicense } from "../../services/license.js";
 import { storeBotActivity } from "../../services/botActivity.js";
 import { verifyCommandLicense } from "../../services/commandLicense.js";
 import { normalizePropFirmConfig } from "../../services/propFirmConfig.js";
@@ -137,7 +137,7 @@ export async function registerCloudCommandRoutes(app: FastifyInstance): Promise<
   app.get("/cloud/command/pending", async (request) => {
     const q = PendingQuerySchema.parse(request.query);
     const raw = normalizeLicenseKey(q.license_key || q.pin || "");
-    const lic = await resolveMonitorLicense(raw, q.account || "");
+    const lic = await resolveEaMonitorLicense(raw, q.account || "");
     const expired = await expireStalePendingCommands();
 
     const n = Math.max(1, Math.min(Math.trunc(q.limit), 10));
@@ -165,7 +165,7 @@ export async function registerCloudCommandRoutes(app: FastifyInstance): Promise<
   app.post("/cloud/command/ack", async (request, reply) => {
     const req = CloudCommandAckReqSchema.parse(request.body);
     const raw = normalizeLicenseKey(req.license_key || req.pin || "");
-    const lic = await resolveMonitorLicense(raw, req.account || "");
+    const lic = await resolveEaMonitorLicense(raw, req.account || "");
     const status = (req.status || "").toUpperCase().trim();
     if (!VALID_ACK_STATUSES.has(status)) {
       return reply.code(400).send({ detail: "Invalid command acknowledgement status." });

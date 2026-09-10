@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FakeDb } from "../../testUtils/fakeDb.js";
 
 vi.hoisted(() => {
   process.env["ENVIRONMENT"] = "test";
@@ -7,37 +8,11 @@ vi.hoisted(() => {
 
 type Doc = Record<string, unknown>;
 
-class FakeCollection {
-  docs: Doc[] = [];
-  find(query: Doc) {
-    const rows = this.docs.filter((d) =>
-      Object.entries(query).every(([k, v]) => {
-        if (v && typeof v === "object" && !Array.isArray(v) && "$gt" in (v as Doc)) return String(d[k]) > String((v as Doc)["$gt"]);
-        return d[k] === v;
-      }),
-    );
-    return {
-      sort: (sortSpec: Doc) => {
-        const [[key, dir]] = Object.entries(sortSpec);
-        const sorted = [...rows].sort((a, b) => (dir === -1 ? 1 : -1) * String(a[key]).localeCompare(String(b[key])));
-        return { limit: (_n: number) => ({ next: async () => structuredClone(sorted[0]) ?? null }) };
-      },
-    };
-  }
-}
-
-class FakeDb {
-  private map = new Map<string, FakeCollection>();
-  collection(name: string): FakeCollection {
-    if (!this.map.has(name)) this.map.set(name, new FakeCollection());
-    return this.map.get(name)!;
-  }
-}
-
 const state = vi.hoisted(() => ({ db: null as unknown as FakeDb }));
 vi.mock("../../db.js", () => ({ getDb: () => state.db }));
 vi.mock("../../services/license.js", () => ({
   resolveMonitorLicense: vi.fn(async () => null),
+  resolveEaMonitorLicense: vi.fn(async () => ({ pin: "TESTPIN" })),
   normalizeLicenseKey: (v: string) => (v || "").trim().toUpperCase(),
 }));
 
@@ -58,6 +33,7 @@ function thesisDoc(overrides: Doc = {}): Doc {
     symbol: "XAUUSD",
     direction: "BUY",
     status: "ACTIVE",
+    license_key: "TESTPIN",
     generated_at: new Date(now - 5 * 60_000).toISOString(),
     expires_at: new Date(now + 55 * 60_000).toISOString(),
     ...overrides,

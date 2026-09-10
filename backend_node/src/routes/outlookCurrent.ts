@@ -20,7 +20,7 @@ export async function registerOutlookCurrentRoutes(app: FastifyInstance): Promis
     const licenseKey = lic ? normalizeLicenseKey(String(lic["pin"] ?? "")) : "";
     if (!account && !licenseKey) return { outlook: null, reason: "license_not_linked" };
 
-    const scope = account && licenseKey ? { $or: [{ account }, { license_key: licenseKey }] } : account ? { account } : { license_key: licenseKey };
+    const scope = account && licenseKey ? { account, license_key: licenseKey } : account ? { account } : { license_key: licenseKey }; // ASTRA_REPAIR_V2_6287 / 024
     const outlooks = db.collection("cloud_market_outlooks");
 
     const doc = await outlooks.findOne(scope, { projection: { _id: 0 }, sort: { generated_at: -1 } });

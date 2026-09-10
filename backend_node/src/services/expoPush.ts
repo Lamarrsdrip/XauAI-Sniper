@@ -91,7 +91,7 @@ export async function sendExpoPushToUser(userId: string, payload: { title: strin
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(messages),
     });
-    if (!res.ok) return 0;
+    if (!res.ok) throw new Error(`Expo push transport failed (${res.status}).`);
     const json = (await res.json()) as { data?: { status: string; id?: string; details?: { error?: string } }[] };
     const tickets = json.data ?? [];
 
@@ -130,8 +130,8 @@ export async function sendExpoPushToUser(userId: string, payload: { title: strin
     }
 
     return pending.length;
-  } catch {
-    return 0;
+  } catch (error) {
+    throw error; // ASTRA_REPAIR_V2_6287 / 022
   }
 }
 

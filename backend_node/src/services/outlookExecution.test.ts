@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FakeDb } from "../testUtils/fakeDb.js";
 
 /**
  * Outlook+Aurum Unified Coordination fix (2026-09-02). Regression coverage
@@ -8,52 +9,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 type Doc = Record<string, unknown>;
-
-class FakeCollection {
-  docs: Doc[] = [];
-
-  async insertOne(doc: Doc) {
-    this.docs.push(structuredClone(doc));
-    return { acknowledged: true };
-  }
-
-  async updateOne(query: Doc, update: { $set?: Doc }, options: { upsert?: boolean } = {}) {
-    const found = this.docs.find((d) => Object.entries(query).every(([k, v]) => d[k] === v));
-    if (found) {
-      Object.assign(found, structuredClone(update.$set ?? {}));
-      return { matchedCount: 1, upsertedCount: 0 };
-    }
-    if (options.upsert) {
-      this.docs.push({ ...structuredClone(query), ...structuredClone(update.$set ?? {}) });
-      return { matchedCount: 0, upsertedCount: 1 };
-    }
-    return { matchedCount: 0, upsertedCount: 0 };
-  }
-
-  async updateMany(query: Doc, update: { $set?: Doc }) {
-    const matches = this.docs.filter((d) =>
-      Object.entries(query).every(([k, v]) => {
-        if (v && typeof v === "object" && !Array.isArray(v) && "$ne" in (v as Doc)) return d[k] !== (v as Doc)["$ne"];
-        return d[k] === v;
-      }),
-    );
-    for (const d of matches) Object.assign(d, structuredClone(update.$set ?? {}));
-    return { matchedCount: matches.length, modifiedCount: matches.length };
-  }
-
-  find(query: Doc = {}) {
-    const rows = this.docs.filter((d) => Object.entries(query).every(([k, v]) => d[k] === v));
-    return rows;
-  }
-}
-
-class FakeDb {
-  private map = new Map<string, FakeCollection>();
-  collection(name: string): FakeCollection {
-    if (!this.map.has(name)) this.map.set(name, new FakeCollection());
-    return this.map.get(name)!;
-  }
-}
 
 const state = vi.hoisted(() => ({ db: null as unknown as FakeDb }));
 vi.mock("../db.js", () => ({ getDb: () => state.db }));
@@ -88,14 +43,14 @@ beforeEach(() => {
 describe("publishOutlookThesis -- OUTLOOK_SIGNAL_OPEN replaced by passive thesis context", () => {
   it("TEST 1/2: an actionable BUY publication never writes a cloud_bot_commands row", async () => {
     await publishOutlookThesis(actionableDoc());
-    const commands = state.db.collection("cloud_bot_commands").find();
+    const commands = state.db.collection("cloud_bot_commands").docs;
     expect(commands).toHaveLength(0);
   });
 
   it("writes exactly one ACTIVE cloud_outlook_thesis row with the full thesis contract, not an execution command", async () => {
     const id = await publishOutlookThesis(actionableDoc());
     expect(id).toBeTruthy();
-    const rows = state.db.collection("cloud_outlook_thesis").find();
+    const rows = state.db.collection("cloud_outlook_thesis").docs;
     expect(rows).toHaveLength(1);
     const thesis = rows[0];
     expect(thesis["direction"]).toBe("BUY");
@@ -116,7 +71,7 @@ describe("publishOutlookThesis -- OUTLOOK_SIGNAL_OPEN replaced by passive thesis
   it("does not fabricate a thesis when the doc has no usable entry zone (no invented information)", async () => {
     const id = await publishOutlookThesis(actionableDoc({ preferred_entry_zone_low: 0, preferred_entry_zone_high: 0 }));
     expect(id).toBeNull();
-    expect(state.db.collection("cloud_outlook_thesis").find()).toHaveLength(0);
+    expect(state.db.collection("cloud_outlook_thesis").docs).toHaveLength(0);
   });
 
   it("does not publish for NEUTRAL/non-actionable directions", async () => {
@@ -127,7 +82,7 @@ describe("publishOutlookThesis -- OUTLOOK_SIGNAL_OPEN replaced by passive thesis
   it("a fresh thesis for the same account supersedes the prior active one instead of deleting it", async () => {
     await publishOutlookThesis(actionableDoc({ id: "first-signal" }));
     await publishOutlookThesis(actionableDoc({ id: "second-signal", generated_at: "2026-09-02T11:00:00.000Z" }));
-    const rows = state.db.collection("cloud_outlook_thesis").find() as Doc[];
+    const rows = state.db.collection("cloud_outlook_thesis").docs as Doc[];
     expect(rows).toHaveLength(2);
     const first = rows.find((r) => r["outlook_id"] === "first-signal");
     const second = rows.find((r) => r["outlook_id"] === "second-signal");
@@ -137,7 +92,7 @@ describe("publishOutlookThesis -- OUTLOOK_SIGNAL_OPEN replaced by passive thesis
 
   it("defaults expires_at to generated_at + 1h when the doc carries no explicit expiry (matches the EA's original ~1h Outlook opportunity window)", async () => {
     await publishOutlookThesis(actionableDoc());
-    const thesis = state.db.collection("cloud_outlook_thesis").find()[0];
+    const thesis = state.db.collection("cloud_outlook_thesis").docs[0]!;
     const generated = new Date(thesis["generated_at"] as string).getTime();
     const expires = new Date(thesis["expires_at"] as string).getTime();
     expect(expires - generated).toBe(3600_000);
@@ -145,8 +100,8 @@ describe("publishOutlookThesis -- OUTLOOK_SIGNAL_OPEN replaced by passive thesis
 
   it("M10-sourced actionable docs are tagged with a distinct source, still no command row", async () => {
     await publishOutlookThesis(actionableDoc({ id: "m10-candidate-1" }), "M10_SIGNAL_ENGINE");
-    const thesis = state.db.collection("cloud_outlook_thesis").find()[0];
+    const thesis = state.db.collection("cloud_outlook_thesis").docs[0]!;
     expect(thesis["source"]).toBe("M10_SIGNAL_ENGINE");
-    expect(state.db.collection("cloud_bot_commands").find()).toHaveLength(0);
+    expect(state.db.collection("cloud_bot_commands").docs).toHaveLength(0);
   });
 });

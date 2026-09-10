@@ -11,6 +11,7 @@ import { classifyMistake } from "./globalBrainMistakeClassifier.js";
 import { computeCounterfactualTiming, type Quote } from "./globalBrainCounterfactual.js";
 import { getGlobalBrainSettings } from "./globalBrainSettings.js";
 
+import { MongoServerError } from "mongodb";
 /**
  * Ingestion layer for the Global Learning Brain's unified observation
  * store. Both normalizers below build a GlobalBrainObservation FROM an
@@ -98,15 +99,27 @@ export async function recordGlobalBrainObservation(obs: GlobalBrainObservation):
     const settings = await getGlobalBrainSettings();
     if (!settings.global_learning_enabled) return;
     const collection = getDb().collection<GlobalBrainObservation>(GLOBAL_BRAIN_OBSERVATIONS_COLLECTION);
-    if (obs.resolved_at !== null) {
-      const existing = await collection.findOne({ dedupe_key: obs.dedupe_key }, { projection: { _id: 0, resolved_at: 1 } });
-      if (existing && existing.resolved_at !== null) return; // already resolved -- first resolution wins, never overwritten
+    const existing = await collection.findOne(
+      { dedupe_key: obs.dedupe_key },
+      { projection: { _id: 0, resolved_at: 1 } },
+    );
+    if (existing?.resolved_at) return;
+    try {
+      if (existing) {
+        await collection.updateOne(
+          { dedupe_key: obs.dedupe_key, $or: [{ resolved_at: null }, { resolved_at: { $exists: false } }] },
+          { $set: obs },
+        );
+      } else {
+        await collection.insertOne(obs);
+      }
+    } catch (error) {
+      if (error instanceof MongoServerError && error.code === 11000) return;
+      throw error;
     }
-    await collection.updateOne({ dedupe_key: obs.dedupe_key }, { $set: obs }, { upsert: true });
-  } catch {
-    /* best-effort */
-  }
-}
+  } catch { /* shadow learning never affects live trading */ }
+} // ASTRA_REPAIR_V2_6287 / 011
+
 
 function normalizeDecisionAction(raw: string | undefined): DecisionAction {
   if (raw === "EXECUTED" || raw === "SKIPPED" || raw === "EXPIRED") return raw;

@@ -226,10 +226,15 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
     const body = CloudDeleteAccountSchema.parse(request.body);
     const user = (request as typeof request & { cloudUser: Record<string, unknown> }).cloudUser;
     if (!body.confirm) return reply.code(400).send({ detail: "Confirmation is required to delete your account." });
-    if (!(await verifyPassword(body.password, String(user["password_hash"] ?? "")))) {
-      return reply.code(401).send({ detail: "Incorrect password." });
-    }
     const db = getDb();
+    const secretUser = await db.collection("cloud_users").findOne(
+      { id: user["id"] },
+      { projection: { _id: 0, password_hash: 1 } },
+    );
+    if (!secretUser?.["password_hash"] ||
+        !(await verifyPassword(body.password, String(secretUser["password_hash"])))) {
+      return reply.code(401).send({ detail: "Incorrect password." });
+    } // ASTRA_REPAIR_V2_6287 / 002
     await db.collection("account_deletion_audit_log").insertOne({
       id: randomUUID(),
       user_id: user["id"],

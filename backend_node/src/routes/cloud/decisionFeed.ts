@@ -87,7 +87,7 @@ export async function registerDecisionFeedRoutes(app: FastifyInstance): Promise<
 
     const scope =
       accountFilter && licenseKey
-        ? { $or: [{ account: accountFilter }, { license_key: licenseKey }] }
+        ? { account: accountFilter, license_key: licenseKey }
         : accountFilter
           ? { account: accountFilter }
           : { license_key: licenseKey };
@@ -143,7 +143,7 @@ export async function registerDecisionFeedRoutes(app: FastifyInstance): Promise<
     }
     const scope =
       accountFilter && licenseKey
-        ? { $or: [{ account: accountFilter }, { license_key: licenseKey }] }
+        ? { account: accountFilter, license_key: licenseKey }
         : accountFilter
           ? { account: accountFilter }
           : { license_key: licenseKey };
@@ -192,7 +192,7 @@ export async function registerDecisionFeedRoutes(app: FastifyInstance): Promise<
     if (!accountFilter && !licenseKey) return { available: false, reason: "license_not_linked" };
     const scope =
       accountFilter && licenseKey
-        ? { $or: [{ account: accountFilter }, { license_key: licenseKey }] }
+        ? { account: accountFilter, license_key: licenseKey }
         : accountFilter
           ? { account: accountFilter }
           : { license_key: licenseKey };
@@ -231,7 +231,7 @@ export async function registerDecisionFeedRoutes(app: FastifyInstance): Promise<
 
     const scope =
       accountFilter && licenseKey
-        ? { $or: [{ account: accountFilter }, { license_key: licenseKey }] }
+        ? { account: accountFilter, license_key: licenseKey }
         : accountFilter
           ? { account: accountFilter }
           : { license_key: licenseKey };
@@ -254,10 +254,12 @@ export async function registerDecisionFeedRoutes(app: FastifyInstance): Promise<
       .toArray();
 
     if (!thesis && rows.length === 0) {
-      const hbFilters: Record<string, unknown>[] = [];
-      if (licenseKey) hbFilters.push({ license_key: licenseKey }, { pin: licenseKey });
-      if (accountFilter) hbFilters.push({ account_number: accountFilter });
-      const hb = hbFilters.length > 0 ? await db.collection("cloud_bot_heartbeats").findOne({ $or: hbFilters }, { projection: { _id: 0 }, sort: { ts: -1 } }) : null;
+      const heartbeatScope = accountFilter && licenseKey
+        ? { account_number: accountFilter, $or: [{ license_key: licenseKey }, { pin: licenseKey }] }
+        : accountFilter
+          ? { account_number: accountFilter }
+          : { $or: [{ license_key: licenseKey }, { pin: licenseKey }] };
+      const hb = await db.collection("cloud_bot_heartbeats").findOne(heartbeatScope, { projection: { _id: 0 }, sort: { ts: -1 } });
       if (Number(hb?.["open_positions"] ?? 0) > 0) {
         return {
           open: true,

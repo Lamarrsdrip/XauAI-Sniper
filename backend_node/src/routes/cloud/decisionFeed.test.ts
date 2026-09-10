@@ -25,7 +25,7 @@ async function createApp(): Promise<FastifyInstance> {
 
 function tradeOpenedRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    account: "476396807", event_type: "TRADE_OPENED", event_category: "entries", ticket: "3143809430", ts: "2026-08-26T22:22:32.000Z", ...overrides,
+    account: "476396807", license_key: "PIN-1", event_type: "TRADE_OPENED", event_category: "entries", ticket: "3143809430", ts: "2026-08-26T22:22:32.000Z", ...overrides,
   };
 }
 
@@ -75,10 +75,10 @@ describe("GET /cloud/monitor/activity -- ticket-level TRADE_OPENED dedup (forens
   it("does NOT collapse non-TRADE_OPENED rows sharing a ticket (risk updates, AI thoughts, closes all remain distinct)", async () => {
     await state.db.collection("cloud_bot_activity").insertOne(tradeOpenedRow({ ts: "2026-08-26T22:22:32.000Z" }));
     await state.db.collection("cloud_bot_activity").insertOne({
-      account: "476396807", event_type: "RISK_UPDATE", event_category: "risk", ticket: "3143809430", ts: "2026-08-26T22:23:00.000Z",
+      account: "476396807", license_key: "PIN-1", event_type: "RISK_UPDATE", event_category: "risk", ticket: "3143809430", ts: "2026-08-26T22:23:00.000Z",
     });
     await state.db.collection("cloud_bot_activity").insertOne({
-      account: "476396807", event_type: "TRADE_CLOSED", event_category: "exits", ticket: "3143809430", net_profit: -12.5, ts: "2026-08-26T23:00:00.000Z",
+      account: "476396807", license_key: "PIN-1", event_type: "TRADE_CLOSED", event_category: "exits", ticket: "3143809430", net_profit: -12.5, ts: "2026-08-26T23:00:00.000Z",
     });
 
     const app = await createApp();
@@ -89,8 +89,8 @@ describe("GET /cloud/monitor/activity -- ticket-level TRADE_OPENED dedup (forens
   });
 
   it("never collapses TRADE_OPENED-classified rows that have no ticket to group by", async () => {
-    await state.db.collection("cloud_bot_activity").insertOne({ account: "476396807", event_type: "TRADE_EXECUTED", event_category: "entries", ts: "2026-08-26T22:22:32.000Z" });
-    await state.db.collection("cloud_bot_activity").insertOne({ account: "476396807", event_type: "TRADE_EXECUTED", event_category: "entries", ts: "2026-08-26T22:22:33.000Z" });
+    await state.db.collection("cloud_bot_activity").insertOne({ account: "476396807", license_key: "PIN-1", event_type: "TRADE_EXECUTED", event_category: "entries", ts: "2026-08-26T22:22:32.000Z" });
+    await state.db.collection("cloud_bot_activity").insertOne({ account: "476396807", license_key: "PIN-1", event_type: "TRADE_EXECUTED", event_category: "entries", ts: "2026-08-26T22:22:33.000Z" });
 
     const app = await createApp();
     const res = await app.inject({ method: "GET", url: "/cloud/monitor/activity" });

@@ -5,11 +5,14 @@ export const DEFAULT_BREAK_EVEN_TOLERANCE_USD = 1.0;
 
 /** Port of performance_engine.py:39 `net_result` -- net realized result after commission, swap and fees. */
 export function netResult(trade: Record<string, unknown>): number {
-  const profit = Number(trade["profit"] ?? 0);
-  const commission = Number(trade["commission"] ?? 0);
-  const swap = Number(trade["swap"] ?? 0);
-  return profit + commission + swap;
-}
+  const explicitNet = Number(trade["net_profit"]);
+  if (Number.isFinite(explicitNet)) return explicitNet;
+  const gross = Number(trade["gross_profit"]);
+  if (Number.isFinite(gross)) return gross + Number(trade["commission"] ?? 0) + Number(trade["swap"] ?? 0) + Number(trade["fees"] ?? 0);
+  const legacyNet = Number(trade["profit"] ?? 0);
+  return Number.isFinite(legacyNet) ? legacyNet : 0;
+} // ASTRA_REPAIR_V2_6287 / 016
+
 
 export type TradeOutcome = "WIN" | "LOSS" | "BE";
 

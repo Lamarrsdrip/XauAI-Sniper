@@ -1,6 +1,6 @@
 # XauCloud — Release Checklist
 
-## Current production identity (v6.26.3 Pattern + Breakout promotion)
+## Current production identity (v6.28.6 XauCloud production rename + audited fixes) <!-- ASTRA_REPAIR_V2_6287 / 029 -->
 
 - Authoritative source: `backend/ea_code/XauCloud.io.mq5`
 - Customer artifact: `XauCloud.io.ex5`

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FakeDb } from "../testUtils/fakeDb.js";
 
 /**
  * Integration harness (Layer C of the owner's required validation):
@@ -29,43 +30,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type Doc = Record<string, unknown>;
 
-class FakeCollection {
-  docs: Doc[] = [];
-  async updateOne(query: Doc, update: { $set?: Doc }, options: { upsert?: boolean } = {}) {
-    const found = this.docs.find((d) => Object.entries(query).every(([k, v]) => d[k] === v));
-    if (found) { Object.assign(found, structuredClone(update.$set ?? {})); return { matchedCount: 1 }; }
-    if (options.upsert) { this.docs.push({ ...structuredClone(query), ...structuredClone(update.$set ?? {}) }); return { upsertedCount: 1 }; }
-    return { matchedCount: 0 };
-  }
-  async updateMany(query: Doc, update: { $set?: Doc }) {
-    const matches = this.docs.filter((d) => Object.entries(query).every(([k, v]) => {
-      if (v && typeof v === "object" && "$ne" in (v as Doc)) return d[k] !== (v as Doc)["$ne"];
-      return d[k] === v;
-    }));
-    for (const d of matches) Object.assign(d, structuredClone(update.$set ?? {}));
-    return { modifiedCount: matches.length };
-  }
-  find(query: Doc = {}) {
-    const rows = this.docs.filter((d) => Object.entries(query).every(([k, v]) => {
-      if (v && typeof v === "object" && !Array.isArray(v) && "$gt" in (v as Doc)) return String(d[k]) > String((v as Doc)["$gt"]);
-      return d[k] === v;
-    }));
-    return { sort: () => ({ limit: () => ({ next: async () => structuredClone(rows[0]) ?? null }) }) };
-  }
-}
-
-class FakeDb {
-  private map = new Map<string, FakeCollection>();
-  collection(name: string): FakeCollection {
-    if (!this.map.has(name)) this.map.set(name, new FakeCollection());
-    return this.map.get(name)!;
-  }
-}
-
 const state = vi.hoisted(() => ({ db: null as unknown as FakeDb }));
 vi.mock("../db.js", () => ({ getDb: () => state.db }));
 vi.mock("../services/license.js", () => ({
   resolveMonitorLicense: vi.fn(async () => null),
+  resolveEaMonitorLicense: vi.fn(async () => ({ pin: "" })),
   normalizeLicenseKey: (v: string) => (v || "").trim().toUpperCase(),
 }));
 
@@ -78,12 +47,10 @@ beforeEach(() => {
 async function fetchThesisAsEaWould(account: string): Promise<Doc | null> {
   const db = state.db;
   const nowIso = new Date().toISOString();
-  const row = await db
-    .collection("cloud_outlook_thesis")
-    .find({ status: "ACTIVE", symbol: "XAUUSD", account, expires_at: { $gt: nowIso } })
-    .sort({ generated_at: -1 })
-    .limit(1)
-    .next();
+  const row = await db.collection("cloud_outlook_thesis").findOne(
+    { status: "ACTIVE", symbol: "XAUUSD", account, expires_at: { $gt: nowIso } },
+    { sort: { generated_at: -1 } },
+  );
   return row;
 }
 

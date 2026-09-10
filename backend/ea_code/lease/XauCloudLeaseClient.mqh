@@ -894,55 +894,75 @@ bool XAU_LeaseUploadReconciliationQueue(const string &cloudUrl, int timeoutMs, c
                                         const string &account, const string &brokerServer, const string &symbol,
                                         const string &installationId, const string &terminalInstanceId)
 {
-   string path = XAU_LeaseReconcileQueuePath();
-   if(!FileIsExist(path, 0)) return true; // nothing queued -- trivially successful
-
-   int h = FileOpen(path, FILE_READ | FILE_TXT | FILE_ANSI);
+   string path=XAU_LeaseReconcileQueuePath();
+   if(!FileIsExist(path,0)) return true;
+   int h=FileOpen(path,FILE_READ|FILE_TXT|FILE_ANSI);
    if(h == INVALID_HANDLE) return false;
    string lines[];
    int n = 0;
    while(!FileIsEnding(h))
    {
-      string line = FileReadString(h);
-      if(StringLen(line) == 0) continue;
-      ArrayResize(lines, n + 1);
-      lines[n] = line;
-      n++;
+      string line=FileReadString(h);
+      if(StringLen(line)==0) continue;
+      ArrayResize(lines,n+1); lines[n++]=line;
    }
    FileClose(h);
-   if(n == 0) return true;
+   if(n==0) return true;
 
-   string eventsJson = "[";
-   for(int i = 0; i < n; i++)
+   string eventsJson="["; int appended=0;
+   for(int i=0;i<n;i++)
    {
-      string parts[];
-      int partCount = StringSplit(lines[i], '|', parts);
-      if(partCount != 8) continue; // malformed line -- skip rather than crash, left in queue for a human to inspect
-      if(i > 0) eventsJson += ",";
-      eventsJson += StringFormat(
+      string parts[]; int pc=StringSplit(lines[i],'|',parts);
+      if(pc!=8) continue; // retain malformed local line; never acknowledge or delete it.
+      if(appended>0) eventsJson+=",";
+      eventsJson+=StringFormat(
          "{\"execution_key\":\"%s\",\"lease_id\":\"%s\",\"lease_sequence\":%s,\"direction\":%s,\"entry_family\":\"%s\",\"broker_ticket\":%s,\"result\":\"%s\",\"executed_at\":\"%s\"}",
-         parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7]);
+         parts[0],parts[1],parts[2],parts[3],parts[4],parts[5],parts[6],parts[7]);
+      appended++;
    }
-   eventsJson += "]";
+   eventsJson+="]";
+   if(appended==0) return false;
 
-   string body = StringFormat(
+   string body=StringFormat(
       "{\"pin\":\"%s\",\"account\":\"%s\",\"broker_server\":\"%s\",\"symbol\":\"%s\",\"installation_id\":\"%s\",\"terminal_instance_id\":\"%s\",\"events\":%s}",
-      pin, account, brokerServer, symbol, installationId, terminalInstanceId, eventsJson);
-   uchar pd[]; StringToCharArray(body, pd, 0, StringLen(body), CP_UTF8);
-   int rawLen = ArraySize(pd);
-   if(rawLen > 0 && pd[rawLen - 1] == 0) ArrayResize(pd, rawLen - 1);
-   string hdr = "Content-Type: application/json\r\n";
-   uchar res[]; string rh;
+      pin,account,brokerServer,symbol,installationId,terminalInstanceId,eventsJson);
+   uchar pd[]; StringToCharArray(body,pd,0,StringLen(body),CP_UTF8);
+   int rawLen=ArraySize(pd); if(rawLen>0 && pd[rawLen-1]==0) ArrayResize(pd,rawLen-1);
+   string hdr="Content-Type: application/json\r\n"; uchar res[]; string rh;
    ResetLastError();
-   int code = WebRequest("POST", cloudUrl + "/api/cloud/lease/reconcile", hdr, timeoutMs, pd, res, rh);
-   if(code != 200)
+   int code=WebRequest("POST",cloudUrl+"/api/cloud/lease/reconcile",hdr,timeoutMs,pd,res,rh);
+   string response=code!=-1?CharArrayToString(res,0,WHOLE_ARRAY,CP_UTF8):"";
+   if(code!=200 || StringFind(response,"\"reconciled\":true")<0)
    {
-      PrintFormat("XAUCLOUD_LEASE_RECONCILE_UPLOAD_FAILED httpCode=%d err=%d queuedEvents=%d -- left in queue, will retry", code, GetLastError(), n);
+      PrintFormat("XAUCLOUD_LEASE_RECONCILE_UPLOAD_FAILED httpCode=%d err=%d queuedEvents=%d -- queue retained",code,GetLastError(),n);
       return false;
    }
 
-   // Backend acknowledged (idempotently) -- safe to clear the queue now.
-   FileDelete(path);
-   PrintFormat("XAUCLOUD_LEASE_RECONCILE_UPLOAD_SUCCEEDED queuedEvents=%d", n);
-   return true;
-}
+   string keep[]; int keepN=0;
+   for(int i=0;i<n;i++)
+   {
+      string parts[]; int pc=StringSplit(lines[i],'|',parts); bool ack=false;
+      if(pc==8)
+      {
+         string keyNeedle="\"execution_key\":\""+parts[0]+"\"";
+         int kp=StringFind(response,keyNeedle);
+         if(kp>=0)
+         {
+            string nearby=StringSubstr(response,kp,MathMin(360,StringLen(response)-kp));
+            ack=StringFind(nearby,"\"status\":\"reconciled\"")>=0 ||
+                StringFind(nearby,"\"status\":\"already_reconciled\"")>=0;
+         }
+      }
+      if(!ack) { ArrayResize(keep,keepN+1); keep[keepN++]=lines[i]; }
+   }
+   if(keepN==0) FileDelete(path);
+   else
+   {
+      int wh=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI);
+      if(wh==INVALID_HANDLE) return false;
+      for(int i=0;i<keepN;i++) FileWriteString(wh,keep[i]+"\r\n");
+      FileFlush(wh); FileClose(wh);
+   }
+   PrintFormat("XAUCLOUD_LEASE_RECONCILE_ACK | sent=%d retained=%d",appended,keepN);
+   return keepN==0;
+} // ASTRA_REPAIR_V2_6287 / 020

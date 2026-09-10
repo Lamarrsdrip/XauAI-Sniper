@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { getDb } from "../../db.js";
-import { LicenseError, normalizeLicenseKey, resolveMonitorLicense } from "../../services/license.js";
+import { LicenseError, normalizeLicenseKey, resolveEaMonitorLicense } from "../../services/license.js";
 import { storeBotActivity } from "../../services/botActivity.js";
 import { BotHeartbeatReqSchema } from "../../models/cloudMonitor.js";
 import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
@@ -37,10 +37,11 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
     const now = new Date();
 
     const licenseKey = normalizeLicenseKey(req.license_key || req.pin || "");
-    const account = req.account_number || "";
+    const account = String(req.account_number || "").trim();
+    if (!account) throw new LicenseError(400, { ok:false, reason:"MISSING_MT5_ACCOUNT", message:"Heartbeat requires account_number." }); // ASTRA_REPAIR_V2_6287 / 023
     let lic;
     try {
-      lic = await resolveMonitorLicense(licenseKey, account);
+      lic = await resolveEaMonitorLicense(licenseKey, account);
     } catch (error) {
       if (error instanceof LicenseError && licenseKey.startsWith("APEX-")) {
         const detail = typeof error.detail === "object" ? error.detail : {};
@@ -63,18 +64,16 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
 
     if (licenseKey) {
       const updateResult = await db.collection("pin_licenses").updateOne(
-        { pin: licenseKey, is_active: true },
+        { pin: licenseKey, is_active: true, mt5_account: account },
         {
           $set: {
             is_used: true,
-            activated_at: now.toISOString(),
-            mt5_account: account,
             ea_version: req.ea_version || "",
             broker_server: req.broker_server || "",
             last_heartbeat: now.toISOString(),
             last_symbol: req.symbol || "",
             last_timeframe: req.timeframe || "",
-          },
+          }, // ASTRA_REPAIR_V2_6287 / 031 — activation/account binding are immutable heartbeat inputs, never overwritten here.
         },
       );
       doc["license_update_matched"] = updateResult.matchedCount;
@@ -151,17 +150,12 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
     }
 
     const heartbeats = db.collection("cloud_bot_heartbeats");
-    const total = await heartbeats.estimatedDocumentCount();
-    if (total > 1500) {
-      const oldest = await heartbeats
-        .find({}, { projection: { _id: 1, ts: 1 } })
-        .sort({ ts: 1 })
-        .limit(total - 1000)
-        .toArray();
-      if (oldest.length > 0) {
-        await heartbeats.deleteMany({ _id: { $in: oldest.map((o) => o["_id"]) } });
-      }
-    }
+    const identity = { license_id: licenseId, account_number: account };
+    const totalForIdentity = await heartbeats.countDocuments(identity);
+    if (totalForIdentity > 1500) {
+      const oldest = await heartbeats.find(identity, { projection: { _id: 1, ts: 1 } }).sort({ ts: 1 }).limit(totalForIdentity - 1000).toArray();
+      if (oldest.length > 0) await heartbeats.deleteMany({ _id: { $in: oldest.map((o) => o["_id"]) } });
+    } // ASTRA_REPAIR_V2_6287 / 030
 
     return {
       ok: true,

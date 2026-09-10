@@ -113,7 +113,8 @@ export async function registerNotificationRoutes(app: FastifyInstance): Promise<
   });
   app.post("/notifications/web-push/unsubscribe", { preHandler: requireCloudUser }, async (request) => {
     const body = (request.body ?? {}) as { endpoint?: string };
-    await removeSubscription(String(body.endpoint ?? ""));
+    const user = (request as typeof request & { cloudUser: Record<string, unknown> }).cloudUser;
+    await removeSubscription(String(body.endpoint ?? ""), String(user["id"] ?? "")); // ASTRA_REPAIR_V2_6287 / 026
     return { ok: true };
   });
   app.post("/notifications/web-push/test", { preHandler: requireCloudUser }, async (request) => {

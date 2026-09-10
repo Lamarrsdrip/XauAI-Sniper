@@ -22,6 +22,7 @@ import { logOutlookShadowComparison } from "./globalBrainShadowServing.js";
 import { evaluateGlobalBrainInfluence, type GlobalBrainInfluenceResult } from "./globalBrainInfluence.js";
 import { computeConfidence, confidenceCategory, confidencePct, computeZoneAndTargets, expectedPath, newOutlookId, synthesizeNarrative } from "./marketOutlookConfidence.js";
 
+import { loadClosedBrokerHtfEvidence } from "./manualTradingMarketStore.js";
 void _BREAK_EVEN_R_TOLERANCE; // referenced by advance_persisted_signal, still pending port
 
 function deriveSetupType(path: string): string {
@@ -261,6 +262,7 @@ export async function generateOutlookForAccount(opts: {
 
   let outlookId = newOutlookId("PENDING");
   const now = new Date();
+  const brokerHtfEvidence = await loadClosedBrokerHtfEvidence(account, OUTLOOK_SYMBOL, now);
   const hourlySlot = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}T${String(now.getUTCHours()).padStart(2, "0")}:00`;
   const publicationKey = opts.publication_key || hourlySlot;
   const expiryAt = new Date(now.getTime() + OUTLOOK_HORIZON_HOURS * 3600_000).toISOString();
@@ -273,6 +275,10 @@ export async function generateOutlookForAccount(opts: {
       symbol: OUTLOOK_SYMBOL,
       account,
       license_key: licenseKey,
+      broker_htf_evidence: brokerHtfEvidence.candles,
+      broker_htf_evidence_complete: brokerHtfEvidence.complete,
+      broker_htf_missing_timeframes: brokerHtfEvidence.missing,
+      broker_htf_provenance: brokerHtfEvidence.provenance,
       generated_at: now.toISOString(),
       hourly_slot: hourlySlot,
       publication_key: publicationKey,
@@ -302,6 +308,14 @@ export async function generateOutlookForAccount(opts: {
     ...((evidence["market_thesis"] as Record<string, unknown> | undefined) ?? {}),
   };
   const canonicalM10 = canonicalM10Signal(evidence);
+  canonicalM10["broker_htf_evidence"] = brokerHtfEvidence.candles;
+  canonicalM10["broker_htf_evidence_complete"] = brokerHtfEvidence.complete;
+  canonicalM10["broker_htf_missing_timeframes"] = brokerHtfEvidence.missing;
+  if (!brokerHtfEvidence.complete) {
+    canonicalM10["actionable"] = false;
+    canonicalM10["execution_status"] = "BLOCKED";
+    canonicalM10["blocker_code"] = "INCOMPLETE_BROKER_HTF_EVIDENCE";
+  } // ASTRA_REPAIR_V2_6287 / 005
 
   const bias = resolveHourlyBias(canonicalM10, thesis);
   let directionLabel = bias.direction_label;
@@ -392,6 +406,10 @@ export async function generateOutlookForAccount(opts: {
       symbol: OUTLOOK_SYMBOL,
       account,
       license_key: licenseKey,
+      broker_htf_evidence: brokerHtfEvidence.candles,
+      broker_htf_evidence_complete: brokerHtfEvidence.complete,
+      broker_htf_missing_timeframes: brokerHtfEvidence.missing,
+      broker_htf_provenance: brokerHtfEvidence.provenance,
       generated_at: now.toISOString(),
       hourly_slot: hourlySlot,
       publication_key: publicationKey,
@@ -446,6 +464,10 @@ export async function generateOutlookForAccount(opts: {
       symbol: OUTLOOK_SYMBOL,
       account,
       license_key: licenseKey,
+      broker_htf_evidence: brokerHtfEvidence.candles,
+      broker_htf_evidence_complete: brokerHtfEvidence.complete,
+      broker_htf_missing_timeframes: brokerHtfEvidence.missing,
+      broker_htf_provenance: brokerHtfEvidence.provenance,
       generated_at: now.toISOString(),
       published_at: now.toISOString(),
       hourly_slot: hourlySlot,

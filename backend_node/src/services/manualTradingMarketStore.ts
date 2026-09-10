@@ -10,6 +10,7 @@
 import { getDb } from "../db.js";
 import { isGoldSymbol, normalizeGoldSymbol } from "./goldSymbol.js";
 
+import { createHash } from "node:crypto";
 const GOLD_MIN = 1000;
 const GOLD_MAX = 20_000;
 const TIMEFRAMES = [
@@ -30,12 +31,19 @@ function finite(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function isoFromEvidence(value: unknown, fallback: Date): string {
-  // EA evidence uses `YYYY.MM.DD HH:MM:SS`; accept it only when it parses.
+function isoFromEvidence(value: unknown): string | null {
   const raw = String(value ?? "").trim();
-  const parsed = raw ? new Date(`${raw.replace(/\./g, "-").replace(" ", "T")}Z`) : null;
-  return parsed && Number.isFinite(parsed.getTime()) ? parsed.toISOString() : fallback.toISOString();
-}
+  if (!raw) return null;
+  let normalized = raw;
+  if (/^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(raw)) {
+    normalized = `${raw.replace(/\./g, "-").replace(" ", "T")}Z`;
+  } else if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(raw)) {
+    normalized = `${raw.replace(" ", "T")}Z`;
+  }
+  const parsed = new Date(normalized);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
+} // ASTRA_REPAIR_V2_6287 / 004
+
 
 /**
  * Best-effort collection; it never affects the EA activity acknowledgement.
@@ -54,47 +62,53 @@ export async function recordVerifiedManualTradingQuote(args: {
   const normalizedSymbol = normalizeGoldSymbol(args.symbol);
   const rejected = { persisted: false, normalizedSymbol, sourceAt: null, close: null };
   if (!args.account || !isGoldSymbol(args.symbol) || bid == null || ask == null || ask < bid || bid < GOLD_MIN || ask > GOLD_MAX) return rejected;
-
-  const sourceAt = isoFromEvidence(thesis["evidence_time_utc"], args.receivedAt);
+  const sourceAt = isoFromEvidence(thesis["evidence_time_utc"]);
+  if (!sourceAt) return rejected;
   const sourceMs = new Date(sourceAt).getTime();
-  if (!Number.isFinite(sourceMs)) return rejected;
+  const receivedAt = args.receivedAt.toISOString();
   const mid = (bid + ask) / 2;
   const db = getDb();
 
+  const sampleId = createHash("sha256").update([args.account, normalizedSymbol, sourceAt, String(bid), String(ask)].join("|")).digest("hex");
+  const sourceOrderKey = `${sourceAt}|${sampleId}`;
+  await db.collection<{ _id: string } & Record<string, unknown>>("manual_trading_broker_quote_samples").updateOne(
+    { _id: sampleId },
+    { $setOnInsert: { account: args.account, symbol: normalizedSymbol, brokerSymbol: String(args.symbol), sourceAt, receivedAt, bid, ask, mid } },
+    { upsert: true },
+  );
+
   await Promise.all(TIMEFRAMES.map(async ({ name, seconds }) => {
-    const startMs = Math.floor(sourceMs / (seconds * 1000)) * seconds * 1000;
-    const openTime = new Date(startMs).toISOString();
-    // XAUUSDm is the same Gold market as XAUUSD for intelligence identity.
-    // Preserve the raw broker symbol for traceability, but key the candle by
-    // the one existing XauCloud canonical Gold symbol.
+    const openTime = new Date(Math.floor(sourceMs / (seconds * 1000)) * seconds * 1000).toISOString();
     const key = { account: args.account, symbol: normalizedSymbol, timeframe: name, openTime };
     await db.collection("manual_trading_broker_candles").updateOne(
       key,
-      [{
-        // A single aggregation-pipeline $set is intentional. The former
-        // update placed h/l/c/bid/ask/source/brokerSymbol in multiple update
-        // operators at once ($setOnInsert + $min/$max/$set), which MongoDB
-        // rejects as conflicting paths before it writes anything.
-        $set: {
-          ...key,
-          brokerSymbol: String(args.symbol),
-          o: { $ifNull: ["$o", mid] },
-          h: { $max: [{ $ifNull: ["$h", mid] }, mid] },
-          l: { $min: [{ $ifNull: ["$l", mid] }, mid] },
-          c: mid,
-          firstSourceAt: { $ifNull: ["$firstSourceAt", sourceAt] },
-          lastSourceAt: sourceAt,
-          source: "ea-stream(spot)",
-          bid,
-          ask,
-          samples: { $add: [{ $ifNull: ["$samples", 0] }, 1] },
-        },
-      }],
+      [{ $set: {
+        ...key,
+        source: "ea-stream(spot)",
+        // Legacy candles predate the order-key field. Their stored source
+        // timestamp remains a safe migration baseline; treating it as
+        // "missing" would let a late packet overwrite their open/close.
+        o: { $cond: [{ $or: [{ $eq: [{ $ifNull: ["$firstSourceAt", null] }, null] }, { $gt: [{ $ifNull: ["$firstOrderKey", { $concat: ["$firstSourceAt", "|"] }] }, sourceOrderKey] }] }, mid, { $ifNull: ["$o", mid] }] },
+        h: { $max: [{ $ifNull: ["$h", mid] }, mid] },
+        l: { $min: [{ $ifNull: ["$l", mid] }, mid] },
+        c: { $cond: [{ $or: [{ $eq: [{ $ifNull: ["$lastSourceAt", null] }, null] }, { $lt: [{ $ifNull: ["$lastOrderKey", { $concat: ["$lastSourceAt", "|"] }] }, sourceOrderKey] }] }, mid, { $ifNull: ["$c", mid] }] },
+        bid: { $cond: [{ $or: [{ $eq: [{ $ifNull: ["$lastSourceAt", null] }, null] }, { $lt: [{ $ifNull: ["$lastOrderKey", { $concat: ["$lastSourceAt", "|"] }] }, sourceOrderKey] }] }, bid, "$bid"] },
+        ask: { $cond: [{ $or: [{ $eq: [{ $ifNull: ["$lastSourceAt", null] }, null] }, { $lt: [{ $ifNull: ["$lastOrderKey", { $concat: ["$lastSourceAt", "|"] }] }, sourceOrderKey] }] }, ask, "$ask"] },
+        brokerSymbol: { $cond: [{ $or: [{ $eq: [{ $ifNull: ["$lastSourceAt", null] }, null] }, { $lt: [{ $ifNull: ["$lastOrderKey", { $concat: ["$lastSourceAt", "|"] }] }, sourceOrderKey] }] }, String(args.symbol), "$brokerSymbol"] },
+        firstSourceAt: { $cond: [{ $or: [{ $eq: [{ $ifNull: ["$firstSourceAt", null] }, null] }, { $gt: [{ $ifNull: ["$firstOrderKey", { $concat: ["$firstSourceAt", "|"] }] }, sourceOrderKey] }] }, sourceAt, "$firstSourceAt"] },
+        lastSourceAt: { $cond: [{ $or: [{ $eq: [{ $ifNull: ["$lastSourceAt", null] }, null] }, { $lt: [{ $ifNull: ["$lastOrderKey", { $concat: ["$lastSourceAt", "|"] }] }, sourceOrderKey] }] }, sourceAt, "$lastSourceAt"] },
+        firstOrderKey: { $cond: [{ $or: [{ $eq: [{ $ifNull: ["$firstSourceAt", null] }, null] }, { $gt: [{ $ifNull: ["$firstOrderKey", { $concat: ["$firstSourceAt", "|"] }] }, sourceOrderKey] }] }, sourceOrderKey, { $ifNull: ["$firstOrderKey", { $concat: ["$firstSourceAt", "|"] }] }] },
+        lastOrderKey: { $cond: [{ $or: [{ $eq: [{ $ifNull: ["$lastSourceAt", null] }, null] }, { $lt: [{ $ifNull: ["$lastOrderKey", { $concat: ["$lastSourceAt", "|"] }] }, sourceOrderKey] }] }, sourceOrderKey, { $ifNull: ["$lastOrderKey", { $concat: ["$lastSourceAt", "|"] }] }] },
+        firstReceivedAt: { $min: [{ $ifNull: ["$firstReceivedAt", receivedAt] }, receivedAt] },
+        lastReceivedAt: { $max: [{ $ifNull: ["$lastReceivedAt", receivedAt] }, receivedAt] },
+        sampleKeys: { $setUnion: [{ $ifNull: ["$sampleKeys", []] }, [sampleId]] },
+      }}, { $set: { samples: { $size: "$sampleKeys" } } }],
       { upsert: true },
     );
   }));
   return { persisted: true, normalizedSymbol, sourceAt, close: mid };
-}
+} // ASTRA_REPAIR_V2_6287 / 004
+
 
 /** Persist entry/exit decision evidence beyond the short activity retention. */
 export async function recordAuditableEaDecision(args: {
@@ -118,3 +132,23 @@ export async function recordAuditableEaDecision(args: {
     m10_signal: d["m10_signal"] ?? {}, ea_version: d["ea_version"] ?? "", build_hash: d["build_hash"] ?? "",
   });
 }
+
+
+export async function loadClosedBrokerHtfEvidence(account: string, symbol: string, at = new Date()): Promise<{
+  complete: boolean; candles: Record<string, Record<string, unknown>>; missing: string[]; provenance: Record<string, unknown>;
+}> {
+  const normalizedSymbol = normalizeGoldSymbol(symbol);
+  const db = getDb();
+  const candles: Record<string, Record<string, unknown>> = {};
+  const missing: string[] = [];
+  for (const { name, seconds } of TIMEFRAMES) {
+    const latestClosedOpen = new Date(Math.floor(at.getTime() / (seconds * 1000)) * seconds * 1000 - seconds * 1000).toISOString();
+    const row = await db.collection("manual_trading_broker_candles").findOne(
+      { account, symbol: normalizedSymbol, timeframe: name, openTime: { $lte: latestClosedOpen } },
+      { projection: { _id: 0 }, sort: { openTime: -1 } },
+    );
+    if (!row) { missing.push(name); continue; }
+    candles[name] = row as Record<string, unknown>;
+  }
+  return { complete: missing.length === 0, candles, missing, provenance: { account, symbol: normalizedSymbol, required: ["H1", "H4", "D1"], evaluated_at: at.toISOString() } };
+} // ASTRA_REPAIR_V2_6287 / 005

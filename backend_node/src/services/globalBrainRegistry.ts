@@ -52,6 +52,7 @@ export class RollbackError extends Error {}
 export class RegistryLockError extends Error {}
 
 const GLOBAL_BRAIN_LOCKS_COLLECTION = "global_brain_registry_locks";
+const GLOBAL_BRAIN_CHAMPION_POINTERS_COLLECTION = "global_brain_champion_pointers";
 const LOCK_STALE_AFTER_MS = 30_000; // generous vs. this operation's expected near-instant duration; only matters if a process crashed mid-lock
 
 export async function ensureGlobalBrainRegistryIndexes(): Promise<void> {
@@ -59,6 +60,7 @@ export async function ensureGlobalBrainRegistryIndexes(): Promise<void> {
   await db.collection(GLOBAL_BRAIN_MODELS_COLLECTION).createIndex({ question: 1, version: 1 }, { unique: true });
   await db.collection(GLOBAL_BRAIN_MODELS_COLLECTION).createIndex({ question: 1, status: 1 });
   await db.collection(GLOBAL_BRAIN_PROMOTIONS_COLLECTION).createIndex({ question: 1, at: -1 });
+  await db.collection(GLOBAL_BRAIN_CHAMPION_POINTERS_COLLECTION).createIndex({ question: 1 }, { unique: true });
 }
 
 /**
@@ -95,10 +97,18 @@ async function withQuestionLock<T>(question: string, fn: () => Promise<T>): Prom
 }
 
 export async function getCurrentChampion(question: string): Promise<GlobalBrainModelDoc | null> {
-  return getDb()
-    .collection<GlobalBrainModelDoc>(GLOBAL_BRAIN_MODELS_COLLECTION)
-    .findOne({ question, status: "CHAMPION" }, { projection: { _id: 0 } });
-}
+  const db = getDb();
+  const pointer = await db.collection(GLOBAL_BRAIN_CHAMPION_POINTERS_COLLECTION).findOne({ question }, { projection: { _id: 0, version: 1 } });
+  if (pointer && Number(pointer["version"]) > 0) {
+    const model = await db.collection<GlobalBrainModelDoc>(GLOBAL_BRAIN_MODELS_COLLECTION).findOne({ question, version: Number(pointer["version"]) }, { projection: { _id: 0 } });
+    if (!model) throw new Error(`Global Brain champion pointer ${question} v${pointer["version"]} has no model document.`);
+    return { ...model, status: "CHAMPION" };
+  }
+  const legacy = await db.collection<GlobalBrainModelDoc>(GLOBAL_BRAIN_MODELS_COLLECTION).findOne({ question, status: "CHAMPION" }, { projection: { _id: 0 } });
+  if (legacy) await db.collection(GLOBAL_BRAIN_CHAMPION_POINTERS_COLLECTION).updateOne({ question }, { $setOnInsert: { question, version: legacy.version, updated_at: new Date().toISOString() } }, { upsert: true });
+  return legacy;
+} // ASTRA_REPAIR_V2_6287 / 012
+
 
 /** Most recent model doc for a question REGARDLESS of status -- the multi-cycle maturity streak (globalBrainMaturity.ts) is carried on whatever the last cycle produced (CHAMPION or REJECTED), not only on the current champion. */
 export async function getLatestModelDoc(question: string): Promise<GlobalBrainModelDoc | null> {
@@ -144,38 +154,28 @@ export async function promoteChallenger(input: NewModelInput, reason: string): P
     const db = getDb();
     const collection = db.collection<GlobalBrainModelDoc>(GLOBAL_BRAIN_MODELS_COLLECTION);
     const priorChampion = await getCurrentChampion(input.question);
-    if (priorChampion) {
-      await collection.updateOne({ question: input.question, version: priorChampion.version }, { $set: { status: "SUPERSEDED" } });
-    }
     const version = await nextVersion(input.question);
-    const doc: GlobalBrainModelDoc = {
-      question: input.question,
-      version,
-      status: "CHAMPION",
-      trained_at: input.trained_at,
-      training_window: input.training_window,
-      dataset_fingerprint: input.dataset_fingerprint,
-      validation_metrics: input.validation_metrics,
-      holdout_metrics: input.holdout_metrics,
-      buckets: input.buckets,
-      promotion_reason: reason,
-      promoted_at: new Date().toISOString(),
-      meets_small_sample_criteria: input.meets_small_sample_criteria,
-      streak_count: input.streak_count,
-      maturity_path: input.maturity_path,
+    const nowIso = new Date().toISOString();
+    const staged: GlobalBrainModelDoc = {
+      question: input.question, version, status: "SUPERSEDED", trained_at: input.trained_at,
+      training_window: input.training_window, dataset_fingerprint: input.dataset_fingerprint,
+      validation_metrics: input.validation_metrics, holdout_metrics: input.holdout_metrics, buckets: input.buckets,
+      promotion_reason: reason, promoted_at: nowIso, meets_small_sample_criteria: input.meets_small_sample_criteria,
+      streak_count: input.streak_count, maturity_path: input.maturity_path,
     };
-    await collection.insertOne(doc);
-    await writeAudit({
-      question: input.question,
-      action: "PROMOTE",
-      from_version: priorChampion?.version ?? null,
-      to_version: version,
-      reason,
-      at: new Date().toISOString(),
-    });
-    return doc;
+    await collection.insertOne(staged);
+    const durable = await collection.findOne({ question: input.question, version }, { projection: { _id: 0 } });
+    if (!durable) throw new Error("Global Brain replacement failed durable verification.");
+    await db.collection(GLOBAL_BRAIN_CHAMPION_POINTERS_COLLECTION).updateOne(
+      { question: input.question }, { $set: { question: input.question, version, updated_at: nowIso } }, { upsert: true },
+    );
+    await collection.updateOne({ question: input.question, version }, { $set: { status: "CHAMPION" } });
+    if (priorChampion && priorChampion.version !== version) await collection.updateOne({ question: input.question, version: priorChampion.version }, { $set: { status: "SUPERSEDED" } });
+    await writeAudit({ question: input.question, action: "PROMOTE", from_version: priorChampion?.version ?? null, to_version: version, reason, at: nowIso });
+    return { ...staged, status: "CHAMPION" };
   });
-}
+} // ASTRA_REPAIR_V2_6287 / 012
+
 
 /** Persists a challenger as REJECTED for audit history. Champion untouched. */
 export async function rejectChallenger(input: NewModelInput, reason: string): Promise<GlobalBrainModelDoc> {
@@ -227,10 +227,15 @@ export async function rollbackToPreviousChampion(question: string): Promise<Glob
     if (!previous) throw new RollbackError(`Previous champion version ${entry.from_version} for "${question}" no longer exists.`);
 
     const current = await getCurrentChampion(question);
-    if (current) {
+    await db.collection(GLOBAL_BRAIN_CHAMPION_POINTERS_COLLECTION).updateOne(
+      { question },
+      { $set: { question, version: previous.version, updated_at: new Date().toISOString() } },
+      { upsert: true },
+    );
+    await collection.updateOne({ question, version: previous.version }, { $set: { status: "CHAMPION" } });
+    if (current && current.version !== previous.version) {
       await collection.updateOne({ question, version: current.version }, { $set: { status: "ROLLED_BACK" } });
     }
-    await collection.updateOne({ question, version: previous.version }, { $set: { status: "CHAMPION" } });
     await writeAudit({
       question,
       action: "ROLLBACK",

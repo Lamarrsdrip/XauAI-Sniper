@@ -483,9 +483,9 @@ async function sendUserPush(userId: string, payload: Record<string, unknown>): P
   if (totalSent > 0) {
     return { ok: true, failureClass: null, provider: { channel: "web_push+native_push", web_push_sent: webSent, native_push_sent: nativeSent } };
   }
-  if (webResult.status === "rejected" && nativeResult.status === "rejected") {
+  if (webResult.status === "rejected" || nativeResult.status === "rejected") {
     return { ok: false, failureClass: TEMPORARY_DELIVERY_FAILURE, provider: { channel: "web_push+native_push", error: "send_failed" } };
-  }
+  } // ASTRA_REPAIR_V2_6287 / 022
   return { ok: false, failureClass: NO_ACTIVE_WEB_PUSH_RECIPIENT, provider: { channel: "web_push+native_push", web_push_sent: 0, native_push_sent: 0 } };
 }
 
@@ -520,16 +520,7 @@ async function notificationPrefsForAccount(account: string): Promise<Record<stri
 
   const byUser = new Map<string, Record<string, unknown>>();
 
-  // Keep existing correctly-linked rows.
-  const direct = await db
-    .collection("cloud_notification_prefs")
-    .find({ account: normalizedAccount }, { projection: { _id: 0 } })
-    .toArray();
-
-  for (const row of direct) {
-    const userId = String(row["user_id"] ?? "").trim();
-    if (userId) byUser.set(userId, row as Record<string, unknown>);
-  }
+  // ASTRA_REPAIR_V2_6287 / 025 — recipients come only from the canonical current active license owner; stale account-pref rows are not authority.
 
   // Resolve the canonical owner(s) from the active license.
   const accountNumber = Number(normalizedAccount);

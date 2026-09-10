@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { MongoServerError } from "mongodb";
 import { getDb } from "../../db.js";
-import { resolveMonitorLicense } from "../../services/license.js";
+import { resolveEaMonitorLicense } from "../../services/license.js";
 import { DirectionReservationClaimReqSchema, DirectionReservationReleaseReqSchema } from "../../models/cloudActivity.js";
 
 const RESERVATION_VALID_SYMBOLS = new Set(["XAUUSD", "XAUUSDM", "XAUUSD.", "GOLD"]);
@@ -36,7 +36,7 @@ export async function registerCloudReservationRoutes(app: FastifyInstance): Prom
       return reply.code(400).send({ detail: { ok: false, reason: "INVALID_SYMBOL", symbol: req.symbol } });
     }
 
-    const lic = await resolveMonitorLicense(req.pin || req.license_key, req.account);
+    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account);
     const executionKey = (req.execution_key || "").trim();
     if (!executionKey || executionKey.length > 240) {
       return reply.code(400).send({ detail: "execution_key is required and must be at most 240 characters" });
@@ -88,7 +88,7 @@ export async function registerCloudReservationRoutes(app: FastifyInstance): Prom
 
   app.post("/cloud/reservation/release", async (request) => {
     const req = DirectionReservationReleaseReqSchema.parse(request.body);
-    const lic = await resolveMonitorLicense(req.pin || req.license_key, req.account);
+    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account);
     const key = reservationKey(req.broker_server, req.account, req.symbol);
     const db = getDb();
     const reservations = db.collection("cloud_direction_reservations");

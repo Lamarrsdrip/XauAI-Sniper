@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { getDb } from "../../db.js";
-import { normalizeLicenseKey, resolveMonitorLicense } from "../../services/license.js";
+import { normalizeLicenseKey, resolveEaMonitorLicense } from "../../services/license.js";
 import { TradeThesisStatusReqSchema } from "../../models/lease.js";
 
 /** Port of server.py:7846 `POST /cloud/monitor/thesis-status` -- upserted per-ticket live state, not appended. */
@@ -8,7 +8,7 @@ export async function registerCloudThesisStatusRoutes(app: FastifyInstance): Pro
   app.post("/cloud/monitor/thesis-status", async (request, reply) => {
     const req = TradeThesisStatusReqSchema.parse(request.body);
     const licenseKey = normalizeLicenseKey(req.license_key || req.pin || "");
-    const lic = await resolveMonitorLicense(licenseKey, req.account || "");
+    const lic = await resolveEaMonitorLicense(licenseKey, req.account || "");
     if (!req.ticket) return reply.code(400).send({ detail: "ticket is required" });
 
     const doc: Record<string, unknown> = { ...req };

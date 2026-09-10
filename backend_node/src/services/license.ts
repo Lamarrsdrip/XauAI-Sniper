@@ -91,3 +91,13 @@ export async function resolveMonitorLicense(pin: string, account: string): Promi
     account: acct,
   });
 }
+
+
+export async function resolveEaMonitorLicense(pin: string, account: string): Promise<Document> {
+  const acct = String(account ?? "").trim();
+  if (!acct) throw new LicenseError(400, { ok: false, reason: "MISSING_MT5_ACCOUNT", message: "EA-facing requests must include the MT5 account.", account: acct });
+  const lic = await resolveMonitorLicense(pin, acct);
+  const bound = String(lic["mt5_account"] ?? "").trim();
+  if (!bound || bound !== acct) throw new LicenseError(403, { ok: false, reason: "MT5_ACCOUNT_BINDING_NOT_CONFIRMED", message: "License/account binding is not confirmed.", bound_account: bound, account: acct });
+  return lic;
+} // ASTRA_REPAIR_V2_6287 / 023

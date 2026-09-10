@@ -163,4 +163,27 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
     }),
   );
   log.info(`[startup] index report: ${indexReport.join(" | ")}`);
+
+  await astraVerifyCriticalIndexesV2(); // readiness must fail when a correctness-critical unique index is absent
 }
+
+
+async function astraVerifyCriticalIndexesV2(): Promise<void> {
+  const db = getDb();
+  const ensure = async (collectionName: string, key: Record<string, 1>, options: Record<string, unknown> = {}) => {
+    const indexes = await db.collection(collectionName).indexes();
+    const fields = Object.keys(key);
+    const exists = indexes.some((idx) => idx.unique === true && fields.length === Object.keys(idx.key ?? {}).length && fields.every((field) => Number((idx.key as Record<string, unknown>)[field]) === 1));
+    if (!exists) await db.collection(collectionName).createIndex(key, { ...options, unique: true });
+  };
+  await ensure("users", { email: 1 });
+  await ensure("payment_transactions", { reference: 1 });
+  await ensure("pin_licenses", { payment_ref: 1 }, { sparse: true });
+  await ensure("cloud_notification_log", { idempotency_key: 1 });
+  await ensure("manual_trading_broker_candles", { account: 1, symbol: 1, timeframe: 1, openTime: 1 });
+  await ensure("cloud_outlook_thesis", { account: 1, symbol: 1, outlook_id: 1 });
+  await ensure("global_brain_observations", { dedupe_key: 1 });
+  await ensure("cloud_users", { email: 1 });
+  await ensure("pin_licenses", { pin: 1 });
+  await ensure("trade_journal", { trade_identity: 1 });
+} // ASTRA_REPAIR_V2_6287 / 013

@@ -269,7 +269,7 @@ describe("X auto-post queue + eligibility", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("recovers an interrupted worker claim and resumes the same durable job", async () => {
+  it("fences an interrupted worker claim as uncertain and never resends it automatically", async () => {
     await setSettings({ auto_post_enabled: true, last_auto_post_at: new Date(Date.now() - 60_000).toISOString() });
     const trade = closedTrade({ profit: 20 });
     state.db.collection("x_trade_posts").docs.push({
@@ -284,8 +284,8 @@ describe("X auto-post queue + eligibility", () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 201, headers: new Headers(), json: async () => ({ data: { id: "17000000003" } }) })));
     await processQueuedXTradePosts();
     const row = state.db.collection("x_trade_posts").docs[0]!;
-    expect(row["status"]).toBe("POSTED");
-    expect(row["x_post_id"]).toBe("17000000003");
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(row["status"]).toBe("UNCERTAIN");
+    expect(row["failure_category"]).toBe("WORKER_RESTART_REQUIRES_RECONCILIATION");
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

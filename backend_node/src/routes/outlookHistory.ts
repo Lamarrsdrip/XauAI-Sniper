@@ -35,7 +35,7 @@ export async function registerOutlookHistoryRoutes(app: FastifyInstance): Promis
       return { outlooks: [], timeline: [], signal_events: [], stats: {}, reason: "license_not_linked" };
     }
 
-    const scope = account && licenseKey ? { $or: [{ account }, { license_key: licenseKey }] } : account ? { account } : { license_key: licenseKey };
+    const scope = account && licenseKey ? { account, license_key: licenseKey } : account ? { account } : { license_key: licenseKey };
     const conditions: Record<string, unknown>[] = [scope];
     if (q.direction && q.direction !== "All") conditions.push({ primary_direction: q.direction });
     if (q.color && q.color !== "All") conditions.push({ color_state: q.color });
@@ -94,7 +94,7 @@ export async function registerOutlookHistoryRoutes(app: FastifyInstance): Promis
     const licenseKey = lic ? normalizeLicenseKey(String(lic["pin"] ?? "")) : "";
     if (!account && !licenseKey) return reply.code(404).send({ detail: "outlook not found" });
 
-    const scope = account && licenseKey ? { $or: [{ account }, { license_key: licenseKey }] } : account ? { account } : { license_key: licenseKey };
+    const scope = account && licenseKey ? { account, license_key: licenseKey } : account ? { account } : { license_key: licenseKey };
     const doc = await db.collection("cloud_market_outlooks").findOne({ $and: [{ id: outlookId }, scope] }, { projection: { _id: 0 } });
     if (!doc) return reply.code(404).send({ detail: "outlook not found" });
 

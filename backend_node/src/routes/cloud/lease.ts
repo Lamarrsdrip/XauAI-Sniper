@@ -3,7 +3,7 @@ import type { Document } from "mongodb";
 import { randomUUID } from "node:crypto";
 import { getDb } from "../../db.js";
 import { env } from "../../env.js";
-import { resolveMonitorLicense } from "../../services/license.js";
+import { resolveEaMonitorLicense } from "../../services/license.js";
 import {
   LEASE_ALGORITHM_ID,
   LEASE_SCHEMA_VERSION,
@@ -180,21 +180,21 @@ async function issueLease(
 export async function registerCloudLeaseRoutes(app: FastifyInstance): Promise<void> {
   app.post("/cloud/lease/request", async (request) => {
     const req = LeaseRequestReqSchema.parse(request.body);
-    const lic = await resolveMonitorLicense(req.pin || req.license_key, req.account);
+    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account);
     const leaseDoc = await issueLease(lic, req.account, req.broker_server, req.symbol, req.installation_id, req.terminal_instance_id, req.allowed_directions, req.allowed_entry_families, false);
     return { issued: true, lease: leaseDoc };
   });
 
   app.post("/cloud/lease/renew", async (request) => {
     const req = LeaseRequestReqSchema.parse(request.body);
-    const lic = await resolveMonitorLicense(req.pin || req.license_key, req.account);
+    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account);
     const leaseDoc = await issueLease(lic, req.account, req.broker_server, req.symbol, req.installation_id, req.terminal_instance_id, req.allowed_directions, req.allowed_entry_families, true);
     return { issued: true, lease: leaseDoc };
   });
 
   app.post("/cloud/lease/surrender", async (request) => {
     const req = LeaseSurrenderReqSchema.parse(request.body);
-    const lic = await resolveMonitorLicense(req.pin || req.license_key, req.account);
+    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account);
     const key = leaseAuthorityKey(String(lic["id"] ?? ""), req.account, req.broker_server, req.symbol);
     const nowIso = new Date().toISOString();
     const result = await getDb()
@@ -208,7 +208,7 @@ export async function registerCloudLeaseRoutes(app: FastifyInstance): Promise<vo
 
   app.get("/cloud/lease/status", async (request) => {
     const q = request.query as { pin?: string; account?: string; broker_server?: string; symbol?: string };
-    const lic = await resolveMonitorLicense(q.pin ?? "", q.account ?? "");
+    const lic = await resolveEaMonitorLicense(q.pin ?? "", q.account ?? "");
     const key = leaseAuthorityKey(String(lic["id"] ?? ""), q.account ?? "", q.broker_server ?? "", q.symbol ?? "");
     const authority = await getDb().collection("lease_terminal_authority").findOne({ _id: key as unknown as never }, { projection: { _id: 0 } });
     if (!authority) return { has_authority_record: false };
@@ -224,32 +224,27 @@ export async function registerCloudLeaseRoutes(app: FastifyInstance): Promise<vo
     };
   });
 
-  app.post("/cloud/lease/reconcile", async (request) => {
+  app.post("/cloud/lease/reconcile", async (request, reply) => {
     const req = LeaseReconcileReqSchema.parse(request.body);
-    const lic = await resolveMonitorLicense(req.pin || req.license_key, req.account);
+    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account);
     const nowIso = new Date().toISOString();
     const results: { execution_key: string; status: string }[] = [];
     const offlineEvents = getDb().collection("lease_offline_events");
-
+    let retryableFailure = false;
     for (const ev of req.events) {
-      const doc: Record<string, unknown> = {
-        ...ev,
-        _id: ev.execution_key,
-        license_id: lic["id"] ?? "",
-        account: req.account,
-        broker_server: req.broker_server,
-        symbol: req.symbol,
-        installation_id: req.installation_id,
-        terminal_instance_id: req.terminal_instance_id,
-        reconciled_at: nowIso,
-      };
+      const doc: Record<string, unknown> = { ...ev, _id: ev.execution_key, license_id: lic["id"] ?? "", account: req.account, broker_server: req.broker_server, symbol: req.symbol, installation_id: req.installation_id, terminal_instance_id: req.terminal_instance_id, reconciled_at: nowIso };
       try {
         await offlineEvents.insertOne(doc as unknown as Document);
         results.push({ execution_key: ev.execution_key, status: "reconciled" });
-      } catch {
-        results.push({ execution_key: ev.execution_key, status: "already_reconciled" });
+      } catch (error) {
+        if ((error as { code?: number }).code !== 11000) { retryableFailure = true; results.push({ execution_key: ev.execution_key, status: "retryable_error" }); continue; }
+        const existing = await offlineEvents.findOne({ _id: ev.execution_key as unknown as never });
+        const same = existing && String(existing["license_id"] ?? "") === String(lic["id"] ?? "") && String(existing["account"] ?? "") === req.account && String(existing["broker_server"] ?? "") === req.broker_server && String(existing["symbol"] ?? "") === req.symbol && Object.entries(ev).every(([k,v]) => JSON.stringify(existing[k]) === JSON.stringify(v));
+        if (same) results.push({ execution_key: ev.execution_key, status: "already_reconciled" });
+        else { retryableFailure = true; results.push({ execution_key: ev.execution_key, status: "duplicate_mismatch" }); }
       }
     }
-    return { reconciled: true, events: results };
-  });
+    const payload = { reconciled: !retryableFailure, events: results };
+    return retryableFailure ? reply.code(503).send(payload) : payload;
+  }); // ASTRA_REPAIR_V2_6287 / 020
 }

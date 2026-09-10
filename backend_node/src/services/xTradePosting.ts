@@ -5,7 +5,7 @@ import { xOAuthConnection, xUserAccessToken } from "./xOAuth.js";
 import { normalizeGoldSymbol } from "./goldSymbol.js";
 
 export type FinalTrade = Record<string, unknown>;
-type XPostStatus = "QUEUED" | "PROCESSING" | "POSTED" | "RETRYING" | "FAILED" | "BLOCKED_INVALID_TRADE_DATA";
+type XPostStatus = "QUEUED" | "PROCESSING" | "POSTED" | "UNCERTAIN" | "RETRYING" | "FAILED" | "BLOCKED_INVALID_TRADE_DATA";
 type FinalTradeValidation = { valid: true; trade: FinalTrade } | { valid: false; reason: string; trade: FinalTrade };
 const MAX_X_POST_LENGTH = 280;
 const RETRYABLE_STATUSES = ["QUEUED", "RETRYING", "queued"];
@@ -195,7 +195,7 @@ async function recoverInterruptedPosts(): Promise<void> {
   for (const row of rows) {
     await coll.updateOne(
       { idempotency_key: String(row["idempotency_key"] ?? ""), status: { $in: PROCESSING_STATUSES } },
-      { $set: { status: "RETRYING", failure_category: "WORKER_RESTART_RECOVERY", next_attempt_at: staleAt } },
+      { $set: { status: "UNCERTAIN", failure_category: "WORKER_RESTART_REQUIRES_RECONCILIATION", next_attempt_at: null } },
     );
     xPostLog("recovered_interrupted_post", { closed_trade_id: row["closed_trade_id"] });
   }
@@ -238,25 +238,30 @@ async function persistAuthoritativeExitPrice(trade: FinalTrade): Promise<void> {
 
 async function processClaimedXTradePost(row: Record<string, unknown>, source: "auto" | "admin_manual"): Promise<Record<string, unknown>> {
   const checked = validateFinalTrade(row["trade"] as FinalTrade);
-  if (!checked.valid) {
-    await blockInvalidXTradePost(row, checked);
-    return { status: "BLOCKED_INVALID_TRADE_DATA", closed_trade_id: row["closed_trade_id"] };
-  }
+  if (!checked.valid) { await blockInvalidXTradePost(row, checked); return { status: "BLOCKED_INVALID_TRADE_DATA", closed_trade_id: row["closed_trade_id"] }; }
   await persistAuthoritativeExitPrice(checked.trade);
   xPostLog("publishing", { closed_trade_id: row["closed_trade_id"], source });
+  let providerPostId = "";
   try {
-    const postText = buildXTradePost(checked.trade);
-    const posted = await postToX(postText);
+    const posted = await postToX(buildXTradePost(checked.trade));
+    providerPostId = posted.id;
     const result = { status: "POSTED", x_post_id: posted.id, posted_at: new Date().toISOString(), last_attempt_at: new Date().toISOString(), trade: checked.trade };
-    await getDb().collection("x_trade_posts").updateOne({ idempotency_key: String(row["idempotency_key"] ?? ""), status: { $in: PROCESSING_STATUSES } }, { $set: result });
+    try {
+      const persisted = await getDb().collection("x_trade_posts").updateOne({ idempotency_key: String(row["idempotency_key"] ?? ""), status: { $in: PROCESSING_STATUSES } }, { $set: result });
+      if (persisted.matchedCount !== 1) throw new Error("claimed X-post row was not persistable after provider success");
+    } catch (persistError) {
+      await getDb().collection("x_trade_posts").updateOne({ idempotency_key: String(row["idempotency_key"] ?? "") }, { $set: { status: "UNCERTAIN", x_post_id: posted.id, failure_category: "POST_SUCCEEDED_PERSISTENCE_UNCERTAIN", last_attempt_at: new Date().toISOString(), next_attempt_at: null } }).catch(() => undefined);
+      throw Object.assign(new Error("X post succeeded but persistence is uncertain; automatic resend fenced."), { category: "X_POST_PERSISTENCE_UNCERTAIN", cause: persistError });
+    }
     xPostLog("posted", { closed_trade_id: row["closed_trade_id"], x_post_id: posted.id });
     return { ...result, closed_trade_id: row["closed_trade_id"] };
   } catch (error) {
+    if (providerPostId) { xPostLog("uncertain", { closed_trade_id: row["closed_trade_id"], x_post_id: providerPostId }); throw error; }
     xPostLog("failed", { closed_trade_id: row["closed_trade_id"], category: String((error as { category?: unknown })?.category ?? "X_POSTING_ERROR") });
-    await failXTradePost(row, error);
-    throw error;
+    await failXTradePost(row, error); throw error;
   }
-}
+} // ASTRA_REPAIR_V2_6287 / 017
+
 
 export async function publishApprovedXTrade(trade: FinalTrade): Promise<Record<string, unknown>> {
   if (!await xPostingConfigured()) throw Object.assign(new Error("X user-context credentials are not configured."), { statusCode: 503 });

@@ -67,6 +67,7 @@ describe("persona/entitlement acceptance matrix", () => {
     state.db = new FakeDb();
     state.db.uniqueIndexes["signal_trials"] = ["user_id"];
     state.user = { id: "persona-user", email: "persona@example.com", full_name: "Persona Tester" };
+    state.db.collection("cloud_users").docs.push({ ...state.user });
     app = await createApp();
   });
 
