@@ -5,6 +5,7 @@ import { normalizeGoldSymbol } from "./goldSymbol.js";
 import { asUtc, extractEvidenceQuoteFromDetails } from "./marketOutlookEvidence.js";
 import { MARKET_EVIDENCE_COLLECTION, MARKET_EVIDENCE_RETENTION_DAYS } from "./marketIntelligenceConfig.js";
 import { recordPersistentDiagnostic } from "./persistentDiagnostics.js";
+import { normalizeEnvironmentSource, normalizeRuntimeEnvironment } from "./accountProvenance.js";
 
 export { MARKET_EVIDENCE_COLLECTION };
 
@@ -35,15 +36,6 @@ function nonEmptyRecord(value: unknown): value is Record<string, unknown> {
 export function hasMarketEvidence(details: Record<string, unknown> | null | undefined): boolean {
   const d = details ?? {};
   return nonEmptyRecord(d["market_thesis"]) || nonEmptyRecord(d["entry_readiness"]) || nonEmptyRecord(d["m10_signal"]);
-}
-
-function normalizeRuntimeEnvironment(raw: unknown): "LIVE" | "DEMO" | "TESTER" | "REPLAY" | "UNKNOWN" {
-  const value = String(raw ?? "").trim().toUpperCase();
-  if (["LIVE", "REAL", "PRODUCTION"].includes(value)) return "LIVE";
-  if (["DEMO", "PAPER"].includes(value)) return "DEMO";
-  if (["TESTER", "BACKTEST", "STRATEGY_TESTER"].includes(value)) return "TESTER";
-  if (["REPLAY", "SIMULATION", "SIMULATOR"].includes(value)) return "REPLAY";
-  return "UNKNOWN";
 }
 
 function stableJson(value: unknown): string {
@@ -174,7 +166,10 @@ export async function recordImmutableMarketEvidence(input: MarketEvidenceInput):
       broker_retcode: details["broker_retcode"],
     },
     provenance: {
+      // Stamped by the route from the server-side attestation resolver.
       runtime_environment: normalizeRuntimeEnvironment(details["runtime_environment"]),
+      environment_source: normalizeEnvironmentSource(details["environment_source"]),
+      environment_attestation_id: details["environment_attestation_id"] ? String(details["environment_attestation_id"]) : null,
       ea_version: String(details["ea_version"] ?? ""),
       broker_server: String(details["broker_server"] ?? ""),
       build_id: String(details["build_id"] ?? ""),

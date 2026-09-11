@@ -10,6 +10,7 @@ import { authoritativeExitPrice, enqueueFinalTradeForXPost } from "../services/x
 import { buildBotTradeObservation, recordGlobalBrainObservation } from "../services/globalBrainIngest.js";
 import { shadowOutcome } from "../services/tradeOutcome.js";
 import { recordPersistentDiagnostic } from "../services/persistentDiagnostics.js";
+import { resolveTrustedRuntimeEnvironment } from "../services/accountProvenance.js";
 
 export const MAX_JOURNAL_TRADES_PAGE_SIZE = 200;
 
@@ -50,6 +51,16 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
       const db = getDb();
       const doc: Record<string, unknown> = { ...rest };
       doc["license_id"] = lic?.["id"] ?? "";
+      // Server-resolved provenance for the strictly license-bound account;
+      // the EA-sent runtime_environment is kept only as reported_environment.
+      const provenance = await resolveTrustedRuntimeEnvironment({
+        license_id: String(lic?.["id"] ?? ""), account: entry.account_login,
+        reported_environment: entry.runtime_environment, broker_server: entry.broker_server,
+      });
+      doc["runtime_environment"] = provenance.environment;
+      doc["environment_source"] = provenance.environment_source;
+      doc["environment_attestation_id"] = provenance.environment_attestation_id;
+      doc["reported_environment"] = provenance.reported_environment;
       doc["created_at"] = new Date().toISOString();
       doc["created_ts"] = Date.now() / 1000;
       doc["win_rate"] = entry.total_trades > 0 ? Math.round((entry.wins / entry.total_trades) * 1000) / 10 : 0;

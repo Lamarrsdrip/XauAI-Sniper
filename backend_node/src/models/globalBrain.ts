@@ -110,6 +110,10 @@ export interface ObservationProvenance {
   broker_server: string | null;
   source_build: string | null;
   integrity_epoch: string;
+  /** How `environment` was established. Only SERVER_ATTESTATION can support trusted LIVE (services/accountProvenance.ts). */
+  environment_source?: "SERVER_ATTESTATION" | "EA_REPORTED" | "BROKER_SERVER_HINT" | "NONE";
+  /** The attestation that vouched for LIVE; training re-checks it is still active. */
+  environment_attestation_id?: string | null;
 }
 
 export interface ObservationOutcome {
@@ -166,4 +170,26 @@ export const GlobalBrainSettingsPatchSchema = z.object({
   bot_learned_influence_enabled: z.boolean().optional(),
   m10_learned_influence_enabled: z.boolean().optional(),
   outlook_learned_influence_enabled: z.boolean().optional(),
+});
+
+/**
+ * Admin attestation of a license-bound MT5 account's environment -- the
+ * server-side source of truth for trusted LIVE provenance
+ * (services/accountProvenance.ts). Only LIVE/DEMO are account properties;
+ * TESTER/REPLAY can only ever be reported, never attested.
+ */
+export const GlobalBrainAccountAttestRequestSchema = z.object({
+  license_pin: z.string().optional(),
+  license_id: z.string().optional(),
+  mt5_account: z.string().trim().min(1),
+  environment: z.enum(["LIVE", "DEMO"]),
+  broker_server: z.string().optional().default(""),
+  note: z.string().max(500).optional().default(""),
+});
+
+export const GlobalBrainAccountRevokeRequestSchema = z.object({
+  license_pin: z.string().optional(),
+  license_id: z.string().optional(),
+  mt5_account: z.string().trim().min(1),
+  reason: z.string().trim().min(1).max(500),
 });

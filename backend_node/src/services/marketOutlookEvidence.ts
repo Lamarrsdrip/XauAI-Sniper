@@ -217,6 +217,8 @@ export async function latestEaEvidence(licenseKey: string, account: string, sour
       event_time: row["observed_at"] ?? row["received_at"],
       execution: row["execution"] ?? {},
       runtime_environment: provenance["runtime_environment"] ?? "UNKNOWN",
+      environment_source: provenance["environment_source"] ?? "NONE",
+      environment_attestation_id: provenance["environment_attestation_id"] ?? null,
       ea_version: provenance["ea_version"] ?? "",
       broker_server: provenance["broker_server"] ?? "",
       build_id: provenance["build_id"] ?? "",
@@ -234,6 +236,7 @@ export async function latestEaEvidence(licenseKey: string, account: string, sour
       regime: details["regime"] ?? row["mode"] ?? "", session: details["session"] ?? "", event_time: row["ts"],
       broker_time: details["broker_time"] ?? details["server_time"], device_time: details["device_time"] ?? details["local_time"],
       runtime_environment: details["runtime_environment"] ?? "UNKNOWN", ea_version: details["ea_version"] ?? "",
+      environment_source: details["environment_source"] ?? "NONE", environment_attestation_id: details["environment_attestation_id"] ?? null,
       broker_server: details["broker_server"] ?? "", build_id: details["build_id"] ?? "",
       execution: {
         candidate_allowed: details["candidate_allowed"], final_execution_allowed: details["final_execution_allowed"],

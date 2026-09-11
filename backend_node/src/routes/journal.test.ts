@@ -221,3 +221,43 @@ describe("v6.27.9 ShadowML — closed trade joins back to its pending shadow obs
     expect(state.db.collection("ml_shadow_decisions").docs).toHaveLength(0);
   });
 });
+
+describe("POST /journal/log -- Global Brain runtime provenance is server-resolved", () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    state.db = new FakeDb();
+    reconcileTradeJournalEntry.mockClear();
+    reconcileTradeJournalEntry.mockResolvedValue(null);
+    app = await createApp();
+  });
+
+  // Shaped like production v6.28.6 (XauCloud.mq5 /api/journal/log): signature + ea_version, no runtime_environment, no broker_server.
+  const v6286Close = (overrides: Doc = {}) => closedTradePayload({ ea_version: "6.28.6", signature: "v6286-sig-1", result: "WIN", final_r: 1, mfe_r: 1.1, mae_r: -0.2, ...overrides });
+
+  it("stamps attested LIVE onto a v6.28.6 close for the license-bound account and its Global Brain observation", async () => {
+    await state.db.collection("global_brain_account_provenance").insertOne({ id: "att-1", license_id: "lic-test", account: "555111", environment: "LIVE", active: true, broker_server: "" });
+    const res = await app.inject({ method: "POST", url: "/journal/log", payload: v6286Close() });
+    expect(res.json()).toMatchObject({ status: "ok" });
+    expect(state.db.collection("trade_journal").docs[0]).toMatchObject({ runtime_environment: "LIVE", environment_source: "SERVER_ATTESTATION", environment_attestation_id: "att-1", reported_environment: "UNKNOWN" });
+    const obs = state.db.collection("global_brain_observations").docs[0]!;
+    expect(obs["provenance"]).toMatchObject({ environment: "LIVE", environment_source: "SERVER_ATTESTATION", environment_attestation_id: "att-1", ea_version: "6.28.6", integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11" });
+  });
+
+  it("keeps an unattested v6.28.6 close UNKNOWN", async () => {
+    await app.inject({ method: "POST", url: "/journal/log", payload: v6286Close() });
+    expect(state.db.collection("global_brain_observations").docs[0]!["provenance"]).toMatchObject({ environment: "UNKNOWN", environment_source: "NONE", environment_attestation_id: null });
+  });
+
+  it("ignores a client that self-declares LIVE (and tries to forge the server fields)", async () => {
+    await app.inject({ method: "POST", url: "/journal/log", payload: v6286Close({ runtime_environment: "LIVE", environment_source: "SERVER_ATTESTATION", environment_attestation_id: "att-forged" }) });
+    expect(state.db.collection("trade_journal").docs[0]).toMatchObject({ runtime_environment: "UNKNOWN", environment_source: "NONE", environment_attestation_id: null, reported_environment: "LIVE" });
+    expect(state.db.collection("global_brain_observations").docs[0]!["provenance"]).toMatchObject({ environment: "UNKNOWN", environment_source: "NONE" });
+  });
+
+  it("honors an EA-reported DEMO even on an attested LIVE account", async () => {
+    await state.db.collection("global_brain_account_provenance").insertOne({ id: "att-1", license_id: "lic-test", account: "555111", environment: "LIVE", active: true, broker_server: "" });
+    await app.inject({ method: "POST", url: "/journal/log", payload: v6286Close({ runtime_environment: "DEMO" }) });
+    expect(state.db.collection("global_brain_observations").docs[0]!["provenance"]).toMatchObject({ environment: "DEMO", environment_source: "EA_REPORTED" });
+  });
+});

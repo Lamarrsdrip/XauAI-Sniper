@@ -59,6 +59,8 @@ export async function publishM10SignalFromActivity(licenseKey: string, account: 
     event_time: evidence["event_time"] ?? evidence["ts"] ?? nowIso,
     source_event_id: sourceEventId || evidence["source_event_id"],
     runtime_environment: evidence["runtime_environment"] ?? "UNKNOWN",
+    environment_source: evidence["environment_source"] ?? "NONE",
+    environment_attestation_id: evidence["environment_attestation_id"] ?? null,
     ea_version: evidence["ea_version"] ?? "",
     broker_server: evidence["broker_server"] ?? "",
     build_id: evidence["build_id"] ?? "",

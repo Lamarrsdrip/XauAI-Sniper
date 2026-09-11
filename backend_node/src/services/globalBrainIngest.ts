@@ -13,6 +13,7 @@ import { getGlobalBrainSettings } from "./globalBrainSettings.js";
 import { GLOBAL_BRAIN_INTEGRITY_EPOCH, GLOBAL_BRAIN_LEGACY_EPOCH } from "../models/globalBrain.js";
 import { recordPersistentDiagnostic } from "./persistentDiagnostics.js";
 import { canonicalTradeOutcome } from "./tradeOutcome.js";
+import { normalizeEnvironmentSource, normalizeRuntimeEnvironment } from "./accountProvenance.js";
 
 import { MongoServerError } from "mongodb";
 /**
@@ -66,14 +67,6 @@ function firstNonEmpty(...values: unknown[]): string {
   return "";
 }
 
-function normalizeProvenanceEnvironment(value: unknown): "LIVE" | "DEMO" | "TESTER" | "REPLAY" | "UNKNOWN" {
-  const raw = String(value ?? "").trim().toUpperCase();
-  if (["LIVE", "REAL", "PRODUCTION"].includes(raw)) return "LIVE";
-  if (["DEMO", "PAPER"].includes(raw)) return "DEMO";
-  if (["TESTER", "BACKTEST", "STRATEGY_TESTER"].includes(raw)) return "TESTER";
-  if (["REPLAY", "SIMULATION", "SIMULATOR"].includes(raw)) return "REPLAY";
-  return "UNKNOWN";
-}
 
 function hashAccountRef(rawId: string): string {
   const pepper = env.GLOBAL_BRAIN_HASH_PEPPER || env.JWT_SECRET;
@@ -227,7 +220,7 @@ export function buildBotTradeObservation(
     // send source_evidence_id for trades, so keying on it would permanently
     // mislabel genuine post-repair trades as legacy. Environment still gates
     // training (UNKNOWN is never treated as LIVE).
-    provenance: { environment: normalizeProvenanceEnvironment(tradeDoc["runtime_environment"]), ea_version: String(tradeDoc["ea_version"] ?? "") || null, broker_server: String(tradeDoc["broker_server"] ?? "") || null, source_build: String(tradeDoc["build_id"] ?? "") || null, integrity_epoch: GLOBAL_BRAIN_INTEGRITY_EPOCH },
+    provenance: { environment: normalizeRuntimeEnvironment(tradeDoc["runtime_environment"]), environment_source: normalizeEnvironmentSource(tradeDoc["environment_source"]), environment_attestation_id: tradeDoc["environment_attestation_id"] ? String(tradeDoc["environment_attestation_id"]) : null, ea_version: String(tradeDoc["ea_version"] ?? "") || null, broker_server: String(tradeDoc["broker_server"] ?? "") || null, source_build: String(tradeDoc["build_id"] ?? "") || null, integrity_epoch: GLOBAL_BRAIN_INTEGRITY_EPOCH },
     created_at: new Date().toISOString(),
   };
 }
@@ -267,7 +260,9 @@ export function buildShadowCandidateObservation(shadowDoc: Record<string, unknow
     resolved_at: null,
     resolution_state: "UNRESOLVABLE_NO_PATH",
     source_ref: { collection: "ml_shadow_decisions", id: String(shadowDoc["signature"] ?? "") },
-    provenance: { environment: normalizeProvenanceEnvironment(shadowDoc["runtime_environment"]), ea_version: String(shadowDoc["ea_version"] ?? "") || null, broker_server: String(shadowDoc["broker_server"] ?? "") || null, source_build: String(shadowDoc["build_id"] ?? "") || null, integrity_epoch: shadowDoc["source_evidence_id"] ? GLOBAL_BRAIN_INTEGRITY_EPOCH : GLOBAL_BRAIN_LEGACY_EPOCH },
+    // Built straight from the /ml/shadow/record request body: client text, so
+    // it can never carry a server attestation (and it never resolves anyway).
+    provenance: { environment: normalizeRuntimeEnvironment(shadowDoc["runtime_environment"]), environment_source: "EA_REPORTED", environment_attestation_id: null, ea_version: String(shadowDoc["ea_version"] ?? "") || null, broker_server: String(shadowDoc["broker_server"] ?? "") || null, source_build: String(shadowDoc["build_id"] ?? "") || null, integrity_epoch: shadowDoc["source_evidence_id"] ? GLOBAL_BRAIN_INTEGRITY_EPOCH : GLOBAL_BRAIN_LEGACY_EPOCH },
     created_at: new Date().toISOString(),
   };
 }
@@ -311,7 +306,7 @@ export function buildM10CandidateObservation(eventDoc: Record<string, unknown>):
     resolved_at: null,
     resolution_state: "UNRESOLVABLE_NO_PATH",
     source_ref: { collection: "cloud_outlook_signal_events", id: String(eventDoc["candidate_id"] ?? "") },
-    provenance: { environment: normalizeProvenanceEnvironment(eventDoc["runtime_environment"]), ea_version: String(eventDoc["ea_version"] ?? "") || null, broker_server: String(eventDoc["broker_server"] ?? "") || null, source_build: String(eventDoc["build_id"] ?? "") || null, integrity_epoch: eventDoc["source_evidence_id"] ? GLOBAL_BRAIN_INTEGRITY_EPOCH : GLOBAL_BRAIN_LEGACY_EPOCH },
+    provenance: { environment: normalizeRuntimeEnvironment(eventDoc["runtime_environment"]), environment_source: normalizeEnvironmentSource(eventDoc["environment_source"]), environment_attestation_id: eventDoc["environment_attestation_id"] ? String(eventDoc["environment_attestation_id"]) : null, ea_version: String(eventDoc["ea_version"] ?? "") || null, broker_server: String(eventDoc["broker_server"] ?? "") || null, source_build: String(eventDoc["build_id"] ?? "") || null, integrity_epoch: eventDoc["source_evidence_id"] ? GLOBAL_BRAIN_INTEGRITY_EPOCH : GLOBAL_BRAIN_LEGACY_EPOCH },
     created_at: new Date().toISOString(),
   };
 }
@@ -413,7 +408,7 @@ export function buildOutlookObservation(doc: Record<string, unknown>, quotes: re
     resolved_at: String(doc["classification_at"] ?? new Date().toISOString()),
     resolution_state: "RESOLVED",
     source_ref: { collection: "cloud_market_outlooks", id: String(doc["id"] ?? "") },
-    provenance: { environment: normalizeProvenanceEnvironment(doc["runtime_environment"]), ea_version: String(doc["ea_version"] ?? "") || null, broker_server: String(doc["broker_server"] ?? "") || null, source_build: String(doc["source_evidence_id"] ?? "") || null, integrity_epoch: doc["source_evidence_id"] ? GLOBAL_BRAIN_INTEGRITY_EPOCH : GLOBAL_BRAIN_LEGACY_EPOCH },
+    provenance: { environment: normalizeRuntimeEnvironment(doc["runtime_environment"]), environment_source: normalizeEnvironmentSource(doc["environment_source"]), environment_attestation_id: doc["environment_attestation_id"] ? String(doc["environment_attestation_id"]) : null, ea_version: String(doc["ea_version"] ?? "") || null, broker_server: String(doc["broker_server"] ?? "") || null, source_build: String(doc["source_evidence_id"] ?? "") || null, integrity_epoch: doc["source_evidence_id"] ? GLOBAL_BRAIN_INTEGRITY_EPOCH : GLOBAL_BRAIN_LEGACY_EPOCH },
     created_at: new Date().toISOString(),
   };
 }

@@ -82,6 +82,7 @@ import { recordDiagnostic } from "./services/diagnostics.js";
 import { applySecurityHeaders } from "./services/httpSecurity.js";
 import { ensureMarketEvidenceIndexes } from "./services/marketEvidenceLedger.js";
 import { ensurePersistentDiagnosticIndexes } from "./services/persistentDiagnostics.js";
+import { ensureAccountProvenanceIndexes } from "./services/accountProvenance.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -373,6 +374,7 @@ async function main(): Promise<void> {
   await runReadinessStep("market-intelligence-storage", async () => {
     await ensureMarketEvidenceIndexes();
     await ensurePersistentDiagnosticIndexes();
+    await ensureAccountProvenanceIndexes();
   }, 30_000);
   await runReadinessStep("global-brain", async () => {
     await ensureGlobalBrainIndexes();

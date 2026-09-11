@@ -21,6 +21,18 @@ const {
 const { getCurrentChampion, getLatestModelDoc } = await import("./globalBrainRegistry.js");
 const { latestDriftAlert } = await import("./globalBrainDrift.js");
 
+/** A trusted-LIVE observation: current epoch + LIVE established by an ACTIVE server attestation. */
+const TRUSTED_LIVE_PROVENANCE = {
+  environment: "LIVE", ea_version: "6.28.6", broker_server: "live", source_build: "evidence",
+  integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11", environment_source: "SERVER_ATTESTATION", environment_attestation_id: "att-live-1",
+} as const;
+
+function dbWithLiveAttestation(): FakeDb {
+  const db = new FakeDb();
+  void db.collection("global_brain_account_provenance").insertOne({ id: "att-live-1", license_id: "lic-1", account: "1001", environment: "LIVE", active: true });
+  return db;
+}
+
 function makeObservation(i: number, overrides: Partial<GlobalBrainObservation> = {}): GlobalBrainObservation {
   // Chronologically spread, oldest first -- resolved_at index i, 1 hour apart.
   const resolvedAt = new Date(Date.UTC(2026, 0, 1, 0, 0, 0) + i * 3_600_000).toISOString();
@@ -59,7 +71,7 @@ function makeObservation(i: number, overrides: Partial<GlobalBrainObservation> =
     decision_at: resolvedAt,
     resolved_at: resolvedAt,
     source_ref: { collection: "cloud_market_outlooks", id: `id${i}` },
-    provenance: { environment: "LIVE", ea_version: "6.28.6", broker_server: "live", source_build: "evidence", integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11" },
+    provenance: TRUSTED_LIVE_PROVENANCE,
     created_at: resolvedAt,
     ...overrides,
   };
@@ -74,7 +86,7 @@ async function seedObservations(count: number): Promise<void> {
 
 describe("runGlobalBrainDailyCycle", () => {
   beforeEach(() => {
-    state.db = new FakeDb();
+    state.db = dbWithLiveAttestation();
   });
 
   it("reports INSUFFICIENT_EVIDENCE and promotes nothing when there are no observations at all", async () => {
@@ -85,6 +97,43 @@ describe("runGlobalBrainDailyCycle", () => {
       expect(question?.promoted).toBe(false);
       expect(question?.reason).toContain("INSUFFICIENT_EVIDENCE");
     }
+  });
+
+  it("admits only current-epoch LIVE backed by an ACTIVE server attestation", async () => {
+    const collection = state.db.collection(GLOBAL_BRAIN_OBSERVATIONS_COLLECTION);
+    await state.db.collection("global_brain_account_provenance").insertOne({ id: "att-revoked", license_id: "lic-2", account: "1002", environment: "LIVE", active: false });
+    const cases: Record<string, unknown>[] = [
+      { ...TRUSTED_LIVE_PROVENANCE }, // 0: eligible
+      { ...TRUSTED_LIVE_PROVENANCE, environment: "DEMO" },
+      { ...TRUSTED_LIVE_PROVENANCE, environment: "TESTER" },
+      { ...TRUSTED_LIVE_PROVENANCE, environment: "REPLAY" },
+      { ...TRUSTED_LIVE_PROVENANCE, environment: "UNKNOWN" },
+      { ...TRUSTED_LIVE_PROVENANCE, environment_source: "EA_REPORTED", environment_attestation_id: null }, // EA says LIVE: not proof
+      { ...TRUSTED_LIVE_PROVENANCE, environment_source: undefined, environment_attestation_id: undefined }, // source missing
+      { ...TRUSTED_LIVE_PROVENANCE, environment_attestation_id: "att-revoked" }, // attestation withdrawn
+      { ...TRUSTED_LIVE_PROVENANCE, environment_attestation_id: "att-forged" }, // unknown attestation id
+      { ...TRUSTED_LIVE_PROVENANCE, integrity_epoch: "LEGACY_UNTRUSTED" }, // epoch mismatch even though LIVE+attested
+    ];
+    for (const [i, provenance] of cases.entries()) {
+      await collection.insertOne({ ...makeObservation(i), provenance } as unknown as Record<string, unknown>);
+    }
+    // Legacy UNKNOWN observation with no provenance at all stays excluded even though an attestation now exists.
+    const { provenance: _drop, ...legacy } = makeObservation(99);
+    await collection.insertOne(legacy as unknown as Record<string, unknown>);
+    const report = await runGlobalBrainDailyCycle({ dryRun: true });
+    expect(report.observations_total).toBe(cases.length + 1);
+    expect(report.observations_eligible).toBe(1);
+  });
+
+  it("fails closed when the attestation store cannot be read", async () => {
+    await state.db.collection(GLOBAL_BRAIN_OBSERVATIONS_COLLECTION).insertOne(makeObservation(0) as unknown as Record<string, unknown>);
+    const realCollection = state.db.collection.bind(state.db);
+    (state.db as unknown as { collection: (name: string) => unknown }).collection = (name: string) => {
+      if (name === "global_brain_account_provenance") throw new Error("attestation store down");
+      return realCollection(name);
+    };
+    const report = await runGlobalBrainDailyCycle({ dryRun: true });
+    expect(report.observations_eligible).toBe(0);
   });
 
   it("excludes TESTER, REPLAY, UNKNOWN, and legacy-epoch observations from trusted production training", async () => {
@@ -160,7 +209,7 @@ describe("runGlobalBrainDailyCycle", () => {
         decision_at: resolvedAt,
         resolved_at: resolvedAt,
         source_ref: { collection: "cloud_market_outlooks", id: `id${i}` },
-        provenance: { environment: "LIVE", ea_version: "6.28.6", broker_server: "live", source_build: "evidence", integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11" },
+        provenance: TRUSTED_LIVE_PROVENANCE,
         created_at: resolvedAt,
       } as unknown as Record<string, unknown>);
     }
@@ -296,7 +345,7 @@ describe("runGlobalBrainDailyCycle", () => {
           decision_at: resolvedAt,
           resolved_at: resolvedAt,
           source_ref: { collection: "cloud_market_outlooks", id: `noise${cursor}` },
-          provenance: { environment: "LIVE", ea_version: "6.28.6", broker_server: "live", source_build: "evidence", integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11" },
+          provenance: TRUSTED_LIVE_PROVENANCE,
           created_at: resolvedAt,
         } as unknown as Record<string, unknown>);
       }
@@ -553,7 +602,7 @@ describe("checkHoldoutStability", () => {
 
 describe("Global Brain kill switches", () => {
   beforeEach(() => {
-    state.db = new FakeDb();
+    state.db = dbWithLiveAttestation();
   });
 
   it("auto_training_enabled=false: the cycle reports success with training_disabled=true and touches nothing else", async () => {
@@ -711,7 +760,7 @@ describe("checkOverfiltering", () => {
 
 describe("Anti-overfiltering wired into the promotion decision (integration)", () => {
   beforeEach(() => {
-    state.db = new FakeDb();
+    state.db = dbWithLiveAttestation();
   });
 
   it("wires checkOverfiltering into every real daily-cycle run and does not false-flag a challenger when every bucket it trains on genuinely performs well", async () => {
@@ -727,7 +776,7 @@ describe("Anti-overfiltering wired into the promotion decision (integration)", (
         decision_at: resolvedAt,
         resolved_at: resolvedAt,
         source_ref: { collection: "cloud_market_outlooks", id: `id${i}` },
-        provenance: { environment: "LIVE", ea_version: "6.28.6", broker_server: "live", source_build: "evidence", integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11" },
+        provenance: TRUSTED_LIVE_PROVENANCE,
         created_at: resolvedAt,
         counterfactual: null,
         mistake_classification: "CLEAN_WIN",
@@ -763,7 +812,7 @@ describe("Anti-overfiltering wired into the promotion decision (integration)", (
 
 describe("24h cycle locking / idempotency (spec: no duplicate concurrent execution)", () => {
   beforeEach(() => {
-    state.db = new FakeDb();
+    state.db = dbWithLiveAttestation();
     state.db.uniqueIndexes["global_brain_cycle_lock"] = ["_id"];
   });
 

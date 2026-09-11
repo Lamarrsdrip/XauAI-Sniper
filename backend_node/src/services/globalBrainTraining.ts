@@ -24,6 +24,8 @@ import {
 } from "./globalBrainPromotion.js";
 import { evaluateMaturity, type PriorStreakInfo } from "./globalBrainMaturity.js";
 import { getCurrentChampion, getLatestModelDoc, promoteChallenger, rejectChallenger, type NewModelInput } from "./globalBrainRegistry.js";
+import { activeLiveAttestationIds } from "./accountProvenance.js";
+import { recordPersistentDiagnostic } from "./persistentDiagnostics.js";
 import { detectDrift, recordDriftAlert } from "./globalBrainDrift.js";
 import { getGlobalBrainSettings } from "./globalBrainSettings.js";
 
@@ -133,8 +135,8 @@ export const QUESTION_SPECS: Record<GlobalBrainQuestion, QuestionSpec> = {
   },
 };
 
-/** Data-quality filter (spec: reject missing timestamps/direction/outcome, unsupported symbols). No is_tester/is_backtest flag exists anywhere in the source data today (per architecture audit) -- there is nothing to filter on for that specific risk yet; documented as a known gap in the daily report rather than silently ignored. */
-function passesDataQuality(o: GlobalBrainObservation): boolean {
+/** Data-quality + trust filter: reject missing timestamps/direction/outcome and unsupported symbols, and admit only current-integrity-epoch observations whose LIVE environment was established by a still-active server attestation (TESTER/REPLAY/DEMO/UNKNOWN never train). */
+function passesDataQuality(o: GlobalBrainObservation, trustedLiveAttestations: ReadonlySet<string>): boolean {
   if (!o.resolved_at) return false;
   if (!o.features.direction || o.features.direction === "NONE") return false;
   if (!o.features.symbol || !o.features.symbol.toUpperCase().startsWith("XAU")) return false;
@@ -148,6 +150,13 @@ function passesDataQuality(o: GlobalBrainObservation): boolean {
   // DEMO are retained for audit/shadow analysis but cannot influence a
   // production champion; this is deliberately fail-closed.
   if (environment !== "LIVE") return false;
+  // ...and that LIVE must have been established by a server-side account
+  // attestation (services/accountProvenance.ts) that is STILL active, so an
+  // EA/client claim can never train, and revoking a mistaken attestation
+  // withdraws everything stamped under it.
+  if (o.provenance.environment_source !== "SERVER_ATTESTATION") return false;
+  const attestationId = o.provenance.environment_attestation_id;
+  if (!attestationId || !trustedLiveAttestations.has(attestationId)) return false;
   return true;
 }
 
@@ -797,8 +806,16 @@ export async function runGlobalBrainDailyCycle(opts: { dryRun?: boolean } = {}):
 
     const entryQualityBySource = computeEntryQualityBySource(allObservations);
 
+    // Fail closed: if the attestation store cannot be read, nothing is
+    // trusted-LIVE this cycle.
+    let trustedLiveAttestations: ReadonlySet<string> = new Set<string>();
+    try {
+      trustedLiveAttestations = await activeLiveAttestationIds();
+    } catch (error) {
+      await recordPersistentDiagnostic("error", "global-brain-training", error, { code: "ACCOUNT_PROVENANCE_READ_FAILED" });
+    }
     const eligible = allObservations
-      .filter(passesDataQuality)
+      .filter((o) => passesDataQuality(o, trustedLiveAttestations))
       .sort((a, b) => new Date(a.resolved_at!).getTime() - new Date(b.resolved_at!).getTime());
 
     const n = eligible.length;

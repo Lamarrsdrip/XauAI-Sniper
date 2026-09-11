@@ -7,6 +7,7 @@ import { BotHeartbeatReqSchema } from "../../models/cloudMonitor.js";
 import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
 import { normalizeGoldSymbol } from "../../services/goldSymbol.js";
 import { runMarketIntelligenceForEaRequest } from "../../services/marketIntelligencePipeline.js";
+import { resolveTrustedRuntimeEnvironment, type ResolvedRuntimeProvenance } from "../../services/accountProvenance.js";
 
 const NOISY_STALE_ERRORS = new Set(["MQL ERROR 5035"]);
 
@@ -14,7 +15,7 @@ export function heartbeatMarketDetails(req: {
   license_key?: string;
   market_thesis?: Record<string, unknown> | null;
   m10_signal?: Record<string, unknown> | null;
-  runtime_environment?: string;
+  provenance?: ResolvedRuntimeProvenance;
   ea_version?: string;
   broker_server?: string;
   build_id?: string;
@@ -23,7 +24,12 @@ export function heartbeatMarketDetails(req: {
     license_key: req.license_key ?? "",
     market_thesis: req.market_thesis ?? {},
     source: "HEARTBEAT",
-    runtime_environment: req.runtime_environment ?? "UNKNOWN",
+    // Server-resolved only (services/accountProvenance.ts); a heartbeat's own
+    // runtime_environment text is audit data, never the trusted value.
+    runtime_environment: req.provenance?.environment ?? "UNKNOWN",
+    environment_source: req.provenance?.environment_source ?? "NONE",
+    environment_attestation_id: req.provenance?.environment_attestation_id ?? null,
+    reported_environment: req.provenance?.reported_environment ?? "UNKNOWN",
     ea_version: req.ea_version ?? "",
     broker_server: req.broker_server ?? "",
     build_id: req.build_id ?? "",
@@ -107,17 +113,17 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
     // that exact quote through the existing activity/candle pipeline whenever
     // a heartbeat arrives; this is not a second price source.  A quiet M10
     // decision loop must never make a connected terminal look market-stale.
-    const explicitEnvironment = String(req.runtime_environment ?? "UNKNOWN").trim().toUpperCase();
-    const inferredEnvironment = explicitEnvironment !== "UNKNOWN"
-      ? explicitEnvironment
-      : req.broker_server && req.broker_server.toUpperCase().includes("DEMO")
-        ? "DEMO"
-        : "UNKNOWN";
+    // Trusted environment comes from the admin attestation on this exact
+    // license-bound account; the EA's own claim and a "demo" broker name can
+    // only downgrade it. Missing never becomes LIVE.
+    const provenance = await resolveTrustedRuntimeEnvironment({
+      license_id: String(licenseId), account, reported_environment: req.runtime_environment, broker_server: req.broker_server,
+    });
     const marketDetails = heartbeatMarketDetails({
       license_key: licenseKey,
       market_thesis: req.market_thesis,
       m10_signal: req.m10_signal,
-      runtime_environment: inferredEnvironment,
+      provenance,
       ea_version: req.ea_version,
       broker_server: req.broker_server,
       build_id: req.build_id,

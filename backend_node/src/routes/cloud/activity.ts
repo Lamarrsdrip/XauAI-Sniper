@@ -5,6 +5,7 @@ import { storeBotActivity } from "../../services/botActivity.js";
 import { sendPatternActivityNotification, sendTradeActivityNotification } from "../../services/notifications.js";
 import { ACTIVITY_DETAIL_FIELDS, BotActivityReqSchema } from "../../models/cloudActivity.js";
 import { runMarketIntelligenceForEaRequest } from "../../services/marketIntelligencePipeline.js";
+import { resolveTrustedRuntimeEnvironment } from "../../services/accountProvenance.js";
 
 /** Port of server.py:7343 `POST /cloud/monitor/activity` -- remote monitoring only, never executes trades. */
 export async function registerCloudActivityRoutes(app: FastifyInstance): Promise<void> {
@@ -23,6 +24,21 @@ export async function registerCloudActivityRoutes(app: FastifyInstance): Promise
     if (licenseKey) {
       details["license_key"] = licenseKey;
       details["license_id"] = lic?.["id"] ?? "";
+    }
+    // Provenance is server-resolved and ALWAYS overwrites anything the client
+    // put in details (runtime_environment / environment_source are free text
+    // in the request). v6.28.6 carries its version only inside m10_signal.
+    const provenance = await resolveTrustedRuntimeEnvironment({
+      license_id: String(lic?.["id"] ?? ""), account: req.account || "",
+      reported_environment: req.runtime_environment ?? details["runtime_environment"], broker_server: req.broker_server,
+    });
+    details["runtime_environment"] = provenance.environment;
+    details["environment_source"] = provenance.environment_source;
+    details["environment_attestation_id"] = provenance.environment_attestation_id;
+    details["reported_environment"] = provenance.reported_environment;
+    if (!details["ea_version"]) {
+      const m10Version = (req.m10_signal as Record<string, unknown> | null | undefined)?.["ea_version"];
+      if (m10Version) details["ea_version"] = String(m10Version);
     }
 
     // Production EA pattern telemetry:

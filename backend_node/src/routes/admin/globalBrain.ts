@@ -4,6 +4,8 @@ import { getDb } from "../../db.js";
 import {
   GLOBAL_BRAIN_DAILY_REPORTS_COLLECTION,
   GLOBAL_BRAIN_OBSERVATIONS_COLLECTION,
+  GlobalBrainAccountAttestRequestSchema,
+  GlobalBrainAccountRevokeRequestSchema,
   GlobalBrainRollbackRequestSchema,
   GlobalBrainRunCycleRequestSchema,
   GlobalBrainSettingsPatchSchema,
@@ -12,6 +14,7 @@ import { getCurrentChampion, listPromotionHistory, rollbackToPreviousChampion, R
 import { GLOBAL_BRAIN_QUESTIONS, runGlobalBrainDailyCycle, type DailyCycleReport } from "../../services/globalBrainTraining.js";
 import { latestDriftAlert } from "../../services/globalBrainDrift.js";
 import { emergencyDisableGlobalBrain, getGlobalBrainSettings, updateGlobalBrainSettings } from "../../services/globalBrainSettings.js";
+import { AccountProvenanceError, attestAccountEnvironment, listAccountProvenance, revokeAccountEnvironment } from "../../services/accountProvenance.js";
 
 /**
  * Admin-only Global Learning Brain command-center endpoints. Read-only
@@ -124,5 +127,38 @@ export async function registerAdminGlobalBrainRoutes(app: FastifyInstance): Prom
     const admin = (request as typeof request & { admin?: Record<string, unknown> }).admin;
     const settings = await emergencyDisableGlobalBrain(String(admin?.["email"] ?? "unknown-admin"));
     return { status: "ok", settings };
+  });
+
+  // Trusted LIVE provenance (services/accountProvenance.ts). The owner
+  // verifies an account out-of-band (broker statement / MT5 account type) and
+  // attests it here; the license must be strictly bound to that exact MT5
+  // account. Takes effect for evidence ingested from now on -- it never
+  // rewrites historical observations.
+  app.get("/admin/global-brain/account-provenance", { preHandler: requireAdmin }, async () => {
+    return { attestations: await listAccountProvenance() };
+  });
+
+  app.post("/admin/global-brain/account-provenance", { preHandler: requireAdmin }, async (request, reply) => {
+    const req = GlobalBrainAccountAttestRequestSchema.parse(request.body ?? {});
+    const admin = (request as typeof request & { admin?: Record<string, unknown> }).admin;
+    try {
+      const attestation = await attestAccountEnvironment(req, String(admin?.["email"] ?? "unknown-admin"));
+      return { status: "ok", attestation };
+    } catch (error) {
+      if (error instanceof AccountProvenanceError) return reply.code(400).send({ status: "error", detail: error.message });
+      throw error;
+    }
+  });
+
+  app.post("/admin/global-brain/account-provenance/revoke", { preHandler: requireAdmin }, async (request, reply) => {
+    const req = GlobalBrainAccountRevokeRequestSchema.parse(request.body ?? {});
+    const admin = (request as typeof request & { admin?: Record<string, unknown> }).admin;
+    try {
+      const attestation = await revokeAccountEnvironment(req, String(admin?.["email"] ?? "unknown-admin"));
+      return { status: "ok", attestation };
+    } catch (error) {
+      if (error instanceof AccountProvenanceError) return reply.code(400).send({ status: "error", detail: error.message });
+      throw error;
+    }
   });
 }
