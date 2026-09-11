@@ -53,7 +53,7 @@ import { registerAdminGatewayActionRoutes } from "./routes/admin/adminGatewayAct
 import { registerAdminReleasesRoutes } from "./routes/admin/releases.js";
 import { registerAdminGlobalBrainRoutes } from "./routes/admin/globalBrain.js";
 import { ensureGlobalBrainIndexes } from "./services/globalBrainIngest.js";
-import { ensureGlobalBrainRegistryIndexes } from "./services/globalBrainRegistry.js";
+import { ensureGlobalBrainRegistryIndexes, quarantineLegacyGlobalBrainChampions } from "./services/globalBrainRegistry.js";
 import { runGlobalBrainDailyCycle } from "./services/globalBrainTraining.js";
 import { ensureGlobalBrainSettingsIndexes, getGlobalBrainSettings } from "./services/globalBrainSettings.js";
 import { ensureGlobalBrainDriftIndexes } from "./services/globalBrainDrift.js";
@@ -80,6 +80,8 @@ import { processQueuedXTradePosts } from "./services/xTradePosting.js";
 import { isApplicationReady, markApplicationReady, readinessSnapshot, runReadinessStep } from "./services/readiness.js";
 import { recordDiagnostic } from "./services/diagnostics.js";
 import { applySecurityHeaders } from "./services/httpSecurity.js";
+import { ensureMarketEvidenceIndexes } from "./services/marketEvidenceLedger.js";
+import { ensurePersistentDiagnosticIndexes } from "./services/persistentDiagnostics.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -368,9 +370,14 @@ async function main(): Promise<void> {
   await runReadinessStep("admin_ops_actions", () => ensureAdminOpsInfrastructure(), 30_000);
   await runReadinessStep("academy", () => ensureAcademyInfrastructure(), 30_000);
   await runReadinessStep("academy-courses", () => ensureAcademyCourseInfrastructure(), 30_000);
+  await runReadinessStep("market-intelligence-storage", async () => {
+    await ensureMarketEvidenceIndexes();
+    await ensurePersistentDiagnosticIndexes();
+  }, 30_000);
   await runReadinessStep("global-brain", async () => {
     await ensureGlobalBrainIndexes();
     await ensureGlobalBrainRegistryIndexes();
+    await quarantineLegacyGlobalBrainChampions();
     await ensureGlobalBrainDriftIndexes();
     await ensureGlobalBrainShadowServingIndexes();
     await ensureGlobalBrainSettingsIndexes();

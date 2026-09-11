@@ -1,6 +1,7 @@
 import { lookupBucket } from "./globalBrainEstimator.js";
 import { getCurrentChampion } from "./globalBrainRegistry.js";
 import { getGlobalBrainSettings, type GlobalBrainSettings } from "./globalBrainSettings.js";
+import { recordPersistentDiagnostic } from "./persistentDiagnostics.js";
 
 /**
  * Global Learning Brain -- PRODUCTION INFLUENCE evaluator (AGENTS spec
@@ -115,7 +116,7 @@ export async function evaluateGlobalBrainInfluence(
       return {
         scope,
         enabled: true,
-        applied: true,
+        applied: false,
         recommendation: "NO_OPINION",
         reason: `insufficient validated evidence for bucket "${bucketKey}" (n=${bucket.n}) -- deferring to the baseline strategy`,
         direction_quality_bucket: bucketKey,
@@ -174,7 +175,11 @@ export async function evaluateGlobalBrainInfluence(
       entry_timing_shrunk_rate: timingBucket && timingBucket.sample_sufficient ? timingBucket.shrunk_rate : null,
       entry_timing_n: timingBucket && timingBucket.sample_sufficient ? timingBucket.n : 0,
     };
-  } catch {
+  } catch (error) {
+    await recordPersistentDiagnostic("error", "global-brain-influence", error, {
+      code: "GLOBAL_BRAIN_INFLUENCE_EVALUATION_FAILED",
+      details: { scope },
+    });
     return notApplied(scope, false, "evaluation failed -- failing safe to NO_OPINION");
   }
 }

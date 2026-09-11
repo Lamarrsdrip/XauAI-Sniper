@@ -144,6 +144,10 @@ export class FakeCollection {
     return this.docs.filter((d) => matches(d, query)).length;
   }
 
+  async estimatedDocumentCount(): Promise<number> {
+    return this.docs.length;
+  }
+
   async deleteOne(query: Doc): Promise<{ deletedCount: number }> {
     const index = this.docs.findIndex((d) => matches(d, query));
     if (index === -1) return { deletedCount: 0 };

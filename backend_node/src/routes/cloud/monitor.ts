@@ -6,6 +6,7 @@ import { storeBotActivity } from "../../services/botActivity.js";
 import { BotHeartbeatReqSchema } from "../../models/cloudMonitor.js";
 import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
 import { normalizeGoldSymbol } from "../../services/goldSymbol.js";
+import { runMarketIntelligenceForEaRequest } from "../../services/marketIntelligencePipeline.js";
 
 const NOISY_STALE_ERRORS = new Set(["MQL ERROR 5035"]);
 
@@ -13,11 +14,19 @@ export function heartbeatMarketDetails(req: {
   license_key?: string;
   market_thesis?: Record<string, unknown> | null;
   m10_signal?: Record<string, unknown> | null;
+  runtime_environment?: string;
+  ea_version?: string;
+  broker_server?: string;
+  build_id?: string;
 }): Record<string, unknown> {
   const details: Record<string, unknown> = {
     license_key: req.license_key ?? "",
     market_thesis: req.market_thesis ?? {},
     source: "HEARTBEAT",
+    runtime_environment: req.runtime_environment ?? "UNKNOWN",
+    ea_version: req.ea_version ?? "",
+    broker_server: req.broker_server ?? "",
+    build_id: req.build_id ?? "",
   };
   // An absent M10 reading is not evidence. Persisting `{}` here made each
   // 20-second quote heartbeat newer than the EA's genuine completed-scan
@@ -98,10 +107,20 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
     // that exact quote through the existing activity/candle pipeline whenever
     // a heartbeat arrives; this is not a second price source.  A quiet M10
     // decision loop must never make a connected terminal look market-stale.
+    const explicitEnvironment = String(req.runtime_environment ?? "UNKNOWN").trim().toUpperCase();
+    const inferredEnvironment = explicitEnvironment !== "UNKNOWN"
+      ? explicitEnvironment
+      : req.broker_server && req.broker_server.toUpperCase().includes("DEMO")
+        ? "DEMO"
+        : "UNKNOWN";
     const marketDetails = heartbeatMarketDetails({
       license_key: licenseKey,
       market_thesis: req.market_thesis,
       m10_signal: req.m10_signal,
+      runtime_environment: inferredEnvironment,
+      ea_version: req.ea_version,
+      broker_server: req.broker_server,
+      build_id: req.build_id,
     });
     const quote = extractEvidenceQuoteFromDetails(marketDetails, now.toISOString());
     let marketData: Record<string, unknown> = {
@@ -110,7 +129,8 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
       persisted: false,
       state: "NO_VALID_BID_ASK",
     };
-    if (quote.valid && account && req.symbol) {
+    const hasM10Evidence = Boolean(req.m10_signal && Object.keys(req.m10_signal).length > 0);
+    if ((quote.valid || hasM10Evidence) && account && req.symbol) {
       const marketActivity = await storeBotActivity(
         "MARKET_HEARTBEAT",
         "INFO",
@@ -127,14 +147,28 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
       const receipt = (marketActivity["manual_market_quote"] && typeof marketActivity["manual_market_quote"] === "object")
         ? marketActivity["manual_market_quote"] as Record<string, unknown>
         : {};
+      const evidenceReceipt = (marketActivity["market_evidence"] && typeof marketActivity["market_evidence"] === "object")
+        ? marketActivity["market_evidence"] as Record<string, unknown>
+        : {};
+      const intelligence = await runMarketIntelligenceForEaRequest({
+        license_key: licenseKey,
+        account,
+        source_event_id: String(evidenceReceipt["evidence_id"] ?? marketActivity["id"] ?? ""),
+        event_at: String(marketActivity["ts"] ?? now.toISOString()),
+        details: marketDetails,
+        route: "/api/cloud/monitor/heartbeat",
+        request_id: request.id,
+      });
       marketData = {
         source: "EA_HEARTBEAT",
-        received: true,
+        received: quote.valid,
         persisted: receipt["persisted"] === true,
-        state: receipt["persisted"] === true ? "PERSISTED" : "PERSISTENCE_UNAVAILABLE",
+        state: quote.valid ? (receipt["persisted"] === true ? "PERSISTED" : "PERSISTENCE_UNAVAILABLE") : "M10_ONLY",
         normalized_symbol: receipt["normalizedSymbol"] ?? normalizeGoldSymbol(req.symbol),
-        evidence_timestamp: receipt["sourceAt"] ?? quote.quote_at ?? null,
+        evidence_timestamp: evidenceReceipt["observed_at"] ?? receipt["sourceAt"] ?? quote.quote_at ?? null,
+        evidence_id: evidenceReceipt["evidence_id"] ?? null,
         close: receipt["close"] ?? quote.mid ?? null,
+        intelligence,
       };
     }
 

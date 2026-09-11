@@ -3,6 +3,7 @@ import { getDb } from "../db.js";
 import {
   GLOBAL_BRAIN_DAILY_REPORTS_COLLECTION,
   GLOBAL_BRAIN_OBSERVATIONS_COLLECTION,
+  GLOBAL_BRAIN_INTEGRITY_EPOCH,
   MISTAKE_CATEGORIES,
   type GlobalBrainObservation,
   type MistakeCategory,
@@ -137,6 +138,16 @@ function passesDataQuality(o: GlobalBrainObservation): boolean {
   if (!o.resolved_at) return false;
   if (!o.features.direction || o.features.direction === "NONE") return false;
   if (!o.features.symbol || !o.features.symbol.toUpperCase().startsWith("XAU")) return false;
+  // Only post-repair observations from the immutable-evidence trust epoch may
+  // train/promote production knowledge. This quarantines historical labels
+  // that may have been built from the old lossy/mutable activity stream.
+  if (o.provenance?.integrity_epoch !== GLOBAL_BRAIN_INTEGRITY_EPOCH) return false;
+  const environment = o.provenance.environment;
+  if (environment === "TESTER" || environment === "REPLAY") return false;
+  // Production learning requires affirmative LIVE provenance. UNKNOWN and
+  // DEMO are retained for audit/shadow analysis but cannot influence a
+  // production champion; this is deliberately fail-closed.
+  if (environment !== "LIVE") return false;
   return true;
 }
 

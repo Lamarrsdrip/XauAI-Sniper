@@ -3,6 +3,7 @@ import { OUTLOOK_SYMBOL } from "./marketOutlookCore.js";
 import { generateOutlookForAccount } from "./marketOutlookSignal.js";
 import { dispatchSignalEvent } from "./marketOutlookPublish.js";
 import { mirrorSubscriberSignal, outlookDocAsSubscriberSignal } from "./subscriberSignalFeed.js";
+import { recordPersistentDiagnostic } from "./persistentDiagnostics.js";
 
 /** Port of market_outlook.py:2847 `_dispatch_hourly_notification`. */
 async function dispatchHourlyNotification(doc: Record<string, unknown>): Promise<void> {
@@ -74,10 +75,20 @@ export async function hourlyGenerationTick(account = ""): Promise<[number, Recor
         // Subscriber-feed mirror: a no-op for every account except the one
         // an admin has explicitly configured as the signal source. Never
         // affects this account's own generation/notification/execution.
-        await mirrorSubscriberSignal(acct, outlookDocAsSubscriberSignal(doc, "OUTLOOK", isNewActionable)).catch(() => {});
+        try {
+          await mirrorSubscriberSignal(acct, outlookDocAsSubscriberSignal(doc, "OUTLOOK", isNewActionable));
+        } catch (error) {
+          await recordPersistentDiagnostic("warning", "subscriber-signal-feed", error, {
+            code: "SUBSCRIBER_OUTLOOK_MIRROR_FAILED", account: acct, stage: "HOURLY_MIRROR",
+          });
+        }
       }
-    } catch {
-      /* logged-and-continue in Python, matches per-account isolation */
+    } catch (error) {
+      await recordPersistentDiagnostic("error", "outlook-hourly-generation", error, {
+        code: "OUTLOOK_HOURLY_GENERATION_FAILED", account: acct, stage: "GENERATE_OR_PUBLISH",
+      });
+      // No slot marker is written on failure, so the next heartbeat/activity
+      // retries this same UTC slot instead of silently losing the hour.
     }
   }
 

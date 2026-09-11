@@ -8,6 +8,8 @@ import { reconcileTradeJournalEntry } from "../services/automatedTradeReconcilia
 import { canonicalTradeIdentity, classifyTrade, dedupeByTradeIdentity, netResult } from "../services/performanceEngine.js";
 import { authoritativeExitPrice, enqueueFinalTradeForXPost } from "../services/xTradePosting.js";
 import { buildBotTradeObservation, recordGlobalBrainObservation } from "../services/globalBrainIngest.js";
+import { shadowOutcome } from "../services/tradeOutcome.js";
+import { recordPersistentDiagnostic } from "../services/persistentDiagnostics.js";
 
 export const MAX_JOURNAL_TRADES_PAGE_SIZE = 200;
 
@@ -107,7 +109,7 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
         // matches nothing here.
         let joinedShadowDoc: Record<string, unknown> | null = null;
         try {
-          const outcome = entry.result === "WIN" ? "WIN" : entry.result === "LOSS" ? "LOSS" : "BREAKEVEN";
+          const outcome = shadowOutcome(entry.result);
           joinedShadowDoc = await db.collection("ml_shadow_decisions").findOneAndUpdate(
             { signature: entry.signature, actual_action: "CANDIDATE", eventual_result: { $exists: false } },
             {
@@ -135,8 +137,12 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
         if (isClosedTrade) {
           try {
             await recordGlobalBrainObservation(buildBotTradeObservation(doc, joinedShadowDoc));
-          } catch {
-            /* best-effort -- a build failure here must never turn an already-persisted trade close into an error response */
+          } catch (error) {
+            await recordPersistentDiagnostic("error", "global-brain-journal-ingest", error, {
+              code: "GLOBAL_BRAIN_JOURNAL_INGEST_FAILED",
+              source_event_id: String(doc["trade_identity"] ?? ""),
+              details: { account: String(doc["account_login"] ?? "") },
+            });
           }
         }
       }

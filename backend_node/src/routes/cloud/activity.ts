@@ -3,13 +3,8 @@ import { getDb } from "../../db.js";
 import { normalizeLicenseKey, resolveEaMonitorLicense } from "../../services/license.js";
 import { storeBotActivity } from "../../services/botActivity.js";
 import { sendPatternActivityNotification, sendTradeActivityNotification } from "../../services/notifications.js";
-import { extractEvidenceQuoteFromDetails } from "../../services/marketOutlookEvidence.js";
-import { trackOutlookLifecycleTick } from "../../services/marketOutlookTick.js";
-import { publishM10SignalFromActivity } from "../../services/marketOutlookPublish.js";
-import { mirrorSubscriberM10Evaluation } from "../../services/subscriberSignalFeed.js";
-import { hourlyGenerationTick } from "../../services/marketOutlookHourlyTick.js";
-import { publishOutlookThesis } from "../../services/outlookExecution.js";
 import { ACTIVITY_DETAIL_FIELDS, BotActivityReqSchema } from "../../models/cloudActivity.js";
+import { runMarketIntelligenceForEaRequest } from "../../services/marketIntelligencePipeline.js";
 
 /** Port of server.py:7343 `POST /cloud/monitor/activity` -- remote monitoring only, never executes trades. */
 export async function registerCloudActivityRoutes(app: FastifyInstance): Promise<void> {
@@ -95,34 +90,23 @@ export async function registerCloudActivityRoutes(app: FastifyInstance): Promise
       }
     })();
 
-    // Outlook quote-event monitor -- fire-and-forget, never affects this
-    // endpoint's own response. Port of server.py:7387 `_monitor_outlook_quote_event`.
-    const normalizedQuote = extractEvidenceQuoteFromDetails(details, doc["ts"]);
-    const quoteBid = Number(normalizedQuote.bid ?? 0);
-    const quoteAsk = Number(normalizedQuote.ask ?? 0);
-    if (quoteBid > 0 && quoteAsk >= quoteBid && req.account) {
-      void (async () => {
-        try {
-          await trackOutlookLifecycleTick({ account: req.account || "", bid: quoteBid, ask: quoteAsk, quote_at: doc["ts"] });
-          const m10Signal = (details["m10_signal"] as Record<string, unknown> | undefined) ?? {};
-          // Continuous evaluation-freshness mirror -- runs on every heartbeat
-          // regardless of decision, so a subscriber's "last evaluated" never
-          // goes stale just because the engine stayed in WATCHING. No-op for
-          // every account except the configured subscriber-signal source.
-          await mirrorSubscriberM10Evaluation(req.account || "", m10Signal, doc["ts"]);
-          const m10Decision = String(m10Signal["decision"] ?? m10Signal["final_decision"] ?? "").toUpperCase();
-          if (["BUY_CANDIDATE", "SELL_CANDIDATE", "ALLOW_CORE"].includes(m10Decision)) {
-            const m10Doc = await publishM10SignalFromActivity(licenseKey, req.account || "", String(doc["id"]));
-            if (m10Doc) await publishOutlookThesis(m10Doc, "M10_SIGNAL_ENGINE");
-          }
-          const [, hourlyActionable] = await hourlyGenerationTick(req.account || "");
-          for (const hDoc of hourlyActionable) await publishOutlookThesis(hDoc, "MARKET_OUTLOOK");
-        } catch {
-          /* best-effort, matches Python's logged-but-swallowed exception */
-        }
-      })();
-    }
+    const evidenceReceipt = (doc["market_evidence"] && typeof doc["market_evidence"] === "object")
+      ? doc["market_evidence"] as Record<string, unknown>
+      : {};
+    // Canonical market-intelligence pipeline. Unlike the old fire-and-forget
+    // block, failures are durably recorded and the next heartbeat/activity
+    // can safely retry because all downstream writes are idempotent. The EA
+    // is never held beyond the response budget (see marketIntelligenceConfig).
+    const intelligence = await runMarketIntelligenceForEaRequest({
+      license_key: licenseKey,
+      account: req.account || "",
+      source_event_id: String(evidenceReceipt["evidence_id"] ?? doc["id"] ?? ""),
+      event_at: String(doc["ts"] ?? new Date().toISOString()),
+      details,
+      route: "/api/cloud/monitor/activity",
+      request_id: request.id,
+    });
 
-    return { ok: true, event_id: doc["id"] };
+    return { ok: true, event_id: doc["id"], evidence_id: evidenceReceipt["evidence_id"] ?? null, intelligence };
   });
 }

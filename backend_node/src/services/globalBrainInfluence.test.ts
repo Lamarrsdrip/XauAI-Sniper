@@ -61,7 +61,7 @@ describe("evaluateGlobalBrainInfluence", () => {
     await promoteChallenger(championInput("SELL|NY|RANGE|REVERSAL", 0.1), "seed"); // different bucket than INPUT
     await updateGlobalBrainSettings({ outlook_learned_influence_enabled: true }, "admin@xaucloud.io");
     const result = await evaluateGlobalBrainInfluence("OUTLOOK", INPUT);
-    expect(result.applied).toBe(true);
+    expect(result.applied).toBe(false);
     expect(result.recommendation).toBe("NO_OPINION");
     expect(result.direction_quality_n).toBe(0);
   });
@@ -104,7 +104,7 @@ describe("applyGlobalBrainToEntryVerdict (routes/ai.ts POST /ai/analyze Bot cons
   });
 
   it("is a no-op when the recommendation is NO_OPINION", () => {
-    const influence = { scope: "BOT" as const, enabled: true, applied: true, recommendation: "NO_OPINION" as const, reason: "thin evidence", direction_quality_bucket: "k", direction_quality_shrunk_rate: 0.5, direction_quality_n: 3 };
+    const influence = { scope: "BOT" as const, enabled: true, applied: false, recommendation: "NO_OPINION" as const, reason: "thin evidence", direction_quality_bucket: "k", direction_quality_shrunk_rate: 0.5, direction_quality_n: 3 };
     expect(applyGlobalBrainToEntryVerdict(verdict, influence)).toEqual(verdict);
   });
 

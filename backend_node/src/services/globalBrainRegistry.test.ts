@@ -5,7 +5,7 @@ import { FakeDb } from "../testUtils/fakeDb.js";
 const state = vi.hoisted(() => ({ db: null as unknown as FakeDb }));
 vi.mock("../db.js", () => ({ getDb: () => state.db }));
 
-const { getCurrentChampion, promoteChallenger, rejectChallenger, rollbackToPreviousChampion, RollbackError, RegistryLockError, listPromotionHistory } = await import(
+const { getCurrentChampion, promoteChallenger, rejectChallenger, rollbackToPreviousChampion, RollbackError, RegistryLockError, listPromotionHistory, quarantineLegacyGlobalBrainChampions } = await import(
   "./globalBrainRegistry.js"
 );
 
@@ -32,6 +32,35 @@ describe("globalBrainRegistry", () => {
 
   it("has no champion for an untrained question", async () => {
     expect(await getCurrentChampion("DIRECTION_QUALITY")).toBeNull();
+  });
+
+  it("quarantines a pre-integrity-epoch champion while retaining its audit record", async () => {
+    await state.db.collection("global_brain_models").insertOne({
+      ...modelInput("DIRECTION_QUALITY"), version: 1, status: "CHAMPION", integrity_epoch: "LEGACY_UNTRUSTED",
+    });
+    await state.db.collection("global_brain_champion_pointers").insertOne({ question: "DIRECTION_QUALITY", version: 1 });
+    expect(await quarantineLegacyGlobalBrainChampions()).toBe(1);
+    const legacy = state.db.collection("global_brain_models").docs[0]!;
+    expect(legacy).toMatchObject({ status: "SUPERSEDED", legacy_quarantine_reason: "IMMUTABLE_EVIDENCE_V2_2026_09_11" });
+    expect(await getCurrentChampion("DIRECTION_QUALITY")).toBeNull();
+    // The withdrawal is audit-logged and the quarantine is idempotent.
+    const history = await listPromotionHistory("DIRECTION_QUALITY");
+    expect(history).toEqual([expect.objectContaining({ action: "QUARANTINE", from_version: 1, to_version: null })]);
+    expect(await quarantineLegacyGlobalBrainChampions()).toBe(0);
+    expect(await listPromotionHistory("DIRECTION_QUALITY")).toHaveLength(1);
+  });
+
+  it("refuses a legacy champion pointer even before startup quarantine runs, and a post-repair champion never rolls back into it", async () => {
+    await state.db.collection("global_brain_models").insertOne({ ...modelInput("DIRECTION_QUALITY"), version: 1, status: "CHAMPION" });
+    await state.db.collection("global_brain_champion_pointers").insertOne({ question: "DIRECTION_QUALITY", version: 1 });
+    expect(await getCurrentChampion("DIRECTION_QUALITY")).toBeNull();
+    const trusted = await promoteChallenger(modelInput("DIRECTION_QUALITY"), "first post-repair champion");
+    expect(trusted.version).toBe(2);
+    expect((await getCurrentChampion("DIRECTION_QUALITY"))?.version).toBe(2);
+    await expect(rollbackToPreviousChampion("DIRECTION_QUALITY")).rejects.toThrow(RollbackError);
+    expect((await getCurrentChampion("DIRECTION_QUALITY"))?.version).toBe(2);
+    // History retained.
+    expect(state.db.collection("global_brain_models").docs.map((d) => d["version"])).toEqual([1, 2]);
   });
 
   it("promotes the first challenger as version 1 with no prior champion to demote", async () => {
@@ -72,6 +101,15 @@ describe("globalBrainRegistry", () => {
     expect(docs.find((d) => d["version"] === 1)?.["status"]).toBe("CHAMPION");
     const champion = await getCurrentChampion("DIRECTION_QUALITY");
     expect(champion?.version).toBe(1);
+  });
+
+  it("walks the rollback chain across repeated rollbacks (v3 -> v2 -> v1)", async () => {
+    await promoteChallenger(modelInput("DIRECTION_QUALITY"), "v1");
+    await promoteChallenger(modelInput("DIRECTION_QUALITY"), "v2");
+    await promoteChallenger(modelInput("DIRECTION_QUALITY"), "v3");
+    expect((await rollbackToPreviousChampion("DIRECTION_QUALITY")).version).toBe(2);
+    expect((await rollbackToPreviousChampion("DIRECTION_QUALITY")).version).toBe(1);
+    expect((await getCurrentChampion("DIRECTION_QUALITY"))?.version).toBe(1);
   });
 
   it("throws RollbackError instead of silently no-oping when there is nothing to roll back to", async () => {

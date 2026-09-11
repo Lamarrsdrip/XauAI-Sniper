@@ -90,4 +90,22 @@ describe("persistSignalOutcome -- Global Brain observation hook", () => {
     state.db = brokenDb as unknown as FakeDb;
     await expect(persistSignalOutcome(terminalOutlookDoc())).resolves.toBeUndefined();
   });
+
+  it("keeps a post-repair outlook trusted when its quote journey comes from the immutable ledger", async () => {
+    await state.db.collection("cloud_market_evidence").insertOne({
+      id: "ev-1", account: "acct-1", quote_valid: true, observed_at: "2026-01-01T00:05:00.000Z", bid: 2004, ask: 2004.2,
+    });
+    await persistSignalOutcome(terminalOutlookDoc({ source_evidence_id: "ev-0", runtime_environment: "LIVE" }));
+    const obs = state.db.collection("global_brain_observations").docs[0]!;
+    expect(obs["provenance"]).toMatchObject({ integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11", environment: "LIVE" });
+  });
+
+  it("marks a post-repair outlook untrusted when its counterfactual had to be replayed from the lossy activity stream", async () => {
+    await state.db.collection("cloud_bot_activity").insertOne({
+      id: "act-1", account: "acct-1", ts: "2026-01-01T00:05:00.000Z", details: { market_thesis: { live_bid: 2004, live_ask: 2004.2 } },
+    });
+    await persistSignalOutcome(terminalOutlookDoc({ source_evidence_id: "ev-0", runtime_environment: "LIVE" }));
+    const obs = state.db.collection("global_brain_observations").docs[0]!;
+    expect(obs["provenance"]).toMatchObject({ integrity_epoch: "LEGACY_UNTRUSTED" });
+  });
 });

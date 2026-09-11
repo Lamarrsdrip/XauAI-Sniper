@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { readinessSnapshot } from "../services/readiness.js";
 import { getDb } from "../db.js";
 import { normalizeGoldSymbol } from "../services/goldSymbol.js";
-import { extractEvidenceQuoteFromDetails } from "../services/marketOutlookEvidence.js";
+import { BROKER_QUOTE_FRESH_SECONDS, MARKET_EVIDENCE_COLLECTION } from "../services/marketIntelligenceConfig.js";
 
 function ageSeconds(iso: unknown): number | null {
   const time = new Date(String(iso ?? "")).getTime();
@@ -25,13 +25,11 @@ export async function registerApiHealthRoutes(app: FastifyInstance): Promise<voi
   // not a market-data source and cannot generate or execute a signal.
   app.get("/health/market-intelligence", async () => {
     const db = getDb();
-    const latest = await db.collection("cloud_bot_activity").findOne(
-      { normalized_symbol: "XAUUSD", "details.market_thesis.live_bid": { $gt: 0 }, "details.market_thesis.live_ask": { $gt: 0 } },
-      { projection: { _id: 0, account: 1, symbol: 1, ts: 1, details: 1 }, sort: { ts: -1 } },
+    const latest = await db.collection(MARKET_EVIDENCE_COLLECTION).findOne(
+      { normalized_symbol: "XAUUSD", quote_valid: true },
+      { projection: { _id: 0, account: 1, symbol: 1, received_at: 1, observed_at: 1, bid: 1, ask: 1, mid: 1 }, sort: { received_at: -1 } },
     ) as Record<string, unknown> | null;
-    const details = (latest?.["details"] as Record<string, unknown> | undefined) ?? {};
-    const quote = extractEvidenceQuoteFromDetails(details, String(latest?.["ts"] ?? ""));
-    const evidenceAt = quote.quote_at ?? latest?.["ts"] ?? null;
+    const evidenceAt = latest?.["observed_at"] ?? latest?.["received_at"] ?? null;
     const dataAge = ageSeconds(evidenceAt);
     const account = String(latest?.["account"] ?? "");
     const [latestCandle, m10] = await Promise.all([
@@ -39,22 +37,22 @@ export async function registerApiHealthRoutes(app: FastifyInstance): Promise<voi
         { account, symbol: "XAUUSD", source: "ea-stream(spot)" },
         { projection: { _id: 0, lastSourceAt: 1 }, sort: { lastSourceAt: -1 } },
       ) : null,
-      account ? db.collection("cloud_bot_activity").findOne(
-        { account, normalized_symbol: "XAUUSD", "details.m10_signal.evidence_id": { $gt: 0 } },
-        { projection: { _id: 0, ts: 1, "details.m10_signal": 1 }, sort: { ts: -1 } },
+      account ? db.collection(MARKET_EVIDENCE_COLLECTION).findOne(
+        { account, normalized_symbol: "XAUUSD", "m10_signal.evidence_id": { $gt: 0 } },
+        { projection: { _id: 0, received_at: 1, m10_signal: 1 }, sort: { received_at: -1 } },
       ) as Promise<Record<string, unknown> | null> : null,
     ]);
-    const m10Signal = ((m10?.["details"] as Record<string, unknown> | undefined)?.["m10_signal"] as Record<string, unknown> | undefined) ?? null;
+    const m10Signal = (m10?.["m10_signal"] as Record<string, unknown> | undefined) ?? null;
     return {
       generated_at: new Date().toISOString(),
       market_data: {
         source: "EA_HEARTBEAT",
-        received_at: latest?.["ts"] ?? null,
+        received_at: latest?.["received_at"] ?? null,
         evidence_at: evidenceAt,
         normalized_symbol: normalizeGoldSymbol(latest?.["symbol"]),
-        latest_verified_close: quote.valid ? quote.mid : null,
+        latest_verified_close: latest?.["mid"] ?? (latest ? (Number(latest["bid"] ?? 0) + Number(latest["ask"] ?? 0)) / 2 : null),
         age_seconds: dataAge,
-        freshness_state: quote.valid && dataAge !== null && dataAge <= 600 ? "FRESH" : quote.valid ? "STALE" : "UNAVAILABLE",
+        freshness_state: latest && dataAge !== null && dataAge <= BROKER_QUOTE_FRESH_SECONDS ? "FRESH" : latest ? "STALE" : "UNAVAILABLE",
         persistence_state: latestCandle ? "PERSISTED" : "PERSISTENCE_UNAVAILABLE",
       },
       m10: m10Signal ? {

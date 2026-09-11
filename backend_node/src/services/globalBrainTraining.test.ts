@@ -59,6 +59,7 @@ function makeObservation(i: number, overrides: Partial<GlobalBrainObservation> =
     decision_at: resolvedAt,
     resolved_at: resolvedAt,
     source_ref: { collection: "cloud_market_outlooks", id: `id${i}` },
+    provenance: { environment: "LIVE", ea_version: "6.28.6", broker_server: "live", source_build: "evidence", integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11" },
     created_at: resolvedAt,
     ...overrides,
   };
@@ -84,6 +85,22 @@ describe("runGlobalBrainDailyCycle", () => {
       expect(question?.promoted).toBe(false);
       expect(question?.reason).toContain("INSUFFICIENT_EVIDENCE");
     }
+  });
+
+  it("excludes TESTER, REPLAY, UNKNOWN, and legacy-epoch observations from trusted production training", async () => {
+    const collection = state.db.collection(GLOBAL_BRAIN_OBSERVATIONS_COLLECTION);
+    for (const [i, provenance] of [
+      { environment: "TESTER", integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11" },
+      { environment: "REPLAY", integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11" },
+      { environment: "UNKNOWN", integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11" },
+      { environment: "LIVE", integrity_epoch: "LEGACY_UNTRUSTED" },
+    ].entries()) {
+      await collection.insertOne({ ...makeObservation(i), provenance: { ...provenance, ea_version: null, broker_server: null, source_build: null } } as unknown as Record<string, unknown>);
+    }
+    const report = await runGlobalBrainDailyCycle();
+    expect(report.observations_total).toBe(4);
+    expect(report.observations_eligible).toBe(0);
+    expect(await getCurrentChampion("DIRECTION_QUALITY")).toBeNull();
   });
 
   it("promotes an initial champion once holdout sample size is cleared, using a real chronological (non-random) split", async () => {
@@ -143,6 +160,7 @@ describe("runGlobalBrainDailyCycle", () => {
         decision_at: resolvedAt,
         resolved_at: resolvedAt,
         source_ref: { collection: "cloud_market_outlooks", id: `id${i}` },
+        provenance: { environment: "LIVE", ea_version: "6.28.6", broker_server: "live", source_build: "evidence", integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11" },
         created_at: resolvedAt,
       } as unknown as Record<string, unknown>);
     }
@@ -278,6 +296,7 @@ describe("runGlobalBrainDailyCycle", () => {
           decision_at: resolvedAt,
           resolved_at: resolvedAt,
           source_ref: { collection: "cloud_market_outlooks", id: `noise${cursor}` },
+          provenance: { environment: "LIVE", ea_version: "6.28.6", broker_server: "live", source_build: "evidence", integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11" },
           created_at: resolvedAt,
         } as unknown as Record<string, unknown>);
       }
@@ -708,6 +727,7 @@ describe("Anti-overfiltering wired into the promotion decision (integration)", (
         decision_at: resolvedAt,
         resolved_at: resolvedAt,
         source_ref: { collection: "cloud_market_outlooks", id: `id${i}` },
+        provenance: { environment: "LIVE", ea_version: "6.28.6", broker_server: "live", source_build: "evidence", integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11" },
         created_at: resolvedAt,
         counterfactual: null,
         mistake_classification: "CLEAN_WIN",

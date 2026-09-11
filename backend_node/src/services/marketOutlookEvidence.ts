@@ -12,20 +12,24 @@ import {
   OUTLOOK_WATCHING,
   ANALYTICS_WIN,
 } from "./marketOutlookCore.js";
+import { MARKET_EVIDENCE_COLLECTION, OUTLOOK_EVIDENCE_MAX_AGE_SECONDS } from "./marketIntelligenceConfig.js";
 
 /** Port of market_outlook.py:1937 `_as_utc`. */
 export function asUtc(value: unknown): Date | null {
   if (value instanceof Date) return value;
   if (!value) return null;
   const s = String(value);
-  const isoAttempt = new Date(s.replace("Z", "+00:00"));
-  if (!Number.isNaN(isoAttempt.getTime())) return isoAttempt;
-  // MT5-style "%Y.%m.%d %H:%M:%S" / "%Y.%m.%d %H:%M"
+  // MT5-style "%Y.%m.%d %H:%M:%S" / "%Y.%m.%d %H:%M" (EA TimeToString) is
+  // matched FIRST: V8's Date parser also accepts this shape but interprets it
+  // in the host's LOCAL timezone, which would shift every EA timestamp on a
+  // non-UTC host.
   const m = /^(\d{4})\.(\d{2})\.(\d{2}) (\d{2}):(\d{2})(?::(\d{2}))?$/.exec(s);
   if (m) {
     const [, y, mo, d, h, mi, se] = m;
     return new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(se ?? 0)));
   }
+  const isoAttempt = new Date(s.replace("Z", "+00:00"));
+  if (!Number.isNaN(isoAttempt.getTime())) return isoAttempt;
   return null;
 }
 
@@ -190,67 +194,117 @@ export interface EaEvidenceResult {
 export async function latestEaEvidence(licenseKey: string, account: string, sourceEventId = ""): Promise<EaEvidenceResult> {
   const db = getDb();
   if (!account && !licenseKey) return { evidence: null, reason: "NO_CONNECTED_EA" };
-  // When both identifiers are known they must identify the SAME activity row.
-  // The previous OR scope could leak another account on the same license into
-  // this account's Outlook, including its direction and broker quote.
   const scope: Record<string, unknown> =
     account && licenseKey ? { account, license_key: licenseKey } : account ? { account } : { license_key: licenseKey };
 
+  const ledger = db.collection(MARKET_EVIDENCE_COLLECTION);
   const activity = db.collection("cloud_bot_activity");
-  const ever = await activity.findOne(scope, { projection: { _id: 0, id: 1 } });
-  if (!ever) return { evidence: null, reason: "NO_CONNECTED_EA" };
+  const everLedger = await ledger.findOne(scope, { projection: { _id: 0, id: 1 } });
+  const everActivity = everLedger ? null : await activity.findOne(scope, { projection: { _id: 0, id: 1 } });
+  if (!everLedger && !everActivity) return { evidence: null, reason: "NO_CONNECTED_EA" };
 
-  let rows: Record<string, unknown>[] | null = null;
-  if (sourceEventId) {
-    const exact = await activity.findOne({ $and: [scope, { id: sourceEventId }] }, { projection: { _id: 0 } });
-    if (exact) rows = [exact];
-    else return { evidence: null, reason: "SOURCE_EVENT_NOT_FOUND" };
-  }
-  if (rows === null) {
-    const cutoff = new Date(Date.now() - 20 * 60_000).toISOString();
-    rows = await activity
-      .find({ $and: [scope, { ts: { $gte: cutoff } }] }, { projection: { _id: 0 } })
-      .sort({ ts: -1 })
-      .limit(50)
-      .toArray();
-  }
-  if (rows.length === 0) return { evidence: null, reason: "STALE_EVIDENCE" };
-
-  for (const row of rows) {
+  const fromLedger = (row: Record<string, unknown>): Record<string, unknown> => {
+    const provenance = (row["provenance"] as Record<string, unknown> | undefined) ?? {};
+    return {
+      ts: row["received_at"],
+      evidence_id: row["id"],
+      source_event_id: row["source_activity_id"] ?? sourceEventId,
+      symbol: row["symbol"] ?? OUTLOOK_SYMBOL,
+      market_thesis: row["market_thesis"] ?? {},
+      post_trade_state: row["post_trade_state"] ?? {},
+      entry_readiness: row["entry_readiness"] ?? {},
+      m10_signal: row["m10_signal"] ?? {},
+      event_time: row["observed_at"] ?? row["received_at"],
+      execution: row["execution"] ?? {},
+      runtime_environment: provenance["runtime_environment"] ?? "UNKNOWN",
+      ea_version: provenance["ea_version"] ?? "",
+      broker_server: provenance["broker_server"] ?? "",
+      build_id: provenance["build_id"] ?? "",
+    };
+  };
+  const fromActivity = (row: Record<string, unknown>): Record<string, unknown> | null => {
     const details = (row["details"] as Record<string, unknown> | undefined) ?? {};
     const thesis = (details["market_thesis"] as Record<string, unknown> | undefined) ?? {};
     const readiness = (details["entry_readiness"] as Record<string, unknown> | undefined) ?? {};
     const m10Signal = (details["m10_signal"] as Record<string, unknown> | undefined) ?? {};
-    if (Object.keys(thesis).length > 0 || Object.keys(readiness).length > 0 || Object.keys(m10Signal).length > 0) {
-      return {
-        evidence: {
-          ts: row["ts"],
-          source_event_id: row["id"] ?? sourceEventId,
-          symbol: row["symbol"] ?? OUTLOOK_SYMBOL,
-          market_thesis: thesis,
-          post_trade_state: details["post_trade_state"] ?? {},
-          entry_readiness: readiness,
-          m10_signal: m10Signal,
-          regime: details["regime"] ?? row["mode"] ?? "",
-          session: details["session"] ?? "",
-          event_time: row["ts"],
-          broker_time: details["broker_time"] ?? details["server_time"],
-          device_time: details["device_time"] ?? details["local_time"],
-          execution: {
-            candidate_allowed: details["candidate_allowed"],
-            final_execution_allowed: details["final_execution_allowed"],
-            final_decision: details["final_decision"],
-            final_blocker: details["final_blocker"] ?? details["blocked_by"],
-            pipeline_stage: details["pipeline_stage"],
-            open_trade_called: details["open_trade_called"],
-            broker_retcode: details["broker_retcode"],
-          },
-        },
-        reason: "OK",
-      };
-    }
+    if (Object.keys(thesis).length === 0 && Object.keys(readiness).length === 0 && Object.keys(m10Signal).length === 0) return null;
+    return {
+      ts: row["ts"], source_event_id: row["id"] ?? sourceEventId, symbol: row["symbol"] ?? OUTLOOK_SYMBOL,
+      market_thesis: thesis, post_trade_state: details["post_trade_state"] ?? {}, entry_readiness: readiness, m10_signal: m10Signal,
+      regime: details["regime"] ?? row["mode"] ?? "", session: details["session"] ?? "", event_time: row["ts"],
+      broker_time: details["broker_time"] ?? details["server_time"], device_time: details["device_time"] ?? details["local_time"],
+      runtime_environment: details["runtime_environment"] ?? "UNKNOWN", ea_version: details["ea_version"] ?? "",
+      broker_server: details["broker_server"] ?? "", build_id: details["build_id"] ?? "",
+      execution: {
+        candidate_allowed: details["candidate_allowed"], final_execution_allowed: details["final_execution_allowed"],
+        final_decision: details["final_decision"], final_blocker: details["final_blocker"] ?? details["blocked_by"],
+        pipeline_stage: details["pipeline_stage"], open_trade_called: details["open_trade_called"], broker_retcode: details["broker_retcode"],
+      },
+    };
+  };
+
+  if (sourceEventId) {
+    // 1) Immutable evidence id -- the normal pipeline path.
+    const exactLedger = await ledger.findOne({ $and: [scope, { id: sourceEventId }] }, { projection: { _id: 0 } });
+    if (exactLedger) return { evidence: fromLedger(exactLedger as Record<string, unknown>), reason: "OK" };
+    // 2) An activity id. Only reached when the ledger write for this event
+    //    failed or for pre-ledger callers. A deduplicated activity row links
+    //    to MANY ledger rows via source_activity_id, so matching on that link
+    //    first could return an older observation as if it were this event;
+    //    the activity row itself holds this event's details at this moment.
+    const exactActivity = await activity.findOne({ $and: [scope, { id: sourceEventId }] }, { projection: { _id: 0 } });
+    const legacy = exactActivity ? fromActivity(exactActivity as Record<string, unknown>) : null;
+    if (legacy) return { evidence: legacy, reason: "OK" };
+    // 3) Activity row already pruned: newest immutable observation it linked to.
+    const linked = await ledger
+      .find({ $and: [scope, { source_activity_id: sourceEventId }] }, { projection: { _id: 0 } })
+      .sort({ received_at: -1 })
+      .limit(1)
+      .toArray();
+    return linked[0] ? { evidence: fromLedger(linked[0] as Record<string, unknown>), reason: "OK" } : { evidence: null, reason: "SOURCE_EVENT_NOT_FOUND" };
   }
-  return { evidence: null, reason: "INSUFFICIENT_MARKET_EVIDENCE" };
+
+  const cutoff = new Date(Date.now() - OUTLOOK_EVIDENCE_MAX_AGE_SECONDS * 1000).toISOString();
+  const ledgerRows = await ledger
+    .find({ $and: [scope, { received_at: { $gte: cutoff } }] }, { projection: { _id: 0 } })
+    .sort({ received_at: -1 })
+    .limit(50)
+    .toArray();
+  // Operational rows are recovery compatibility only.  Never let a mutable
+  // activity row override the immutable ledger when ledger evidence exists.
+  const legacyRows = ledgerRows.length === 0
+    ? await activity.find({ $and: [scope, { ts: { $gte: cutoff } }] }, { projection: { _id: 0 } }).sort({ ts: -1 }).limit(50).toArray()
+    : [];
+  const candidates: { at: number; evidence: Record<string, unknown> }[] = [];
+  for (const row of ledgerRows) {
+    const evidence = fromLedger(row as Record<string, unknown>);
+    const at = asUtc(evidence["event_time"] ?? evidence["ts"])?.getTime() ?? 0;
+    candidates.push({ at, evidence });
+  }
+  for (const row of legacyRows) {
+    const evidence = fromActivity(row as Record<string, unknown>);
+    if (!evidence) continue;
+    const at = asUtc(evidence["event_time"] ?? evidence["ts"])?.getTime() ?? 0;
+    candidates.push({ at, evidence });
+  }
+  candidates.sort((a, b) => b.at - a.at);
+  if (!candidates[0]) return { evidence: null, reason: "STALE_EVIDENCE" };
+
+  // Current-state view may receive a fast quote heartbeat between completed
+  // M10 evaluations. Keep the freshest quote/thesis as the base, but carry
+  // forward the freshest genuine M10/readiness blocks still inside the same
+  // freshness window. Exact sourceEventId lookups above remain immutable and
+  // never compose rows, preserving causal publication/forensics.
+  const evidence = { ...candidates[0].evidence };
+  const newestM10 = candidates.find((c) => Object.keys((c.evidence["m10_signal"] as Record<string, unknown> | undefined) ?? {}).length > 0)?.evidence;
+  const newestReadiness = candidates.find((c) => Object.keys((c.evidence["entry_readiness"] as Record<string, unknown> | undefined) ?? {}).length > 0)?.evidence;
+  if (newestM10 && Object.keys((evidence["m10_signal"] as Record<string, unknown> | undefined) ?? {}).length === 0) {
+    evidence["m10_signal"] = newestM10["m10_signal"] ?? {};
+  }
+  if (newestReadiness && Object.keys((evidence["entry_readiness"] as Record<string, unknown> | undefined) ?? {}).length === 0) {
+    evidence["entry_readiness"] = newestReadiness["entry_readiness"] ?? {};
+  }
+  return { evidence, reason: "OK" };
 }
 
 /** Port of market_outlook.py:536 `_outlook_within_freshness_window`. */
@@ -304,8 +358,11 @@ export function computeOutlookFreshness(
     outlook_id: null,
   };
 
-  if (["NO_CONNECTED_EA", "STALE_EVIDENCE"].includes(evidenceReason)) {
-    return { ...base, state: "EA_OFFLINE", message: "Your EA isn't connected right now. No live outlook until a fresh heartbeat arrives." };
+  if (evidenceReason === "NO_CONNECTED_EA") {
+    return { ...base, state: "EA_OFFLINE", message: "Your EA has not connected yet. No live outlook until a heartbeat arrives." };
+  }
+  if (evidenceReason === "STALE_EVIDENCE") {
+    return { ...base, state: "NO_FRESH_SIGNAL", message: "The EA may still be online, but XauCloud is waiting for fresh broker/M10 evidence before publishing a live outlook." };
   }
 
   const signalCurrent = outlookStillLive(signalDoc, now) && signalBelongsToCurrentHourlyWindow(signalDoc, doc);

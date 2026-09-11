@@ -20,6 +20,9 @@ import { z } from "zod";
  * shadow-only boundary.
  */
 
+export const GLOBAL_BRAIN_INTEGRITY_EPOCH = "IMMUTABLE_EVIDENCE_V2_2026_09_11";
+/** Stamped on observations that cannot prove they were built under the immutable-evidence contract. Retained for audit, never trained on. */
+export const GLOBAL_BRAIN_LEGACY_EPOCH = "LEGACY_UNTRUSTED";
 export const GLOBAL_BRAIN_OBSERVATIONS_COLLECTION = "global_brain_observations";
 export const GLOBAL_BRAIN_MODELS_COLLECTION = "global_brain_models";
 export const GLOBAL_BRAIN_PROMOTIONS_COLLECTION = "global_brain_promotions";
@@ -101,6 +104,14 @@ export interface ObservationFeatures {
 
 export type ObservationResolutionState = "RESOLVED" | "PENDING_TRACKABLE" | "UNRESOLVABLE_NO_PATH";
 
+export interface ObservationProvenance {
+  environment: "LIVE" | "DEMO" | "TESTER" | "REPLAY" | "UNKNOWN";
+  ea_version: string | null;
+  broker_server: string | null;
+  source_build: string | null;
+  integrity_epoch: string;
+}
+
 export interface ObservationOutcome {
   analytics_outcome: string | null; // WIN | LOSS | PARTIAL_PROFIT | BREAK_EVEN | null (unresolved)
   r_multiple: number | null;
@@ -132,6 +143,7 @@ export interface GlobalBrainObservation {
   /** Separates genuinely pending evidence from records that have no stored future price path and can never resolve honestly. */
   resolution_state?: ObservationResolutionState;
   source_ref: { collection: string; id: string };
+  provenance?: ObservationProvenance;
   created_at: string;
 }
 

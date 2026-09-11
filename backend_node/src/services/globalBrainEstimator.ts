@@ -102,8 +102,11 @@ export function computeBucketedEstimator<T>(
 }
 
 /** Looks up the estimator's suggestion for one bucket key, falling back to the global prior when the bucket is unseen or below minSample -- mirrors hive/score's exact-then-rollup-then-cold-start fallback shape. */
-export function lookupBucket(result: BucketedEstimatorResult, bucketKey: string): BucketStats | { bucket_key: string; n: 0; shrunk_rate: number; sample_sufficient: false } {
-  const found = result.buckets.find((b) => b.bucket_key === bucketKey && b.sample_sufficient);
-  if (found) return found;
-  return { bucket_key: bucketKey, n: 0, shrunk_rate: result.global_prior_rate, sample_sufficient: false };
+export function lookupBucket(result: BucketedEstimatorResult, bucketKey: string): BucketStats | { bucket_key: string; n: number; shrunk_rate: number; sample_sufficient: false } {
+  const found = result.buckets.find((b) => b.bucket_key === bucketKey);
+  if (found?.sample_sufficient) return found;
+  // Preserve the real sample count for observability, but keep the original
+  // prediction semantics: an insufficient bucket falls back to the validated
+  // global prior and can never influence a decision as if it were mature.
+  return { bucket_key: bucketKey, n: found?.n ?? 0, shrunk_rate: result.global_prior_rate, sample_sufficient: false };
 }

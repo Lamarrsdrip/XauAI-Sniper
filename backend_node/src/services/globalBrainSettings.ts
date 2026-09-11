@@ -1,4 +1,5 @@
 import { getDb } from "../db.js";
+import { recordPersistentDiagnostic } from "./persistentDiagnostics.js";
 
 /**
  * Owner-controlled master switches for the Global Learning Brain. A
@@ -73,6 +74,20 @@ const DEFAULT_SETTINGS: GlobalBrainSettings = {
   updated_by: null,
 };
 
+const FAIL_CLOSED_SETTINGS: GlobalBrainSettings = {
+  global_learning_enabled: false,
+  scheduled_cycle_enabled: false,
+  auto_training_enabled: false,
+  auto_promotion_enabled: false,
+  shadow_serving_enabled: false,
+  advisory_integration_enabled: false,
+  bot_learned_influence_enabled: false,
+  m10_learned_influence_enabled: false,
+  outlook_learned_influence_enabled: false,
+  updated_at: null,
+  updated_by: "SETTINGS_READ_FAILED",
+};
+
 export async function ensureGlobalBrainSettingsIndexes(): Promise<void> {
   await getDb().collection(SETTINGS_COLLECTION).createIndex("key", { unique: true });
 }
@@ -88,10 +103,13 @@ export async function getGlobalBrainSettings(): Promise<GlobalBrainSettings> {
       const { key: _key, ...rest } = existing;
       return { ...DEFAULT_SETTINGS, ...rest } as GlobalBrainSettings;
     }
-  } catch {
-    /* fail safe to defaults below -- a settings-read failure must never crash the caller */
+  } catch (error) {
+    await recordPersistentDiagnostic("error", "global-brain-settings", error, { code: "GLOBAL_BRAIN_SETTINGS_READ_FAILED" });
+    // DB/config uncertainty must never turn training/promotion/influence ON.
+    return { ...FAIL_CLOSED_SETTINGS };
   }
-  return DEFAULT_SETTINGS;
+  // A healthy DB with no settings document keeps the intended product defaults.
+  return { ...DEFAULT_SETTINGS };
 }
 
 export type GlobalBrainSettingsPatch = Partial<Omit<GlobalBrainSettings, "updated_at" | "updated_by">>;

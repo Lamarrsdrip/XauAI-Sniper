@@ -61,9 +61,13 @@ describe("globalBrainSettings", () => {
     expect(settings.auto_promotion_enabled).toBe(false); // still off -- re-enable is explicit per-flag
   });
 
-  it("fails safe to defaults if the settings read itself throws, never crashing the caller", async () => {
+  it("fails closed if the settings read itself throws, never crashing the caller", async () => {
     state.db = { collection: () => { throw new Error("boom"); } } as unknown as FakeDb;
     const settings = await getGlobalBrainSettings();
-    expect(settings.global_learning_enabled).toBe(true); // safe default, not a crash
+    expect(settings.global_learning_enabled).toBe(false);
+    expect(settings.auto_training_enabled).toBe(false);
+    expect(settings.auto_promotion_enabled).toBe(false);
+    expect(settings.outlook_learned_influence_enabled).toBe(false);
+    expect(settings.updated_by).toBe("SETTINGS_READ_FAILED");
   });
 });

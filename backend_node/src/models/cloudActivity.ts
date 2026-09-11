@@ -50,6 +50,10 @@ export const BotActivityReqSchema = z.object({
   entry_readiness: z.record(z.string(), z.unknown()).nullable().optional(),
   m10_signal: z.record(z.string(), z.unknown()).nullable().optional(),
   m30_consensus: z.record(z.string(), z.unknown()).nullable().optional(),
+  runtime_environment: z.string().optional(),
+  ea_version: z.string().optional().default(""),
+  broker_server: z.string().optional().default(""),
+  build_id: z.string().optional().default(""),
 });
 export type BotActivityReq = z.infer<typeof BotActivityReqSchema>;
 
@@ -64,7 +68,7 @@ export const ACTIVITY_DETAIL_FIELDS = [
   "final_decision", "final_blocker", "open_trade_called", "trade_buy_called",
   "trade_sell_called", "broker_retcode", "broker_error", "pipeline_stage",
   "market_thesis", "post_trade_state", "entry_readiness", "m10_signal",
-  "m30_consensus",
+  "m30_consensus", "runtime_environment", "ea_version", "broker_server", "build_id",
 ] as const;
 
 /** Port of server.py:7482 `class DirectionReservationClaimReq(BaseModel)`. */

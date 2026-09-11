@@ -10,6 +10,9 @@ import {
 import { classifyMistake } from "./globalBrainMistakeClassifier.js";
 import { computeCounterfactualTiming, type Quote } from "./globalBrainCounterfactual.js";
 import { getGlobalBrainSettings } from "./globalBrainSettings.js";
+import { GLOBAL_BRAIN_INTEGRITY_EPOCH, GLOBAL_BRAIN_LEGACY_EPOCH } from "../models/globalBrain.js";
+import { recordPersistentDiagnostic } from "./persistentDiagnostics.js";
+import { canonicalTradeOutcome } from "./tradeOutcome.js";
 
 import { MongoServerError } from "mongodb";
 /**
@@ -55,6 +58,23 @@ import { MongoServerError } from "mongodb";
  * customer's observations over time (a linkability risk), even though the
  * hash itself cannot be reversed to the raw account_login/license_id.
  */
+function firstNonEmpty(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function normalizeProvenanceEnvironment(value: unknown): "LIVE" | "DEMO" | "TESTER" | "REPLAY" | "UNKNOWN" {
+  const raw = String(value ?? "").trim().toUpperCase();
+  if (["LIVE", "REAL", "PRODUCTION"].includes(raw)) return "LIVE";
+  if (["DEMO", "PAPER"].includes(raw)) return "DEMO";
+  if (["TESTER", "BACKTEST", "STRATEGY_TESTER"].includes(raw)) return "TESTER";
+  if (["REPLAY", "SIMULATION", "SIMULATOR"].includes(raw)) return "REPLAY";
+  return "UNKNOWN";
+}
+
 function hashAccountRef(rawId: string): string {
   const pepper = env.GLOBAL_BRAIN_HASH_PEPPER || env.JWT_SECRET;
   return createHash("sha256").update(`${pepper}:${rawId}`).digest("hex").slice(0, 32);
@@ -117,7 +137,14 @@ export async function recordGlobalBrainObservation(obs: GlobalBrainObservation):
       if (error instanceof MongoServerError && error.code === 11000) return;
       throw error;
     }
-  } catch { /* shadow learning never affects live trading */ }
+  } catch (error) {
+    await recordPersistentDiagnostic("error", "global-brain-ingest", error, {
+      code: "GLOBAL_BRAIN_INGEST_FAILED",
+      source_event_id: obs.source_ref?.id ?? "",
+      details: { source: obs.source, dedupe_key: obs.dedupe_key },
+    });
+    /* shadow learning never affects live trading */
+  }
 } // ASTRA_REPAIR_V2_6287 / 011
 
 
@@ -139,10 +166,11 @@ export function buildBotTradeObservation(
   shadowDoc: Record<string, unknown> | null,
 ): GlobalBrainObservation {
   const direction = String(tradeDoc["direction"] ?? "").toUpperCase();
+  const normalizedOutcome = canonicalTradeOutcome(tradeDoc["result"]);
   const outcome =
     tradeDoc["result"] !== undefined && tradeDoc["result"] !== ""
       ? {
-          analytics_outcome: String(tradeDoc["result"]).toUpperCase() === "WIN" ? "WIN" : String(tradeDoc["result"]).toUpperCase() === "LOSS" ? "LOSS" : "BREAK_EVEN",
+          analytics_outcome: normalizedOutcome,
           r_multiple: Number.isFinite(Number(tradeDoc["final_r"])) ? Number(tradeDoc["final_r"]) : null,
           mfe_r: Number.isFinite(Number(tradeDoc["mfe_r"])) ? Number(tradeDoc["mfe_r"]) : null,
           mae_r: Number.isFinite(Number(tradeDoc["mae_r"])) ? Number(tradeDoc["mae_r"]) : null,
@@ -171,7 +199,7 @@ export function buildBotTradeObservation(
   return {
     dedupe_key: `BOT_TRADE:${String(tradeDoc["trade_identity"] ?? tradeDoc["signature"] ?? "")}`,
     source: "BOT_TRADE",
-    account_ref: hashAccountRef(String(tradeDoc["license_id"] ?? tradeDoc["account_login"] ?? "")),
+    account_ref: hashAccountRef(firstNonEmpty(tradeDoc["license_id"], tradeDoc["account_login"])),
     decision_action: decisionAction,
     features: {
       symbol: String(tradeDoc["symbol"] ?? "XAUUSD"),
@@ -191,6 +219,15 @@ export function buildBotTradeObservation(
     resolved_at: resolvedAt,
     resolution_state: "RESOLVED",
     source_ref: { collection: "trade_journal", id: String(tradeDoc["trade_identity"] ?? "") },
+    // A closed-trade label comes from the EA's own journal record (result,
+    // final_r, mfe_r, mae_r), never from the lossy activity stream, and is
+    // now normalized by canonicalTradeOutcome at build time -- so an
+    // observation built HERE satisfies the integrity contract. Pre-repair
+    // BOT_TRADE rows carry no provenance and stay excluded. The EA does not
+    // send source_evidence_id for trades, so keying on it would permanently
+    // mislabel genuine post-repair trades as legacy. Environment still gates
+    // training (UNKNOWN is never treated as LIVE).
+    provenance: { environment: normalizeProvenanceEnvironment(tradeDoc["runtime_environment"]), ea_version: String(tradeDoc["ea_version"] ?? "") || null, broker_server: String(tradeDoc["broker_server"] ?? "") || null, source_build: String(tradeDoc["build_id"] ?? "") || null, integrity_epoch: GLOBAL_BRAIN_INTEGRITY_EPOCH },
     created_at: new Date().toISOString(),
   };
 }
@@ -230,6 +267,7 @@ export function buildShadowCandidateObservation(shadowDoc: Record<string, unknow
     resolved_at: null,
     resolution_state: "UNRESOLVABLE_NO_PATH",
     source_ref: { collection: "ml_shadow_decisions", id: String(shadowDoc["signature"] ?? "") },
+    provenance: { environment: normalizeProvenanceEnvironment(shadowDoc["runtime_environment"]), ea_version: String(shadowDoc["ea_version"] ?? "") || null, broker_server: String(shadowDoc["broker_server"] ?? "") || null, source_build: String(shadowDoc["build_id"] ?? "") || null, integrity_epoch: shadowDoc["source_evidence_id"] ? GLOBAL_BRAIN_INTEGRITY_EPOCH : GLOBAL_BRAIN_LEGACY_EPOCH },
     created_at: new Date().toISOString(),
   };
 }
@@ -273,6 +311,7 @@ export function buildM10CandidateObservation(eventDoc: Record<string, unknown>):
     resolved_at: null,
     resolution_state: "UNRESOLVABLE_NO_PATH",
     source_ref: { collection: "cloud_outlook_signal_events", id: String(eventDoc["candidate_id"] ?? "") },
+    provenance: { environment: normalizeProvenanceEnvironment(eventDoc["runtime_environment"]), ea_version: String(eventDoc["ea_version"] ?? "") || null, broker_server: String(eventDoc["broker_server"] ?? "") || null, source_build: String(eventDoc["build_id"] ?? "") || null, integrity_epoch: eventDoc["source_evidence_id"] ? GLOBAL_BRAIN_INTEGRITY_EPOCH : GLOBAL_BRAIN_LEGACY_EPOCH },
     created_at: new Date().toISOString(),
   };
 }
@@ -374,6 +413,7 @@ export function buildOutlookObservation(doc: Record<string, unknown>, quotes: re
     resolved_at: String(doc["classification_at"] ?? new Date().toISOString()),
     resolution_state: "RESOLVED",
     source_ref: { collection: "cloud_market_outlooks", id: String(doc["id"] ?? "") },
+    provenance: { environment: normalizeProvenanceEnvironment(doc["runtime_environment"]), ea_version: String(doc["ea_version"] ?? "") || null, broker_server: String(doc["broker_server"] ?? "") || null, source_build: String(doc["source_evidence_id"] ?? "") || null, integrity_epoch: doc["source_evidence_id"] ? GLOBAL_BRAIN_INTEGRITY_EPOCH : GLOBAL_BRAIN_LEGACY_EPOCH },
     created_at: new Date().toISOString(),
   };
 }

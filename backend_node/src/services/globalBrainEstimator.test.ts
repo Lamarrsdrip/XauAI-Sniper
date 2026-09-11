@@ -95,6 +95,17 @@ describe("lookupBucket", () => {
     expect(found.n).toBe(2);
   });
 
+  it("preserves the real sample count for an existing but insufficient bucket", () => {
+    const thin = computeBucketedEstimator(
+      [{ bucket: "THIN", success: true, r: 1 }] as Item[],
+      (i) => i.bucket, (i) => i.success, (i) => i.r,
+      { minSample: 8 },
+    );
+    const found = lookupBucket(thin, "THIN");
+    expect(found.n).toBe(1);
+    expect(found.sample_sufficient).toBe(false);
+  });
+
   it("falls back to the global prior for an unseen bucket key", () => {
     const found = lookupBucket(result, "NEVER_SEEN");
     expect(found.n).toBe(0);

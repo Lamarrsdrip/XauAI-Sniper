@@ -23,6 +23,7 @@ import { evaluateGlobalBrainInfluence, type GlobalBrainInfluenceResult } from ".
 import { computeConfidence, confidenceCategory, confidencePct, computeZoneAndTargets, expectedPath, newOutlookId, synthesizeNarrative } from "./marketOutlookConfidence.js";
 
 import { loadClosedBrokerHtfEvidence } from "./manualTradingMarketStore.js";
+import { outlookEvidenceStaleMessage } from "./marketIntelligenceConfig.js";
 void _BREAK_EVEN_R_TOLERANCE; // referenced by advance_persisted_signal, still pending port
 
 function deriveSetupType(path: string): string {
@@ -230,7 +231,7 @@ const EMPTY_CONFIDENCE_COMPONENTS = {
 
 const NO_VALID_REASON_TEXT: Record<string, string> = {
   NO_CONNECTED_EA: "No EA has ever reported activity for this account -- connect and run your EA to begin receiving hourly outlooks.",
-  STALE_EVIDENCE: "This account's EA has connected before, but has not reported any activity in the last 6 hours -- check that it is still running.",
+  STALE_EVIDENCE: outlookEvidenceStaleMessage(),
   INSUFFICIENT_MARKET_EVIDENCE: "The EA is connected and reporting, but its recent events do not yet carry usable market-thesis or entry-readiness data.",
   INTERNAL_GENERATION_ERROR: "No usable live broker price is available from the EA right now, so no outlook could be generated this cycle.",
   BROKER_QUOTE_UNAVAILABLE: "The EA evidence is present, but it does not contain a usable account-specific broker quote. Outlook will not substitute an external XAU feed.",
@@ -275,6 +276,10 @@ export async function generateOutlookForAccount(opts: {
       symbol: OUTLOOK_SYMBOL,
       account,
       license_key: licenseKey,
+      runtime_environment: String(evidence?.["runtime_environment"] ?? "UNKNOWN"),
+      ea_version: String(evidence?.["ea_version"] ?? ""),
+      broker_server: String(evidence?.["broker_server"] ?? ""),
+      source_evidence_id: evidence?.["evidence_id"] ?? null,
       broker_htf_evidence: brokerHtfEvidence.candles,
       broker_htf_evidence_complete: brokerHtfEvidence.complete,
       broker_htf_missing_timeframes: brokerHtfEvidence.missing,
@@ -295,7 +300,7 @@ export async function generateOutlookForAccount(opts: {
       confidence_components: EMPTY_CONFIDENCE_COMPONENTS,
       status: "PUBLISHED",
       reasoning: reasonText,
-      uncertainty: ["NO_CONNECTED_EA", "STALE_EVIDENCE"].includes(noValidReason) ? "Connect and run your EA to begin receiving hourly outlooks." : "Retry next hourly cycle.",
+      uncertainty: noValidReason === "NO_CONNECTED_EA" ? "Connect and run your EA to begin receiving hourly outlooks." : noValidReason === "STALE_EVIDENCE" ? "EA connectivity and market-data freshness are tracked separately; waiting for fresh broker/M10 evidence." : "Retry next hourly cycle.",
       expected_path: "NO_CLEAR_PATH",
       setup_type: "NONE",
     };
@@ -406,6 +411,10 @@ export async function generateOutlookForAccount(opts: {
       symbol: OUTLOOK_SYMBOL,
       account,
       license_key: licenseKey,
+      runtime_environment: String(evidence?.["runtime_environment"] ?? "UNKNOWN"),
+      ea_version: String(evidence?.["ea_version"] ?? ""),
+      broker_server: String(evidence?.["broker_server"] ?? ""),
+      source_evidence_id: evidence?.["evidence_id"] ?? null,
       broker_htf_evidence: brokerHtfEvidence.candles,
       broker_htf_evidence_complete: brokerHtfEvidence.complete,
       broker_htf_missing_timeframes: brokerHtfEvidence.missing,
@@ -464,6 +473,10 @@ export async function generateOutlookForAccount(opts: {
       symbol: OUTLOOK_SYMBOL,
       account,
       license_key: licenseKey,
+      runtime_environment: String(evidence?.["runtime_environment"] ?? "UNKNOWN"),
+      ea_version: String(evidence?.["ea_version"] ?? ""),
+      broker_server: String(evidence?.["broker_server"] ?? ""),
+      source_evidence_id: evidence?.["evidence_id"] ?? null,
       broker_htf_evidence: brokerHtfEvidence.candles,
       broker_htf_evidence_complete: brokerHtfEvidence.complete,
       broker_htf_missing_timeframes: brokerHtfEvidence.missing,
@@ -504,6 +517,10 @@ export async function generateOutlookForAccount(opts: {
     symbol: OUTLOOK_SYMBOL,
     account,
     license_key: licenseKey,
+    runtime_environment: String(evidence?.["runtime_environment"] ?? "UNKNOWN"),
+    ea_version: String(evidence?.["ea_version"] ?? ""),
+    broker_server: String(evidence?.["broker_server"] ?? ""),
+    source_evidence_id: evidence?.["evidence_id"] ?? null,
     generated_at: publishedAt,
     published_at: publishedAt,
     hourly_slot: hourlySlot,

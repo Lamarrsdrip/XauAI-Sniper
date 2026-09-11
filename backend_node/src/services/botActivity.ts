@@ -4,6 +4,7 @@ import { normalizeLicenseKey } from "./license.js";
 import { recordAuditableEaDecision, recordVerifiedManualTradingQuote } from "./manualTradingMarketStore.js";
 import { recordDiagnostic } from "./diagnostics.js";
 import { normalizeGoldSymbol } from "./goldSymbol.js";
+import { hasMarketEvidence, recordImmutableMarketEvidence, type MarketEvidenceInput } from "./marketEvidenceLedger.js";
 
 export interface BotActivityDetails {
   license_key?: string;
@@ -51,6 +52,20 @@ export function categorizeBotActivity(sev: string, text: string): string {
 }
 
 /**
+ * Ledger persistence is durable evidence, but it is still observability from
+ * the EA's point of view: an unexpected ledger failure is recorded and the
+ * activity acknowledgement proceeds.
+ */
+async function recordMarketEvidenceSafely(input: MarketEvidenceInput): Promise<Record<string, unknown>> {
+  try {
+    return { ...(await recordImmutableMarketEvidence(input)) };
+  } catch (error) {
+    recordDiagnostic("error", "market-evidence-ledger", error, { code: "MARKET_EVIDENCE_PERSIST_FAILED" });
+    return { persisted: false, evidence_id: null };
+  }
+}
+
+/**
  * Port of server.py:6829 `_store_bot_activity` -- dedupes identical events
  * within a 15-minute window (same license/account/symbol/type/severity/
  * module/decision/reason/blocked_by/ticket hashes to the same dedupe_key),
@@ -78,6 +93,9 @@ export async function storeBotActivity(
   const ticket = String(details.ticket ?? "");
   const text = `${ev} ${sev} ${moduleName} ${decision} ${reason} ${blockedBy}`.toUpperCase();
   const category = categorizeBotActivity(sev, text);
+  // Market evidence has its own append-only identity/retention; operational
+  // activity can remain deduplicated without destroying broker/M10 history.
+  const marketBearing = hasMarketEvidence(details);
 
   const dedupeSource = [licenseKey, account || "", symbol || "", ev, sev, moduleName, decision, reason, blockedBy, ticket].join("|");
   const dedupeKey = createHash("sha256").update(dedupeSource, "utf8").digest("hex");
@@ -99,6 +117,12 @@ export async function storeBotActivity(
       normalized_symbol: normalizeGoldSymbol(symbol),
     };
     await activity.updateOne({ id: existing["id"] as string }, { $set: patch });
+    const marketEvidence = marketBearing
+      ? await recordMarketEvidenceSafely({
+        source_activity_id: String(existing["id"] ?? ""), license_key: licenseKey,
+        account: account || "", symbol: symbol || "", event_type: ev, received_at: now, details,
+      })
+      : { persisted: false, evidence_id: null };
     let manualMarketQuote: Record<string, unknown> = { persisted: false };
     try {
       manualMarketQuote = { ...(await recordVerifiedManualTradingQuote({ account: account || "", symbol: symbol || "", receivedAt: now, marketThesis: details["market_thesis"] })) };
@@ -107,7 +131,7 @@ export async function storeBotActivity(
       recordDiagnostic("warning", "manual-trading-market-store", error, { code: "BROKER_CANDLE_PERSIST_FAILED" });
       /* A candle-store failure must not affect an EA acknowledgement. */
     }
-    return { ...existing, ...patch, manual_market_quote: manualMarketQuote };
+    return { ...existing, ...patch, manual_market_quote: manualMarketQuote, market_evidence: marketEvidence };
   }
 
   const doc: Record<string, unknown> = {
@@ -150,6 +174,15 @@ export async function storeBotActivity(
   };
   await activity.insertOne({ ...doc });
 
+  // Durable append-only market/M10 evidence with identity independent of the
+  // operational activity row. Exact retries are idempotent by evidence_key.
+  const marketEvidence = marketBearing
+    ? await recordMarketEvidenceSafely({
+      source_activity_id: String(doc["id"]), license_key: licenseKey,
+      account: account || "", symbol: symbol || "", event_type: ev, received_at: now, details,
+    })
+    : { persisted: false, evidence_id: null };
+
   // Retain verified broker candles separately from short-lived operational
   // activity. This is deliberately best-effort: a storage failure can never
   // make an EA heartbeat or trade decision fail.
@@ -178,7 +211,7 @@ export async function storeBotActivity(
       await activity.deleteMany({ _id: { $in: oldest.map((o) => o["_id"]) } });
     }
   }
-  return { ...doc, manual_market_quote: manualMarketQuote };
+  return { ...doc, manual_market_quote: manualMarketQuote, market_evidence: marketEvidence };
 }
 
 /**

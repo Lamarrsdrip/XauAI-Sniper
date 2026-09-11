@@ -32,6 +32,10 @@ export const TradeJournalEntrySchema = z.object({
   mfe_r: z.number().optional().default(0),
   campaign_id: z.string().optional().default(""),
   ea_version: z.string().optional().default(""),
+  build_id: z.string().optional().default(""),
+  broker_server: z.string().optional().default(""),
+  runtime_environment: z.string().optional().default("UNKNOWN"),
+  source_evidence_id: z.string().optional().default(""),
   account_login: z.string().optional().default(""),
   // MT5 deposit currency is authoritative only when reported by the EA.
   // Older rows remain intentionally unknown rather than guessed as USD.

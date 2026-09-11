@@ -3,6 +3,7 @@ import { getDb } from "../db.js";
 import {
   GLOBAL_BRAIN_MODELS_COLLECTION,
   GLOBAL_BRAIN_PROMOTIONS_COLLECTION,
+  GLOBAL_BRAIN_INTEGRITY_EPOCH,
 } from "../models/globalBrain.js";
 import type { BucketedEstimatorResult } from "./globalBrainEstimator.js";
 import type { ModelMetrics } from "./globalBrainPromotion.js";
@@ -22,6 +23,7 @@ export type ModelStatus = "CHAMPION" | "CHALLENGER" | "REJECTED" | "SUPERSEDED" 
 
 export interface GlobalBrainModelDoc {
   question: string;
+  integrity_epoch: string;
   version: number;
   status: ModelStatus;
   trained_at: string;
@@ -41,7 +43,7 @@ export interface GlobalBrainModelDoc {
 
 export interface PromotionAuditEntry {
   question: string;
-  action: "PROMOTE" | "REJECT" | "ROLLBACK";
+  action: "PROMOTE" | "REJECT" | "ROLLBACK" | "QUARANTINE";
   from_version: number | null;
   to_version: number | null;
   reason: string;
@@ -61,6 +63,36 @@ export async function ensureGlobalBrainRegistryIndexes(): Promise<void> {
   await db.collection(GLOBAL_BRAIN_MODELS_COLLECTION).createIndex({ question: 1, status: 1 });
   await db.collection(GLOBAL_BRAIN_PROMOTIONS_COLLECTION).createIndex({ question: 1, at: -1 });
   await db.collection(GLOBAL_BRAIN_CHAMPION_POINTERS_COLLECTION).createIndex({ question: 1 }, { unique: true });
+}
+
+/** Quarantine any champion trained before immutable-evidence trust epoch. Idempotent. */
+export async function quarantineLegacyGlobalBrainChampions(): Promise<number> {
+  const db = getDb();
+  const models = db.collection<GlobalBrainModelDoc>(GLOBAL_BRAIN_MODELS_COLLECTION);
+  const pointers = db.collection(GLOBAL_BRAIN_CHAMPION_POINTERS_COLLECTION);
+  const legacy = await models.find({ status: "CHAMPION", integrity_epoch: { $ne: GLOBAL_BRAIN_INTEGRITY_EPOCH } }, { projection: { _id: 0, question: 1, version: 1 } }).toArray();
+  let quarantined = 0;
+  for (const model of legacy) {
+    const nowIso = new Date().toISOString();
+    // The model document is kept (audit/history); only its trusted-champion
+    // standing is withdrawn, and the withdrawal itself is audit-logged.
+    const res = await models.updateOne({ question: model.question, version: model.version, status: "CHAMPION" }, { $set: { status: "SUPERSEDED", legacy_quarantined_at: nowIso, legacy_quarantine_reason: GLOBAL_BRAIN_INTEGRITY_EPOCH } });
+    await pointers.deleteOne({ question: model.question, version: model.version });
+    if (res.modifiedCount > 0) {
+      await writeAudit({
+        question: model.question, action: "QUARANTINE", from_version: model.version, to_version: null,
+        reason: `Champion v${model.version} was trained before integrity epoch ${GLOBAL_BRAIN_INTEGRITY_EPOCH} (possibly from the lossy activity stream); withdrawn from production, retained for audit.`,
+        at: nowIso,
+      });
+      quarantined += 1;
+    }
+  }
+  const allPointers = await pointers.find({}, { projection: { _id: 0, question: 1, version: 1 } }).toArray();
+  for (const pointer of allPointers) {
+    const model = await models.findOne({ question: pointer.question, version: pointer.version }, { projection: { _id: 0, integrity_epoch: 1 } });
+    if (!model || model.integrity_epoch !== GLOBAL_BRAIN_INTEGRITY_EPOCH) await pointers.deleteOne({ question: pointer.question, version: pointer.version });
+  }
+  return quarantined;
 }
 
 /**
@@ -102,9 +134,10 @@ export async function getCurrentChampion(question: string): Promise<GlobalBrainM
   if (pointer && Number(pointer["version"]) > 0) {
     const model = await db.collection<GlobalBrainModelDoc>(GLOBAL_BRAIN_MODELS_COLLECTION).findOne({ question, version: Number(pointer["version"]) }, { projection: { _id: 0 } });
     if (!model) throw new Error(`Global Brain champion pointer ${question} v${pointer["version"]} has no model document.`);
+    if (model.integrity_epoch !== GLOBAL_BRAIN_INTEGRITY_EPOCH) return null;
     return { ...model, status: "CHAMPION" };
   }
-  const legacy = await db.collection<GlobalBrainModelDoc>(GLOBAL_BRAIN_MODELS_COLLECTION).findOne({ question, status: "CHAMPION" }, { projection: { _id: 0 } });
+  const legacy = await db.collection<GlobalBrainModelDoc>(GLOBAL_BRAIN_MODELS_COLLECTION).findOne({ question, status: "CHAMPION", integrity_epoch: GLOBAL_BRAIN_INTEGRITY_EPOCH }, { projection: { _id: 0 } });
   if (legacy) await db.collection(GLOBAL_BRAIN_CHAMPION_POINTERS_COLLECTION).updateOne({ question }, { $setOnInsert: { question, version: legacy.version, updated_at: new Date().toISOString() } }, { upsert: true });
   return legacy;
 } // ASTRA_REPAIR_V2_6287 / 012
@@ -114,7 +147,7 @@ export async function getCurrentChampion(question: string): Promise<GlobalBrainM
 export async function getLatestModelDoc(question: string): Promise<GlobalBrainModelDoc | null> {
   const docs = await getDb()
     .collection<GlobalBrainModelDoc>(GLOBAL_BRAIN_MODELS_COLLECTION)
-    .find({ question }, { projection: { _id: 0 } })
+    .find({ question, integrity_epoch: GLOBAL_BRAIN_INTEGRITY_EPOCH }, { projection: { _id: 0 } })
     .sort({ version: -1 })
     .limit(1)
     .toArray();
@@ -137,6 +170,7 @@ async function writeAudit(entry: PromotionAuditEntry): Promise<void> {
 
 export interface NewModelInput {
   question: string;
+  integrity_epoch?: string;
   trained_at: string;
   training_window: { from: string | null; to: string | null; n: number };
   dataset_fingerprint: string;
@@ -157,7 +191,7 @@ export async function promoteChallenger(input: NewModelInput, reason: string): P
     const version = await nextVersion(input.question);
     const nowIso = new Date().toISOString();
     const staged: GlobalBrainModelDoc = {
-      question: input.question, version, status: "SUPERSEDED", trained_at: input.trained_at,
+      question: input.question, integrity_epoch: input.integrity_epoch ?? GLOBAL_BRAIN_INTEGRITY_EPOCH, version, status: "SUPERSEDED", trained_at: input.trained_at,
       training_window: input.training_window, dataset_fingerprint: input.dataset_fingerprint,
       validation_metrics: input.validation_metrics, holdout_metrics: input.holdout_metrics, buckets: input.buckets,
       promotion_reason: reason, promoted_at: nowIso, meets_small_sample_criteria: input.meets_small_sample_criteria,
@@ -184,6 +218,7 @@ export async function rejectChallenger(input: NewModelInput, reason: string): Pr
     const version = await nextVersion(input.question);
     const doc: GlobalBrainModelDoc = {
       question: input.question,
+      integrity_epoch: input.integrity_epoch ?? GLOBAL_BRAIN_INTEGRITY_EPOCH,
       version,
       status: "REJECTED",
       trained_at: input.trained_at,
@@ -208,41 +243,40 @@ export async function rejectChallenger(input: NewModelInput, reason: string): Pr
 export async function rollbackToPreviousChampion(question: string): Promise<GlobalBrainModelDoc> {
   return withQuestionLock(question, async () => {
     const db = getDb();
-    // Sorted by to_version (monotonic per question), not by wall-clock `at` --
-    // two promotions issued in rapid succession can share a millisecond-
-    // resolution timestamp, which would make an `at`-sort pick the wrong
-    // "most recent" entry and roll back to the wrong version.
-    const lastPromote = await db
+    const collection = db.collection<GlobalBrainModelDoc>(GLOBAL_BRAIN_MODELS_COLLECTION);
+    const current = await getCurrentChampion(question);
+    if (!current) throw new RollbackError(`No previous champion exists for question "${question}" because no current champion is trusted.`);
+
+    // Follow the promotion edge that originally produced the CURRENT version.
+    // This makes repeated rollback walk v3 -> v2 -> v1 instead of repeatedly
+    // selecting the repository's most recent PROMOTE record.
+    const promotion = await db
       .collection<PromotionAuditEntry>(GLOBAL_BRAIN_PROMOTIONS_COLLECTION)
-      .find({ question, action: "PROMOTE" }, { projection: { _id: 0 } })
-      .sort({ to_version: -1 })
+      .find({ question, action: "PROMOTE", to_version: current.version }, { projection: { _id: 0 } })
+      .sort({ at: -1 })
       .limit(1)
       .toArray();
-    const entry = lastPromote[0];
+    const entry = promotion[0];
     if (!entry || entry.from_version === null) {
-      throw new RollbackError(`No previous champion exists for question "${question}" to roll back to.`);
+      throw new RollbackError(`No previous champion exists for question "${question}" before version ${current.version}.`);
     }
-    const collection = db.collection<GlobalBrainModelDoc>(GLOBAL_BRAIN_MODELS_COLLECTION);
+
     const previous = await collection.findOne({ question, version: entry.from_version }, { projection: { _id: 0 } });
     if (!previous) throw new RollbackError(`Previous champion version ${entry.from_version} for "${question}" no longer exists.`);
-
-    const current = await getCurrentChampion(question);
+    if (previous.integrity_epoch !== GLOBAL_BRAIN_INTEGRITY_EPOCH) {
+      throw new RollbackError(`Previous champion version ${previous.version} for "${question}" predates integrity epoch ${GLOBAL_BRAIN_INTEGRITY_EPOCH} and is quarantined.`);
+    }
+    const nowIso = new Date().toISOString();
     await db.collection(GLOBAL_BRAIN_CHAMPION_POINTERS_COLLECTION).updateOne(
-      { question },
-      { $set: { question, version: previous.version, updated_at: new Date().toISOString() } },
-      { upsert: true },
+      { question }, { $set: { question, version: previous.version, updated_at: nowIso } }, { upsert: true },
     );
     await collection.updateOne({ question, version: previous.version }, { $set: { status: "CHAMPION" } });
-    if (current && current.version !== previous.version) {
+    if (current.version !== previous.version) {
       await collection.updateOne({ question, version: current.version }, { $set: { status: "ROLLED_BACK" } });
     }
     await writeAudit({
-      question,
-      action: "ROLLBACK",
-      from_version: current?.version ?? null,
-      to_version: previous.version,
-      reason: `Manual rollback to version ${previous.version}.`,
-      at: new Date().toISOString(),
+      question, action: "ROLLBACK", from_version: current.version, to_version: previous.version,
+      reason: `Manual rollback from version ${current.version} to version ${previous.version}.`, at: nowIso,
     });
     return { ...previous, status: "CHAMPION" };
   });

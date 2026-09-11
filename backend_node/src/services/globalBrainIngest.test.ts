@@ -48,6 +48,25 @@ describe("buildBotTradeObservation", () => {
     expect(obs.account_ref).toMatch(/^[0-9a-f]{32}$/);
   });
 
+  it("uses account_login when license_id is an empty string", () => {
+    const fromEmptyLicense = buildBotTradeObservation({ trade_identity: "identity-fallback", license_id: "", account_login: "476396807", symbol: "XAUUSD", direction: "BUY" }, null);
+    const fromAccount = buildBotTradeObservation({ trade_identity: "identity-fallback", account_login: "476396807", symbol: "XAUUSD", direction: "BUY" }, null);
+    expect(fromEmptyLicense.account_ref).toBe(fromAccount.account_ref);
+    expect(fromEmptyLicense.account_ref).not.toBe(buildBotTradeObservation({ trade_identity: "identity-fallback", account_login: "", symbol: "XAUUSD", direction: "BUY" }, null).account_ref);
+  });
+
+  it("stamps a post-repair trade with the integrity epoch but never guesses LIVE provenance", () => {
+    const unknownEnv = buildBotTradeObservation({ trade_identity: "p1", account_login: "1", symbol: "XAUUSD", direction: "BUY", result: "WIN" }, null);
+    expect(unknownEnv.provenance).toMatchObject({ integrity_epoch: "IMMUTABLE_EVIDENCE_V2_2026_09_11", environment: "UNKNOWN" });
+    const tester = buildBotTradeObservation({ trade_identity: "p2", account_login: "1", symbol: "XAUUSD", direction: "BUY", result: "WIN", runtime_environment: "strategy_tester" }, null);
+    expect(tester.provenance?.environment).toBe("TESTER");
+  });
+
+  it("keeps an unknown trade result unclassified instead of calling it break-even", () => {
+    const observation = buildBotTradeObservation({ trade_identity: "unknown-result", account_login: "1", symbol: "XAUUSD", direction: "BUY", result: "UNKNOWN" }, null);
+    expect(observation.outcome?.analytics_outcome).toBeNull();
+  });
+
   it("classifies a loss with an early favorable move as STOP_BEFORE_MOVE using the EA's own mfe_r", () => {
     const obs = buildBotTradeObservation(
       { trade_identity: "t2", symbol: "XAUUSD", direction: "SELL", result: "LOSS", final_r: -1.0, mfe_r: 0.7, mae_r: -1.0 },
@@ -147,6 +166,16 @@ describe("buildOutlookObservation", () => {
     );
     expect(obs!.source).toBe("M10");
     expect(obs!.dedupe_key).toBe("M10:m10-outlook-1");
+  });
+
+  it("quarantines an outlook without immutable-evidence provenance", () => {
+    const observation = buildOutlookObservation({
+      id: "legacy-outlook", account: "acct-1", symbol: "XAUUSD", primary_direction: "BUY",
+      published_at: "2026-01-01T00:00:00.000Z", published_quote_at: "2026-01-01T00:00:00.000Z",
+      evaluation_deadline: "2026-01-01T01:00:00.000Z", classification_at: "2026-01-01T00:10:00.000Z",
+      analytics_outcome: "WIN", analytics_r: 1,
+    }, []);
+    expect(observation?.provenance?.integrity_epoch).toBe("LEGACY_UNTRUSTED");
   });
 });
 

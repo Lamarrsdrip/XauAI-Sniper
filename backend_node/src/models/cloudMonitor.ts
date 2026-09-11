@@ -19,6 +19,7 @@ export const BotHeartbeatReqSchema = z.object({
   // EA's fields were silently dropped before Mongo and the dashboard showed "Free Margin —"
   // for values the EA was in fact sending. Typed explicitly rather than passthrough.
   build_id: z.string().optional().default(""),
+  runtime_environment: z.string().optional().default("UNKNOWN"),
   free_margin: z.number().optional().default(0),
   margin_level: z.number().optional().default(0),
   basket_volume: z.number().optional().default(0),

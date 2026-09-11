@@ -5,12 +5,46 @@ import { asUtc } from "./marketOutlookEvidence.js";
 import { advancePersistedSignal } from "./marketOutlookLifecycle.js";
 import { dispatchSignalEvent } from "./marketOutlookPublish.js";
 import { buildOutlookObservation, recordGlobalBrainObservation } from "./globalBrainIngest.js";
+import { MARKET_EVIDENCE_COLLECTION } from "./marketIntelligenceConfig.js";
+import { GLOBAL_BRAIN_LEGACY_EPOCH } from "../models/globalBrain.js";
+import { recordPersistentDiagnostic } from "./persistentDiagnostics.js";
 
 type Quote = [number, number, Date];
 
+type QuoteJourneySource = "LEDGER" | "ACTIVITY_FALLBACK" | "NONE";
+
 /** Port of market_outlook.py:2233 `_account_quotes_since` -- persisted account quotes in event order, for restart replay. */
 async function accountQuotesSince(account: string, since: Date, until: Date): Promise<Quote[]> {
-  if (!account) return [];
+  return (await accountQuoteJourneySince(account, since, until)).quotes;
+}
+
+/** Same journey, plus which store it came from so learning can refuse a lossy replay. */
+async function accountQuoteJourneySince(account: string, since: Date, until: Date): Promise<{ quotes: Quote[]; source: QuoteJourneySource }> {
+  if (!account) return { quotes: [], source: "NONE" };
+  // Canonical path: immutable evidence ledger. The old cloud_bot_activity
+  // stream is globally pruned/deduped for operations and cannot be treated as
+  // complete market history.
+  const evidenceRows = await getDb()
+    .collection(MARKET_EVIDENCE_COLLECTION)
+    .find(
+      { account, quote_valid: true, observed_at: { $gt: since.toISOString(), $lte: until.toISOString() } },
+      { projection: { _id: 0, observed_at: 1, bid: 1, ask: 1 } },
+    )
+    .sort({ observed_at: 1 })
+    .limit(20_000)
+    .toArray();
+  const canonicalQuotes = evidenceRows.flatMap((row) => {
+    const at = asUtc(row["observed_at"]);
+    const bid = Number(row["bid"]);
+    const ask = Number(row["ask"]);
+    return at && bid > 0 && ask >= bid ? [[bid, ask, at] as Quote] : [];
+  });
+
+  if (canonicalQuotes.length > 0) return { quotes: canonicalQuotes, source: "LEDGER" };
+
+  // Compatibility/recovery source only for the dual-write crash window. A
+  // mutable, deduplicated row must never supplement or supersede ledger
+  // history when immutable observations are available.
   const rows = await getDb()
     .collection("cloud_bot_activity")
     .find(
@@ -25,16 +59,15 @@ async function accountQuotesSince(account: string, since: Date, until: Date): Pr
     .sort({ ts: 1 })
     .limit(5000)
     .toArray();
-
   const quotes: Quote[] = [];
   for (const row of rows) {
     const thesis = ((row["details"] as Record<string, unknown> | undefined)?.["market_thesis"] as Record<string, unknown> | undefined) ?? {};
     const quoteTime = asUtc(row["ts"]);
     const quoteBid = Number(thesis["live_bid"]);
     const quoteAsk = Number(thesis["live_ask"]);
-    if (quoteTime && quoteBid && quoteAsk && quoteAsk >= quoteBid) quotes.push([quoteBid, quoteAsk, quoteTime]);
+    if (quoteTime && quoteBid > 0 && quoteAsk >= quoteBid) quotes.push([quoteBid, quoteAsk, quoteTime]);
   }
-  return quotes;
+  return { quotes, source: quotes.length > 0 ? "ACTIVITY_FALLBACK" : "NONE" };
 }
 
 /** Port of market_outlook.py:2373 `_record_revision`. */
@@ -95,11 +128,20 @@ export async function persistSignalOutcome(doc: Record<string, unknown>): Promis
   try {
     const since = asUtc(doc["published_quote_at"]) ?? asUtc(doc["published_at"]);
     const until = asUtc(doc["classification_at"]) ?? asUtc(doc["evaluation_deadline"]) ?? new Date();
-    const quotes = since ? await accountQuotesSince(String(doc["account"] ?? ""), since, until) : [];
-    const observation = buildOutlookObservation(doc, quotes);
+    const journey = since ? await accountQuoteJourneySince(String(doc["account"] ?? ""), since, until) : { quotes: [], source: "NONE" as const };
+    const observation = buildOutlookObservation(doc, journey.quotes);
+    // A counterfactual replayed from the deduplicated/pruned activity stream
+    // is exactly the contamination the integrity epoch exists to exclude.
+    if (observation?.provenance && journey.source === "ACTIVITY_FALLBACK") {
+      observation.provenance = { ...observation.provenance, integrity_epoch: GLOBAL_BRAIN_LEGACY_EPOCH };
+    }
     if (observation) await recordGlobalBrainObservation(observation);
-  } catch {
-    /* best-effort */
+  } catch (error) {
+    await recordPersistentDiagnostic("error", "global-brain-outlook-ingest", error, {
+      code: "GLOBAL_BRAIN_OUTLOOK_INGEST_FAILED",
+      account: String(doc["account"] ?? ""),
+      source_event_id: String(doc["id"] ?? ""),
+    });
   }
 }
 

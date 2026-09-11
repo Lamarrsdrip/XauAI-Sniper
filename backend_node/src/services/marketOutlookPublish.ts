@@ -7,6 +7,7 @@ import { NAMESPACE_URL, uuidV5, uuidV5Hex } from "./uuidV5.js";
 import { RETRYABLE_FAILURES, sendOutlookNotification } from "./notifications.js";
 import { m10EventAsSubscriberSignal, mirrorSubscriberSignal, outlookDocAsSubscriberSignal } from "./subscriberSignalFeed.js";
 import { buildM10CandidateObservation, recordGlobalBrainObservation } from "./globalBrainIngest.js";
+import { recordPersistentDiagnostic } from "./persistentDiagnostics.js";
 
 /** Port of market_outlook.py:2409 `_dispatch_signal_event`. */
 export async function dispatchSignalEvent(doc: Record<string, unknown>, event: string): Promise<void> {
@@ -57,6 +58,11 @@ export async function publishM10SignalFromActivity(licenseKey: string, account: 
     event_version: 1,
     event_time: evidence["event_time"] ?? evidence["ts"] ?? nowIso,
     source_event_id: sourceEventId || evidence["source_event_id"],
+    runtime_environment: evidence["runtime_environment"] ?? "UNKNOWN",
+    ea_version: evidence["ea_version"] ?? "",
+    broker_server: evidence["broker_server"] ?? "",
+    build_id: evidence["build_id"] ?? "",
+    source_evidence_id: evidence["evidence_id"] ?? null,
     direction: canonical["direction"],
     confidence: canonical["confidence"],
     freshness_state: canonical["freshness_state"],
@@ -85,14 +91,25 @@ export async function publishM10SignalFromActivity(licenseKey: string, account: 
   try {
     const m10Observation = buildM10CandidateObservation(eventDoc);
     if (m10Observation) await recordGlobalBrainObservation(m10Observation);
-  } catch {
-    /* best-effort -- must never block the real signal generation below */
+  } catch (error) {
+    await recordPersistentDiagnostic("error", "global-brain-m10-ingest", error, {
+      code: "GLOBAL_BRAIN_M10_INGEST_FAILED",
+      account,
+      source_event_id: sourceEventId,
+      evidence_id: String(evidence["evidence_id"] ?? ""),
+    });
   }
   // Keeps the subscriber "10-minute engine" view current for WATCHING/BLOCKED/EXPIRED
   // states too, not just final actionable signals. No-op for every account except
   // the configured subscriber-signal source; never affects this account's own flow.
   const rawM10Signal = (evidence?.["m10_signal"] as Record<string, unknown> | undefined) ?? undefined;
-  await mirrorSubscriberSignal(account, m10EventAsSubscriberSignal(eventDoc, rawM10Signal)).catch(() => {});
+  try {
+    await mirrorSubscriberSignal(account, m10EventAsSubscriberSignal(eventDoc, rawM10Signal));
+  } catch (error) {
+    await recordPersistentDiagnostic("warning", "subscriber-signal-feed", error, {
+      code: "SUBSCRIBER_M10_MIRROR_FAILED", account, source_event_id: sourceEventId,
+    });
+  }
 
   if (!canonical["actionable"]) return null;
 
@@ -118,7 +135,13 @@ export async function publishM10SignalFromActivity(licenseKey: string, account: 
   delete doc["_newly_inserted"];
   if (newlyInserted && ["BUY", "SELL"].includes(String(doc["primary_direction"]))) {
     await dispatchSignalEvent(doc, "TRACKING_STARTED");
-    await mirrorSubscriberSignal(account, outlookDocAsSubscriberSignal(doc, "M10_ENGINE", true)).catch(() => {});
+    try {
+      await mirrorSubscriberSignal(account, outlookDocAsSubscriberSignal(doc, "M10_ENGINE", true));
+    } catch (error) {
+      await recordPersistentDiagnostic("warning", "subscriber-signal-feed", error, {
+        code: "SUBSCRIBER_OUTLOOK_MIRROR_FAILED", account, source_event_id: sourceEventId,
+      });
+    }
     await signalEvents.updateOne(
       { account, candidate_id: candidateId, event_type: OUTLOOK_ACTIONABLE, event_version: 1 },
       { $set: { outlook_id: doc["id"], notification_dispatched_at: new Date().toISOString() } },
