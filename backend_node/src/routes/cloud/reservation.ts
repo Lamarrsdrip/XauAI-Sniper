@@ -3,9 +3,13 @@ import { randomUUID } from "node:crypto";
 import { MongoServerError } from "mongodb";
 import { getDb } from "../../db.js";
 import { resolveEaMonitorLicense } from "../../services/license.js";
+import { isGoldSymbol } from "../../services/goldSymbol.js";
 import { DirectionReservationClaimReqSchema, DirectionReservationReleaseReqSchema } from "../../models/cloudActivity.js";
 
-const RESERVATION_VALID_SYMBOLS = new Set(["XAUUSD", "XAUUSDM", "XAUUSD.", "GOLD"]);
+function reservationSymbolOk(symbol: string): boolean {
+  const u = symbol.trim().toUpperCase();
+  return isGoldSymbol(symbol) || u === "GOLD" || u.startsWith("GOLD");
+}
 
 /** Port of server.py `_reservation_key`. */
 function reservationKey(brokerServer: string, account: string, symbol: string): string {
@@ -32,7 +36,7 @@ export async function registerCloudReservationRoutes(app: FastifyInstance): Prom
     if (!req.broker_server || !req.account || !req.symbol) {
       return reply.code(400).send({ detail: "broker_server, account, and symbol are required" });
     }
-    if (!RESERVATION_VALID_SYMBOLS.has(req.symbol.toUpperCase())) {
+    if (!reservationSymbolOk(req.symbol)) {
       return reply.code(400).send({ detail: { ok: false, reason: "INVALID_SYMBOL", symbol: req.symbol } });
     }
 

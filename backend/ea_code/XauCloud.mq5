@@ -1981,8 +1981,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.281"
-#property description "XAUCloud-Fixed-B1: candidate -- blocks clean-continuation grade-B"
+#property version   "6.286"
+#property description "XauCloud v6.28.6 — M10 production"
 #property description "M10_ORIGINATED_CANDIDATE (audit-proven net-negative bucket)."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
@@ -2071,7 +2071,7 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 
 #define XAUAI_EA_VERSION "XauCloud_v6.28.6"
 #define XAUAI_EA_VERSION_NUM "6.286"
-#define XAUAI_BUILD_HASH "xaucloud-fixed-b1-no-ea-shadowml-globalbrain-v4-20260902"
+#define XAUAI_BUILD_HASH "xaucloud-v6.28.6-hive-pin-retired-fanout-20260917"
 
 // v6.26.0 owner directive (2026-08-05): permanent migration off the R
 // (risk-multiple) measurement system. Every internal exit/protection
@@ -2825,7 +2825,7 @@ input bool   InpReEntryBetterPriceOnly = true; // After a loss, do not auto re-e
 input int    InpReEntrySnapshotMaxBars = 3; // v6.24.3: a re-entry approval cannot survive more than this many closed M5 bars
 
 input group "=== SMART FILTERS ==="
-input bool   InpUseDXYFilter   = true;     // Skip trades fighting DXY direction
+input bool   InpUseDXYFilter   = true;     // Skip trades fighting DXY direction (GetDXYBias; unknown = no filter)
 input int    InpDXYRefreshSec  = 900;      // Refresh DXY every N seconds (15min)
 input bool   InpDrawdownMode   = true;     // Tracks loss state for quality diagnostics; never reduces approved normal-trade risk
 input int    InpDrawdownLosses = 5;        // v6.3.2: raised 3→5 — 3 micro-losses were triggering half-risk mode all day
@@ -13538,7 +13538,12 @@ int GetDXYBias()
    string url = InpServerURL + "/api/smart/dxy";
    char pd[], result[]; string rh;
    int res = WebRequest("GET", url, "", 6000, pd, result, rh);
-   if(res != 200) return 0;
+   if(res != 200)
+   {
+      dxyLastFetch = TimeCurrent();
+      dxyGoldBias = "unknown";
+      return 0;
+   }
    string response = CharArrayToString(result);
    dxyLastFetch = TimeCurrent();
    if(StringFind(response, "\"gold_bias\":\"bullish\"") >= 0) { dxyGoldBias = "bullish"; return  1; }
@@ -45453,7 +45458,7 @@ void BotMonitorHeartbeat()
    string body = StringFormat(
       "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"%s\",\"build_hash\":\"%s\","
       "\"input_hash\":\"%s\",\"account_number\":\"%I64d\","
-      "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"digits\":%d,\"point\":%.8f,"
+      "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M10\",\"digits\":%d,\"point\":%.8f,"
       "\"magic_number\":%d,\"spread\":%.0f,\"avg_spread\":%.1f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -45619,7 +45624,8 @@ void XAU_FetchOutlookThesis()
    ResetLastError();
    string url = InpCloudURL + "/api/cloud/outlook/thesis?pin=" +
                 BotMonitorJsonSafe(InpLicensePIN, 32) +
-                "&account=" + (string)AccountInfoInteger(ACCOUNT_LOGIN);
+                "&account=" + (string)AccountInfoInteger(ACCOUNT_LOGIN) +
+                "&symbol=" + Symbol();
    int code = WebRequest("GET", url, hdr, InpCloudTimeoutMs, pd, res, rh);
    if(code != 200 || ArraySize(res) == 0) return;
 

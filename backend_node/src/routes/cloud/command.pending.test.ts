@@ -40,12 +40,13 @@ describe("GET /cloud/command/pending — no empty-account leak", () => {
     state.db = new FakeDb();
   });
 
-  it("does not return PENDING commands with empty or missing mt5_account", async () => {
+  it("does not leak another PIN's empty-account commands, but does deliver this PIN's pre-bind queue", async () => {
     state.db.collection("cloud_bot_commands").docs.push(
       { status: "PENDING", license_key: "TESTPIN", mt5_account: "111", command_id: "mine", requested_at: "2026-01-01T00:00:00.000Z" },
-      { status: "PENDING", license_key: "TESTPIN", mt5_account: "", command_id: "leak-empty", requested_at: "2026-01-01T00:00:01.000Z" },
-      { status: "PENDING", license_key: "TESTPIN", command_id: "leak-missing", requested_at: "2026-01-01T00:00:02.000Z" },
-      { status: "PENDING", license_key: "TESTPIN", mt5_account: "999", command_id: "other-account", requested_at: "2026-01-01T00:00:03.000Z" },
+      { status: "PENDING", license_key: "TESTPIN", mt5_account: "", command_id: "prebind", requested_at: "2026-01-01T00:00:01.000Z" },
+      { status: "PENDING", license_key: "TESTPIN", command_id: "prebind-missing", requested_at: "2026-01-01T00:00:02.000Z" },
+      { status: "PENDING", license_key: "OTHERPIN", mt5_account: "", command_id: "leak-other-pin", requested_at: "2026-01-01T00:00:03.000Z" },
+      { status: "PENDING", license_key: "TESTPIN", mt5_account: "999", command_id: "other-account", requested_at: "2026-01-01T00:00:04.000Z" },
     );
     const app = await createApp();
     const res = await app.inject({
@@ -55,7 +56,8 @@ describe("GET /cloud/command/pending — no empty-account leak", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     const ids = (body.commands as Array<{ command_id: string }>).map((c) => c.command_id);
-    expect(ids).toEqual(["mine"]);
-    expect(body.count).toBe(1);
+    expect(ids).toEqual(["mine", "prebind", "prebind-missing"]);
+    expect(ids).not.toContain("leak-other-pin");
+    expect(ids).not.toContain("other-account");
   });
 });

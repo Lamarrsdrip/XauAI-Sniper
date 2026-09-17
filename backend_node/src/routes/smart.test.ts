@@ -36,22 +36,18 @@ describe("smart routes — no fabricated DXY or news calendar", () => {
     expect(JSON.stringify(body)).not.toContain("99.5");
   });
 
-  it("GET /smart/dxy maps a weakening dollar to bullish gold bias", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          chart: { result: [{ meta: { regularMarketPrice: 101.234, regularMarketChangePercent: -0.42 } }] },
-        }),
-      })),
-    );
+  it("GET /smart/dxy caches Yahoo so a poll storm does not fan out", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        chart: { result: [{ meta: { regularMarketPrice: 101.234, regularMarketChangePercent: -0.42 } }] },
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
     const app = await createApp();
-    const res = await app.inject({ method: "GET", url: "/smart/dxy" });
-    const body = res.json();
-    expect(body.available).toBe(true);
-    expect(body.gold_bias).toBe("bullish");
-    expect(body.dxy_direction).toBe("weakening");
+    await app.inject({ method: "GET", url: "/smart/dxy" });
+    await app.inject({ method: "GET", url: "/smart/dxy" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("GET /smart/news-events does not invent NFP/CPI/FOMC rows when the calendar is down", async () => {

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { LicenseError, resolveMonitorLicense } from "../services/license.js";
+import { clientIp, rateLimit } from "../auth.js";
 
 const PinValidateRequestSchema = z.object({
   pin: z.string(),
@@ -10,6 +11,7 @@ const PinValidateRequestSchema = z.object({
 /** Port of server.py:1232 `POST /pins/validate` (public -- EA calls this). */
 export async function registerPinRoutes(app: FastifyInstance): Promise<void> {
   app.post("/pins/validate", async (request) => {
+    rateLimit(`pins_validate_ip:${clientIp(request)}`, 20, 300);
     const body = PinValidateRequestSchema.parse(request.body);
     try {
       const lic = await resolveMonitorLicense(body.pin, body.mt5_account ?? "");

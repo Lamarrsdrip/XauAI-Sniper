@@ -4,6 +4,7 @@ import { appendFile, readFile } from "node:fs/promises";
 import { z } from "zod";
 import { getDb } from "../db.js";
 import { env } from "../env.js";
+import { requireAdmin, rateLimit, clientIp } from "../auth.js";
 import { normalizeLicenseKey, resolveEaMonitorLicense } from "../services/license.js";
 import { LlmChat } from "../services/llmClient.js";
 import {
@@ -421,6 +422,8 @@ Decision (HOLD / CLOSE / LOCK)? JSON only.`;
   app.post("/ai/analyze", async (request, reply) => {
     const req = AIAnalysisRequestSchema.parse(request.body);
     if (!req.account_id) return reply.code(400).send({ detail: "account_id is required" });
+    rateLimit(`ai_analyze_pin:${req.pin}`, 30, 300);
+    rateLimit(`ai_analyze_ip:${clientIp(request)}`, 40, 60);
     await resolveEaMonitorLicense(req.pin, req.account_id);
 
     try {
@@ -641,8 +644,9 @@ Decision (HOLD / CLOSE / LOCK)? JSON only.`;
     }
   });
 
-  // GET /ai/cost/stats -- server.py:5184
-  app.get("/ai/cost/stats", async () => aiCostSnapshot());
+  // GET /ai/cost/stats -- server.py:5184. Admin-only; this is a process-wide
+  // budget snapshot, not an EA-facing probe.
+  app.get("/ai/cost/stats", { preHandler: requireAdmin }, async () => aiCostSnapshot());
 
   // POST /ai/memory/record -- server.py:5188
   app.post("/ai/memory/record", async (request, reply) => {
@@ -734,10 +738,20 @@ Decision (HOLD / CLOSE / LOCK)? JSON only.`;
     const pin = String(data["pin"] ?? "");
     const account = String(data["account_id"] ?? data["account"] ?? "");
     if (!account) return reply.code(400).send({ detail: "account_id is required" });
+    rateLimit(`ai_feedback_pin:${pin}`, 20, 300);
     const lic = await resolveEaMonitorLicense(pin, account);
     try {
-      const { pin: _pin, ...rest } = data;
-      const record = { ...rest, license_id: lic?.["id"] ?? "", account_id: account, recorded_at: new Date().toISOString() };
+      const record = {
+        pin: undefined,
+        license_id: lic?.["id"] ?? "",
+        account_id: account,
+        symbol: String(data["symbol"] ?? ""),
+        direction: String(data["direction"] ?? ""),
+        ai_action: String(data["ai_action"] ?? data["action"] ?? ""),
+        ai_confidence: Number(data["ai_confidence"] ?? data["confidence"] ?? 0),
+        outcome: String(data["outcome"] ?? ""),
+        recorded_at: new Date().toISOString(),
+      };
       await appendFile(AI_FEEDBACK_PATH, `${JSON.stringify(record)}\n`, "utf8");
       try {
         await getDb().collection("ai_feedback").insertOne({ ...record });

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db.js";
-import { normalizeLicenseKey, resolveMonitorLicense } from "../services/license.js";
+import { normalizeLicenseKey, resolveEaMonitorLicense } from "../services/license.js";
 import { rateLimit } from "../auth.js";
 import { TradeJournalEntrySchema, WeeklyReportEntrySchema } from "../models/journal.js";
 import { reconcileTradeJournalEntry } from "../services/automatedTradeReconciliation.js";
@@ -36,7 +36,7 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
 
     let lic;
     try {
-      lic = await resolveMonitorLicense(entry.pin, entry.account_login);
+      lic = await resolveEaMonitorLicense(entry.pin, entry.account_login);
     } catch {
       return { status: "error", detail: "Invalid or inactive license." };
     }
@@ -201,12 +201,24 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
 
   // GET /journal/trades -- server.py:5669
   app.get("/journal/trades", async (request) => {
-    const q = z.object({ pin: z.string().optional().default(""), limit: z.coerce.number().optional().default(50) }).parse(request.query);
-    const lic = await resolveMonitorLicense(q.pin, "");
+    const q = z
+      .object({
+        pin: z.string().optional().default(""),
+        account: z.string().optional().default(""),
+        account_login: z.string().optional().default(""),
+        limit: z.coerce.number().optional().default(50),
+      })
+      .parse(request.query);
+    const account = String(q.account || q.account_login || "").trim();
+    const lic = await resolveEaMonitorLicense(q.pin, account);
     try {
       const db = getDb();
       const journal = db.collection("trade_journal");
-      const query = { $or: [{ license_id: lic?.["id"] ?? "" }, { pin: normalizeLicenseKey(q.pin) }] };
+      const licenseId = String(lic?.["id"] ?? "");
+      const pin = normalizeLicenseKey(q.pin);
+      const query = licenseId
+        ? { $or: [{ license_id: licenseId }, { pin }] }
+        : { pin };
       // Limit is pagination only. Every summary value below is computed from
       // the complete canonical account-scoped journal dataset.
       const canonical = dedupeByTradeIdentity(
@@ -253,7 +265,7 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
   app.post("/journal/weekly-report", async (request, reply) => {
     const entry = WeeklyReportEntrySchema.parse(request.body);
     if (!entry.account_id) return reply.code(400).send({ detail: "account_id is required" });
-    const lic = await resolveMonitorLicense(entry.pin, entry.account_id);
+    const lic = await resolveEaMonitorLicense(entry.pin, entry.account_id);
     try {
       const { pin: _pin, ...rest } = entry;
       const doc: Record<string, unknown> = { ...rest };
@@ -269,10 +281,22 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
 
   // GET /journal/weekly-reports -- server.py:5743
   app.get("/journal/weekly-reports", async (request) => {
-    const q = z.object({ pin: z.string().optional().default(""), limit: z.coerce.number().optional().default(12) }).parse(request.query);
-    const lic = await resolveMonitorLicense(q.pin, "");
+    const q = z
+      .object({
+        pin: z.string().optional().default(""),
+        account: z.string().optional().default(""),
+        account_id: z.string().optional().default(""),
+        limit: z.coerce.number().optional().default(12),
+      })
+      .parse(request.query);
+    const account = String(q.account || q.account_id || "").trim();
+    const lic = await resolveEaMonitorLicense(q.pin, account);
     try {
-      const query = { $or: [{ license_id: lic?.["id"] ?? "" }, { pin: normalizeLicenseKey(q.pin) }] };
+      const licenseId = String(lic?.["id"] ?? "");
+      const pin = normalizeLicenseKey(q.pin);
+      const query = licenseId
+        ? { $or: [{ license_id: licenseId }, { pin }] }
+        : { pin };
       const reports = await getDb()
         .collection("weekly_reports")
         .find(query, { projection: { _id: 0 } })

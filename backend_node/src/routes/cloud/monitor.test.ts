@@ -23,4 +23,9 @@ describe("monitor heartbeat market details", () => {
 
     expect(heartbeatMarketDetails({ m10_signal: m10 })).toMatchObject({ m10_signal: m10 });
   });
+
+  it("maps EA build_hash onto build_id so Command Center sees the compiled identity", () => {
+    expect(heartbeatMarketDetails({ build_hash: "xaucloud-v6.28.6-abc" }).build_id).toBe("xaucloud-v6.28.6-abc");
+    expect(heartbeatMarketDetails({ build_id: "apex-id", build_hash: "ignored" }).build_id).toBe("apex-id");
+  });
 });

@@ -19,6 +19,7 @@ export function heartbeatMarketDetails(req: {
   ea_version?: string;
   broker_server?: string;
   build_id?: string;
+  build_hash?: string;
 }): Record<string, unknown> {
   const details: Record<string, unknown> = {
     license_key: req.license_key ?? "",
@@ -32,7 +33,7 @@ export function heartbeatMarketDetails(req: {
     reported_environment: req.provenance?.reported_environment ?? "UNKNOWN",
     ea_version: req.ea_version ?? "",
     broker_server: req.broker_server ?? "",
-    build_id: req.build_id ?? "",
+    build_id: req.build_id || req.build_hash || "",
   };
   // An absent M10 reading is not evidence. Persisting `{}` here made each
   // 20-second quote heartbeat newer than the EA's genuine completed-scan
@@ -127,6 +128,7 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
       ea_version: req.ea_version,
       broker_server: req.broker_server,
       build_id: req.build_id,
+      build_hash: req.build_hash,
     });
     const quote = extractEvidenceQuoteFromDetails(marketDetails, now.toISOString());
     let marketData: Record<string, unknown> = {

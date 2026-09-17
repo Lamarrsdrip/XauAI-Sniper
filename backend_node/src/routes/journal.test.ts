@@ -68,6 +68,7 @@ const state = vi.hoisted(() => ({ db: null as unknown as FakeDb }));
 vi.mock("../db.js", () => ({ getDb: () => state.db }));
 vi.mock("../services/license.js", () => ({
   resolveMonitorLicense: vi.fn(async () => ({ id: "lic-test" })),
+  resolveEaMonitorLicense: vi.fn(async () => ({ id: "lic-test", pin: "TESTPIN1", mt5_account: "555111" })),
   normalizeLicenseKey: (v: string) => (v || "").trim().toUpperCase(),
 }));
 

@@ -1,6 +1,6 @@
 import type { FastifyReply } from "fastify";
 
-const SENSITIVE_API_PREFIXES = ["/api/admin", "/api/auth", "/api/cloud"];
+const SENSITIVE_API_PREFIXES = ["/api/admin", "/api/auth", "/api/cloud", "/api/ml", "/api/journal", "/api/ai"];
 
 export function applySecurityHeaders(reply: Pick<FastifyReply, "header">, pathName: string, production: boolean): void {
   reply.header("x-content-type-options", "nosniff");

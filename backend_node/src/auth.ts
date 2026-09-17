@@ -156,10 +156,16 @@ export function rateLimit(key: string, maxRequests: number, windowSeconds: numbe
   }
 }
 
-/** Port of server.py's `_client_ip` -- X-Forwarded-For first (reverse proxy), else socket address. */
+/** Client IP for rate limits. The leftmost X-Forwarded-For hop is
+ * client-spoofable; use the rightmost hop (what the reverse proxy observed)
+ * when the header is present, else the socket address. */
 export function clientIp(request: FastifyRequest): string {
   const fwd = request.headers["x-forwarded-for"];
-  if (typeof fwd === "string" && fwd.length > 0) return fwd.split(",")[0]!.trim();
+  if (typeof fwd === "string" && fwd.length > 0) {
+    const hops = fwd.split(",").map((s) => s.trim()).filter(Boolean);
+    const observed = hops[hops.length - 1];
+    if (observed) return observed;
+  }
   return request.ip || "unknown";
 }
 

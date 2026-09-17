@@ -16,7 +16,7 @@ describe("HTTP security headers", () => {
     expect(headers["strict-transport-security"]).toContain("max-age=31536000");
   });
 
-  it.each(["/api/admin/settings", "/api/auth/login", "/api/cloud/monitor/status"])("prevents sensitive API caching for %s", (path) => {
+  it.each(["/api/admin/settings", "/api/auth/login", "/api/cloud/monitor/status", "/api/ml/hive/score", "/api/journal/log", "/api/ai/analyze"])("prevents sensitive API caching for %s", (path) => {
     expect(capture(path)["cache-control"]).toBe("no-store");
   });
 

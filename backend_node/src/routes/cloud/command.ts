@@ -143,10 +143,22 @@ export async function registerCloudCommandRoutes(app: FastifyInstance): Promise<
     const n = Math.max(1, Math.min(Math.trunc(q.limit), 10));
     const db = getDb();
     const query: Record<string, unknown> = { status: "PENDING" };
-    if (lic?.["pin"]) query["license_key"] = lic["pin"];
+    const pin = String(lic?.["pin"] ?? "").trim();
+    if (!pin) {
+      return { ok: true, commands: [], next: null, count: 0, expired };
+    }
+    query["license_key"] = pin;
     const boundAccount = String(lic?.["mt5_account"] ?? q.account ?? "").trim();
     if (boundAccount) {
-      query["$or"] = [{ mt5_account: boundAccount }, { account: boundAccount }];
+      // Empty mt5_account rows are commands queued for this PIN before the
+      // EA bound; they are safe to deliver only because license_key is
+      // required above (PIN is 1:1 with an account after resolveEaMonitorLicense).
+      query["$or"] = [
+        { mt5_account: boundAccount },
+        { account: boundAccount },
+        { mt5_account: "" },
+        { mt5_account: { $exists: false } },
+      ];
     }
     const rows = await db
       .collection("cloud_bot_commands")

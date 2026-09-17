@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { getDb } from "../../db.js";
 import { env } from "../../env.js";
 import { resolveEaMonitorLicense } from "../../services/license.js";
+import { isGoldSymbol } from "../../services/goldSymbol.js";
 import {
   LEASE_ALGORITHM_ID,
   LEASE_SCHEMA_VERSION,
@@ -14,7 +15,10 @@ import {
 } from "../../services/leaseService.js";
 import { LeaseReconcileReqSchema, LeaseRequestReqSchema, LeaseSurrenderReqSchema } from "../../models/lease.js";
 
-const RESERVATION_VALID_SYMBOLS = new Set(["XAUUSD", "XAUUSDM", "XAUUSD.", "GOLD"]);
+function leaseSymbolOk(symbol: string): boolean {
+  const u = symbol.trim().toUpperCase();
+  return isGoldSymbol(symbol) || u === "GOLD" || u.startsWith("GOLD");
+}
 
 /** Port of server.py `_lease_authority_key`. */
 function leaseAuthorityKey(licenseId: string, account: string, brokerServer: string, symbol: string): string {
@@ -55,7 +59,7 @@ async function issueLease(
     throw new LeaseHttpError(400, "installation_id and terminal_instance_id are required");
   }
   const symbolNorm = (reqSymbol || "").trim().toUpperCase();
-  if (!RESERVATION_VALID_SYMBOLS.has(symbolNorm)) {
+  if (!leaseSymbolOk(reqSymbol)) {
     throw new LeaseHttpError(400, { ok: false, reason: "INVALID_SYMBOL", symbol: reqSymbol });
   }
 

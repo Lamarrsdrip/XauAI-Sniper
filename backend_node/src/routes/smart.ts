@@ -17,9 +17,13 @@ let newsCheckCache: NewsCheckResult | null = null;
 let newsCheckCacheTime = 0;
 let newsCheckCacheTtlSec = 0;
 
+let dxyCache: Record<string, unknown> | null = null;
+let dxyCacheTime = 0;
+
 const NEWS_EVENTS_TTL_SEC = 3600;
 const NEWS_CHECK_OK_TTL_SEC = 90;
 const NEWS_CHECK_DEGRADED_TTL_SEC = 20;
+const DXY_CACHE_TTL_SEC = 60;
 const DXY_HTTP_TIMEOUT_MS = 5000;
 
 export function _resetSmartCachesForTests(): void {
@@ -28,6 +32,8 @@ export function _resetSmartCachesForTests(): void {
   newsCheckCache = null;
   newsCheckCacheTime = 0;
   newsCheckCacheTtlSec = 0;
+  dxyCache = null;
+  dxyCacheTime = 0;
 }
 
 const DEGRADED_NEWS_CHECK: NewsCheckResult = {
@@ -130,9 +136,12 @@ export async function registerSmartRoutes(app: FastifyInstance): Promise<void> {
   // GET /smart/dxy -- never fabricates a price. EA GetDXYBias only keys off
   // gold_bias bullish/bearish; unknown/unavailable is treated as no bias.
   app.get("/smart/dxy", async () => {
+    const now = Date.now() / 1000;
+    if (dxyCache && now - dxyCacheTime < DXY_CACHE_TTL_SEC) return dxyCache;
+
     const quote = await fetchYahooDxy();
     if (!quote) {
-      return {
+      const unavailable = {
         available: false,
         dxy_price: null,
         dxy_change: null,
@@ -140,10 +149,13 @@ export async function registerSmartRoutes(app: FastifyInstance): Promise<void> {
         gold_bias: "unknown",
         recommendation: "DXY unavailable. No bias.",
       };
+      dxyCache = unavailable;
+      dxyCacheTime = now;
+      return unavailable;
     }
     const direction = quote.change < 0 ? "weakening" : quote.change > 0 ? "strengthening" : "neutral";
     const goldBias = quote.change < 0 ? "bullish" : quote.change > 0 ? "bearish" : "neutral";
-    return {
+    const result = {
       available: true,
       dxy_price: Math.round(quote.price * 1000) / 1000,
       dxy_change: Math.round(quote.change * 1000) / 1000,
@@ -151,6 +163,9 @@ export async function registerSmartRoutes(app: FastifyInstance): Promise<void> {
       gold_bias: goldBias,
       recommendation: `DXY ${direction} -> Gold ${goldBias}. ${goldBias === "bullish" ? "Favor BUY trades" : goldBias === "bearish" ? "Favor SELL trades" : "No bias"}.`,
     };
+    dxyCache = result;
+    dxyCacheTime = now;
+    return result;
   });
 
   // GET /smart/session-config -- server.py:4034
