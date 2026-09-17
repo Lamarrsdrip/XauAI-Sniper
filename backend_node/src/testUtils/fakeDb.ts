@@ -25,13 +25,24 @@ function matchesClause(doc: Doc, key: string, expected: unknown): boolean {
     const knownOps = ["$ne", "$in", "$exists", "$gt", "$gte", "$lt", "$lte"];
     if (knownOps.some((op) => op in ops)) return true;
   }
-  return actual === expected;
+  return identityEqual(actual, expected);
 }
 
 function compareLoose(a: unknown, b: unknown): number {
   const an = typeof a === "string" ? a : Number(a);
   const bn = typeof b === "string" ? b : Number(b);
   return an < bn ? -1 : an > bn ? 1 : 0;
+}
+
+function identityEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  if (typeof a === "object" && typeof b === "object") {
+    const as = String(a);
+    const bs = String(b);
+    if (/^[a-f0-9]{24}$/i.test(as) && as.toLowerCase() === bs.toLowerCase()) return true;
+  }
+  return false;
 }
 
 function matches(doc: Doc, query: Doc): boolean {
@@ -103,10 +114,14 @@ export class FakeCollection {
     }
   }
 
-  async updateOne(query: Doc, update: { $set?: Doc; $setOnInsert?: Doc; $addToSet?: Doc; $pull?: Doc }, options: { upsert?: boolean } = {}) {
+  async updateOne(query: Doc, update: { $set?: Doc; $setOnInsert?: Doc; $addToSet?: Doc; $pull?: Doc; $inc?: Doc; $unset?: Doc }, options: { upsert?: boolean } = {}) {
     const found = this.docs.find((d) => matches(d, query));
     if (found) {
       Object.assign(found, structuredClone(update.$set ?? {}));
+      for (const [key, value] of Object.entries(update.$inc ?? {})) {
+        found[key] = Number(found[key] ?? 0) + Number(value);
+      }
+      for (const key of Object.keys(update.$unset ?? {})) delete found[key];
       if (update.$addToSet) this.applyAddToSet(found, structuredClone(update.$addToSet));
       if (update.$pull) this.applyPull(found, structuredClone(update.$pull));
       return { matchedCount: 1, upsertedCount: 0, modifiedCount: 1 };

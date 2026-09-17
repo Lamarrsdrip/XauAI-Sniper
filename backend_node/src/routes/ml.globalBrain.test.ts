@@ -9,7 +9,23 @@ vi.hoisted(() => {
 const state = vi.hoisted(() => ({ db: null as unknown as FakeDb }));
 vi.mock("../db.js", () => ({ getDb: () => state.db }));
 vi.mock("../auth.js", () => ({ requireAdmin: async () => undefined }));
-vi.mock("../services/license.js", () => ({ resolveMonitorLicense: vi.fn(async () => ({ id: "lic-test" })) }));
+vi.mock("../services/license.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/license.js")>();
+  return {
+    ...actual,
+    resolveMonitorLicense: vi.fn(async () => ({ id: "lic-test" })),
+    resolveEaMonitorLicense: vi.fn(async (pin: string, account: string) => {
+      if (!String(pin ?? "").trim() || !String(account ?? "").trim() || String(account) === "0") {
+        throw new actual.LicenseError(403, {
+          ok: false,
+          reason: "MISSING_LICENSE_PIN",
+          message: "EA monitor requests must include license_pin/pin.",
+        });
+      }
+      return { id: "lic-test", pin, mt5_account: String(account) };
+    }),
+  };
+});
 
 const { registerMlRoutes } = await import("./ml.js");
 const { promoteChallenger } = await import("../services/globalBrainRegistry.js");
@@ -30,7 +46,7 @@ describe("global brain -- ml.ts wiring", () => {
     const res = await app.inject({
       method: "POST",
       url: "/ml/shadow/record",
-      payload: { signature: "1|2|3|4|5|6|7", actual_action: "SKIPPED", direction: "SELL", symbol: "XAUUSDm", account: 111, decision_time_utc: "2026-01-01T00:00:00.000Z" },
+      payload: { signature: "1|2|3|4|5|6|7", actual_action: "SKIPPED", direction: "SELL", symbol: "XAUUSDm", pin: "TESTPIN", account: 111, decision_time_utc: "2026-01-01T00:00:00.000Z" },
     });
     expect(res.statusCode).toBe(200);
     const observations = state.db.collection("global_brain_observations").docs;
@@ -41,7 +57,7 @@ describe("global brain -- ml.ts wiring", () => {
 
   it("does NOT record a global-brain observation for a CANDIDATE (still-pending) shadow decision", async () => {
     const app = await createApp();
-    await app.inject({ method: "POST", url: "/ml/shadow/record", payload: { signature: "1|2|3|4|5|6|7", actual_action: "CANDIDATE" } });
+    await app.inject({ method: "POST", url: "/ml/shadow/record", payload: { signature: "1|2|3|4|5|6|7", actual_action: "CANDIDATE", pin: "TESTPIN", account: 111 } });
     expect(state.db.collection("global_brain_observations").docs).toHaveLength(0);
   });
 

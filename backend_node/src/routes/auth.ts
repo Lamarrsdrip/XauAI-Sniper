@@ -2,12 +2,14 @@ import type { FastifyInstance } from "fastify";
 import jwt from "jsonwebtoken";
 import { authenticator } from "otplib";
 import { randomUUID } from "node:crypto";
+import { ObjectId } from "mongodb";
 import { z } from "zod";
 import { getDb } from "../db.js";
 import { env } from "../env.js";
 import {
   clientIp,
   createAccessToken,
+  extractToken,
   rateLimit,
   requireAdmin,
   setAdminSessionCookie,
@@ -40,11 +42,12 @@ interface AdminUser {
   password_hash: string;
   mfa_enabled?: boolean;
   mfa_secret_enc?: string;
+  session_version?: number;
 }
 
 /** Port of server.py:1078 `_issue_admin_session`. */
 function issueAdminSession(reply: import("fastify").FastifyReply, user: AdminUser) {
-  const token = createAccessToken(String(user._id), user.email);
+  const token = createAccessToken(String(user._id), user.email, Number(user.session_version ?? 0));
   setAdminSessionCookie(reply, token);
   return {
     email: user.email,
@@ -238,8 +241,29 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  // POST /auth/logout -- server.py:1225
-  app.post("/auth/logout", async (_request, reply) => {
+  // POST /auth/logout -- increment session_version so existing JWTs fail
+  // requireAdmin, then drop the cookie. Unauthenticated logout still 200s
+  // (clear cookie only) so the client can always recover a stuck session.
+  app.post("/auth/logout", async (request, reply) => {
+    const token = extractToken(request, "access_token");
+    if (token) {
+      try {
+        const payload = jwt.verify(token, env.JWT_SECRET, { algorithms: [JWT_ALGORITHM] }) as {
+          sub?: string;
+          type?: string;
+        };
+        if (payload.type === "access" && typeof payload.sub === "string" && ObjectId.isValid(payload.sub)) {
+          await getDb()
+            .collection("users")
+            .updateOne(
+              { _id: new ObjectId(payload.sub) },
+              { $inc: { session_version: 1 }, $set: { sessions_revoked_at: new Date().toISOString() } },
+            );
+        }
+      } catch {
+        /* expired/invalid token -- still clear the cookie below */
+      }
+    }
     reply.clearCookie("access_token", { path: "/" });
     return { message: "Logged out" };
   });

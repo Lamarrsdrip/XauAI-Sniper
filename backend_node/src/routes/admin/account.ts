@@ -39,9 +39,17 @@ export async function registerAdminAccountRoutes(app: FastifyInstance): Promise<
       return { updated: false, message: "No changes provided" };
     }
 
-    await db.collection("users").updateOne({ email: admin["email"] }, { $set: updates });
+    await db.collection("users").updateOne(
+      { email: admin["email"] },
+      { $set: updates, $inc: { session_version: 1 } },
+    );
+    const updated = await db.collection("users").findOne({ _id: user["_id"] });
     const newEmail = (updates["email"] as string | undefined) ?? String(admin["email"]);
-    const newToken = createAccessToken(String(user["_id"]), newEmail);
+    const newToken = createAccessToken(
+      String(user["_id"]),
+      newEmail,
+      Number(updated?.["session_version"] ?? Number(user["session_version"] ?? 0) + 1),
+    );
     setAdminSessionCookie(reply, newToken);
     return { updated: true, email: newEmail, message: "Account updated successfully" };
   });

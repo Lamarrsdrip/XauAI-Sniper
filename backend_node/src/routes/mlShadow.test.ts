@@ -105,7 +105,23 @@ const state = vi.hoisted(() => ({ db: null as unknown as FakeDb }));
 
 vi.mock("../db.js", () => ({ getDb: () => state.db }));
 vi.mock("../auth.js", () => ({ requireAdmin: async () => undefined }));
-vi.mock("../services/license.js", () => ({ resolveMonitorLicense: vi.fn(async () => ({ id: "lic-test" })) }));
+vi.mock("../services/license.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/license.js")>();
+  return {
+    ...actual,
+    resolveMonitorLicense: vi.fn(async () => ({ id: "lic-test" })),
+    resolveEaMonitorLicense: vi.fn(async (pin: string, account: string) => {
+      if (!String(pin ?? "").trim() || !String(account ?? "").trim() || String(account) === "0") {
+        throw new actual.LicenseError(403, {
+          ok: false,
+          reason: "MISSING_LICENSE_PIN",
+          message: "EA monitor requests must include license_pin/pin.",
+        });
+      }
+      return { id: "lic-test", pin, mt5_account: String(account) };
+    }),
+  };
+});
 
 const { registerMlRoutes } = await import("./ml.js");
 
@@ -142,6 +158,7 @@ describe("shadow ML — pure observation, never influences a live decision", () 
         signature: "1|2|3|4|5|6|7",
         shadow_recommendation: "BOOST",
         actual_action: "CANDIDATE",
+        pin: "TESTPIN",
         account: 476396807,
         decision_time_utc: "2026.08.24 12:00:00",
       },
@@ -165,9 +182,24 @@ describe("shadow ML — pure observation, never influences a live decision", () 
     expect(state.db.collection("ml_shadow_decisions").docs).toHaveLength(0);
   });
 
+  it("rejects a record with no PIN / account", async () => {
+    const app = await createApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/ml/shadow/record",
+      payload: { signature: "1|2|3|4|5|6|7" },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(state.db.collection("ml_shadow_decisions").docs).toHaveLength(0);
+  });
+
   it("applies safe defaults for optional fields", async () => {
     const app = await createApp();
-    const res = await app.inject({ method: "POST", url: "/ml/shadow/record", payload: { signature: "1|2|3|4|5|6|7" } });
+    const res = await app.inject({
+      method: "POST",
+      url: "/ml/shadow/record",
+      payload: { signature: "1|2|3|4|5|6|7", pin: "TESTPIN", account: 476396807 },
+    });
     expect(res.statusCode).toBe(200);
     const stored = state.db.collection("ml_shadow_decisions").docs[0]!;
     expect(stored["hive_verdict"]).toBe("NONE");
@@ -203,5 +235,26 @@ describe("shadow ML — pure observation, never influences a live decision", () 
     expect(body.pending_unjoined_candidates).toBe(1);
     expect(body.executed).toBe(3);
     expect(body.skipped).toBe(1);
+  });
+
+  it("PIN-gates hive/score: missing pin fails closed (EA fail-opens on HTTP != 200)", async () => {
+    const app = await createApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/ml/hive/score",
+      payload: { signature: "1|2|3|4|5|6|7", window_days: 7 },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("PIN-gates hive/score: bound pin+account is allowed to read", async () => {
+    const app = await createApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/ml/hive/score",
+      payload: { signature: "1|2|3|4|5|6|7", window_days: 7, pin: "TESTPIN", account: "476396807" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().verdict).toBe("COLD_START");
   });
 });

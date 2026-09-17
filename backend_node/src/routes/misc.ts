@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { getDb } from "../db.js";
-import { requireCloudUser } from "../auth.js";
+import { requireCloudUser, rateLimit, clientIp } from "../auth.js";
 import { getUserLicense } from "../services/commandLicense.js";
 import { normalizeLicenseKey } from "../services/license.js";
 import { normalizePropFirmConfig } from "../services/propFirmConfig.js";
@@ -275,8 +275,10 @@ export async function registerMiscRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // POST /configs -- server.py:3641. Public (unauthenticated) config
-  // submission from the marketing-site Configurator.
+  // submission from the marketing-site Configurator. IP-rate-limited so
+  // the open write cannot be used as a collection-fill DoS.
   app.post("/configs", async (request) => {
+    rateLimit(`public_configs_ip:${clientIp(request)}`, 20, 3600);
     const data = EAConfigCreateSchema.parse(request.body ?? {});
     const id = randomUUID();
     const doc = {
@@ -289,6 +291,15 @@ export async function registerMiscRoutes(app: FastifyInstance): Promise<void> {
     await getDb().collection("ea_configs").insertOne({ ...doc });
     return { ok: true, id };
   });
+
+  const retiredCopyTrading = async (_request: unknown, reply: import("fastify").FastifyReply) =>
+    reply.code(410).send({ detail: "retired" });
+  app.post("/cloud/master/signal", retiredCopyTrading);
+  app.post("/cloud/master/signal-close", retiredCopyTrading);
+  app.post("/cloud/master/signal-partial", retiredCopyTrading);
+  app.post("/cloud/master/heartbeat", retiredCopyTrading);
+  app.get("/cloud/master/config", retiredCopyTrading);
+  app.post("/cloud/master/reasoning", retiredCopyTrading);
 
   // GET /cloud/command/recent -- server.py:8040
   app.get("/cloud/command/recent", { preHandler: requireCloudUser }, async (request) => {

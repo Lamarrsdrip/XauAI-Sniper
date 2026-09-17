@@ -1,10 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
+import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { getDb } from "../../db.js";
+import { env } from "../../env.js";
 import {
   clientIp,
   createCloudToken,
+  extractToken,
   hashPassword,
   rateLimit,
   requireCloudUser,
@@ -124,8 +127,28 @@ export async function registerCloudAuthRoutes(app: FastifyInstance): Promise<voi
     return { ok: true, user: userOut, token };
   });
 
-  // POST /cloud/auth/logout -- server.py:6456
-  app.post("/cloud/auth/logout", async (_request, reply) => {
+  // POST /cloud/auth/logout -- bump session_version so leftover JWTs (cookie
+  // or Bearer) fail requireCloudUser, then drop the cookie.
+  app.post("/cloud/auth/logout", async (request, reply) => {
+    const token = extractToken(request, "cloud_token");
+    if (token) {
+      try {
+        const payload = jwt.verify(token, env.JWT_SECRET, { algorithms: ["HS256"] }) as {
+          sub?: string;
+          type?: string;
+        };
+        if (payload.type === "cloud" && typeof payload.sub === "string" && payload.sub) {
+          await getDb()
+            .collection("cloud_users")
+            .updateOne(
+              { id: payload.sub },
+              { $inc: { session_version: 1 }, $set: { sessions_revoked_at: new Date().toISOString() } },
+            );
+        }
+      } catch {
+        /* expired/invalid token -- still clear the cookie below */
+      }
+    }
     reply.clearCookie("cloud_token", { path: "/" });
     return { ok: true };
   });

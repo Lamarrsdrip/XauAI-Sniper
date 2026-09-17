@@ -2,14 +2,21 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db.js";
 import { requireAdmin } from "../auth.js";
-import { resolveEaMonitorLicense } from "../services/license.js";
+import { resolveEaMonitorLicense, LicenseError } from "../services/license.js";
 import { buildShadowCandidateObservation, recordGlobalBrainObservation } from "../services/globalBrainIngest.js";
 import { lookupBucket } from "../services/globalBrainEstimator.js";
 import { getCurrentChampion } from "../services/globalBrainRegistry.js";
 import { getGlobalBrainSettings } from "../services/globalBrainSettings.js";
 import { logBotTradeShadowComparison } from "../services/globalBrainShadowServing.js";
 
-const HiveScoreRequestSchema = z.object({ signature: z.string().optional().default(""), window_days: z.number().optional().default(7) });
+const HiveScoreRequestSchema = z.object({
+  signature: z.string().optional().default(""),
+  window_days: z.number().optional().default(7),
+  pin: z.string().optional().default(""),
+  license_key: z.string().optional().default(""),
+  account: z.union([z.string(), z.number()]).optional().default(""),
+  account_id: z.union([z.string(), z.number()]).optional().default(""),
+});
 // v6.27.9 ShadowML: what the EA observed at one decision cycle -- the
 // existing rule-engine verdict alongside the existing ML/Hive learning
 // memory's opinion. Written once per genuine signal, joined to its eventual
@@ -33,7 +40,10 @@ const ShadowDecisionSchema = z.object({
   signature: z.string().optional().default(""),
   shadow_recommendation: z.string().optional().default("NONE"),
   actual_action: z.string().optional().default("CANDIDATE"),
-  account: z.number().optional().default(0),
+  pin: z.string().optional().default(""),
+  license_key: z.string().optional().default(""),
+  account: z.union([z.number(), z.string()]).optional().default(0),
+  account_id: z.union([z.string(), z.number()]).optional().default(""),
   decision_time_utc: z.string().optional().default(""),
 });
 const PatternDataSchema = z.object({
@@ -45,6 +55,31 @@ const PatternDataSchema = z.object({
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function licenseAccount(...vals: Array<string | number | undefined>): string {
+  for (const v of vals) {
+    const s = String(v ?? "").trim();
+    if (s && s !== "0") return s;
+  }
+  return "";
+}
+
+async function requireEaLicense(
+  pin: string,
+  account: string,
+  reply: import("fastify").FastifyReply,
+): Promise<boolean> {
+  try {
+    await resolveEaMonitorLicense(pin, account);
+    return true;
+  } catch (err) {
+    if (err instanceof LicenseError) {
+      reply.code(err.statusCode).send({ detail: err.detail });
+      return false;
+    }
+    throw err;
+  }
 }
 
 /** Port of server.py:3835-3910 (retired ML endpoints), :5595 hive score, :5764/5782 pattern save/load, :3910 admin ML stats. */
@@ -132,9 +167,14 @@ export async function registerMlRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  // POST /ml/hive/score -- server.py:5595
-  app.post("/ml/hive/score", async (request) => {
+  // POST /ml/hive/score -- server.py:5595. PIN-gated: unauthenticated reads
+  // must not scrape the hive, and a missing PIN fails closed here (EA
+  // GetHiveVerdict fail-opens to NEUTRAL on HTTP != 200).
+  app.post("/ml/hive/score", async (request, reply) => {
     const req = HiveScoreRequestSchema.parse(request.body);
+    const pin = String(req.pin || req.license_key || "");
+    const account = licenseAccount(req.account_id, req.account);
+    if (!(await requireEaLicense(pin, account, reply))) return;
     try {
       if (!req.signature) return { wins: 0, losses: 0, total: 0, wr: 0.5, verdict: "NONE", level: -1, matched_signature: "" };
       const window = Math.max(1, Math.trunc(req.window_days));
@@ -184,6 +224,9 @@ export async function registerMlRoutes(app: FastifyInstance): Promise<void> {
   app.post("/ml/shadow/record", async (request, reply) => {
     const req = ShadowDecisionSchema.parse(request.body);
     if (!req.signature) return reply.code(400).send({ detail: "signature is required" });
+    const pin = String(req.pin || req.license_key || "");
+    const account = licenseAccount(req.account_id, req.account);
+    if (!(await requireEaLicense(pin, account, reply))) return;
     try {
       await getDb()
         .collection("ml_shadow_decisions")

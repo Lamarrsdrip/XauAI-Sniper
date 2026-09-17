@@ -1281,12 +1281,10 @@ async def generate_outlook_for_account(license_key: str, account: str, account_i
         current_price = ea_mid
         price_source = "EA_LIVE_BROKER_PRICE"
     else:
-        price_info = await srv.fetch_live_gold_price()
-        if price_info.get("source") == "live" and float(price_info.get("bid", 0.0) or 0.0) > 0.0:
-            current_price = float(price_info.get("bid", 0.0) or 0.0)
-            price_source = "EXTERNAL_FALLBACK_FEED"
-        # else: stays 0.0 / "NONE" -- the stale hardcoded constant (source ==
-        # "fallback_stale_constant") is never treated as a usable price here.
+        # Never scrape or fabricate a third-party gold price for zone/SL/TP
+        # math. If this account has no live broker quote, refuse to publish.
+        current_price = 0.0
+        price_source = "NONE"
 
     outlook_id = _new_outlook_id("PENDING")
     now = datetime.now(timezone.utc)

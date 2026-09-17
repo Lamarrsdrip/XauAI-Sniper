@@ -144,13 +144,9 @@ export async function registerCloudCommandRoutes(app: FastifyInstance): Promise<
     const db = getDb();
     const query: Record<string, unknown> = { status: "PENDING" };
     if (lic?.["pin"]) query["license_key"] = lic["pin"];
-    if (q.account) {
-      query["$or"] = [
-        { mt5_account: String(q.account) },
-        { account: String(q.account) },
-        { mt5_account: "" },
-        { mt5_account: { $exists: false } },
-      ];
+    const boundAccount = String(lic?.["mt5_account"] ?? q.account ?? "").trim();
+    if (boundAccount) {
+      query["$or"] = [{ mt5_account: boundAccount }, { account: boundAccount }];
     }
     const rows = await db
       .collection("cloud_bot_commands")

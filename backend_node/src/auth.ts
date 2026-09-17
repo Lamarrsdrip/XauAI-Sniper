@@ -36,6 +36,7 @@ interface AccessTokenPayload {
   sub: string;
   email: string;
   type: "access";
+  session_version?: number;
 }
 
 interface CloudTokenPayload {
@@ -45,8 +46,8 @@ interface CloudTokenPayload {
   session_version?: number;
 }
 
-export function createAccessToken(userId: string, email: string): string {
-  const payload: AccessTokenPayload = { sub: userId, email, type: "access" };
+export function createAccessToken(userId: string, email: string, sessionVersion = 0): string {
+  const payload: AccessTokenPayload = { sub: userId, email, type: "access", session_version: sessionVersion };
   return jwt.sign(payload, env.JWT_SECRET, { algorithm: JWT_ALGORITHM, expiresIn: "24h" });
 }
 
@@ -64,7 +65,7 @@ class AuthError extends Error {
   }
 }
 
-function extractToken(request: FastifyRequest, cookieName: string): string | null {
+export function extractToken(request: FastifyRequest, cookieName: string): string | null {
   const cookies = (request as { cookies?: Record<string, string> }).cookies;
   const fromCookie = cookies?.[cookieName];
   if (fromCookie) return fromCookie;
@@ -88,6 +89,11 @@ export async function requireAdmin(request: FastifyRequest, reply: FastifyReply)
       { projection: { password_hash: 0 } },
     );
     if (!user) return void reply.code(403).send({ detail: "Admin access required" });
+    const currentSessionVersion = Number(user["session_version"] ?? 0);
+    const tokenSessionVersion = Number(payload.session_version ?? 0);
+    if (tokenSessionVersion !== currentSessionVersion) {
+      return void reply.code(401).send({ detail: "Session has been revoked. Please log in again." });
+    }
     (request as FastifyRequest & { admin?: Record<string, unknown> }).admin = user;
   } catch (err) {
     if (err instanceof jwt.TokenExpiredError) return void reply.code(401).send({ detail: "Token expired" });
