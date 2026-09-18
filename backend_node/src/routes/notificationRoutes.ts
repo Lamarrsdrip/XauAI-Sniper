@@ -19,6 +19,7 @@ import {
 } from "../services/notifications.js";
 
 const NOTIFICATION_TIERS = ["OFF", "HOURLY_ONLY", "HOURLY_PLUS_RESULTS", "ALL_UPDATES"] as const;
+export const NOTIFICATION_PREFS_SCHEMA_VERSION = "xaucloud-notification-prefs-v2-results";
 
 const NotificationPrefsUpdateSchema = z.object({
   tier: z.string().optional().default("HOURLY_PLUS_RESULTS"),
@@ -91,6 +92,7 @@ export async function registerNotificationRoutes(app: FastifyInstance): Promise<
       quiet_hours_end: body.quiet_hours_end ?? null,
       notify_all_devices: body.notify_all_devices,
       muted_categories: mutedCategories,
+      schema_version: NOTIFICATION_PREFS_SCHEMA_VERSION,
       updated_at: new Date().toISOString(),
     };
     await db.collection("cloud_notification_prefs").updateOne({ user_id: user["id"] }, { $set: doc }, { upsert: true });
