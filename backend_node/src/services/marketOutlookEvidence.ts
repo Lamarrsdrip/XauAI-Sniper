@@ -12,6 +12,7 @@ import {
   OUTLOOK_WATCHING,
   ANALYTICS_WIN,
 } from "./marketOutlookCore.js";
+import { exactOutlookIdentityScope } from "./outlookIdentityScope.js";
 import { MARKET_EVIDENCE_COLLECTION, OUTLOOK_EVIDENCE_MAX_AGE_SECONDS } from "./marketIntelligenceConfig.js";
 
 /** Port of market_outlook.py:1937 `_as_utc`. */
@@ -176,7 +177,11 @@ export function canonicalM10Signal(evidence: Record<string, unknown> | null | un
     direction,
     decision,
     execution_status: finalDecision || (executionReady ? "READY" : candidate ? "PENDING" : "NO_CANDIDATE"),
-    blocker_code: blocker || null,
+    // A READY/allowed decision cannot simultaneously expose a blocker. Some
+    // EA payloads retain the previous blocker text beside a later ALLOW; the
+    // executable decision is authoritative and the stale label must not make
+    // the UI say both "execution-ready" and "Blocked".
+    blocker_code: executionReady ? null : (blocker || null),
     confidence,
     freshness_state: freshness,
     bar_time: String(m10["bar_time"] ?? m10["candle_time"] ?? ev["ts"] ?? ""),
@@ -194,8 +199,9 @@ export interface EaEvidenceResult {
 export async function latestEaEvidence(licenseKey: string, account: string, sourceEventId = ""): Promise<EaEvidenceResult> {
   const db = getDb();
   if (!account && !licenseKey) return { evidence: null, reason: "NO_CONNECTED_EA" };
-  const scope: Record<string, unknown> =
-    account && licenseKey ? { account, license_key: licenseKey } : account ? { account } : { license_key: licenseKey };
+  // Keep live evidence tenant-strict, but tolerate the historical BSON account
+  // representation split (MT5 login stored as either number or string).
+  const scope = exactOutlookIdentityScope(account, licenseKey);
 
   const ledger = db.collection(MARKET_EVIDENCE_COLLECTION);
   const activity = db.collection("cloud_bot_activity");
