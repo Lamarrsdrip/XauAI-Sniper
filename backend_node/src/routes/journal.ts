@@ -11,6 +11,7 @@ import { buildBotTradeObservation, recordGlobalBrainObservation } from "../servi
 import { shadowOutcome } from "../services/tradeOutcome.js";
 import { recordPersistentDiagnostic } from "../services/persistentDiagnostics.js";
 import { resolveTrustedRuntimeEnvironment } from "../services/accountProvenance.js";
+import { sendClosedJournalTradeNotification } from "../services/notifications.js";
 
 export const MAX_JOURNAL_TRADES_PAGE_SIZE = 200;
 
@@ -174,6 +175,15 @@ export async function registerJournalRoutes(app: FastifyInstance): Promise<void>
           .findOne({ trade_identity: doc["trade_identity"] }, { projection: { _id: 0 } })
           .catch(() => null);
         if (stored) {
+          // The journal is broker-confirmed close truth. Activity telemetry is
+          // best-effort, so make this durable path a second close-alert source.
+          // notifications.ts dedupes it against activity/Outlook by
+          // account+ticket, so the customer still receives exactly one alert.
+          try {
+            await sendClosedJournalTradeNotification(stored);
+          } catch {
+            request.log.warn("journal close notification failed after a persisted trade");
+          }
           try {
             await reconcileTradeJournalEntry(stored);
           } catch {
