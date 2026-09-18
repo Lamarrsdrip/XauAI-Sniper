@@ -22,9 +22,9 @@ function accountClause(accountInput: string): Record<string, unknown> {
  * New rows are expected to carry BOTH account and license_key and must match
  * both when both are known. Older Python-era rows may legitimately have only
  * one identity field, and their MT5 account may be stored as either a BSON
- * number or a string. We allow those exact one-sided legacy rows only when the
- * other field is genuinely absent/empty. A row that contains a conflicting
- * non-empty account or license can therefore never match this scope.
+ * number or a string. Once the current active license binds an MT5 account,
+ * that account is the historical ownership key across PIN rotations. License-
+ * only legacy rows are admitted only when account is absent/empty.
  */
 export function outlookReadScope(accountInput: string, licenseKeyInput: string): Record<string, unknown> {
   const account = String(accountInput ?? "").trim();
@@ -34,13 +34,14 @@ export function outlookReadScope(accountInput: string, licenseKeyInput: string):
   if (account && licenseKey) {
     return {
       $or: [
-        { $and: [accountMatch, { license_key: licenseKey }] },
-        {
-          $and: [
-            accountMatch,
-            { $or: [{ license_key: { $exists: false } }, { license_key: null }, { license_key: "" }] },
-          ],
-        },
+        // The CURRENT active license already proves this MT5 account belongs
+        // to the authenticated customer. Historical Outlook rows must follow
+        // the account across PIN rotation/reissue; requiring the old row's
+        // license_key to equal today's PIN is what made real old results
+        // disappear after a license change.
+        accountMatch,
+        // Very old rows that predate account binding may carry only the PIN.
+        // Admit those only when account is genuinely absent/empty.
         {
           $and: [
             { license_key: licenseKey },
