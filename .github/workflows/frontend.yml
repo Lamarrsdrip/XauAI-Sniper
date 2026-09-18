@@ -41,6 +41,17 @@ jobs:
         working-directory: frontend
         run: CI=true npm test -- --watchAll=false
 
+      # Short-retention build artifact gives maintainers the exact CRA output
+      # that the synchronization gate validates. This is especially useful
+      # when a source change intentionally rotates hashed bundle filenames.
+      - name: Upload production frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-production-build
+          path: frontend/build
+          retention-days: 1
+          if-no-files-found: error
+
       - name: Verify deployed frontend bundle is synchronized
         working-directory: frontend
         run: |
