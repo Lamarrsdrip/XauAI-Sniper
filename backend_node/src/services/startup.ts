@@ -74,6 +74,7 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
   try {
     await db.collection("cloud_market_outlooks").createIndex("id", { unique: true });
     await db.collection("cloud_market_outlooks").createIndex({ account: 1, generated_at: -1 });
+    await db.collection("cloud_market_outlooks").createIndex({ license_key: 1, generated_at: -1 });
     await db.collection("cloud_market_outlooks").createIndex({ monitoring_closed: 1, primary_direction: 1, account: 1 });
     await db.collection("cloud_market_outlook_outcomes").createIndex("outlook_id", { unique: true });
     await db.collection("cloud_bot_activity").createIndex({ account: 1, ts: 1 });
@@ -93,6 +94,8 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
       { unique: true },
     );
     await db.collection("cloud_outlook_signal_events").createIndex({ account: 1, symbol: 1, signal_bar_time: -1, event_time: -1 });
+    await db.collection("cloud_outlook_signal_events").createIndex({ license_key: 1, event_time: -1 });
+    await db.collection("cloud_market_outlook_repair_runs").createIndex({ completed_at: -1 });
     await db.collection("cloud_outlook_thesis").createIndex({ account: 1, symbol: 1, status: 1, generated_at: -1 });
     await db.collection("cloud_outlook_thesis").createIndex({ account: 1, symbol: 1, outlook_id: 1 }, { unique: true });
   } catch (e) {
