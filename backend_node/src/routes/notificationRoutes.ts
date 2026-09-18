@@ -5,6 +5,7 @@ import { rateLimit, requireCloudUser } from "../auth.js";
 import { getUserLicense } from "../services/commandLicense.js";
 import { getVapidPublicKey, saveSubscription, removeSubscription, sendWebPushToUser } from "../services/webPush.js";
 import { registerDeviceToken, removeDeviceToken, sendExpoPushToUser } from "../services/expoPush.js";
+import { NOTIFICATION_PREFS_SCHEMA_VERSION } from "../services/notificationPreferenceMigration.js";
 import {
   NOTIFICATION_CATEGORIES,
   completeActiveDevices,
@@ -19,7 +20,6 @@ import {
 } from "../services/notifications.js";
 
 const NOTIFICATION_TIERS = ["OFF", "HOURLY_ONLY", "HOURLY_PLUS_RESULTS", "ALL_UPDATES"] as const;
-export const NOTIFICATION_PREFS_SCHEMA_VERSION = "xaucloud-notification-prefs-v2-results";
 
 const NotificationPrefsUpdateSchema = z.object({
   tier: z.string().optional().default("HOURLY_PLUS_RESULTS"),
