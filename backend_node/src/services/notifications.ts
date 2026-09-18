@@ -44,6 +44,10 @@ const EVENT_MIN_TIER: Record<string, string> = {
   TP3_HIT: "HOURLY_PLUS_RESULTS",
   SL_HIT: "HOURLY_PLUS_RESULTS",
   AUTOMATED_TRADE_RESULT: "HOURLY_PLUS_RESULTS",
+  // Opening chatter stays opt-in at the highest tier. A broker-confirmed close
+  // is a result and belongs with TP/SL/outcome notifications.
+  TRADE_OPENED: "ALL_UPDATES",
+  TRADE_CLOSED: "HOURLY_PLUS_RESULTS",
   PATTERN_CONFIRMED: "ALL_UPDATES",
 };
 
@@ -610,8 +614,14 @@ export async function sendOutlookNotification(doc: Record<string, unknown>, even
     const account = String(doc["account"] ?? "");
     const outlookId = String(doc["id"] ?? "");
 
-    const [allowed] = await marketOpenAndBotConnected(account);
-    if (!allowed) return null;
+    // Connectivity/market-hours are valid gates for a NEW live publication,
+    // never for a result already proven and persisted. Otherwise an Outlook
+    // can hit TP/SL while the EA is reconnecting and the customer never hears
+    // about the outcome.
+    if (event === "OUTLOOK_PUBLISHED" || event === "TRACKING_STARTED") {
+      const [allowed] = await marketOpenAndBotConnected(account);
+      if (!allowed) return null;
+    }
 
     const prefsRows = await notificationPrefsForAccount(account);
     let sent = 0;
@@ -1297,7 +1307,8 @@ export async function sendTradeActivityNotification(activity: Record<string, unk
     let sent = 0;
     for (const prefs of prefsRows) {
       const userId = String(prefs["user_id"] ?? "");
-      if (!userId || (TIER_RANK[String(prefs["tier"] ?? "OFF")] ?? 0) < TIER_RANK["ALL_UPDATES"]!) continue;
+      const requiredTier = EVENT_MIN_TIER[event] ?? "ALL_UPDATES";
+      if (!userId || (TIER_RANK[String(prefs["tier"] ?? "OFF")] ?? 0) < (TIER_RANK[requiredTier] ?? 99)) continue;
       if (categoryMuted(prefs, notificationCategory(event))) continue;
 
       const idemKey =
@@ -1376,6 +1387,44 @@ export async function sendTradeActivityNotification(activity: Record<string, unk
   } catch {
     return null;
   }
+}
+
+/**
+ * Broker-journal fallback for close alerts.
+ *
+ * /journal/log is the durable, authenticated close record. Activity telemetry
+ * normally produces the same alert first, but it is intentionally best-effort
+ * and may be absent. Reusing sendTradeActivityNotification plus the canonical
+ * account+ticket idempotency key makes both paths converge on one phone alert.
+ */
+export async function sendClosedJournalTradeNotification(trade: Record<string, unknown>): Promise<number | null> {
+  const account = cleanText(trade["account_login"] ?? trade["account"], 80);
+  const ticket = cleanText(trade["ticket"] ?? trade["position_id"] ?? trade["position_ticket"], 80);
+  const closedAt = Number(trade["closed_at"] ?? 0);
+  if (!account || !ticket || !Number.isFinite(closedAt) || closedAt <= 0) return 0;
+
+  const profit = Number(trade["profit"] ?? trade["net_profit"] ?? trade["realized_profit"]);
+  if (!Number.isFinite(profit)) return 0;
+
+  const syntheticActivity: Record<string, unknown> = {
+    id: String(trade["trade_identity"] ?? trade["id"] ?? `journal:${account}:${ticket}`),
+    account,
+    symbol: trade["symbol"] ?? "XAUUSD",
+    event_type: "TRADE_CLOSED",
+    event_category: "exits",
+    ticket,
+    profit,
+    price: trade["actual_exit_price"] ?? trade["exit_price"] ?? trade["price"],
+    close_price: trade["actual_exit_price"] ?? trade["exit_price"] ?? trade["price"],
+    entry_price: trade["entry_price"],
+    direction: trade["direction"],
+    final_r: trade["final_r"],
+    lots: trade["lots"] ?? trade["volume"] ?? trade["lot_size"],
+    balance: trade["balance"] ?? trade["account_balance"],
+    close_reason_exact: trade["exit_reason"] ?? trade["close_reason_exact"] ?? trade["close_reason"] ?? "BROKER_CONFIRMED_CLOSE",
+    closed_by_module: trade["exit_owner"] ?? trade["closed_by_module"] ?? "JOURNAL",
+  };
+  return sendTradeActivityNotification(syntheticActivity);
 }
 
 /** Port of notifications.py:999 `dispatch_pending_trade_notifications`. */

@@ -6,6 +6,7 @@ import { hashPassword, verifyPassword } from "../auth.js";
 import { ensureLocalAiIndexes } from "./localAiRelay.js";
 import { repairMisclassifiedActivityCategories } from "./botActivity.js";
 import { retireStaleOutlookSignalOpenCommands } from "./commandStateMachine.js";
+import { migrateLegacyNotificationPrefs } from "./notificationPreferenceMigration.js";
 
 /**
  * Port of server.py's `@app.on_event("startup")` handler (lines 4139-4283):
@@ -88,6 +89,8 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
     await db.collection("manual_trading_ea_decisions").createIndex({ account: 1, symbol: 1, recordedAt: -1 });
     await db.collection("manual_trading_ea_decisions").createIndex("recordedAt", { expireAfterSeconds: 180 * 86400 });
     await db.collection("cloud_notification_prefs").createIndex("user_id", { unique: true });
+    const migratedLegacyPrefs = await migrateLegacyNotificationPrefs();
+    if (migratedLegacyPrefs) log.info(`[notifications] upgraded ${migratedLegacyPrefs} legacy signal-only preference row(s) to include results`);
     await db.collection("cloud_push_subscriptions").createIndex({ user_id: 1, opted_in: 1 });
     await db.collection("cloud_outlook_signal_events").createIndex(
       { account: 1, candidate_id: 1, event_type: 1, event_version: 1 },

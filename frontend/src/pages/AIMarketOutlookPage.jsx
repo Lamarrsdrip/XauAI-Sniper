@@ -537,7 +537,7 @@ function WaitingCard({ contract }) {
         <p className="mt-2 text-[13px] leading-5 text-white/70">
           {actionable ? "No additional confirmation is pending; the M10 signal is execution-ready." : contract?.nextRequiredCondition || "Fresh EA evidence."}
         </p>
-        {contract?.blockerLabel && <p className="mt-1 text-[11px] text-rose-200/65">Blocker: {contract.blockerLabel}</p>}
+        {!actionable && contract?.blockerLabel && <p className="mt-1 text-[11px] text-rose-200/65">Blocker: {contract.blockerLabel}</p>}
       </div>
     </section>
   );

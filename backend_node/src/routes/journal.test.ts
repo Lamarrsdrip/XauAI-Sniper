@@ -75,6 +75,11 @@ vi.mock("../services/license.js", () => ({
 const reconcileTradeJournalEntry = vi.fn(async () => null);
 vi.mock("../services/automatedTradeReconciliation.js", () => ({ reconcileTradeJournalEntry: (doc: Doc) => reconcileTradeJournalEntry(doc) }));
 
+const sendClosedJournalTradeNotification = vi.fn(async () => 1);
+vi.mock("../services/notifications.js", () => ({
+  sendClosedJournalTradeNotification: (doc: Doc) => sendClosedJournalTradeNotification(doc),
+}));
+
 const { registerJournalRoutes } = await import("./journal.js");
 
 async function createApp(): Promise<FastifyInstance> {
@@ -107,6 +112,8 @@ describe("POST /journal/log wires an authenticated final close into the X-post q
     state.db = new FakeDb();
     reconcileTradeJournalEntry.mockClear();
     reconcileTradeJournalEntry.mockResolvedValue(null);
+    sendClosedJournalTradeNotification.mockClear();
+    sendClosedJournalTradeNotification.mockResolvedValue(1);
     app = await createApp();
   });
 
@@ -125,6 +132,8 @@ describe("POST /journal/log wires an authenticated final close into the X-post q
     const journalRows = state.db.collection("trade_journal").docs;
     expect(journalRows).toHaveLength(1);
     expect(journalRows[0]!["actual_exit_price"]).toBe(4396.25);
+    expect(sendClosedJournalTradeNotification).toHaveBeenCalledTimes(1);
+    expect(sendClosedJournalTradeNotification).toHaveBeenCalledWith(expect.objectContaining({ ticket: 999, account_login: "555111", profit: 125 }));
   });
 
   it("does not queue a duplicate job when the same close event is delivered twice", async () => {
@@ -136,6 +145,7 @@ describe("POST /journal/log wires an authenticated final close into the X-post q
     expect(second.json()).toMatchObject({ status: "ok", duplicate: true });
     expect(state.db.collection("x_trade_posts").docs).toHaveLength(1);
     expect(state.db.collection("trade_journal").docs).toHaveLength(1);
+    expect(sendClosedJournalTradeNotification).toHaveBeenCalledTimes(1);
   });
 
   it("still queues the X-post job even when Outlook reconciliation fails", async () => {
@@ -153,6 +163,7 @@ describe("POST /journal/log wires an authenticated final close into the X-post q
     });
     expect(response.json()).toMatchObject({ status: "ok" });
     expect(state.db.collection("x_trade_posts").docs).toHaveLength(0);
+    expect(sendClosedJournalTradeNotification).not.toHaveBeenCalled();
   });
 });
 
@@ -163,6 +174,8 @@ describe("v6.27.9 ShadowML — closed trade joins back to its pending shadow obs
     state.db = new FakeDb();
     reconcileTradeJournalEntry.mockClear();
     reconcileTradeJournalEntry.mockResolvedValue(null);
+    sendClosedJournalTradeNotification.mockClear();
+    sendClosedJournalTradeNotification.mockResolvedValue(1);
     app = await createApp();
   });
 
@@ -230,6 +243,8 @@ describe("POST /journal/log -- Global Brain runtime provenance is server-resolve
     state.db = new FakeDb();
     reconcileTradeJournalEntry.mockClear();
     reconcileTradeJournalEntry.mockResolvedValue(null);
+    sendClosedJournalTradeNotification.mockClear();
+    sendClosedJournalTradeNotification.mockResolvedValue(1);
     app = await createApp();
   });
 

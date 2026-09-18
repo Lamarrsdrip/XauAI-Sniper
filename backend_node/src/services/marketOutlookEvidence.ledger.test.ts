@@ -4,7 +4,7 @@ import { FakeDb } from "../testUtils/fakeDb.js";
 const state = vi.hoisted(() => ({ db: null as unknown as FakeDb }));
 vi.mock("../db.js", () => ({ getDb: () => state.db }));
 
-const { computeOutlookFreshness, latestEaEvidence } = await import("./marketOutlookEvidence.js");
+const { canonicalM10Signal, computeOutlookFreshness, latestEaEvidence } = await import("./marketOutlookEvidence.js");
 
 function ledger(overrides: Record<string, unknown> = {}) {
   return {
@@ -66,4 +66,36 @@ describe("marketOutlook immutable-evidence reads", () => {
     // A different account can never resolve this account's evidence id.
     expect((await latestEaEvidence("lic-a", "acct-b", "old-evidence")).evidence).toBeNull();
   });
+  it("treats a numeric legacy MT5 account as the same exact account for evidence reads", async () => {
+    await state.db.collection("cloud_market_evidence").insertOne(ledger({
+      id: "numeric-account", account: 111, license_key: "lic-a",
+    }));
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-11T10:02:00.000Z"));
+    try {
+      const result = await latestEaEvidence("lic-a", "111");
+      expect(result.reason).toBe("OK");
+      expect(result.evidence?.evidence_id).toBe("numeric-account");
+      expect((await latestEaEvidence("lic-b", "111")).reason).toBe("NO_CONNECTED_EA");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("never exposes a stale blocker beside an execution-ready decision", () => {
+    const canonical = canonicalM10Signal({
+      m10_signal: { decision: "BUY_CANDIDATE", preferred_direction: "BUY", freshness_state: "FRESH" },
+      execution: { final_execution_allowed: true, final_decision: "ALLOW", final_blocker: "BLOCKED" },
+    });
+    expect(canonical.actionable).toBe(true);
+    expect(canonical.blocked).toBe(false);
+    expect(canonical.blocker_code).toBeNull();
+
+    const blocked = canonicalM10Signal({
+      m10_signal: { decision: "BUY_CANDIDATE", preferred_direction: "BUY", freshness_state: "FRESH" },
+      execution: { final_execution_allowed: false, final_decision: "BLOCKED", final_blocker: "OWNER_POLICY" },
+    });
+    expect(blocked.actionable).toBe(false);
+    expect(blocked.blocked).toBe(true);
+    expect(blocked.blocker_code).toBe("OWNER_POLICY");
+  });
+
 });

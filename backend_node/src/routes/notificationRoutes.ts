@@ -5,6 +5,7 @@ import { rateLimit, requireCloudUser } from "../auth.js";
 import { getUserLicense } from "../services/commandLicense.js";
 import { getVapidPublicKey, saveSubscription, removeSubscription, sendWebPushToUser } from "../services/webPush.js";
 import { registerDeviceToken, removeDeviceToken, sendExpoPushToUser } from "../services/expoPush.js";
+import { NOTIFICATION_PREFS_SCHEMA_VERSION } from "../services/notificationPreferenceMigration.js";
 import {
   NOTIFICATION_CATEGORIES,
   completeActiveDevices,
@@ -91,6 +92,7 @@ export async function registerNotificationRoutes(app: FastifyInstance): Promise<
       quiet_hours_end: body.quiet_hours_end ?? null,
       notify_all_devices: body.notify_all_devices,
       muted_categories: mutedCategories,
+      schema_version: NOTIFICATION_PREFS_SCHEMA_VERSION,
       updated_at: new Date().toISOString(),
     };
     await db.collection("cloud_notification_prefs").updateOne({ user_id: user["id"] }, { $set: doc }, { upsert: true });

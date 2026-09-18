@@ -16,9 +16,9 @@ const dashboard = read("components/cloud/CloudDashboard.jsx");
 describe("free/trial users can actually receive signal notifications, not just toggle a device subscription", () => {
   const fn = dashboard.slice(dashboard.indexOf("function NotificationPrompt("), dashboard.indexOf("// ── Bot ON/OFF"));
 
-  test("enabling the toggle sets a real delivery tier, not just the device subscription", () => {
+  test("enabling the toggle includes target/stop and trade-result delivery, not just the initial signal", () => {
     expect(fn).toContain("enableWebPush(commandAxios)");
-    expect(fn).toMatch(/notifications\/prefs["'],\s*\{\s*tier:\s*"HOURLY_ONLY"\s*\}/);
+    expect(fn).toMatch(/notifications\/prefs["'],\s*\{\s*tier:\s*"HOURLY_PLUS_RESULTS"\s*\}/);
   });
 
   test("disabling the toggle turns delivery back off, not just the device", () => {

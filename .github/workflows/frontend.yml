@@ -45,6 +45,9 @@ jobs:
         working-directory: frontend
         run: |
           node ../scripts/sync-frontend.mjs
+          # Intent-to-add makes newly hashed CRA assets visible in the diff.
+          # This remains a read-only drift gate; it does not commit anything.
+          git add -N ../backend_node/public
           git diff --exit-code -- ../backend_node/public
 
       # Real route-reachability smoke test: catches a broken build that

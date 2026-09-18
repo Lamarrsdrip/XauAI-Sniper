@@ -21,6 +21,16 @@ import { buildTrackingAnchor, fixedTpPrices, targetsHaveValidGeometry } from "./
 
 type Doc = Record<string, unknown>;
 type Quote = { bid: number; ask: number; at: Date };
+const HISTORY_REPAIR_ENGINE = "NODE_EVIDENCE_V3_20260918";
+
+function accountVariants(accountInput: string): Array<string | number> {
+  const account = String(accountInput ?? "").trim();
+  if (!account) return [];
+  const values: Array<string | number> = [account];
+  const numeric = Number(account);
+  if (Number.isFinite(numeric) && Number.isSafeInteger(numeric)) values.push(numeric);
+  return values;
+}
 
 export interface OutlookHistoryRepairReport {
   examined: number;
@@ -51,6 +61,7 @@ async function markUnavailable(doc: Doc, reason: string): Promise<void> {
     signal_tracking_version: 2,
     signal_state: ANALYTICS_UNAVAILABLE,
     historical_repair_status: ANALYTICS_UNAVAILABLE,
+    historical_repair_engine: HISTORY_REPAIR_ENGINE,
     historical_data_unavailable_reason: reason,
     analytics_outcome: ANALYTICS_UNAVAILABLE,
     analytics_r: null,
@@ -121,9 +132,11 @@ function eventFlags(doc: Doc): Record<string, string> {
 
 async function quotesFor(account: string, start: Date, end: Date): Promise<Quote[]> {
   const db = getDb();
+  const accountIds = accountVariants(account);
+  const accountQuery = accountIds.length > 1 ? { $in: accountIds } : accountIds[0];
   const ledgerRows = await db.collection(MARKET_EVIDENCE_COLLECTION)
     .find(
-      { account, quote_valid: true, observed_at: { $gte: start.toISOString(), $lte: end.toISOString() } },
+      { account: accountQuery, quote_valid: true, observed_at: { $gte: start.toISOString(), $lte: end.toISOString() } },
       { projection: { _id: 0, observed_at: 1, bid: 1, ask: 1 } },
     )
     .sort({ observed_at: 1 })
@@ -141,7 +154,7 @@ async function quotesFor(account: string, start: Date, end: Date): Promise<Quote
   const activityRows = await db.collection("cloud_bot_activity")
     .find(
       {
-        account,
+        account: accountQuery,
         ts: { $gte: start.toISOString(), $lte: end.toISOString() },
         "details.market_thesis.live_bid": { $gt: 0 },
         "details.market_thesis.live_ask": { $gt: 0 },
@@ -187,7 +200,16 @@ export async function backfillSignalOutlookHistory(limit = 500): Promise<Outlook
   const now = new Date();
   const legacy = await db.collection("cloud_market_outlooks")
     .find(
-      { primary_direction: { $in: ["BUY", "SELL"] }, signal_tracking_version: { $ne: 2 } },
+      {
+        primary_direction: { $in: ["BUY", "SELL"] },
+        $or: [
+          { signal_tracking_version: { $ne: 2 } },
+          // Re-run old UNAVAILABLE classifications once under the corrected
+          // account/PIN/evidence lookup. The first Node migration could mark a
+          // real row unavailable simply because its MT5 login was BSON numeric.
+          { historical_repair_status: ANALYTICS_UNAVAILABLE, historical_repair_engine: { $ne: HISTORY_REPAIR_ENGINE } },
+        ],
+      },
       { projection: { _id: 0 } },
     )
     .sort({ generated_at: 1 })
@@ -343,6 +365,7 @@ export async function backfillSignalOutlookHistory(limit = 500): Promise<Outlook
     working = {
       ...working,
       historical_repair_status: "RECONSTRUCTED",
+      historical_repair_engine: HISTORY_REPAIR_ENGINE,
       historical_repaired_at: now.toISOString(),
       notification_flags: eventFlags(working),
     };
@@ -368,4 +391,52 @@ export async function backfillSignalOutlookHistory(limit = 500): Promise<Outlook
     report,
   });
   return report;
+}
+
+
+/**
+ * Drain the full legacy backlog in bounded batches. The previous startup call
+ * processed only the oldest 500 rows once, so accounts later in the collection
+ * could stay permanently unrepaired until another process restart.
+ */
+export async function backfillAllSignalOutlookHistory(
+  batchSize = 500,
+  maxBatches = 20,
+): Promise<OutlookHistoryRepairReport & { batches: number; backlog_remaining: boolean }> {
+  const total: OutlookHistoryRepairReport & { batches: number; backlog_remaining: boolean } = {
+    examined: 0,
+    reconstructed: 0,
+    wins: 0,
+    losses: 0,
+    partial_profits: 0,
+    breakevens: 0,
+    active: 0,
+    unavailable: 0,
+    batches: 0,
+    backlog_remaining: false,
+  };
+
+  const safeBatch = Math.max(1, Math.min(Math.trunc(batchSize), 1000));
+  const safeMax = Math.max(1, Math.min(Math.trunc(maxBatches), 100));
+
+  for (let i = 0; i < safeMax; i += 1) {
+    const report = await backfillSignalOutlookHistory(safeBatch);
+    total.batches += 1;
+    for (const key of ["examined", "reconstructed", "wins", "losses", "partial_profits", "breakevens", "active", "unavailable"] as const) {
+      total[key] += report[key];
+    }
+    if (report.examined < safeBatch) {
+      total.backlog_remaining = false;
+      return total;
+    }
+  }
+
+  total.backlog_remaining = await getDb().collection("cloud_market_outlooks").countDocuments({
+    primary_direction: { $in: ["BUY", "SELL"] },
+    $or: [
+      { signal_tracking_version: { $ne: 2 } },
+      { historical_repair_status: ANALYTICS_UNAVAILABLE, historical_repair_engine: { $ne: HISTORY_REPAIR_ENGINE } },
+    ],
+  }) > 0;
+  return total;
 }

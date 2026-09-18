@@ -4,7 +4,7 @@ import { FakeDb } from "../testUtils/fakeDb.js";
 const state = vi.hoisted(() => ({ db: null as unknown as FakeDb }));
 vi.mock("../db.js", () => ({ getDb: () => state.db }));
 
-const { backfillSignalOutlookHistory } = await import("./marketOutlookHistoryRepair.js");
+const { backfillAllSignalOutlookHistory, backfillSignalOutlookHistory } = await import("./marketOutlookHistoryRepair.js");
 
 function legacy(overrides: Record<string, unknown> = {}) {
   return {
@@ -78,5 +78,70 @@ describe("Market Outlook legacy history repair", () => {
     expect(saved?.analytics_outcome).toBe("HISTORICAL_DATA_UNAVAILABLE");
     expect(saved?.excluded_from_signal_analytics).toBe(true);
     expect(saved?.historical_data_unavailable_reason).toContain("no stored broker Bid/Ask history");
+    expect(saved?.historical_repair_engine).toBe("NODE_EVIDENCE_V3_20260918");
+    expect((await backfillSignalOutlookHistory(20)).examined).toBe(0);
   });
+
+  it("reconstructs when the legacy Outlook account is a string but persisted evidence used BSON numeric MT5 login", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-18T12:00:00.000Z"));
+    try {
+      await state.db.collection("cloud_market_outlooks").insertOne(legacy({ id: "mixed-account" }));
+      await state.db.collection("cloud_market_evidence").insertOne({
+        id: "numeric-q0", account: 111, license_key: "PIN-A", quote_valid: true,
+        observed_at: "2026-09-18T10:00:00.000Z", bid: 3000, ask: 3000.2,
+      });
+      await state.db.collection("cloud_market_evidence").insertOne({
+        id: "numeric-q1", account: 111, license_key: "PIN-A", quote_valid: true,
+        observed_at: "2026-09-18T10:05:00.000Z", bid: 3005.3, ask: 3005.5,
+      });
+
+      const report = await backfillSignalOutlookHistory(20);
+      expect(report.reconstructed).toBe(1);
+      const saved = await state.db.collection("cloud_market_outlooks").findOne({ id: "mixed-account" });
+      expect(saved?.analytics_outcome).toBe("WIN");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drains more than one repair batch instead of leaving later accounts permanently invisible", async () => {
+    await state.db.collection("cloud_market_outlooks").insertOne(legacy({ id: "batch-1", generated_at: "2026-09-18T07:00:00.000Z", published_at: "2026-09-18T07:00:00.000Z" }));
+    await state.db.collection("cloud_market_outlooks").insertOne(legacy({ id: "batch-2", generated_at: "2026-09-18T08:00:00.000Z", published_at: "2026-09-18T08:00:00.000Z" }));
+    await state.db.collection("cloud_market_outlooks").insertOne(legacy({ id: "batch-3", generated_at: "2026-09-18T09:00:00.000Z", published_at: "2026-09-18T09:00:00.000Z" }));
+
+    const report = await backfillAllSignalOutlookHistory(2, 5);
+    expect(report.examined).toBe(3);
+    expect(report.batches).toBe(2);
+    expect(report.backlog_remaining).toBe(false);
+    expect(report.unavailable).toBe(3);
+    expect(await state.db.collection("cloud_market_outlooks").countDocuments({ signal_tracking_version: { $ne: 2 } })).toBe(0);
+  });
+
+
+  it("retries a pre-v3 unavailable row once and recovers it when evidence actually exists", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-18T12:00:00.000Z"));
+    try {
+      await state.db.collection("cloud_market_outlooks").insertOne(legacy({
+        id: "old-false-unavailable",
+        signal_tracking_version: 2,
+        historical_repair_status: "HISTORICAL_DATA_UNAVAILABLE",
+        analytics_outcome: "HISTORICAL_DATA_UNAVAILABLE",
+        excluded_from_signal_analytics: true,
+      }));
+      await quote("2026-09-18T10:00:00.000Z", 3000, 3000.2);
+      await quote("2026-09-18T10:05:00.000Z", 3005.3, 3005.5);
+
+      const report = await backfillSignalOutlookHistory(20);
+      expect(report.reconstructed).toBe(1);
+      const saved = await state.db.collection("cloud_market_outlooks").findOne({ id: "old-false-unavailable" });
+      expect(saved?.analytics_outcome).toBe("WIN");
+      expect(saved?.excluded_from_signal_analytics).toBe(false);
+      expect(saved?.historical_repair_engine).toBe("NODE_EVIDENCE_V3_20260918");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 });
