@@ -83,7 +83,7 @@ import { applySecurityHeaders } from "./services/httpSecurity.js";
 import { ensureMarketEvidenceIndexes } from "./services/marketEvidenceLedger.js";
 import { ensurePersistentDiagnosticIndexes } from "./services/persistentDiagnostics.js";
 import { ensureAccountProvenanceIndexes } from "./services/accountProvenance.js";
-import { backfillSignalOutlookHistory } from "./services/marketOutlookHistoryRepair.js";
+import { backfillAllSignalOutlookHistory } from "./services/marketOutlookHistoryRepair.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -386,10 +386,11 @@ async function main(): Promise<void> {
   // Python already did this one-shot migration. Production Node must do it
   // too or Python-era BUY/SELL rows stay permanently unclassified. Run it
   // after readiness so historical scanning can never delay live requests.
-  void backfillSignalOutlookHistory().then((report) => {
-    app.log.info({ report }, "[outlook-history-repair] startup backfill complete");
+  void backfillAllSignalOutlookHistory().then((report) => {
+    app.log.info({ report }, "[outlook-history-repair] startup backlog drain complete");
+    if (report.backlog_remaining) app.log.warn({ report }, "[outlook-history-repair] bounded startup drain left legacy rows for the next restart");
   }).catch((error) => {
-    app.log.warn({ error }, "[outlook-history-repair] startup backfill failed");
+    app.log.warn({ error }, "[outlook-history-repair] startup backlog drain failed");
   });
   // Recover/publish existing durable jobs immediately after a process restart;
   // the interval below remains the steady-state worker cadence.
