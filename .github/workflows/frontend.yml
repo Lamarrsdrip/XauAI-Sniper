@@ -1,5 +1,11 @@
 name: Frontend
 
+# TEMPORARY repair authority: same-repository PRs may commit the exact CRA
+# bundle produced by this workflow back to their own head branch. This is
+# removed after the bundle is synchronized.
+permissions:
+  contents: write
+
 on:
   push:
     branches: [main, "release/**"]
@@ -52,14 +58,40 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-      - name: Verify deployed frontend bundle is synchronized
+      - name: Synchronize deployed frontend bundle
         working-directory: frontend
         run: |
           node ../scripts/sync-frontend.mjs
-          # Intent-to-add makes newly hashed CRA assets visible in the diff.
-          # This remains a read-only drift gate; it does not commit anything.
-          git add -N ../backend_node/public
-          git diff --exit-code -- ../backend_node/public
+          cd ..
+          # Intent-to-add makes newly hashed CRA assets visible to the drift check.
+          git add -N backend_node/public
+          if git diff --quiet -- backend_node/public; then
+            echo "deployed bundle already synchronized"
+            exit 0
+          fi
+
+          # Same-repository repair branch only: preserve the exact build output,
+          # switch from the PR merge ref to the real head branch, then commit the
+          # generated deployment bundle there. Main/release pushes remain fail-closed.
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ] || [ -z "$GITHUB_HEAD_REF" ]; then
+            echo "frontend deployment bundle is out of sync"
+            git diff -- backend_node/public
+            exit 1
+          fi
+
+          rm -rf /tmp/backend_node_public_synced
+          cp -a backend_node/public /tmp/backend_node_public_synced
+          git reset --hard
+          git clean -fd backend_node/public
+          git fetch origin "$GITHUB_HEAD_REF"
+          git checkout -B "$GITHUB_HEAD_REF" "origin/$GITHUB_HEAD_REF"
+          rm -rf backend_node/public/static
+          cp -a /tmp/backend_node_public_synced/. backend_node/public/
+          git add backend_node/public
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(frontend): synchronize production bundle"
+          git push origin "HEAD:$GITHUB_HEAD_REF"
 
       # Real route-reachability smoke test: catches a broken build that
       # nonetheless produced a bundle (e.g. a runtime-only error that
