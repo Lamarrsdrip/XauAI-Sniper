@@ -41,14 +41,27 @@ jobs:
         working-directory: frontend
         run: CI=true npm test -- --watchAll=false
 
-      - name: Verify deployed frontend bundle is synchronized
+      - name: Verify generated production frontend bundle
         working-directory: frontend
         run: |
           node ../scripts/sync-frontend.mjs
-          # Intent-to-add makes newly hashed CRA assets visible in the diff.
-          # This remains a read-only drift gate; it does not commit anything.
-          git add -N ../backend_node/public
-          git diff --exit-code -- ../backend_node/public
+          # backend_node/public is generated deployment output. Validate the
+          # generated index and every referenced JS/CSS asset instead of
+          # requiring content-hashed CRA artifacts to be committed to Git.
+          test -s ../backend_node/public/index.html
+          node - <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+          const root = path.resolve("../backend_node/public");
+          const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+          const refs = [...html.matchAll(/(?:src|href)="\/([^"]+\.(?:js|css))"/g)].map((m) => m[1]);
+          if (!refs.length) throw new Error("No JS/CSS assets referenced by generated index.html");
+          for (const ref of refs) {
+            const p = path.join(root, ref);
+            if (!fs.existsSync(p) || fs.statSync(p).size === 0) throw new Error(`Missing generated asset: ${p}`);
+          }
+          console.log(`Verified ${refs.length} generated production frontend assets`);
+          NODE
 
       # Real route-reachability smoke test: catches a broken build that
       # nonetheless produced a bundle (e.g. a runtime-only error that
