@@ -5,6 +5,7 @@ import { getUserLicense } from "../services/commandLicense.js";
 import { normalizeLicenseKey } from "../services/license.js";
 import { buildResultConversion } from "../services/marketOutlookCore.js";
 import { buildAuthoritativeOutlookContract, computeOutlookFreshness, latestEaEvidence } from "../services/marketOutlookEvidence.js";
+import { outlookReadScope } from "../services/outlookIdentityScope.js";
 
 function cloudUser(request: unknown): Record<string, unknown> {
   return (request as { cloudUser: Record<string, unknown> }).cloudUser;
@@ -20,7 +21,10 @@ export async function registerOutlookCurrentRoutes(app: FastifyInstance): Promis
     const licenseKey = lic ? normalizeLicenseKey(String(lic["pin"] ?? "")) : "";
     if (!account && !licenseKey) return { outlook: null, reason: "license_not_linked" };
 
-    const scope = account && licenseKey ? { account, license_key: licenseKey } : account ? { account } : { license_key: licenseKey }; // ASTRA_REPAIR_V2_6287 / 024
+    // New rows match the exact pair. Python-era rows may have only one identity
+    // field; outlookReadScope admits only those one-sided legacy rows and still
+    // rejects any conflicting non-empty account/license pair.
+    const scope = outlookReadScope(account, licenseKey);
     const outlooks = db.collection("cloud_market_outlooks");
 
     const doc = await outlooks.findOne(scope, { projection: { _id: 0 }, sort: { generated_at: -1 } });
