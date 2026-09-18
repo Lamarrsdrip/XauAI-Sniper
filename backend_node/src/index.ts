@@ -83,6 +83,7 @@ import { applySecurityHeaders } from "./services/httpSecurity.js";
 import { ensureMarketEvidenceIndexes } from "./services/marketEvidenceLedger.js";
 import { ensurePersistentDiagnosticIndexes } from "./services/persistentDiagnostics.js";
 import { ensureAccountProvenanceIndexes } from "./services/accountProvenance.js";
+import { backfillSignalOutlookHistory } from "./services/marketOutlookHistoryRepair.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -343,11 +344,6 @@ async function main(): Promise<void> {
     }
   }
 
-  // NOTE: server.py also runs `_outlook_history_repair_once` at startup
-  // (idempotent backfill of legacy signal history from persisted broker
-  // quotes) -- deferred; it is a one-shot historical-data repair, not
-  // required for live signal generation/tracking, which both loops above
-  // already cover.
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
   app.log.info(`XauCloud Node backend listening on :${env.PORT}`);
 
@@ -387,6 +383,14 @@ async function main(): Promise<void> {
   await runReadinessStep("push_receipts", () => ensurePushReceiptIndexes(), 30_000);
   markApplicationReady();
   app.log.info({ readiness: readinessSnapshot() }, "XauCloud startup initialization complete");
+  // Python already did this one-shot migration. Production Node must do it
+  // too or Python-era BUY/SELL rows stay permanently unclassified. Run it
+  // after readiness so historical scanning can never delay live requests.
+  void backfillSignalOutlookHistory().then((report) => {
+    app.log.info({ report }, "[outlook-history-repair] startup backfill complete");
+  }).catch((error) => {
+    app.log.warn({ error }, "[outlook-history-repair] startup backfill failed");
+  });
   // Recover/publish existing durable jobs immediately after a process restart;
   // the interval below remains the steady-state worker cadence.
   void processQueuedXTradePosts().catch((error) => app.log.warn({ error }, "[x-posting] initial queue processing failed"));

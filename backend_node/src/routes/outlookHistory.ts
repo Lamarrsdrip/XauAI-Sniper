@@ -5,6 +5,7 @@ import { clientIp, rateLimit, requireCloudUser } from "../auth.js";
 import { getUserLicense } from "../services/commandLicense.js";
 import { normalizeLicenseKey } from "../services/license.js";
 import { buildPublicOutlookPerformance, computeOutlookStats, groupMeaningfulHistory } from "../services/marketOutlookStats.js";
+import { exactOutlookIdentityScope, outlookReadScope } from "../services/outlookIdentityScope.js";
 
 function cloudUser(request: unknown): Record<string, unknown> {
   return (request as { cloudUser: Record<string, unknown> }).cloudUser;
@@ -35,7 +36,10 @@ export async function registerOutlookHistoryRoutes(app: FastifyInstance): Promis
       return { outlooks: [], timeline: [], signal_events: [], stats: {}, reason: "license_not_linked" };
     }
 
-    const scope = account && licenseKey ? { account, license_key: licenseKey } : account ? { account } : { license_key: licenseKey };
+    const scope = outlookReadScope(account, licenseKey);
+    // Signal-event rows are created only by the current Node pipeline, so keep
+    // them strict even while legacy outlook documents support one-sided IDs.
+    const eventScope = exactOutlookIdentityScope(account, licenseKey);
     const conditions: Record<string, unknown>[] = [scope];
     if (q.direction && q.direction !== "All") conditions.push({ primary_direction: q.direction });
     if (q.color && q.color !== "All") conditions.push({ color_state: q.color });
@@ -70,7 +74,7 @@ export async function registerOutlookHistoryRoutes(app: FastifyInstance): Promis
 
     const signalEvents = await db
       .collection("cloud_outlook_signal_events")
-      .find(scope, { projection: { _id: 0 } })
+      .find(eventScope, { projection: { _id: 0 } })
       .sort({ event_time: -1 })
       .limit(q.limit)
       .toArray();
@@ -94,7 +98,7 @@ export async function registerOutlookHistoryRoutes(app: FastifyInstance): Promis
     const licenseKey = lic ? normalizeLicenseKey(String(lic["pin"] ?? "")) : "";
     if (!account && !licenseKey) return reply.code(404).send({ detail: "outlook not found" });
 
-    const scope = account && licenseKey ? { account, license_key: licenseKey } : account ? { account } : { license_key: licenseKey };
+    const scope = outlookReadScope(account, licenseKey);
     const doc = await db.collection("cloud_market_outlooks").findOne({ $and: [{ id: outlookId }, scope] }, { projection: { _id: 0 } });
     if (!doc) return reply.code(404).send({ detail: "outlook not found" });
 
