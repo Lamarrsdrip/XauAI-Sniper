@@ -1255,7 +1255,7 @@ function NotificationPrompt() {
     try {
       if (next) {
         await enableWebPush(commandAxios);
-        await commandAxios.post("/outlook/notifications/prefs", { tier: "HOURLY_ONLY" });
+        await commandAxios.post("/outlook/notifications/prefs", { tier: "HOURLY_PLUS_RESULTS" });
       } else {
         await commandAxios.post("/outlook/notifications/prefs", { tier: "OFF" }).catch(() => {});
         await disableWebPush(commandAxios);
@@ -1270,7 +1270,7 @@ function NotificationPrompt() {
           <span className="flex-none rounded-lg bg-gold-300/12 p-2"><Bell className="h-4 w-4 text-gold-300" /></span>
           <div className="min-w-0">
             <div className="text-[13.5px] font-semibold">Push notifications</div>
-            <div className="truncate text-[11.5px] text-white/45">{busy ? "Working…" : status.subscribed ? "On for this device" : "Trade, outlook & system alerts"}</div>
+            <div className="truncate text-[11.5px] text-white/45">{busy ? "Working…" : status.subscribed ? "On for this device" : "Signals, targets, stops & trade results"}</div>
           </div>
         </div>
         <Toggle value={Boolean(status.subscribed)} onChange={set} />
