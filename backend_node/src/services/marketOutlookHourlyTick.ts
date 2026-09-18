@@ -24,6 +24,21 @@ function parseHourlySlot(slot: string): Date | null {
 }
 
 /**
+ * Activity rows persist the normalized license at top level. Some older
+ * rows also copied it into details; top-level is canonical, details is only
+ * compatibility fallback. Reading details alone can create new account-only
+ * Outlook rows and make the same history disappear when the customer later
+ * reads it with a bound account+PIN.
+ */
+export function hourlyLicenseKeyFromActivity(row: Record<string, unknown> | null | undefined): string {
+  if (!row) return "";
+  const topLevel = String(row["license_key"] ?? "").trim();
+  if (topLevel) return topLevel;
+  const details = (row["details"] as Record<string, unknown> | undefined) ?? {};
+  return String(details["license_key"] ?? "").trim();
+}
+
+/**
  * Port of market_outlook.py:1794 `hourly_generation_tick` -- generates at
  * most one NEW outlook per (account, symbol, UTC hourly slot) that has
  * posted EA evidence recently. Returns [publishedCount, actionableDocs].
@@ -55,9 +70,11 @@ export async function hourlyGenerationTick(account = ""): Promise<[number, Recor
       }
     }
 
-    let licKey = "";
-    const row = await db.collection("cloud_bot_activity").findOne({ account: acct }, { projection: { _id: 0, details: 1 }, sort: { ts: -1 } });
-    if (row) licKey = String((row["details"] as Record<string, unknown> | undefined)?.["license_key"] ?? "");
+    const row = await db.collection("cloud_bot_activity").findOne(
+      { account: acct },
+      { projection: { _id: 0, license_key: 1, details: 1 }, sort: { ts: -1 } },
+    );
+    const licKey = hourlyLicenseKeyFromActivity(row as Record<string, unknown> | null);
 
     try {
       const doc = await generateOutlookForAccount({ license_key: licKey, account: acct, account_id: acct, is_late_catchup: isLateCatchup });
