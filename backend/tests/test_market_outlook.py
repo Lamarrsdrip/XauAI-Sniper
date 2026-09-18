@@ -484,17 +484,25 @@ def _outlook_gen_body() -> str:
     return fn[:fn.index("\n\nasync def publish_m10_signal_from_activity")]
 
 
-def test_outlook_prefers_ea_reported_price_over_external_feed():
+def test_outlook_uses_ea_reported_price_and_never_calls_external_feed():
     body = _outlook_gen_body()
-    ea_price_idx = body.index("evidence_quote = extract_evidence_quote")
-    fallback_idx = body.index("await srv.fetch_live_gold_price()")
-    assert ea_price_idx < fallback_idx, "EA-reported price must be checked before the external fallback feed is ever called"
+    assert "evidence_quote = extract_evidence_quote" in body
+    assert 'ea_mid = float(evidence_quote.get("mid") or 0.0)' in body
+    assert "current_price = ea_mid" in body
+    assert 'price_source = "EA_LIVE_BROKER_PRICE"' in body
+    # Current production contract is stricter than the old fallback policy:
+    # broker/account price must come from the EA evidence snapshot. A third-
+    # party quote must never be substituted into zone/SL/TP geometry.
+    assert "await srv.fetch_live_gold_price()" not in body
 
 
-def test_outlook_refuses_stale_fallback_constant_as_a_usable_price():
+def test_outlook_refuses_missing_ea_quote_instead_of_using_stale_fallback():
     body = _outlook_gen_body()
-    assert 'price_info.get("source") == "live"' in body
-    assert "fallback_stale_constant" in MO_SRC or "fallback_stale_constant" in SERVER_SRC
+    assert "if not evidence or current_price <= 0:" in body
+    assert 'price_source = "NONE"' in body
+    assert "current_price = 0.0" in body
+    assert "await srv.fetch_live_gold_price()" not in body
+    assert "fallback_stale_constant" not in body
 
 
 def test_outlook_has_price_sanity_gate_bounded_by_atr_not_fixed_dollars():

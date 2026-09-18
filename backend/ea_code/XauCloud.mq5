@@ -1981,8 +1981,8 @@
 // this field is MQL5-Market-only bookkeeping, unrelated to the real,
 // authoritative version string below (XAUAI_EA_VERSION), which is what the
 // header banner, filenames, and website display all actually use.
-#property version   "6.286"
-#property description "XauCloud v6.28.6 — M10 production"
+#property version   "6.281"
+#property description "XAUCloud-Fixed-B1: candidate -- blocks clean-continuation grade-B"
 #property description "M10_ORIGINATED_CANDIDATE (audit-proven net-negative bucket)."
 #property description "Exhaustion is evidence-only -- it cannot open a trade at any percentage."
 #property description "Primary timeframe M10. Approved entries use full configured risk"
@@ -2071,7 +2071,7 @@ XAU_FinalRiskGeometry XAU_ComputeFinalRiskGeometry(double structuralDistance)
 
 #define XAUAI_EA_VERSION "XauCloud_v6.28.6"
 #define XAUAI_EA_VERSION_NUM "6.286"
-#define XAUAI_BUILD_HASH "xaucloud-v6.28.6-hive-pin-retired-fanout-20260917"
+#define XAUAI_BUILD_HASH "xaucloud-fixed-b1-no-ea-shadowml-globalbrain-v4-20260902"
 
 // v6.26.0 owner directive (2026-08-05): permanent migration off the R
 // (risk-multiple) measurement system. Every internal exit/protection
@@ -2825,7 +2825,7 @@ input bool   InpReEntryBetterPriceOnly = true; // After a loss, do not auto re-e
 input int    InpReEntrySnapshotMaxBars = 3; // v6.24.3: a re-entry approval cannot survive more than this many closed M5 bars
 
 input group "=== SMART FILTERS ==="
-input bool   InpUseDXYFilter   = true;     // Skip trades fighting DXY direction (GetDXYBias; unknown = no filter)
+input bool   InpUseDXYFilter   = true;     // Skip trades fighting DXY direction
 input int    InpDXYRefreshSec  = 900;      // Refresh DXY every N seconds (15min)
 input bool   InpDrawdownMode   = true;     // Tracks loss state for quality diagnostics; never reduces approved normal-trade risk
 input int    InpDrawdownLosses = 5;        // v6.3.2: raised 3→5 — 3 micro-losses were triggering half-risk mode all day
@@ -13471,12 +13471,7 @@ int GetHiveVerdict(string signature)
 
    string url = InpServerURL + "/api/ml/hive/score";
    string headers = "Content-Type: application/json\r\n";
-   string body = StringFormat(
-      "{\"signature\":\"%s\",\"window_days\":7,\"pin\":\"%s\",\"account\":\"%I64d\",\"account_id\":\"%I64d\"}",
-      signature,
-      BotMonitorJsonSafe(InpLicensePIN, 32),
-      AccountInfoInteger(ACCOUNT_LOGIN),
-      AccountInfoInteger(ACCOUNT_LOGIN));
+   string body = StringFormat("{\"signature\":\"%s\",\"window_days\":7}", signature);
    char pd[], result[]; string rh;
    StringToCharArray(body, pd, 0, StringLen(body));
    int res = WebRequest("POST", url, headers, 8000, pd, result, rh);
@@ -13538,12 +13533,7 @@ int GetDXYBias()
    string url = InpServerURL + "/api/smart/dxy";
    char pd[], result[]; string rh;
    int res = WebRequest("GET", url, "", 6000, pd, result, rh);
-   if(res != 200)
-   {
-      dxyLastFetch = TimeCurrent();
-      dxyGoldBias = "unknown";
-      return 0;
-   }
+   if(res != 200) return 0;
    string response = CharArrayToString(result);
    dxyLastFetch = TimeCurrent();
    if(StringFind(response, "\"gold_bias\":\"bullish\"") >= 0) { dxyGoldBias = "bullish"; return  1; }
@@ -45458,7 +45448,7 @@ void BotMonitorHeartbeat()
    string body = StringFormat(
       "{\"pin\":\"%s\",\"license_key\":\"%s\",\"bot_online\":true,\"ea_version\":\"%s\",\"build_hash\":\"%s\","
       "\"input_hash\":\"%s\",\"account_number\":\"%I64d\","
-      "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M10\",\"digits\":%d,\"point\":%.8f,"
+      "\"broker_server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M5\",\"digits\":%d,\"point\":%.8f,"
       "\"magic_number\":%d,\"spread\":%.0f,\"avg_spread\":%.1f,"
       "\"equity\":%.2f,\"balance\":%.2f,\"daily_pnl\":%.2f,\"drawdown\":%.2f,"
       "\"open_positions\":%d,\"algo_trading\":%s,\"trading_allowed\":%s,"
@@ -45624,8 +45614,7 @@ void XAU_FetchOutlookThesis()
    ResetLastError();
    string url = InpCloudURL + "/api/cloud/outlook/thesis?pin=" +
                 BotMonitorJsonSafe(InpLicensePIN, 32) +
-                "&account=" + (string)AccountInfoInteger(ACCOUNT_LOGIN) +
-                "&symbol=" + Symbol();
+                "&account=" + (string)AccountInfoInteger(ACCOUNT_LOGIN);
    int code = WebRequest("GET", url, hdr, InpCloudTimeoutMs, pd, res, rh);
    if(code != 200 || ArraySize(res) == 0) return;
 
@@ -46401,29 +46390,160 @@ string CloudPostSignal(string symbol, string side, double entry, double sl, doub
                        string grade, double riskHintPct,
                        double masterLots, double masterBalance)
 {
-   // Retired copy-trading master fanout (backend returns HTTP 410).
-   return "";
+   if(!CloudEnabled()) return "";
+   string body = StringFormat(
+      "{\"symbol\":\"%s\",\"side\":\"%s\",\"entry\":%.5f,\"sl\":%.5f,\"tp\":%.5f,"
+      "\"grade\":\"%s\",\"risk_hint_pct\":%.3f,"
+      "\"master_lots\":%.2f,\"master_balance\":%.2f}",
+      symbol, side, entry, sl, tp, grade, riskHintPct, masterLots, masterBalance);
+   char pd[], res[]; string rh;
+   StringToCharArray(body, pd, 0, StringLen(body));
+   string url = InpCloudURL + "/api/cloud/master/signal";
+   string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   int code = WebRequest("POST", url, hdr, InpCloudTimeoutMs, pd, res, rh);
+   if(code != 200)
+   {
+      Print("☁  CLOUD signal POST failed: http=", code, " err=", GetLastError(),
+            " (check WebRequest whitelist for ", InpCloudURL, ")");
+      XAU_IntelAppend("CLOUD_SIGNAL", "", 0, side == "BUY" ? 1 : (side == "SELL" ? -1 : 0),
+                      "", grade, "", (int)currentRegime, SessionTag(), "CLOUD",
+                      "SIGNAL_POST", "CLOUD_SIGNAL_POST_FAILED",
+                      0.0, 0.0, 0.0, entry, entry, 0.0, masterLots, sl, tp,
+                      0.0, 0.0, 0, 0, 0.0, 0.0, "",
+                      "cloud signal POST failed", "", code, false,
+                      "url=" + InpCloudURL + " err=" + (string)GetLastError());
+      return "";
+   }
+   string resp = CharArrayToString(res);
+   string sigId = JsonStr(resp, "signal_id");
+   Print("☁  CLOUD signal fanout OK — signal_id=", sigId, " ", side, " @", entry,
+         " masterLots=", DoubleToString(masterLots,2), " masterBal=$", DoubleToString(masterBalance,0));
+   XAU_IntelAppend("CLOUD_SIGNAL", sigId, 0, side == "BUY" ? 1 : (side == "SELL" ? -1 : 0),
+                   "", grade, "", (int)currentRegime, SessionTag(), "CLOUD",
+                   "SIGNAL_POST", "CLOUD_SIGNAL_POST_OK",
+                   0.0, 0.0, 0.0, entry, entry, 0.0, masterLots, sl, tp,
+                   0.0, 0.0, 0, 0, 0.0, 0.0, "",
+                   "cloud signal accepted", sigId, code, true,
+                   "masterBalance=" + DoubleToString(masterBalance, 2));
+   return sigId;
 }
 
 void CloudPostSignalClose(string sigId, double exitPrice, string reason)
 {
-   return;
+   if(!CloudEnabled() || StringLen(sigId) < 4) return;
+   // strip quotes and trim reason
+   string r = reason;
+   StringReplace(r, "\"", "'");
+   if(StringLen(r) > 120) r = StringSubstr(r, 0, 120);
+   string body = StringFormat("{\"signal_id\":\"%s\",\"exit_price\":%.5f,\"reason\":\"%s\"}",
+                              sigId, exitPrice, r);
+   char pd[], res[]; string rh;
+   StringToCharArray(body, pd, 0, StringLen(body));
+   string url = InpCloudURL + "/api/cloud/master/signal-close";
+   string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   int code = WebRequest("POST", url, hdr, InpCloudTimeoutMs, pd, res, rh);
+   if(code != 200)
+   {
+      Print("☁  CLOUD close POST failed: http=", code, " err=", GetLastError());
+      XAU_IntelAppend("CLOUD_CLOSE", sigId, 0, 0, "", "", "", (int)currentRegime,
+                      SessionTag(), "CLOUD", "CLOSE_POST", "CLOUD_CLOSE_POST_FAILED",
+                      0.0, 0.0, 0.0, exitPrice, 0.0, exitPrice, 0.0, 0.0, 0.0,
+                      0.0, 0.0, 0, 0, 0.0, 0.0, "", reason, sigId, code, false,
+                      "err=" + (string)GetLastError());
+   }
+   else
+   {
+      Print("☁  CLOUD close fanout OK — signal_id=", sigId, " exit=", exitPrice);
+      XAU_IntelAppend("CLOUD_CLOSE", sigId, 0, 0, "", "", "", (int)currentRegime,
+                      SessionTag(), "CLOUD", "CLOSE_POST", "CLOUD_CLOSE_POST_OK",
+                      0.0, 0.0, 0.0, exitPrice, 0.0, exitPrice, 0.0, 0.0, 0.0,
+                      0.0, 0.0, 0, 0, 0.0, 0.0, "", reason, sigId, code, true,
+                      "");
+   }
 }
 
 void CloudPostSignalPartial(string sigId, double exitPrice, double closePct, string reason)
 {
-   return;
+   if(!CloudEnabled() || StringLen(sigId) < 4 || closePct <= 0) return;
+   string r = reason;
+   StringReplace(r, "\"", "'");
+   if(StringLen(r) > 120) r = StringSubstr(r, 0, 120);
+   string body = StringFormat("{\"signal_id\":\"%s\",\"exit_price\":%.5f,\"close_percent\":%.2f,\"reason\":\"%s\"}",
+                              sigId, exitPrice, closePct, r);
+   char pd[], res[]; string rh;
+   StringToCharArray(body, pd, 0, StringLen(body));
+   string url = InpCloudURL + "/api/cloud/master/signal-partial";
+   string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   int code = WebRequest("POST", url, hdr, InpCloudTimeoutMs, pd, res, rh);
+   if(code != 200)
+   {
+      Print("☁  CLOUD partial POST failed: http=", code, " err=", GetLastError());
+      XAU_IntelAppend("CLOUD_PARTIAL", sigId, 0, 0, "", "", "", (int)currentRegime,
+                      SessionTag(), "CLOUD", "PARTIAL_POST", "CLOUD_PARTIAL_POST_FAILED",
+                      0.0, 0.0, 0.0, exitPrice, 0.0, exitPrice, closePct, 0.0, 0.0,
+                      0.0, 0.0, 0, 0, 0.0, 0.0, "", reason, sigId, code, false,
+                      "closePct=" + DoubleToString(closePct, 2) + " err=" + (string)GetLastError());
+   }
+   else
+   {
+      Print("☁  CLOUD partial fanout OK — signal_id=", sigId,
+            " closePct=", DoubleToString(closePct, 1), "% exit=", exitPrice);
+      XAU_IntelAppend("CLOUD_PARTIAL", sigId, 0, 0, "", "", "", (int)currentRegime,
+                      SessionTag(), "CLOUD", "PARTIAL_POST", "CLOUD_PARTIAL_POST_OK",
+                      0.0, 0.0, 0.0, exitPrice, 0.0, exitPrice, closePct, 0.0, 0.0,
+                      0.0, 0.0, 0, 0, 0.0, 0.0, "", reason, sigId, code, true,
+                      "closePct=" + DoubleToString(closePct, 2));
+   }
 }
 
 void CloudHeartbeat()
 {
-   return;
+   if(!CloudEnabled()) return;
+   char pd[], res[]; string rh;
+   StringToCharArray("{}", pd, 0, 2);
+   string url = InpCloudURL + "/api/cloud/master/heartbeat";
+   string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   WebRequest("POST", url, hdr, InpCloudTimeoutMs, pd, res, rh);
 }
 
-// v5.1.8 — admin bot-mode poll used the retired /cloud/master/config route.
+// v5.1.8 — pull the admin-set bot mode every ~60s so admins can flip
+// Conservative/Balanced/Aggressive from the dashboard without restarting MT5.
 void FetchBotMode()
 {
-   return;
+   if(!CloudEnabled()) return;
+   if(TimeCurrent() - g_modeLastFetch < g_modeFetchIntervalSec) return;
+   g_modeLastFetch = TimeCurrent();
+   char pd[], res[]; string rh;
+   StringToCharArray("", pd, 0, 0);
+   string url = InpCloudURL + "/api/cloud/master/config";
+   string hdr = "X-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   ResetLastError();
+   int code = WebRequest("GET", url, hdr, InpCloudTimeoutMs, pd, res, rh);
+   if(code != 200 || ArraySize(res) == 0) return;
+   string body = CharArrayToString(res);
+   // Quick string-based JSON parse (no nested-object library dependency)
+   string newMode = JsonStringField(body, "mode");
+   if(StringLen(newMode) == 0) return;
+   double newGradeB    = JsonNumberField(body, "gradeB");
+   double newFloor     = JsonNumberField(body, "scoreFloor");
+   double newCtxTF     = JsonNumberField(body, "contextTF");
+   string useHTF       = JsonStringField(body, "useHTFBias");
+   string adapt        = JsonStringField(body, "adaptiveTighten");
+   bool   useHTFBool   = (StringFind(useHTF, "true") >= 0);
+   bool   adaptBool    = (StringFind(adapt,  "true") >= 0);
+   bool changed = (newMode != g_modeName);
+   g_modeName        = newMode;
+   g_modeGradeB      = newGradeB;
+   g_modeScoreFloor  = newFloor;
+   g_modeContextTF   = (ENUM_TIMEFRAMES)((int)newCtxTF);
+   g_modeUseHTFBias  = useHTFBool;
+   g_modeUseHTFBiasSet = true;
+   g_modeAdaptive    = adaptBool;
+   g_modeAdaptiveSet = true;
+   if(changed)
+      PrintFormat("🎛 BOT MODE → %s (gradeB=%.1f, floor=%.2f, ctxTF=%d, useHTF=%s, adaptive=%s)",
+                  newMode, newGradeB, newFloor, (int)newCtxTF,
+                  useHTFBool?"true":"false", adaptBool?"true":"false");
 }
 
 // Tiny JSON helpers — extract one top-level field as string or number.
@@ -46556,8 +46676,40 @@ void CloudPostReasoning(string event_type, string reason, string regime, string 
                            "", "", false, false, false, false,
                            BotMonitorSignalName(signal_dir), "", "", combined_score,
                            (double)lastAIConfidence, signal_dir, grade, "");
-   // Retired copy-trading master fanout. Decision events still flow through
-   // BotMonitorDecisionEvent above (Command Center). Do not POST /cloud/master/reasoning.
+   if(!CloudEnabled()) return;
+   string r = CloudJsonSafe(reason, 240);
+   string ev = CloudJsonSafe(event_type, 32);
+   string rg = CloudJsonSafe(regime, 32);
+   string st = CloudJsonSafe(setup, 48);
+   string gr = CloudJsonSafe(grade, 24);
+   string body = StringFormat(
+      "{\"event_type\":\"%s\",\"reason\":\"%s\",\"regime\":\"%s\",\"setup\":\"%s\","
+      "\"setup_score\":%.2f,\"combined_score\":%.2f,\"grade\":\"%s\",\"signal_dir\":%d}",
+      ev, r, rg, st, setup_score, combined_score, gr, signal_dir);
+   char pd[], res[]; string rh;
+   StringToCharArray(body, pd, 0, StringLen(body));
+   string url = InpCloudURL + "/api/cloud/master/reasoning";
+   string hdr = "Content-Type: application/json\r\nX-Agent-Token: " + InpCloudAgentToken + "\r\n";
+   ResetLastError();
+   int code = WebRequest("POST", url, hdr, InpCloudTimeoutMs, pd, res, rh);
+   // v5.1.6: log explicit failure ONCE per error code so user can see auth/whitelist issues.
+   //         Without this, reasoning posts silently disappear and the cloud feed stays empty.
+   static int lastReportedCode = 0;
+   if(code != 200 && code != lastReportedCode)
+   {
+      string body_str = "";
+      if(ArraySize(res) > 0) body_str = CharArrayToString(res);
+      PrintFormat("[CloudReasoning] POST failed code=%d err=%d body=%s — check that '%s' is in MT5 → Tools → Options → Expert Advisors → Allowed URLs, AND that InpCloudAgentToken matches the master token in cloud_settings.agent_token.",
+                  code, GetLastError(),
+                  StringSubstr(body_str, 0, 120),
+                  InpCloudURL);
+      lastReportedCode = code;
+   }
+   else if(code == 200 && lastReportedCode != 0)
+   {
+      Print("[CloudReasoning] POST recovered — events flowing again.");
+      lastReportedCode = 0;
+   }
 }
 
 // Extract grade tag like "A+" / "A" / "B" from a reason string "SETUP [A+]"
