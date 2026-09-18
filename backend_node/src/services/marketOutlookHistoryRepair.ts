@@ -21,6 +21,7 @@ import { buildTrackingAnchor, fixedTpPrices, targetsHaveValidGeometry } from "./
 
 type Doc = Record<string, unknown>;
 type Quote = { bid: number; ask: number; at: Date };
+const HISTORY_REPAIR_ENGINE = "NODE_EVIDENCE_V3_20260918";
 
 function accountVariants(accountInput: string): Array<string | number> {
   const account = String(accountInput ?? "").trim();
@@ -60,6 +61,7 @@ async function markUnavailable(doc: Doc, reason: string): Promise<void> {
     signal_tracking_version: 2,
     signal_state: ANALYTICS_UNAVAILABLE,
     historical_repair_status: ANALYTICS_UNAVAILABLE,
+    historical_repair_engine: HISTORY_REPAIR_ENGINE,
     historical_data_unavailable_reason: reason,
     analytics_outcome: ANALYTICS_UNAVAILABLE,
     analytics_r: null,
@@ -198,7 +200,16 @@ export async function backfillSignalOutlookHistory(limit = 500): Promise<Outlook
   const now = new Date();
   const legacy = await db.collection("cloud_market_outlooks")
     .find(
-      { primary_direction: { $in: ["BUY", "SELL"] }, signal_tracking_version: { $ne: 2 } },
+      {
+        primary_direction: { $in: ["BUY", "SELL"] },
+        $or: [
+          { signal_tracking_version: { $ne: 2 } },
+          // Re-run old UNAVAILABLE classifications once under the corrected
+          // account/PIN/evidence lookup. The first Node migration could mark a
+          // real row unavailable simply because its MT5 login was BSON numeric.
+          { historical_repair_status: ANALYTICS_UNAVAILABLE, historical_repair_engine: { $ne: HISTORY_REPAIR_ENGINE } },
+        ],
+      },
       { projection: { _id: 0 } },
     )
     .sort({ generated_at: 1 })
@@ -354,6 +365,7 @@ export async function backfillSignalOutlookHistory(limit = 500): Promise<Outlook
     working = {
       ...working,
       historical_repair_status: "RECONSTRUCTED",
+      historical_repair_engine: HISTORY_REPAIR_ENGINE,
       historical_repaired_at: now.toISOString(),
       notification_flags: eventFlags(working),
     };
@@ -421,7 +433,10 @@ export async function backfillAllSignalOutlookHistory(
 
   total.backlog_remaining = await getDb().collection("cloud_market_outlooks").countDocuments({
     primary_direction: { $in: ["BUY", "SELL"] },
-    signal_tracking_version: { $ne: 2 },
+    $or: [
+      { signal_tracking_version: { $ne: 2 } },
+      { historical_repair_status: ANALYTICS_UNAVAILABLE, historical_repair_engine: { $ne: HISTORY_REPAIR_ENGINE } },
+    ],
   }) > 0;
   return total;
 }
