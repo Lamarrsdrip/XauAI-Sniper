@@ -27,9 +27,9 @@ describe("Manual Trading Intelligence broker quote persistence", () => {
     expect(state.writes).toHaveLength(3);
     for (const write of state.writes) {
       expect(write.key).toMatchObject({ account: "476396807", symbol: "XAUUSD" });
-      expect(write.update).toHaveLength(2);
+      expect(write.update).toHaveLength(1);
       expect(write.update[0]?.$set).toMatchObject({ source: "ea-stream(spot)" });
-      expect(write.update[1]?.$set).toEqual({ samples: { $size: "$sampleKeys" } });
+      expect(write.update[0]?.$set).not.toHaveProperty("sampleKeys");
     }
     expect(state.samples).toHaveLength(1);
     expect(receipt).toMatchObject({ persisted: true, normalizedSymbol: "XAUUSD", sourceAt: "2026-08-23T12:00:00.000Z", close: 4380.2895 });
