@@ -10,6 +10,7 @@ import { runMarketIntelligenceForEaRequest } from "../../services/marketIntellig
 import { resolveTrustedRuntimeEnvironment, type ResolvedRuntimeProvenance } from "../../services/accountProvenance.js";
 
 const NOISY_STALE_ERRORS = new Set(["MQL ERROR 5035"]);
+const OPERATIONAL_TELEMETRY_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 
 export function heartbeatMarketDetails(req: {
   license_key?: string;
@@ -77,6 +78,7 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
     doc["id"] = randomUUID();
     doc["ts"] = now.toISOString();
     doc["last_heartbeat"] = now.toISOString();
+    doc["expires_at"] = new Date(now.getTime() + OPERATIONAL_TELEMETRY_RETENTION_MS);
 
     if (licenseKey) {
       const updateResult = await db.collection("pin_licenses").updateOne(
@@ -96,7 +98,12 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
       doc["license_update_modified"] = updateResult.modifiedCount;
     }
 
-    await db.collection("cloud_bot_heartbeats").insertOne({ ...doc });
+    const heartbeatIdentity = { license_id: licenseId, account_number: account };
+    await db.collection("cloud_bot_heartbeats").updateOne(
+      heartbeatIdentity,
+      { $set: { ...doc } },
+      { upsert: true },
+    );
     await db.collection("cloud_settings").updateOne(
       { key: "main" },
       {
@@ -190,14 +197,6 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
     if (req.mt5_connected === false) {
       await storeBotActivity("MT5_DISCONNECTED", "CRITICAL", "MT5 disconnected", account, req.symbol || "", doc);
     }
-
-    const heartbeats = db.collection("cloud_bot_heartbeats");
-    const identity = { license_id: licenseId, account_number: account };
-    const totalForIdentity = await heartbeats.countDocuments(identity);
-    if (totalForIdentity > 1500) {
-      const oldest = await heartbeats.find(identity, { projection: { _id: 1, ts: 1 } }).sort({ ts: 1 }).limit(totalForIdentity - 1000).toArray();
-      if (oldest.length > 0) await heartbeats.deleteMany({ _id: { $in: oldest.map((o) => o["_id"]) } });
-    } // ASTRA_REPAIR_V2_6287 / 030
 
     return {
       ok: true,
