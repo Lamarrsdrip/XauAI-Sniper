@@ -81,10 +81,6 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
     await db.collection("cloud_bot_activity").createIndex({ account: 1, ts: 1 });
     await db.collection("cloud_bot_activity").createIndex({ normalized_symbol: 1, ts: -1 });
     await db.collection("cloud_bot_activity").createIndex({ account: 1, normalized_symbol: 1, ts: 1 });
-    await db.collection("cloud_bot_activity").createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 });
-    await db.collection("cloud_bot_heartbeats").createIndex({ license_id: 1, account_number: 1 });
-    await db.collection("cloud_bot_heartbeats").createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 });
-    await db.collection("manual_trading_broker_quote_samples").createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 });
     await db.collection("manual_trading_broker_candles").createIndex(
       { account: 1, symbol: 1, timeframe: 1, openTime: 1 },
       { unique: true },
@@ -173,6 +169,22 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
   if (repairedActivity) log.info(`[activity] repaired ${repairedActivity} legacy non-execution activity classifications`);
 
   const indexReport: string[] = [];
+  indexReport.push(await tryIndex(
+    "cloud_bot_heartbeats.identity",
+    () => db.collection("cloud_bot_heartbeats").createIndex({ license_id: 1, account_number: 1 }),
+  ));
+  indexReport.push(await tryIndex(
+    "cloud_bot_heartbeats.expires_at: TTL",
+    () => db.collection("cloud_bot_heartbeats").createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 }),
+  ));
+  indexReport.push(await tryIndex(
+    "cloud_bot_activity.expires_at: TTL",
+    () => db.collection("cloud_bot_activity").createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 }),
+  ));
+  indexReport.push(await tryIndex(
+    "manual_trading_broker_quote_samples.expires_at: TTL",
+    () => db.collection("manual_trading_broker_quote_samples").createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 }),
+  ));
   indexReport.push(await tryIndex("cloud_users.email: unique", () => db.collection("cloud_users").createIndex("email", { unique: true })));
   indexReport.push(await tryIndex("pin_licenses.pin: unique", () => db.collection("pin_licenses").createIndex("pin", { unique: true })));
   indexReport.push(
