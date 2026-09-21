@@ -6,6 +6,8 @@ import { recordDiagnostic } from "./diagnostics.js";
 import { normalizeGoldSymbol } from "./goldSymbol.js";
 import { hasMarketEvidence, recordImmutableMarketEvidence, type MarketEvidenceInput } from "./marketEvidenceLedger.js";
 
+const OPERATIONAL_ACTIVITY_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
+
 export interface BotActivityDetails {
   license_key?: string;
   reason?: string;
@@ -83,6 +85,7 @@ export async function storeBotActivity(
 ): Promise<Record<string, unknown>> {
   const db = getDb();
   const now = new Date();
+  const expiresAt = new Date(now.getTime() + OPERATIONAL_ACTIVITY_RETENTION_MS);
   const sev = (severity || "INFO").toUpperCase();
   const licenseKey = normalizeLicenseKey(String(details.license_key ?? ""));
   const ev = (eventType || "INFO").toUpperCase();
@@ -112,6 +115,7 @@ export async function storeBotActivity(
       ts: now.toISOString(),
       last_repeat_at: now.toISOString(),
       repeat_count: repeatCount,
+      expires_at: expiresAt,
       message: String(message ?? "").slice(0, 600),
       details,
       normalized_symbol: normalizeGoldSymbol(symbol),
@@ -140,6 +144,7 @@ export async function storeBotActivity(
     first_seen_at: now.toISOString(),
     last_repeat_at: now.toISOString(),
     repeat_count: 1,
+    expires_at: expiresAt,
     dedupe_key: dedupeKey,
     event_type: ev,
     severity: sev,
