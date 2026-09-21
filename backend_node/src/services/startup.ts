@@ -139,6 +139,10 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
         { expires_at: { $exists: false } },
         { $set: { expires_at: legacyExpiry } },
       ),
+      db.collection("cloud_market_evidence").updateMany(
+        { received_at: { $gte: cutoff }, expires_at: { $gt: legacyExpiry } },
+        { $set: { expires_at: legacyExpiry } },
+      ),
     ]);
 
     log.info(
