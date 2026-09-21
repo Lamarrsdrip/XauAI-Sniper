@@ -13,6 +13,7 @@ import { isGoldSymbol, normalizeGoldSymbol } from "./goldSymbol.js";
 import { createHash } from "node:crypto";
 const GOLD_MIN = 1000;
 const GOLD_MAX = 20_000;
+const RAW_QUOTE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 const TIMEFRAMES = [
   { name: "H1", seconds: 60 * 60 },
   { name: "H4", seconds: 4 * 60 * 60 },
@@ -73,7 +74,7 @@ export async function recordVerifiedManualTradingQuote(args: {
   const sourceOrderKey = `${sourceAt}|${sampleId}`;
   await db.collection<{ _id: string } & Record<string, unknown>>("manual_trading_broker_quote_samples").updateOne(
     { _id: sampleId },
-    { $setOnInsert: { account: args.account, symbol: normalizedSymbol, brokerSymbol: String(args.symbol), sourceAt, receivedAt, bid, ask, mid } },
+    { $setOnInsert: { account: args.account, symbol: normalizedSymbol, brokerSymbol: String(args.symbol), sourceAt, receivedAt, bid, ask, mid, expires_at: new Date(args.receivedAt.getTime() + RAW_QUOTE_RETENTION_MS) } },
     { upsert: true },
   );
 
@@ -101,8 +102,7 @@ export async function recordVerifiedManualTradingQuote(args: {
         lastOrderKey: { $cond: [{ $or: [{ $eq: [{ $ifNull: ["$lastSourceAt", null] }, null] }, { $lt: [{ $ifNull: ["$lastOrderKey", { $concat: ["$lastSourceAt", "|"] }] }, sourceOrderKey] }] }, sourceOrderKey, { $ifNull: ["$lastOrderKey", { $concat: ["$lastSourceAt", "|"] }] }] },
         firstReceivedAt: { $min: [{ $ifNull: ["$firstReceivedAt", receivedAt] }, receivedAt] },
         lastReceivedAt: { $max: [{ $ifNull: ["$lastReceivedAt", receivedAt] }, receivedAt] },
-        sampleKeys: { $setUnion: [{ $ifNull: ["$sampleKeys", []] }, [sampleId]] },
-      }}, { $set: { samples: { $size: "$sampleKeys" } } }],
+      }}],
       { upsert: true },
     );
   }));
