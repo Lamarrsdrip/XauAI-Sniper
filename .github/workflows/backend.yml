@@ -142,3 +142,22 @@ jobs:
             python -m pytest "$f" -v --tb=short
             echo "::endgroup::"
           done
+
+
+  # Temporary audit-branch handoff: only publishes the exact checkout after
+  # BOTH production backend stacks have passed. The artifact is used for a
+  # second, local release gate before main is touched, then this job is
+  # removed from the final branch.
+  verified-source-artifact:
+    needs: [production-node-test, legacy-python-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package exact verified checkout
+        uses: actions/upload-artifact@v4
+        with:
+          name: xaucloud-audit-source
+          path: .
+          include-hidden-files: true
+          retention-days: 1
