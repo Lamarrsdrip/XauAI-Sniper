@@ -154,7 +154,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Package exact verified checkout
+      # The local execution container is intentionally network-isolated.
+      # Carry the exact lockfile-installed Node dependencies with the
+      # verified source so the second release gate can genuinely rebuild
+      # locally instead of pretending CI itself was a local build.
+      - name: Set up Node for portable local gate
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install backend dependencies for local gate
+        working-directory: backend_node
+        run: npm ci
+
+      - name: Install frontend dependencies for local gate
+        working-directory: frontend
+        run: npm ci
+
+      - name: Package exact verified checkout with dependencies
         uses: actions/upload-artifact@v4
         with:
           name: xaucloud-audit-source
