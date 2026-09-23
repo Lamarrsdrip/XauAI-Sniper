@@ -353,6 +353,41 @@ def test_cross_license_ack_rejected():
     _run(go())
 
 
+def test_same_license_cannot_ack_command_bound_to_different_account():
+    async def go():
+        await _cleanup()
+        user = await _seed_user_and_license("owner15b@test.com", "ASE-TEST-0015B", account="1000001")
+        created = await srv.cloud_command_request(
+            srv.CloudCommandReq(action="FORCE_SYNC", pin="ASE-TEST-0015B", confirm=True, idempotency_key="cross-account-1"),
+            user,
+        )
+        cid = created["command_id"]
+        # Simulate historical/pre-reset command data still scoped to a
+        # different account under this PIN. License auth alone is not enough
+        # to authorize completion of that command.
+        await srv.db.cloud_bot_commands.update_one(
+            {"id": cid}, {"$set": {"mt5_account": "2000002"}}
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            await srv.cloud_command_ack(
+                srv.CloudCommandAckReq(
+                    command_id=cid,
+                    status="EXECUTED",
+                    pin="ASE-TEST-0015B",
+                    account="1000001",
+                ),
+                None,
+            )
+
+        assert exc.value.status_code == 403
+        assert exc.value.detail["reason"] == "COMMAND_ACCOUNT_MISMATCH"
+        stored = await srv.db.cloud_bot_commands.find_one({"id": cid})
+        assert stored["status"] == "PENDING"
+        await _cleanup()
+    _run(go())
+
+
 def test_recent_history_shows_only_own_commands():
     async def go():
         await _cleanup()
