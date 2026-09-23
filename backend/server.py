@@ -8022,7 +8022,23 @@ async def cloud_command_pending(request: Request, limit: int = 5,
 @api_router.post("/cloud/command/ack")
 async def cloud_command_ack(req: CloudCommandAckReq, request: Request):
     raw = _normalize_license_key(req.license_key or req.pin or "")
-    lic = await _resolve_monitor_license(raw, req.account or "", request)
+    account = str(req.account or "").strip()
+    if not account:
+        raise HTTPException(status_code=400, detail={
+            "ok": False,
+            "reason": "MISSING_MT5_ACCOUNT",
+            "message": "Command acknowledgement requires the MT5 account.",
+        })
+    lic = await _resolve_monitor_license(raw, account, request)
+    bound_account = str((lic or {}).get("mt5_account") or "").strip()
+    if not bound_account or bound_account != account:
+        raise HTTPException(status_code=403, detail={
+            "ok": False,
+            "reason": "MT5_ACCOUNT_BINDING_NOT_CONFIRMED",
+            "message": "License/account binding is not confirmed.",
+            "bound_account": bound_account,
+            "account": account,
+        })
     status = str(req.status or "").upper().strip()
     if status not in {"ACKED", "EXECUTED", "FAILED", "SKIPPED"}:
         raise HTTPException(status_code=400, detail="Invalid command acknowledgement status.")
