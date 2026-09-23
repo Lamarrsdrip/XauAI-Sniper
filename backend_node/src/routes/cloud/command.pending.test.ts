@@ -61,3 +61,79 @@ describe("GET /cloud/command/pending — no empty-account leak", () => {
     expect(ids).not.toContain("other-account");
   });
 });
+
+
+describe("POST /cloud/command/ack — account-bound command ownership", () => {
+  beforeEach(() => {
+    state.db = new FakeDb();
+  });
+
+  it("rejects an acknowledgement from the same license on a different MT5 account", async () => {
+    state.db.collection("cloud_bot_commands").docs.push({
+      id: "cmd-account-mismatch",
+      status: "PENDING",
+      license_key: "TESTPIN",
+      mt5_account: "222",
+      action: "PAUSE_NEW_TRADES",
+      label: "Pause new trades",
+      requested_at: "2026-09-23T12:00:00.000Z",
+    });
+
+    const app = await createApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/cloud/command/ack",
+      payload: {
+        command_id: "cmd-account-mismatch",
+        status: "EXECUTED",
+        pin: "TESTPIN",
+        account: "111",
+      },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({
+      detail: {
+        ok: false,
+        reason: "COMMAND_ACCOUNT_MISMATCH",
+        command_id: "cmd-account-mismatch",
+        command_account: "222",
+        account: "111",
+      },
+    });
+    expect(state.db.collection("cloud_bot_commands").docs[0]!["status"]).toBe("PENDING");
+  });
+
+  it("allows the matching bound account to complete the command", async () => {
+    state.db.collection("cloud_bot_commands").docs.push({
+      id: "cmd-account-match",
+      status: "PENDING",
+      license_key: "TESTPIN",
+      mt5_account: "111",
+      action: "PAUSE_NEW_TRADES",
+      label: "Pause new trades",
+      requested_at: "2026-09-23T12:00:00.000Z",
+    });
+
+    const app = await createApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/cloud/command/ack",
+      payload: {
+        command_id: "cmd-account-match",
+        status: "EXECUTED",
+        pin: "TESTPIN",
+        account: "111",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      ok: true,
+      command_id: "cmd-account-match",
+      status: "EXECUTED",
+      applied: true,
+    });
+    expect(state.db.collection("cloud_bot_commands").docs[0]!["status"]).toBe("EXECUTED");
+  });
+});
