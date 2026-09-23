@@ -277,3 +277,60 @@ describe("POST /journal/log -- Global Brain runtime provenance is server-resolve
     expect(state.db.collection("global_brain_observations").docs[0]!["provenance"]).toMatchObject({ environment: "DEMO", environment_source: "EA_REPORTED" });
   });
 });
+
+
+describe("POST /journal/log — additive broker P&L contract fields", () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    state.db = new FakeDb();
+    reconcileTradeJournalEntry.mockClear();
+    reconcileTradeJournalEntry.mockResolvedValue(null);
+    sendClosedJournalTradeNotification.mockClear();
+    sendClosedJournalTradeNotification.mockResolvedValue(1);
+    app = await createApp();
+  });
+
+  it("preserves explicit gross/net/fees/schema-version fields from newer EAs", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/journal/log",
+      payload: closedTradePayload({
+        ticket: 4004,
+        gross_profit: 150,
+        net_profit: 125,
+        fees: -5,
+        commission: -15,
+        swap: -5,
+        schema_version: "trade-journal-v2",
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "ok" });
+    expect(state.db.collection("trade_journal").docs[0]).toMatchObject({
+      gross_profit: 150,
+      net_profit: 125,
+      fees: -5,
+      commission: -15,
+      swap: -5,
+      schema_version: "trade-journal-v2",
+    });
+  });
+
+  it("does not invent zero-valued explicit P&L fields for legacy EA payloads", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/journal/log",
+      payload: closedTradePayload({ ticket: 4005 }),
+    });
+
+    expect(response.json()).toMatchObject({ status: "ok" });
+    const stored = state.db.collection("trade_journal").docs[0]!;
+    expect(stored["net_profit"]).toBeUndefined();
+    expect(stored["gross_profit"]).toBeUndefined();
+    expect(stored["fees"]).toBeUndefined();
+    expect(stored["schema_version"]).toBeUndefined();
+    expect(stored["profit"]).toBe(125);
+  });
+});
