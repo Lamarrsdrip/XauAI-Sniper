@@ -196,6 +196,20 @@ export async function registerCloudCommandRoutes(app: FastifyInstance): Promise<
         },
       });
     }
+    const commandAccount = String(command["mt5_account"] ?? command["account"] ?? "").trim();
+    const authenticatedAccount = String(lic?.["mt5_account"] ?? req.account ?? "").trim();
+    if (commandAccount && commandAccount !== authenticatedAccount) {
+      return reply.code(403).send({
+        detail: {
+          ok: false,
+          reason: "COMMAND_ACCOUNT_MISMATCH",
+          message: "This command belongs to a different MT5 account.",
+          command_id: req.command_id,
+          command_account: commandAccount,
+          account: authenticatedAccount,
+        },
+      });
+    }
 
     // Atomic conditional transition -- see commandStateMachine.ts. Terminal
     // statuses are never in any allowed-source set, so they can never be
