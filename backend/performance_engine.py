@@ -7,7 +7,8 @@ Design decisions made explicit here (see the audit doc for the
 reasoning behind each):
 
 - WIN/LOSS/BE is reclassified server-side from net realized result
-  (profit + commission + swap) against a configurable break-even
+  (explicit net when reported; otherwise gross/legacy profit plus
+  commission, swap and fees) against a configurable break-even
   tolerance -- never trusts the EA-reported `result` field directly,
   since older EA versions didn't reliably fold commission/swap into
   their own classification.
@@ -37,12 +38,27 @@ DEFAULT_BREAK_EVEN_TOLERANCE_USD = 1.0
 
 
 def net_result(trade: dict) -> float:
-    """Net realized result after commission, swap and fees -- never the
-    raw `profit` field alone."""
-    profit = float(trade.get("profit") or 0)
+    """Canonical realized result, matching the production Node engine.
+
+    Newer EA payloads may report an explicit broker-confirmed net result.
+    Otherwise use explicit gross result plus costs when available, then
+    fall back to the legacy profit field plus commission/swap/fees.
+    Missing fields are absent/null, not an invented explicit zero.
+    """
+    explicit_net = trade.get("net_profit")
+    if explicit_net is not None:
+        return float(explicit_net)
+
     commission = float(trade.get("commission") or 0)
     swap = float(trade.get("swap") or 0)
-    return profit + commission + swap
+    fees = float(trade.get("fees") or 0)
+
+    explicit_gross = trade.get("gross_profit")
+    if explicit_gross is not None:
+        return float(explicit_gross) + commission + swap + fees
+
+    profit = float(trade.get("profit") or 0)
+    return profit + commission + swap + fees
 
 
 def classify_trade(trade: dict, be_tolerance_usd: float = DEFAULT_BREAK_EVEN_TOLERANCE_USD) -> str:

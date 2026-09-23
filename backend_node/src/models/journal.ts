@@ -26,6 +26,13 @@ export const TradeJournalEntrySchema = z.object({
   closed_at: z.number().optional().default(0),
   commission: z.number().optional().default(0),
   swap: z.number().optional().default(0),
+  // Additive broker/P&L contract fields. Keep these truly optional: older
+  // EAs do not send them, and defaulting net_profit/gross_profit to zero
+  // would incorrectly override the legacy `profit` value downstream.
+  gross_profit: z.number().optional(),
+  net_profit: z.number().optional(),
+  fees: z.number().optional(),
+  schema_version: z.union([z.string(), z.number()]).optional(),
   original_risk_usd: z.number().optional().default(0),
   final_r: z.number().optional().default(0),
   mae_r: z.number().optional().default(0),

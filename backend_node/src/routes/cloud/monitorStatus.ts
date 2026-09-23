@@ -17,6 +17,29 @@ function dtOrNull(iso: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/**
+ * Heartbeat reads must stay inside the authenticated license boundary.
+ * When an account is already bound, account_number narrows the license
+ * scope; it must never be an alternative identity (license OR account),
+ * because that can surface another license's fresher heartbeat.
+ */
+export function buildMonitorHeartbeatQuery(
+  licenseId: string,
+  licenseKey: string,
+  account: string,
+): Record<string, unknown> | null {
+  const licenseClauses: Record<string, unknown>[] = [];
+  if (licenseId) licenseClauses.push({ license_id: licenseId });
+  if (licenseKey) licenseClauses.push({ license_key: licenseKey }, { pin: licenseKey });
+  if (licenseClauses.length === 0) return null;
+
+  const licenseScope: Record<string, unknown> =
+    licenseClauses.length === 1 ? licenseClauses[0]! : { $or: licenseClauses };
+  return account
+    ? { $and: [licenseScope, { account_number: account }] }
+    : licenseScope;
+}
+
 /** Port of server.py:8099 `GET /cloud/monitor/status` -- the Command Center's main health/setup panel. */
 export async function registerCloudMonitorStatusRoutes(app: FastifyInstance): Promise<void> {
   app.get("/cloud/monitor/status", { preHandler: requireCloudUser }, async (request) => {
@@ -24,14 +47,10 @@ export async function registerCloudMonitorStatusRoutes(app: FastifyInstance): Pr
     const db = getDb();
     const lic = await getUserLicense(user);
     const licenseKey = normalizeLicenseKey(String(lic?.["pin"] ?? ""));
+    const licenseId = String(lic?.["id"] ?? "").trim();
     let accountFilter = String(lic?.["mt5_account"] ?? "").trim();
 
-    const hbFilters: Record<string, unknown>[] = [];
-    if (licenseKey) {
-      hbFilters.push({ license_key: licenseKey }, { pin: licenseKey });
-    }
-    if (accountFilter) hbFilters.push({ account_number: accountFilter });
-    const hbQuery = hbFilters.length > 0 ? { $or: hbFilters } : null;
+    const hbQuery = buildMonitorHeartbeatQuery(licenseId, licenseKey, accountFilter);
     const hb = hbQuery
       ? await db.collection("cloud_bot_heartbeats").findOne(hbQuery, { projection: { _id: 0 }, sort: { ts: -1 } })
       : null;

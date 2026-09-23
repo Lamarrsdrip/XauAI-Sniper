@@ -5525,6 +5525,13 @@ class TradeJournalEntry(BaseModel):
     closed_at: int = 0          # unix seconds, broker deal time
     commission: float = 0
     swap: float = 0
+    # Additive explicit broker/P&L fields used by newer EAs. None means the
+    # legacy payload did not report that field; never invent a zero because
+    # downstream analytics distinguish "not reported" from a real 0.00.
+    gross_profit: Optional[float] = None
+    net_profit: Optional[float] = None
+    fees: Optional[float] = None
+    schema_version: Optional[Any] = None
     original_risk_usd: float = 0
     final_r: float = 0
     mae_r: float = 0
@@ -5564,7 +5571,10 @@ async def log_trade_journal(entry: TradeJournalEntry, request: Request):
         return {"status": "error", "detail": "Invalid or inactive license."}
     _rate_limit(f"journal_log_pin:{entry.pin}", max_requests=60, window_seconds=300)
     try:
-        doc = entry.dict()
+        # Preserve explicit newer fields when supplied, but omit Optional
+        # fields that an older EA never sent so null cannot masquerade as an
+        # explicit zero/net result in the Node analytics path.
+        doc = entry.dict(exclude_none=True)
         doc.pop("pin", None)
         doc["license_id"] = lic.get("id", "")
         doc["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -8012,7 +8022,23 @@ async def cloud_command_pending(request: Request, limit: int = 5,
 @api_router.post("/cloud/command/ack")
 async def cloud_command_ack(req: CloudCommandAckReq, request: Request):
     raw = _normalize_license_key(req.license_key or req.pin or "")
-    lic = await _resolve_monitor_license(raw, req.account or "", request)
+    account = str(req.account or "").strip()
+    if not account:
+        raise HTTPException(status_code=400, detail={
+            "ok": False,
+            "reason": "MISSING_MT5_ACCOUNT",
+            "message": "Command acknowledgement requires the MT5 account.",
+        })
+    lic = await _resolve_monitor_license(raw, account, request)
+    bound_account = str((lic or {}).get("mt5_account") or "").strip()
+    if not bound_account or bound_account != account:
+        raise HTTPException(status_code=403, detail={
+            "ok": False,
+            "reason": "MT5_ACCOUNT_BINDING_NOT_CONFIRMED",
+            "message": "License/account binding is not confirmed.",
+            "bound_account": bound_account,
+            "account": account,
+        })
     status = str(req.status or "").upper().strip()
     if status not in {"ACKED", "EXECUTED", "FAILED", "SKIPPED"}:
         raise HTTPException(status_code=400, detail="Invalid command acknowledgement status.")
@@ -8026,6 +8052,17 @@ async def cloud_command_ack(req: CloudCommandAckReq, request: Request):
             "reason": "COMMAND_LICENSE_MISMATCH",
             "message": "This command belongs to a different license.",
             "command_id": req.command_id,
+        })
+    command_account = str(command.get("mt5_account") or command.get("account") or "").strip()
+    authenticated_account = str((lic or {}).get("mt5_account") or req.account or "").strip()
+    if command_account and command_account != authenticated_account:
+        raise HTTPException(status_code=403, detail={
+            "ok": False,
+            "reason": "COMMAND_ACCOUNT_MISMATCH",
+            "message": "This command belongs to a different MT5 account.",
+            "command_id": req.command_id,
+            "command_account": command_account,
+            "account": authenticated_account,
         })
 
     # v6.25.6 XAU-027 -- atomic conditional transition. The filter requires
@@ -8150,14 +8187,29 @@ async def cloud_prop_firm_config(user: dict = Depends(get_cloud_user)):
 async def cloud_monitor_status(user: dict = Depends(get_cloud_user)):
     lic = await _get_user_license(user)
     license_key = _normalize_license_key((lic or {}).get("pin", ""))
+    license_id = str((lic or {}).get("id") or "").strip()
     account_filter = str((lic or {}).get("mt5_account") or "").strip()
-    hb_filters = []
+    # License identity is the security boundary. A bound account narrows
+    # that scope; it must never become an OR alternative that can select a
+    # different license's fresher heartbeat on the same MT5 account.
+    hb_license_filters = []
+    if license_id:
+        hb_license_filters.append({"license_id": license_id})
     if license_key:
-        hb_filters.append({"license_key": license_key})
-        hb_filters.append({"pin": license_key})
-    if account_filter:
-        hb_filters.append({"account_number": account_filter})
-    hb_query = {"$or": hb_filters} if hb_filters else None
+        hb_license_filters.append({"license_key": license_key})
+        hb_license_filters.append({"pin": license_key})
+    hb_license_scope = (
+        hb_license_filters[0]
+        if len(hb_license_filters) == 1
+        else {"$or": hb_license_filters}
+        if hb_license_filters
+        else None
+    )
+    hb_query = (
+        {"$and": [hb_license_scope, {"account_number": account_filter}]}
+        if hb_license_scope and account_filter
+        else hb_license_scope
+    )
     hb = await db.cloud_bot_heartbeats.find_one(hb_query, {"_id": 0}, sort=[("ts", -1)]) if hb_query else None
     if hb and not account_filter and hb.get("account_number") and license_key:
         account_filter = str(hb.get("account_number") or "")
