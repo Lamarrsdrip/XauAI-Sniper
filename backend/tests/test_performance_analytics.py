@@ -171,6 +171,39 @@ def test_rich_payload_marked_has_rich_ledger_data():
     assert doc["family"] == "NORMAL"
 
 
+def test_performance_engine_prefers_explicit_net_profit_when_reported():
+    trade = {
+        "profit": 999.0,
+        "gross_profit": 150.0,
+        "net_profit": 125.0,
+        "commission": -15.0,
+        "swap": -5.0,
+        "fees": -5.0,
+    }
+    assert srv.performance_engine.net_result(trade) == 125.0
+
+
+def test_performance_engine_uses_explicit_gross_plus_all_costs_when_net_missing():
+    trade = {
+        "profit": 999.0,
+        "gross_profit": 150.0,
+        "commission": -15.0,
+        "swap": -5.0,
+        "fees": -5.0,
+    }
+    assert srv.performance_engine.net_result(trade) == 125.0
+
+
+def test_performance_engine_legacy_fallback_includes_fees():
+    trade = {
+        "profit": 150.0,
+        "commission": -15.0,
+        "swap": -5.0,
+        "fees": -5.0,
+    }
+    assert srv.performance_engine.net_result(trade) == 125.0
+
+
 def test_analytics_reports_insufficient_data_below_threshold():
     user = _run(_make_user_with_license("ASE-SPARSE1"))
     for i in range(3):  # below MINIMUM_VERIFIED_TRADES_FOR_ANALYTICS (5)
