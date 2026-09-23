@@ -353,6 +353,35 @@ def test_cross_license_ack_rejected():
     _run(go())
 
 
+def test_command_ack_requires_explicit_mt5_account():
+    async def go():
+        await _cleanup()
+        user = await _seed_user_and_license("owner15c@test.com", "ASE-TEST-0015C", account="1000001")
+        created = await srv.cloud_command_request(
+            srv.CloudCommandReq(action="FORCE_SYNC", pin="ASE-TEST-0015C", confirm=True, idempotency_key="missing-account-1"),
+            user,
+        )
+        cid = created["command_id"]
+
+        with pytest.raises(HTTPException) as exc:
+            await srv.cloud_command_ack(
+                srv.CloudCommandAckReq(
+                    command_id=cid,
+                    status="EXECUTED",
+                    pin="ASE-TEST-0015C",
+                    account="",
+                ),
+                None,
+            )
+
+        assert exc.value.status_code == 400
+        assert exc.value.detail["reason"] == "MISSING_MT5_ACCOUNT"
+        stored = await srv.db.cloud_bot_commands.find_one({"id": cid})
+        assert stored["status"] == "PENDING"
+        await _cleanup()
+    _run(go())
+
+
 def test_same_license_cannot_ack_command_bound_to_different_account():
     async def go():
         await _cleanup()
