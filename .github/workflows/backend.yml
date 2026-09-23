@@ -171,6 +171,11 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Preserve installed dependencies for network-isolated local gate
+        run: |
+          tar -czf .xaucloud-local-node-deps.tgz backend_node/node_modules frontend/node_modules
+          rm -rf backend_node/node_modules frontend/node_modules
+
       - name: Package exact verified checkout with dependencies
         uses: actions/upload-artifact@v4
         with:
