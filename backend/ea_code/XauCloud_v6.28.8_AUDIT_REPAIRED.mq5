@@ -5652,10 +5652,34 @@ struct XAU_PendingBrokerOpenState
    string   candidateEpisodeId;
    datetime submittedAt;
    ulong    brokerOrderId;
+   string   reservationId;
 };
 XAU_PendingBrokerOpenState g_pendingBrokerOpen[2];
+datetime g_pendingBrokerReservationRenewAt[2];
 
 int XAU_PendingBrokerOpenSlot(int direction) { return direction==1?0:1; }
+
+string XAU_PendingBrokerOpenUnsafeKey(int direction)
+{
+   return StringFormat("XAU_PEND_UNSAFE_%I64d_%d_%d",
+                       AccountInfoInteger(ACCOUNT_LOGIN),InpMagicNumber,
+                       XAU_PendingBrokerOpenSlot(direction));
+}
+
+void XAU_PendingBrokerOpenMarkUnsafe(int direction,string why)
+{
+   string key=XAU_PendingBrokerOpenUnsafeKey(direction);
+   GlobalVariableSet(key,1.0);
+   GlobalVariablesFlush();
+   PrintFormat("BROKER_OPEN_PENDING_DURABILITY_UNSAFE | direction=%s | why=%s | action=FAIL_CLOSED_AFTER_RESTART",
+               direction==1?"BUY":"SELL",why);
+}
+
+void XAU_PendingBrokerOpenClearUnsafe(int direction)
+{
+   string key=XAU_PendingBrokerOpenUnsafeKey(direction);
+   if(GlobalVariableCheck(key)) GlobalVariableDel(key);
+}
 
 string XAU_PendingBrokerOpenFilePath(int slot)
 {
@@ -5684,38 +5708,57 @@ void XAU_PendingBrokerOpenResetSlot(int slot)
 bool XAU_PendingBrokerOpenPersistSlot(int slot)
 {
    if(slot<0 || slot>1) return false;
+   int direction=slot==0?1:-1;
+   string path=XAU_PendingBrokerOpenFilePath(slot);
+   string tmp=XAU_PendingBrokerOpenTmpPath(slot);
    if(!g_pendingBrokerOpen[slot].active)
    {
-      FileDelete(XAU_PendingBrokerOpenFilePath(slot));
-      FileDelete(XAU_PendingBrokerOpenTmpPath(slot));
+      if(FileIsExist(path,FILE_COMMON) && !FileDelete(path,FILE_COMMON))
+         return false;
+      if(FileIsExist(tmp,FILE_COMMON)) FileDelete(tmp,FILE_COMMON);
+      XAU_PendingBrokerOpenClearUnsafe(direction);
       return true;
    }
    XAU_PendingBrokerOpenState st=g_pendingBrokerOpen[slot];
    string line=StringFormat(
-      "1|1|%s|%d|%s|%s|%d|%.10f|%.10f|%d|%d|%d|%.10f|%I64d|%d|%I64d|%s|%I64d|%I64u",
+      "1|2|%s|%d|%s|%s|%d|%.10f|%.10f|%d|%d|%d|%.10f|%I64d|%d|%I64d|%s|%I64d|%I64u|%s",
       XAU_PendingBrokerOpenSafeText(st.family),st.direction,
       XAU_PendingBrokerOpenSafeText(st.executionKey),XAU_PendingBrokerOpenSafeText(st.setupName),
       st.horizon,st.originalRiskDistance,st.effectiveRiskDistance,st.frozenEntryRegime,
       st.originalSignalDirection,st.breakoutInversionApplied?1:0,st.requestedTP,
       st.campaignIdAtSubmit,st.addNumber,(long)st.timingSourceBar,
-      XAU_PendingBrokerOpenSafeText(st.candidateEpisodeId),(long)st.submittedAt,st.brokerOrderId);
-   string tmp=XAU_PendingBrokerOpenTmpPath(slot);
-   int h=FileOpen(tmp,FILE_WRITE|FILE_TXT|FILE_ANSI);
+      XAU_PendingBrokerOpenSafeText(st.candidateEpisodeId),(long)st.submittedAt,st.brokerOrderId,
+      XAU_PendingBrokerOpenSafeText(st.reservationId));
+   int h=FileOpen(tmp,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
    if(h==INVALID_HANDLE) return false;
    FileWriteString(h,line); FileFlush(h); FileClose(h);
-   int hv=FileOpen(tmp,FILE_READ|FILE_TXT|FILE_ANSI);
+   int hv=FileOpen(tmp,FILE_READ|FILE_TXT|FILE_ANSI|FILE_COMMON);
    if(hv==INVALID_HANDLE) return false;
    string readBack=FileReadString(hv); FileClose(hv);
    if(readBack!=line) return false;
-   return FileMove(tmp,0,XAU_PendingBrokerOpenFilePath(slot),FILE_REWRITE);
+   if(!FileMove(tmp,FILE_COMMON,path,FILE_REWRITE))
+      return false;
+   XAU_PendingBrokerOpenClearUnsafe(direction);
+   return true;
 }
 
 bool XAU_PendingBrokerOpenLoadSlot(int slot)
 {
    XAU_PendingBrokerOpenResetSlot(slot);
    string path=XAU_PendingBrokerOpenFilePath(slot);
-   if(!FileIsExist(path,0)) return true;
-   int h=FileOpen(path,FILE_READ|FILE_TXT|FILE_ANSI);
+   int expectedDirection=slot==0?1:-1;
+   if(!FileIsExist(path,FILE_COMMON))
+   {
+      if(GlobalVariableCheck(XAU_PendingBrokerOpenUnsafeKey(expectedDirection)))
+      {
+         g_pendingBrokerOpen[slot].active=true;
+         g_pendingBrokerOpen[slot].family="CORRUPT_FAIL_CLOSED";
+         PrintFormat("BROKER_OPEN_PENDING_STATE_MISSING_AFTER_PERSIST_FAILURE | slot=%d | action=FAIL_CLOSED",slot);
+         return false;
+      }
+      return true;
+   }
+   int h=FileOpen(path,FILE_READ|FILE_TXT|FILE_ANSI|FILE_COMMON);
    if(h==INVALID_HANDLE)
    {
       g_pendingBrokerOpen[slot].active=true;
@@ -5725,7 +5768,7 @@ bool XAU_PendingBrokerOpenLoadSlot(int slot)
    }
    string line=FileReadString(h); FileClose(h);
    string p[]; int n=StringSplit(line,'|',p);
-   if(n!=19 || (int)StringToInteger(p[0])!=1 || (int)StringToInteger(p[1])!=1)
+   if(n!=20 || (int)StringToInteger(p[0])!=1 || (int)StringToInteger(p[1])!=2)
    {
       g_pendingBrokerOpen[slot].active=true;
       g_pendingBrokerOpen[slot].family="CORRUPT_FAIL_CLOSED";
@@ -5741,6 +5784,7 @@ bool XAU_PendingBrokerOpenLoadSlot(int slot)
    st.campaignIdAtSubmit=(long)StringToInteger(p[13]); st.addNumber=(int)StringToInteger(p[14]);
    st.timingSourceBar=(datetime)StringToInteger(p[15]); st.candidateEpisodeId=p[16];
    st.submittedAt=(datetime)StringToInteger(p[17]); st.brokerOrderId=(ulong)StringToInteger(p[18]);
+   st.reservationId=p[19];
    if(st.direction!=(slot==0?1:-1) || StringLen(st.family)==0 || StringLen(st.executionKey)==0)
    {
       g_pendingBrokerOpen[slot].active=true;
@@ -5749,6 +5793,8 @@ bool XAU_PendingBrokerOpenLoadSlot(int slot)
       return false;
    }
    g_pendingBrokerOpen[slot]=st;
+   XAU_PendingBrokerOpenClearUnsafe(st.direction);
+   g_pendingBrokerReservationRenewAt[slot]=0;
    PrintFormat("BROKER_OPEN_PENDING_RESTORED | family=%s | direction=%s | executionKey=%s | order=%I64u",
                st.family,st.direction==1?"BUY":"SELL",st.executionKey,st.brokerOrderId);
    return true;
@@ -5768,14 +5814,16 @@ void XAU_PendingBrokerOpenClear(int direction,string why)
                   g_pendingBrokerOpen[slot].family,direction==1?"BUY":"SELL",
                   g_pendingBrokerOpen[slot].executionKey,why);
    XAU_PendingBrokerOpenResetSlot(slot);
-   XAU_PendingBrokerOpenPersistSlot(slot);
+   g_pendingBrokerReservationRenewAt[slot]=0;
+   if(!XAU_PendingBrokerOpenPersistSlot(slot))
+      XAU_PendingBrokerOpenMarkUnsafe(direction,"CLEAR_DELETE_FAILED");
 }
 
 void XAU_PendingBrokerOpenArmCore(int direction,string executionKey,string setupName,
                                   ENUM_XAU_TRADE_HORIZON horizon,double originalRiskDistance,
                                   double effectiveRiskDistance,ENUM_REGIME frozenEntryRegime,
                                   int originalSignalDirection,bool breakoutInversionApplied,
-                                  double requestedTP,ulong brokerOrderId)
+                                  double requestedTP,string reservationId,ulong brokerOrderId)
 {
    int slot=XAU_PendingBrokerOpenSlot(direction);
    XAU_PendingBrokerOpenResetSlot(slot);
@@ -5788,15 +5836,16 @@ void XAU_PendingBrokerOpenArmCore(int direction,string executionKey,string setup
    g_pendingBrokerOpen[slot].originalSignalDirection=originalSignalDirection;
    g_pendingBrokerOpen[slot].breakoutInversionApplied=breakoutInversionApplied;
    g_pendingBrokerOpen[slot].requestedTP=requestedTP; g_pendingBrokerOpen[slot].submittedAt=TimeCurrent();
-   g_pendingBrokerOpen[slot].brokerOrderId=brokerOrderId;
+   g_pendingBrokerOpen[slot].brokerOrderId=brokerOrderId; g_pendingBrokerOpen[slot].reservationId=reservationId;
+   g_pendingBrokerReservationRenewAt[slot]=0;
    if(!XAU_PendingBrokerOpenPersistSlot(slot))
-      Print("BROKER_OPEN_PENDING_PERSIST_FAILED | family=CORE | action=IN_MEMORY_FENCE_RETAINED");
+      XAU_PendingBrokerOpenMarkUnsafe(direction,"CORE_PENDING_STATE_PERSIST_FAILED");
 }
 
 void XAU_PendingBrokerOpenArmPyramid(int direction,string executionKey,long campaignIdAtSubmit,
                                      int addNumber,datetime timingSourceBar,string candidateEpisodeId,
                                      double originalRiskDistance,double effectiveRiskDistance,
-                                     ulong brokerOrderId)
+                                     string reservationId,ulong brokerOrderId)
 {
    int slot=XAU_PendingBrokerOpenSlot(direction);
    XAU_PendingBrokerOpenResetSlot(slot);
@@ -5808,8 +5857,10 @@ void XAU_PendingBrokerOpenArmPyramid(int direction,string executionKey,long camp
    g_pendingBrokerOpen[slot].originalRiskDistance=originalRiskDistance;
    g_pendingBrokerOpen[slot].effectiveRiskDistance=effectiveRiskDistance;
    g_pendingBrokerOpen[slot].submittedAt=TimeCurrent(); g_pendingBrokerOpen[slot].brokerOrderId=brokerOrderId;
+   g_pendingBrokerOpen[slot].reservationId=reservationId;
+   g_pendingBrokerReservationRenewAt[slot]=0;
    if(!XAU_PendingBrokerOpenPersistSlot(slot))
-      Print("BROKER_OPEN_PENDING_PERSIST_FAILED | family=PYRAMID | action=IN_MEMORY_FENCE_RETAINED");
+      XAU_PendingBrokerOpenMarkUnsafe(direction,"PYRAMID_PENDING_STATE_PERSIST_FAILED");
 }
 
 // v6.24.14 — universal five-minute post-trade execution cooldown +
@@ -20562,7 +20613,7 @@ void CheckPyramidOpportunity()
                                          timingSourceBar,candidateEpisodeId,
                                          pyramidGeometry.finalOriginalRiskDistance,
                                          pyramidGeometry.effectiveHardStopDistance,
-                                         trade.ResultOrder());
+                                         pyramidReservationId,trade.ResultOrder());
       g_alignedCandidates[2].firstCandidateTime = 0;
       PrintFormat("PYRAMID_OPEN_NOT_CONFIRMED | requestOk=%s retcode=%u accepted=%s positionId=%I64u liveConfirmed=%s err=%d",
                   requestOk?"true":"false",pyramidRetcode,
@@ -25444,7 +25495,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                                       g_latestDecisionSnapshot.horizon,
                                       ownerOriginalOneRDistance,ownerEffectiveSLDistance,
                                       frozenEntryRegime,ownerOriginalSignalDirection,
-                                      breakoutInversionApplied,brokerTP,trade.ResultOrder());
+                                      breakoutInversionApplied,brokerTP,directionReservationId,trade.ResultOrder());
       PrintFormat("BROKER_OPEN_NOT_CONFIRMED | requestOk=%s retcode=%u accepted=%s positionId=%I64u liveConfirmed=%s",
                   requestOk?"true":"false", brokerRetcode,
                   XAU_BrokerOpenRetcodeAccepted(brokerRetcode)?"true":"false",
