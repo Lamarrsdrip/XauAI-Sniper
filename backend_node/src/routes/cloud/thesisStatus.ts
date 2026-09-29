@@ -8,7 +8,7 @@ export async function registerCloudThesisStatusRoutes(app: FastifyInstance): Pro
   app.post("/cloud/monitor/thesis-status", async (request, reply) => {
     const req = TradeThesisStatusReqSchema.parse(request.body);
     const licenseKey = normalizeLicenseKey(req.license_key || req.pin || "");
-    const lic = await resolveEaMonitorLicense(licenseKey, req.account || "");
+    const lic = await resolveEaMonitorLicense(licenseKey, req.account || "", req.broker_server || "");
     if (!req.ticket) return reply.code(400).send({ detail: "ticket is required" });
 
     const doc: Record<string, unknown> = { ...req };

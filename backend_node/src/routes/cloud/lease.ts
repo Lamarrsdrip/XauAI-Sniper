@@ -184,21 +184,21 @@ async function issueLease(
 export async function registerCloudLeaseRoutes(app: FastifyInstance): Promise<void> {
   app.post("/cloud/lease/request", async (request) => {
     const req = LeaseRequestReqSchema.parse(request.body);
-    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account);
+    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account, req.broker_server);
     const leaseDoc = await issueLease(lic, req.account, req.broker_server, req.symbol, req.installation_id, req.terminal_instance_id, req.allowed_directions, req.allowed_entry_families, false);
     return { issued: true, lease: leaseDoc };
   });
 
   app.post("/cloud/lease/renew", async (request) => {
     const req = LeaseRequestReqSchema.parse(request.body);
-    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account);
+    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account, req.broker_server);
     const leaseDoc = await issueLease(lic, req.account, req.broker_server, req.symbol, req.installation_id, req.terminal_instance_id, req.allowed_directions, req.allowed_entry_families, true);
     return { issued: true, lease: leaseDoc };
   });
 
   app.post("/cloud/lease/surrender", async (request) => {
     const req = LeaseSurrenderReqSchema.parse(request.body);
-    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account);
+    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account, req.broker_server);
     const key = leaseAuthorityKey(String(lic["id"] ?? ""), req.account, req.broker_server, req.symbol);
     const nowIso = new Date().toISOString();
     const result = await getDb()
@@ -230,7 +230,7 @@ export async function registerCloudLeaseRoutes(app: FastifyInstance): Promise<vo
 
   app.post("/cloud/lease/reconcile", async (request, reply) => {
     const req = LeaseReconcileReqSchema.parse(request.body);
-    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account);
+    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account, req.broker_server);
     const nowIso = new Date().toISOString();
     const results: { execution_key: string; status: string }[] = [];
     const offlineEvents = getDb().collection("lease_offline_events");

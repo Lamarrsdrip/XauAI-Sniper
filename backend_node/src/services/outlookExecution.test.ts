@@ -29,6 +29,8 @@ function actionableDoc(overrides: Doc = {}): Doc {
     confidence_pct: 62,
     market_regime: "TRENDING",
     setup_type: "CONTINUATION",
+    broker_htf_evidence_complete: true,
+    broker_htf_direction_rule_configured: true,
     tp1_price: 3620.0,
     tp2_price: 3630.0,
     tp3_price: 3645.0,
@@ -41,6 +43,12 @@ beforeEach(() => {
 });
 
 describe("publishOutlookThesis -- OUTLOOK_SIGNAL_OPEN replaced by passive thesis context", () => {
+  it("fails closed when higher-timeframe evidence is incomplete or the owner direction rule is not configured", async () => {
+    expect(await publishOutlookThesis(actionableDoc({ broker_htf_evidence_complete: false }))).toBeNull();
+    expect(await publishOutlookThesis(actionableDoc({ broker_htf_direction_rule_configured: false }))).toBeNull();
+    expect(state.db.collection("cloud_outlook_thesis").docs).toHaveLength(0);
+  });
+
   it("TEST 1/2: an actionable BUY publication never writes a cloud_bot_commands row", async () => {
     await publishOutlookThesis(actionableDoc());
     const commands = state.db.collection("cloud_bot_commands").docs;

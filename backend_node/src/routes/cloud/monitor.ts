@@ -58,7 +58,7 @@ export async function registerCloudMonitorRoutes(app: FastifyInstance): Promise<
     if (!account) throw new LicenseError(400, { ok:false, reason:"MISSING_MT5_ACCOUNT", message:"Heartbeat requires account_number." }); // ASTRA_REPAIR_V2_6287 / 023
     let lic;
     try {
-      lic = await resolveEaMonitorLicense(licenseKey, account);
+      lic = await resolveEaMonitorLicense(licenseKey, account, req.broker_server || "");
     } catch (error) {
       if (error instanceof LicenseError && licenseKey.startsWith("APEX-")) {
         const detail = typeof error.detail === "object" ? error.detail : {};

@@ -24,6 +24,10 @@ import { computeConfidence, confidenceCategory, confidencePct, computeZoneAndTar
 
 import { loadClosedBrokerHtfEvidence } from "./manualTradingMarketStore.js";
 import { outlookEvidenceStaleMessage } from "./marketIntelligenceConfig.js";
+
+export const BROKER_HTF_DECISION_RULE = "OWNER_RULE_REQUIRED_BEFORE_HTF_CAN_CHANGE_DIRECTION";
+export const BROKER_HTF_DIRECTION_RULE_CONFIGURED = false;
+
 void _BREAK_EVEN_R_TOLERANCE; // referenced by advance_persisted_signal, still pending port
 
 function deriveSetupType(path: string): string {
@@ -286,6 +290,8 @@ export async function generateOutlookForAccount(opts: {
       broker_htf_evidence_complete: brokerHtfEvidence.complete,
       broker_htf_missing_timeframes: brokerHtfEvidence.missing,
       broker_htf_provenance: brokerHtfEvidence.provenance,
+      broker_htf_direction_rule_configured: BROKER_HTF_DIRECTION_RULE_CONFIGURED,
+      broker_htf_decision_rule: BROKER_HTF_DECISION_RULE,
       generated_at: now.toISOString(),
       hourly_slot: hourlySlot,
       publication_key: publicationKey,
@@ -423,6 +429,8 @@ export async function generateOutlookForAccount(opts: {
       broker_htf_evidence_complete: brokerHtfEvidence.complete,
       broker_htf_missing_timeframes: brokerHtfEvidence.missing,
       broker_htf_provenance: brokerHtfEvidence.provenance,
+      broker_htf_direction_rule_configured: BROKER_HTF_DIRECTION_RULE_CONFIGURED,
+      broker_htf_decision_rule: BROKER_HTF_DECISION_RULE,
       generated_at: now.toISOString(),
       hourly_slot: hourlySlot,
       publication_key: publicationKey,
@@ -487,6 +495,8 @@ export async function generateOutlookForAccount(opts: {
       broker_htf_evidence_complete: brokerHtfEvidence.complete,
       broker_htf_missing_timeframes: brokerHtfEvidence.missing,
       broker_htf_provenance: brokerHtfEvidence.provenance,
+      broker_htf_direction_rule_configured: BROKER_HTF_DIRECTION_RULE_CONFIGURED,
+      broker_htf_decision_rule: BROKER_HTF_DECISION_RULE,
       generated_at: now.toISOString(),
       published_at: now.toISOString(),
       hourly_slot: hourlySlot,
@@ -559,6 +569,17 @@ export async function generateOutlookForAccount(opts: {
     execution_authority: false,
     automated_entry_approved: bias.automated_entry_approved,
     automated_block_reason: bias.automated_block_reason,
+    // Durable broker HTF evidence is part of every published Outlook record,
+    // not only the no-valid branches. The rule that turns H1/H4/D1 into a
+    // strategy decision is intentionally not guessed here; the audited
+    // contract requires an explicit owner-defined rule before HTF may alter
+    // direction/approval. Missing required frames already fail closed above.
+    broker_htf_evidence: brokerHtfEvidence.candles,
+    broker_htf_evidence_complete: brokerHtfEvidence.complete,
+    broker_htf_missing_timeframes: brokerHtfEvidence.missing,
+    broker_htf_provenance: brokerHtfEvidence.provenance,
+      broker_htf_direction_rule_configured: BROKER_HTF_DIRECTION_RULE_CONFIGURED,
+      broker_htf_decision_rule: BROKER_HTF_DECISION_RULE,
     owner_policy: ownerPolicy,
     owner_policy_blocked: !ownerPolicy["allowed"],
     owner_policy_blocked_direction: ownerPolicyBlockedDirection,

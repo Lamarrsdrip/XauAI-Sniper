@@ -5,14 +5,14 @@ import { normalizeLicenseKey, resolveEaMonitorLicense } from "../../services/lic
 
 const ThesisQuerySchema = z.object({
   pin: z.string().optional().default(""), license_key: z.string().optional().default(""),
-  account: z.string().trim().min(1), symbol: z.string().optional().default("XAUUSD"),
+  account: z.string().trim().min(1), broker_server: z.string().optional().default(""), symbol: z.string().optional().default("XAUUSD"),
 });
 
 export async function registerCloudOutlookThesisRoutes(app: FastifyInstance): Promise<void> {
   app.get("/cloud/outlook/thesis", async (request) => {
     const q = ThesisQuerySchema.parse(request.query);
     const raw = normalizeLicenseKey(q.license_key || q.pin || "");
-    const lic = await resolveEaMonitorLicense(raw, q.account);
+    const lic = await resolveEaMonitorLicense(raw, q.account, q.broker_server);
     const db = getDb(); const nowIso = new Date().toISOString();
     const pointerId = `${q.account}:${q.symbol}`;
     const pointers = db.collection("cloud_outlook_current");
@@ -48,7 +48,18 @@ export async function registerCloudOutlookThesisRoutes(app: FastifyInstance): Pr
       { account: q.account, symbol: q.symbol, outlook_id: outlookId, status: "ACTIVE", license_key: String(lic["pin"] ?? ""), expires_at: { $gt: nowIso } },
       { projection: { _id: 0 } },
     );
-    if (!thesis) await db.collection("cloud_outlook_current").deleteOne({ _id: pointerId as unknown as never, outlook_id: outlookId });
-    return { ok: true, thesis: thesis ?? null, server_time: nowIso };
+    if (!thesis) {
+      await db.collection("cloud_outlook_current").deleteOne({ _id: pointerId as unknown as never, outlook_id: outlookId });
+      return { ok: true, thesis: null, server_time: nowIso };
+    }
+    if (thesis["broker_htf_evidence_complete"] !== true || thesis["broker_htf_direction_rule_configured"] !== true) {
+      await db.collection("cloud_outlook_thesis").updateOne(
+        { account: q.account, symbol: q.symbol, outlook_id: outlookId },
+        { $set: { status: "SUPERSEDED", terminal_reason: "HTF_DIRECTION_RULE_NOT_CONFIGURED", terminal_at: nowIso, updated_at: nowIso } },
+      );
+      await db.collection("cloud_outlook_current").deleteOne({ _id: pointerId as unknown as never, outlook_id: outlookId });
+      return { ok: true, thesis: null, server_time: nowIso };
+    }
+    return { ok: true, thesis, server_time: nowIso };
   });
 } // ASTRA_REPAIR_V2_6287 / 007,023

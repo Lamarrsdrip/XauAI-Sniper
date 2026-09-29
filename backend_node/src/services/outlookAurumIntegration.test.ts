@@ -40,6 +40,14 @@ vi.mock("../services/license.js", () => ({
 
 const { publishOutlookThesis } = await import("./outlookExecution.js");
 
+async function publishReadyThesis(doc: Doc): Promise<string | null> {
+  return publishOutlookThesis({
+    broker_htf_evidence_complete: true,
+    broker_htf_direction_rule_configured: true,
+    ...doc,
+  });
+}
+
 beforeEach(() => {
   state.db = new FakeDb();
 });
@@ -89,8 +97,19 @@ function simulateAurumDecision(
 }
 
 describe("Integration: backend thesis -> EA context -> Aurum decision", () => {
+  it("HTF owner rule unconfigured: backend does not expose a thesis to the EA", async () => {
+    const id = await publishOutlookThesis({
+      id: "sig-htf-blocked", account: "555111", primary_direction: "BUY", generated_at: new Date().toISOString(),
+      preferred_entry_zone_low: 3610, preferred_entry_zone_high: 3612, suggested_sl: 3600, chase_limit: 3620,
+      broker_htf_evidence_complete: true,
+      broker_htf_direction_rule_configured: false,
+    });
+    expect(id).toBeNull();
+    expect(await fetchThesisAsEaWould("555111")).toBeNull();
+  });
+
   it("TEST 1/2: an Outlook BUY thesis alone (no Aurum setup evidence) never resolves to ENTER", async () => {
-    await publishOutlookThesis({
+    await publishReadyThesis({
       id: "sig-1", account: "555111", primary_direction: "BUY", generated_at: new Date().toISOString(),
       preferred_entry_zone_low: 3610, preferred_entry_zone_high: 3612, suggested_sl: 3600, chase_limit: 3620,
     });
@@ -105,7 +124,7 @@ describe("Integration: backend thesis -> EA context -> Aurum decision", () => {
   });
 
   it("TEST 3: Outlook BUY + a genuinely good Aurum BUY setup resolves to ENTER through the shared arbiter", async () => {
-    await publishOutlookThesis({
+    await publishReadyThesis({
       id: "sig-2", account: "555111", primary_direction: "BUY", generated_at: new Date().toISOString(),
       preferred_entry_zone_low: 3610, preferred_entry_zone_high: 3612, suggested_sl: 3600, chase_limit: 3620,
     });
@@ -119,7 +138,7 @@ describe("Integration: backend thesis -> EA context -> Aurum decision", () => {
   });
 
   it("TEST 4: price already beyond chase_limit -> WAIT, never a chase", async () => {
-    await publishOutlookThesis({
+    await publishReadyThesis({
       id: "sig-3", account: "555111", primary_direction: "BUY", generated_at: new Date().toISOString(),
       preferred_entry_zone_low: 3610, preferred_entry_zone_high: 3612, suggested_sl: 3600, chase_limit: 3620,
     });
@@ -133,7 +152,7 @@ describe("Integration: backend thesis -> EA context -> Aurum decision", () => {
   });
 
   it("TEST 5: after a retracement back into a healthy zone with confirmation, the same thesis can ENTER", async () => {
-    await publishOutlookThesis({
+    await publishReadyThesis({
       id: "sig-4", account: "555111", primary_direction: "BUY", generated_at: new Date().toISOString(),
       preferred_entry_zone_low: 3610, preferred_entry_zone_high: 3612, suggested_sl: 3600, chase_limit: 3620,
     });
@@ -147,7 +166,7 @@ describe("Integration: backend thesis -> EA context -> Aurum decision", () => {
   });
 
   it("TEST 8: an expired thesis never resolves (route returns null, EA never even sees it)", async () => {
-    await publishOutlookThesis({
+    await publishReadyThesis({
       id: "sig-5", account: "555111", primary_direction: "BUY",
       generated_at: new Date(Date.now() - 2 * 3600_000).toISOString(),
       expiry_at: new Date(Date.now() - 3600_000).toISOString(), // already expired
@@ -158,7 +177,7 @@ describe("Integration: backend thesis -> EA context -> Aurum decision", () => {
   });
 
   it("TEST 9: a legacy-shaped payload with no usable entry zone is never published as a thesis at all", async () => {
-    const id = await publishOutlookThesis({
+    const id = await publishReadyThesis({
       id: "sig-6", account: "555111", primary_direction: "BUY", generated_at: new Date().toISOString(),
       preferred_entry_zone_low: 0, preferred_entry_zone_high: 0, suggested_sl: 0,
     });
@@ -168,7 +187,7 @@ describe("Integration: backend thesis -> EA context -> Aurum decision", () => {
   });
 
   it("cross-account: account B never receives account A's thesis through the same fetch path", async () => {
-    await publishOutlookThesis({
+    await publishReadyThesis({
       id: "sig-7", account: "555111", primary_direction: "BUY", generated_at: new Date().toISOString(),
       preferred_entry_zone_low: 3610, preferred_entry_zone_high: 3612, suggested_sl: 3600, chase_limit: 3620,
     });

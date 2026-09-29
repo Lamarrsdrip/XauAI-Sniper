@@ -186,52 +186,64 @@ string XAU_LeaseGenerateRandomId()
    return s;
 }
 
+string XAU_LeaseGetOrCreatePersistentId(const string &path, bool commonFile, const string &prefix)
+{
+   int flags = FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI;
+   if(commonFile) flags |= FILE_COMMON;
+
+   int h = INVALID_HANDLE;
+   for(int attempt = 0; attempt < 8 && h == INVALID_HANDLE; attempt++)
+   {
+      ResetLastError();
+      h = FileOpen(path, flags);
+      if(h == INVALID_HANDLE) Sleep(15);
+   }
+   if(h == INVALID_HANDLE)
+   {
+      PrintFormat("XAUCLOUD_LEASE_ID_PERSISTENCE_FAILED path=%s err=%d -- offline lease fails closed", path, GetLastError());
+      return "";
+   }
+
+   FileSeek(h, 0, SEEK_SET);
+   string existing = FileReadString(h);
+   if(StringLen(existing) > 0)
+   {
+      FileClose(h);
+      return existing;
+   }
+
+   string newId = prefix + XAU_LeaseGenerateRandomId();
+   FileSeek(h, 0, SEEK_SET);
+   FileWriteString(h, newId);
+   FileFlush(h);
+   FileClose(h);
+
+   int verifyFlags = FILE_READ | FILE_TXT | FILE_ANSI;
+   if(commonFile) verifyFlags |= FILE_COMMON;
+   int hv = FileOpen(path, verifyFlags);
+   if(hv == INVALID_HANDLE)
+   {
+      PrintFormat("XAUCLOUD_LEASE_ID_VERIFY_FAILED path=%s err=%d -- offline lease fails closed", path, GetLastError());
+      return "";
+   }
+   string persisted = FileReadString(hv);
+   FileClose(hv);
+   if(persisted != newId)
+   {
+      PrintFormat("XAUCLOUD_LEASE_ID_VERIFY_MISMATCH path=%s -- offline lease fails closed", path);
+      return "";
+   }
+   return persisted;
+}
+
 string XAU_LeaseGetOrCreateInstallationId()
 {
-   string path = XAU_LeaseInstallationIdPath();
-   if(FileIsExist(path, FILE_COMMON))
-   {
-      int h = FileOpen(path, FILE_READ | FILE_TXT | FILE_COMMON | FILE_ANSI);
-      if(h != INVALID_HANDLE)
-      {
-         string id = FileReadString(h);
-         FileClose(h);
-         if(StringLen(id) > 0) return id;
-      }
-   }
-   string newId = "INST-" + XAU_LeaseGenerateRandomId();
-   int h2 = FileOpen(path, FILE_WRITE | FILE_TXT | FILE_COMMON | FILE_ANSI);
-   if(h2 != INVALID_HANDLE)
-   {
-      FileWriteString(h2, newId);
-      FileFlush(h2);
-      FileClose(h2);
-   }
-   return newId;
+   return XAU_LeaseGetOrCreatePersistentId(XAU_LeaseInstallationIdPath(), true, "INST-");
 }
 
 string XAU_LeaseGetOrCreateTerminalId()
 {
-   string path = XAU_LeaseTerminalIdPath();
-   if(FileIsExist(path, 0))
-   {
-      int h = FileOpen(path, FILE_READ | FILE_TXT | FILE_ANSI);
-      if(h != INVALID_HANDLE)
-      {
-         string id = FileReadString(h);
-         FileClose(h);
-         if(StringLen(id) > 0) return id;
-      }
-   }
-   string newId = "TERM-" + XAU_LeaseGenerateRandomId();
-   int h2 = FileOpen(path, FILE_WRITE | FILE_TXT | FILE_ANSI);
-   if(h2 != INVALID_HANDLE)
-   {
-      FileWriteString(h2, newId);
-      FileFlush(h2);
-      FileClose(h2);
-   }
-   return newId;
+   return XAU_LeaseGetOrCreatePersistentId(XAU_LeaseTerminalIdPath(), false, "TERM-");
 }
 
 //+------------------------------------------------------------------+
@@ -353,8 +365,11 @@ bool XAU_LeasePersist(const XauLeaseState &st)
    if(!XAU_LeaseDeserializeFromFile(readBack, verifyState)) return false;
    if(!XAU_LeaseVerifyState(verifyState)) return false;
 
-   FileDelete(XAU_LeaseStateFilePath());
+   // Keep the previous known-good state until the verified temp file has
+   // successfully replaced it. FILE_REWRITE performs the replacement.
    bool moved = FileMove(tmpPath, 0, XAU_LeaseStateFilePath(), FILE_REWRITE);
+   if(!moved)
+      PrintFormat("XAUCLOUD_LEASE_STATE_REPLACE_FAILED err=%d -- previous durable state preserved", GetLastError());
    return moved;
 }
 
@@ -464,7 +479,12 @@ ENUM_XAU_LEASE_VALIDITY XAU_LeaseCheckValidity(const XauLeaseState &st, int dire
    // the local-only (unsigned) consumedThisLease counter; the effective
    // remaining allowance is always the signed grant minus local
    // consumption, never the signed field mutated in place.
-   if(st.remainingOfflineNewCampaigns - st.consumedThisLease <= 0) return XAU_LEASE_INVALID_NO_ALLOWANCE_REMAINING;
+   if(GlobalVariableCheck(XAU_LeasePersistenceUnsafeKey(st)))
+      return XAU_LEASE_INVALID_NO_ALLOWANCE_REMAINING;
+
+   int ledgerConsumed = XAU_LeaseOfflineLedgerCountForLease(st.leaseId, st.leaseSequence);
+   int effectiveConsumed = MathMax(st.consumedThisLease, ledgerConsumed);
+   if(st.remainingOfflineNewCampaigns - effectiveConsumed <= 0) return XAU_LEASE_INVALID_NO_ALLOWANCE_REMAINING;
 
    return XAU_LEASE_VALID;
 }
@@ -484,40 +504,46 @@ string XAU_LeaseMutexName(const string &licenseId, const string &accountLogin, c
    return "XAUCLOUD_LEASE_MUTEX_" + licenseId + "_" + accountLogin + "_" + accountServer + "_" + symbol + "_" + (direction == 1 ? "BUY" : "SELL");
 }
 
-// Compare-and-set: succeeds only if the named global variable does not
-// exist or is older than staleSeconds (a crashed/hung prior attempt).
-// Mirrors XAU_TryClaimEntryLock()'s proven compare-and-swap exactly
-// (mq5:4056-4073 -- see the v6.20.3 adversarial-review comment there
-// explaining why a plain check-then-set is a real TOCTOU race between
-// two chart instances): GlobalVariableSetOnCondition only succeeds if
-// the variable's value is STILL exactly oldVal at the instant of the
-// write, so a racing second acquire attempt correctly fails closed
-// instead of silently overwriting the first holder's claim.
+int    g_xauLeaseMutexHandle = INVALID_HANDLE;
+string g_xauLeaseMutexHeldName = "";
+
+string XAU_LeaseMutexFilePath(const string &name)
+{
+   string safe = name;
+   StringReplace(safe, "\\", "_");
+   StringReplace(safe, "/", "_");
+   StringReplace(safe, ":", "_");
+   StringReplace(safe, " ", "_");
+   return "XauCloudLease\\mutex_" + safe + ".lck";
+}
+
 bool XAU_LeaseMutexTryAcquire(const string &name, int staleSeconds = 60)
 {
-   // GlobalVariableSetOnCondition() does NOT create a variable that does
-   // not exist yet in this MQL5 build (verified empirically: it fails
-   // with GetLastError()==4501/"global variable not found" even when
-   // comparing against check_value=0.0 -- not the commonly-assumed
-   // auto-create-on-zero behavior). For the true first-ever claim of this
-   // exact key there is by definition no prior claimant to race against,
-   // so a plain GlobalVariableSet() is the correct primitive there. Once
-   // the variable exists, every subsequent claim goes through the real
-   // compare-and-swap below, identical to XAU_TryClaimEntryLock()'s
-   // proven pattern (mq5:4056-4073).
-   if(!GlobalVariableCheck(name))
-      return GlobalVariableSet(name, (double)TimeCurrent()) != 0;
+   if(g_xauLeaseMutexHandle != INVALID_HANDLE)
+      return false;
 
-   double oldVal = GlobalVariableGet(name);
-   double elapsed = (oldVal > 0.0) ? (double)(TimeCurrent() - (datetime)oldVal) : 1.0e9;
-   if(elapsed < staleSeconds)
-      return false; // held by a still-fresh attempt
-   return GlobalVariableSetOnCondition(name, (double)TimeCurrent(), oldVal);
+   string path = XAU_LeaseMutexFilePath(name);
+   ResetLastError();
+   // No FILE_SHARE_* flags: the open handle is exclusive across chart EAs.
+   int h = FileOpen(path, FILE_READ | FILE_WRITE | FILE_BIN);
+   if(h == INVALID_HANDLE)
+      return false;
+
+   g_xauLeaseMutexHandle = h;
+   g_xauLeaseMutexHeldName = name;
+   FileSeek(h, 0, SEEK_SET);
+   FileWriteLong(h, (long)TimeCurrent());
+   FileFlush(h);
+   return true;
 }
 
 void XAU_LeaseMutexRelease(const string &name)
 {
-   GlobalVariableDel(name);
+   if(g_xauLeaseMutexHandle == INVALID_HANDLE) return;
+   if(g_xauLeaseMutexHeldName != name) return;
+   FileClose(g_xauLeaseMutexHandle);
+   g_xauLeaseMutexHandle = INVALID_HANDLE;
+   g_xauLeaseMutexHeldName = "";
 }
 
 //+------------------------------------------------------------------+
@@ -565,13 +591,44 @@ bool XAU_LeaseOfflineLedgerContains(const string &executionKey)
    return found;
 }
 
+int XAU_LeaseOfflineLedgerCountForLease(const string &leaseId, long leaseSequence)
+{
+   string path = XAU_LeaseOfflineLedgerPath();
+   if(!FileIsExist(path, 0)) return 0;
+   int h = FileOpen(path, FILE_READ | FILE_TXT | FILE_ANSI);
+   if(h == INVALID_HANDLE) return 0;
+   string suffix = "|LEASE|" + leaseId + "|" + IntegerToString((int)leaseSequence);
+   int count = 0;
+   while(!FileIsEnding(h))
+   {
+      string existing = FileReadString(h);
+      int elen = StringLen(existing), slen = StringLen(suffix);
+      if(elen >= slen && StringSubstr(existing, elen - slen) == suffix) count++;
+   }
+   FileClose(h);
+   return count;
+}
+
 bool XAU_LeaseOfflineLedgerTryRecordNew(const string &executionKey)
 {
-   if(XAU_LeaseOfflineLedgerContains(executionKey))
-      return false; // already recorded -- never send twice for this key
    string path = XAU_LeaseOfflineLedgerPath();
-   int ha = FileOpen(path, FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI);
+   int ha = INVALID_HANDLE;
+   for(int attempt = 0; attempt < 8 && ha == INVALID_HANDLE; attempt++)
+   {
+      ResetLastError();
+      ha = FileOpen(path, FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI);
+      if(ha == INVALID_HANDLE) Sleep(15);
+   }
    if(ha == INVALID_HANDLE) return false;
+
+   bool exists = false;
+   FileSeek(ha, 0, SEEK_SET);
+   while(!FileIsEnding(ha))
+   {
+      if(FileReadString(ha) == executionKey) { exists = true; break; }
+   }
+   if(exists) { FileClose(ha); return false; }
+
    FileSeek(ha, 0, SEEK_END);
    FileWriteString(ha, executionKey + "\n");
    FileFlush(ha);
@@ -579,19 +636,34 @@ bool XAU_LeaseOfflineLedgerTryRecordNew(const string &executionKey)
    return true;
 }
 
-// Called ONLY after a broker send whose retcode was accepted (confirmed
-// OR ambiguous-may-have-executed) -- never on evaluation alone, never on
-// an explicit rejection. Increments the LOCAL (unsigned) consumption
-// counter and re-persists the lease state file (the signed fields are
-// untouched, so the signature remains valid on next reload -- see the
-// comment on XAU_LeaseCheckValidity's allowance check).
+string XAU_LeasePersistenceUnsafeKey(const XauLeaseState &st)
+{
+   return "XAU_L_UNSAFE_" + StringSubstr(st.leaseId, 0, 24) + "_" + IntegerToString((int)st.leaseSequence);
+}
+
 bool XAU_LeaseConsumeOfflineAllowance(XauLeaseState &st, const string &executionKey)
 {
-   if(!XAU_LeaseOfflineLedgerTryRecordNew(executionKey))
-      return false; // already consumed for this exact candidate -- do not double-count
+   if(st.lastConsumedExecutionKey == executionKey || XAU_LeaseOfflineLedgerContains(executionKey))
+      return false;
+
    st.consumedThisLease = st.consumedThisLease + 1;
    st.lastConsumedExecutionKey = executionKey;
-   return XAU_LeasePersist(st);
+
+   bool statePersisted = XAU_LeasePersist(st);
+   bool ledgerRecorded = XAU_LeaseOfflineLedgerTryRecordNew(executionKey);
+   if(statePersisted || ledgerRecorded)
+   {
+      if(!statePersisted)
+         Print("XAUCLOUD_LEASE_CONSUME_DEGRADED statePersist=false ledger=true -- restart safety retained by ledger");
+      if(!ledgerRecorded)
+         Print("XAUCLOUD_LEASE_CONSUME_DEGRADED statePersist=true ledger=false -- restart safety retained by persisted state");
+      return true;
+   }
+
+   GlobalVariableSet(XAU_LeasePersistenceUnsafeKey(st), 1.0);
+   GlobalVariablesFlush();
+   Print("XAUCLOUD_LEASE_CONSUME_PERSISTENCE_FATAL -- both durable records failed; lease poisoned fail-closed");
+   return false;
 }
 
 //+------------------------------------------------------------------+
@@ -853,6 +925,11 @@ bool XAU_LeaseTryAuthorizeOffline(int direction, const string &entryFamily, cons
    }
    string installationId = XAU_LeaseGetOrCreateInstallationId();
    string terminalId = XAU_LeaseGetOrCreateTerminalId();
+   if(StringLen(installationId) == 0 || StringLen(terminalId) == 0)
+   {
+      blockReasonOut = "OFFLINE_LEASE_IDENTITY_NOT_DURABLE";
+      return false;
+   }
    ENUM_XAU_LEASE_VALIDITY validity = XAU_LeaseCheckValidity(outState, direction, entryFamily,
                                                               accountLogin, accountServer, symbol,
                                                               installationId, terminalId);
@@ -870,7 +947,8 @@ bool XAU_LeaseTryAuthorizeOffline(int direction, const string &entryFamily, cons
    }
 
    offlineExecutionKeyOut = XAU_LeaseOfflineExecutionKey(candidateExecutionKey, outState.leaseId, outState.leaseSequence);
-   if(XAU_LeaseOfflineLedgerContains(offlineExecutionKeyOut))
+   if(outState.lastConsumedExecutionKey == offlineExecutionKeyOut ||
+      XAU_LeaseOfflineLedgerContains(offlineExecutionKeyOut))
    {
       blockReasonOut = "OFFLINE_LEASE_EXECUTION_KEY_ALREADY_CONSUMED";
       XAU_LeaseMutexRelease(mutexNameOut);
