@@ -6086,6 +6086,28 @@ void XAU_ReleaseDirectionReservation(string reservationId)
    PrintFormat("DIRECTION_RESERVATION_RELEASE reservationId=%s httpCode=%d", reservationId, code);
 }
 
+bool XAU_RenewDirectionReservation(string reservationId,string executionKey)
+{
+   if(StringLen(reservationId)==0) return true; // offline lease path has no server reservation
+   if((bool)MQLInfoInteger(MQL_TESTER)) return true;
+   string body=StringFormat(
+      "{\"pin\":\"%s\",\"broker_server\":\"%s\",\"account\":\"%I64d\",\"symbol\":\"%s\",\"reservation_id\":\"%s\",\"execution_key\":\"%s\",\"ttl_seconds\":120}",
+      BotMonitorJsonSafe(InpLicensePIN,32),BotMonitorJsonSafe(AccountInfoString(ACCOUNT_SERVER),60),
+      AccountInfoInteger(ACCOUNT_LOGIN),BotMonitorJsonSafe(Symbol(),32),
+      BotMonitorJsonSafe(reservationId,80),BotMonitorJsonSafe(executionKey,240));
+   char pd[],res[]; string rh;
+   StringToCharArray(body,pd,0,StringLen(body));
+   string hdr="Content-Type: application/json\r\nX-Agent-Token: "+InpCloudAgentToken+"\r\n";
+   ResetLastError();
+   int code=WebRequest("POST",InpCloudURL+"/api/cloud/reservation/renew",hdr,InpCloudTimeoutMs,pd,res,rh);
+   string response=code!=-1?CharArrayToString(res):"";
+   bool renewed=(code==200 && StringFind(response,"\"renewed\":true")>=0);
+   if(!renewed)
+      PrintFormat("DIRECTION_RESERVATION_RENEW_FAILED reservationId=%s httpCode=%d err=%d -- local pending fence retained",
+                  reservationId,code,GetLastError());
+   return renewed;
+}
+
 bool XAU_BrokerOpenRetcodeAccepted(uint retcode)
 {
    return retcode == TRADE_RETCODE_DONE || retcode == TRADE_RETCODE_DONE_PARTIAL || retcode == TRADE_RETCODE_PLACED; // ASTRA_REPAIR_V2_6287 / 010
@@ -34640,6 +34662,21 @@ int XAU_TradeBrainPositionEntryOrderCount(ulong positionId)
 }
 
 
+bool XAU_PendingBrokerOrderTerminalRejected(int slot,string &reasonOut)
+{
+   reasonOut="";
+   if(slot<0 || slot>1 || !g_pendingBrokerOpen[slot].active) return false;
+   ulong orderId=g_pendingBrokerOpen[slot].brokerOrderId;
+   if(orderId==0 || !HistoryOrderSelect(orderId)) return false;
+   ENUM_ORDER_STATE state=(ENUM_ORDER_STATE)HistoryOrderGetInteger(orderId,ORDER_STATE);
+   if(state==ORDER_STATE_CANCELED || state==ORDER_STATE_REJECTED || state==ORDER_STATE_EXPIRED)
+   {
+      reasonOut=EnumToString(state);
+      return true;
+   }
+   return false;
+}
+
 bool XAU_FindPendingBrokerDealPosition(int slot,ulong &positionIdOut)
 {
    positionIdOut=0;
@@ -34764,9 +34801,31 @@ void XAU_ReconcilePendingBrokerOpens(string source)
          XAU_PendingBrokerOpenClear(dir,"PYRAMID_ALREADY_PRESENT_"+source);
          continue;
       }
+      if(StringLen(g_pendingBrokerOpen[slot].reservationId)>0 &&
+         (g_pendingBrokerReservationRenewAt[slot]==0 ||
+          TimeCurrent()-g_pendingBrokerReservationRenewAt[slot]>=30))
+      {
+         g_pendingBrokerReservationRenewAt[slot]=TimeCurrent();
+         XAU_RenewDirectionReservation(g_pendingBrokerOpen[slot].reservationId,
+                                       g_pendingBrokerOpen[slot].executionKey);
+      }
+
       ulong posId=0;
       if(XAU_FindPendingBrokerDealPosition(slot,posId))
-         XAU_PromotePendingBrokerOpen(dir,posId,source+"_HISTORY");
+      {
+         if(XAU_PromotePendingBrokerOpen(dir,posId,source+"_HISTORY"))
+            continue;
+      }
+
+      string terminalReason="";
+      if(XAU_PendingBrokerOrderTerminalRejected(slot,terminalReason))
+      {
+         string reservationId=g_pendingBrokerOpen[slot].reservationId;
+         PrintFormat("BROKER_PENDING_ORDER_TERMINAL_REJECT | direction=%s | order=%I64u | state=%s | action=RELEASE_AND_CLEAR",
+                     dir==1?"BUY":"SELL",g_pendingBrokerOpen[slot].brokerOrderId,terminalReason);
+         if(StringLen(reservationId)>0) XAU_ReleaseDirectionReservation(reservationId);
+         XAU_PendingBrokerOpenClear(dir,"BROKER_TERMINAL_"+terminalReason);
+      }
    }
 }
 
