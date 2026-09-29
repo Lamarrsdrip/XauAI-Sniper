@@ -34,6 +34,9 @@ function thesisDoc(overrides: Doc = {}): Doc {
     direction: "BUY",
     status: "ACTIVE",
     license_key: "TESTPIN",
+    broker_htf_evidence_complete: true,
+    broker_htf_direction_rule_configured: true,
+    broker_htf_decision_rule: "TEST_OWNER_RULE",
     generated_at: new Date(now - 5 * 60_000).toISOString(),
     expires_at: new Date(now + 55 * 60_000).toISOString(),
     ...overrides,
@@ -60,6 +63,18 @@ describe("GET /cloud/outlook/thesis", () => {
     const body = res.json();
     expect(body.thesis).toBeTruthy();
     expect(body.thesis.outlook_id).toBe("outlook-1");
+  });
+
+  it("retires a pre-fix active thesis that lacks configured HTF authority", async () => {
+    state.db.collection("cloud_outlook_thesis").docs.push(thesisDoc({
+      account: "555111",
+      broker_htf_evidence_complete: true,
+      broker_htf_direction_rule_configured: false,
+    }));
+    const res = await app.inject({ method: "GET", url: "/cloud/outlook/thesis?account=555111" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().thesis).toBeNull();
+    expect(state.db.collection("cloud_outlook_thesis").docs[0]?.["status"]).toBe("SUPERSEDED");
   });
 
   it("never delivers an expired thesis (stale context cannot trigger a trade)", async () => {
