@@ -59,6 +59,7 @@ export const TradeThesisStatusReqSchema = z.object({
   pin: z.string().optional().default(""),
   license_key: z.string().optional().default(""),
   account: z.string().optional().default(""),
+  broker_server: z.string().optional().default(""),
   symbol: z.string().optional().default(""),
   ticket: z.string().optional().default(""),
   direction: z.string().optional().default(""),
