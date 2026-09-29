@@ -44,6 +44,9 @@ export interface OutlookThesisDoc {
   confidence: number | null;
   regime: string | null;
   setup_type: string | null;
+  broker_htf_evidence_complete: boolean;
+  broker_htf_direction_rule_configured: boolean;
+  broker_htf_decision_rule: string;
   generated_at: string;
   expires_at: string;
   reference_price: number;
@@ -121,6 +124,9 @@ export async function publishOutlookThesis(doc: Record<string, unknown> | null, 
     confidence: confidence !== null && Number.isFinite(confidence) ? confidence : null,
     regime: (doc["market_regime"] as string | undefined) ?? (doc["regime"] as string | undefined) ?? null,
     setup_type: (doc["setup_type"] as string | undefined) ?? null,
+    broker_htf_evidence_complete: true,
+    broker_htf_direction_rule_configured: true,
+    broker_htf_decision_rule: String(doc["broker_htf_decision_rule"] ?? "OWNER_CONFIGURED"),
     generated_at: generatedAt,
     expires_at: expiresAt,
     reference_price: entryRef,
