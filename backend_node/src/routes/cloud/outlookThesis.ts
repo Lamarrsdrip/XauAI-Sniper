@@ -5,14 +5,14 @@ import { normalizeLicenseKey, resolveEaMonitorLicense } from "../../services/lic
 
 const ThesisQuerySchema = z.object({
   pin: z.string().optional().default(""), license_key: z.string().optional().default(""),
-  account: z.string().trim().min(1), symbol: z.string().optional().default("XAUUSD"),
+  account: z.string().trim().min(1), broker_server: z.string().optional().default(""), symbol: z.string().optional().default("XAUUSD"),
 });
 
 export async function registerCloudOutlookThesisRoutes(app: FastifyInstance): Promise<void> {
   app.get("/cloud/outlook/thesis", async (request) => {
     const q = ThesisQuerySchema.parse(request.query);
     const raw = normalizeLicenseKey(q.license_key || q.pin || "");
-    const lic = await resolveEaMonitorLicense(raw, q.account);
+    const lic = await resolveEaMonitorLicense(raw, q.account, q.broker_server);
     const db = getDb(); const nowIso = new Date().toISOString();
     const pointerId = `${q.account}:${q.symbol}`;
     const pointers = db.collection("cloud_outlook_current");
