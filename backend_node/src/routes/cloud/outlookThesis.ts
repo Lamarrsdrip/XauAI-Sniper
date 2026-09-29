@@ -48,7 +48,18 @@ export async function registerCloudOutlookThesisRoutes(app: FastifyInstance): Pr
       { account: q.account, symbol: q.symbol, outlook_id: outlookId, status: "ACTIVE", license_key: String(lic["pin"] ?? ""), expires_at: { $gt: nowIso } },
       { projection: { _id: 0 } },
     );
-    if (!thesis) await db.collection("cloud_outlook_current").deleteOne({ _id: pointerId as unknown as never, outlook_id: outlookId });
-    return { ok: true, thesis: thesis ?? null, server_time: nowIso };
+    if (!thesis) {
+      await db.collection("cloud_outlook_current").deleteOne({ _id: pointerId as unknown as never, outlook_id: outlookId });
+      return { ok: true, thesis: null, server_time: nowIso };
+    }
+    if (thesis["broker_htf_evidence_complete"] !== true || thesis["broker_htf_direction_rule_configured"] !== true) {
+      await db.collection("cloud_outlook_thesis").updateOne(
+        { account: q.account, symbol: q.symbol, outlook_id: outlookId },
+        { $set: { status: "SUPERSEDED", terminal_reason: "HTF_DIRECTION_RULE_NOT_CONFIGURED", terminal_at: nowIso, updated_at: nowIso } },
+      );
+      await db.collection("cloud_outlook_current").deleteOne({ _id: pointerId as unknown as never, outlook_id: outlookId });
+      return { ok: true, thesis: null, server_time: nowIso };
+    }
+    return { ok: true, thesis, server_time: nowIso };
   });
 } // ASTRA_REPAIR_V2_6287 / 007,023
