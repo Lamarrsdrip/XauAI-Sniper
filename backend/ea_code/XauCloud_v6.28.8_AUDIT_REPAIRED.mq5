@@ -10553,8 +10553,13 @@ void XAU_SetPendingSLReason(ulong ticket, double newSL, string logTag)
 struct XAU_TradeGuardState
 {
    ulong    ticket;
-   bool     closeIntentActive; // a close has been approved/attempted recently for this ticket
+   bool     closeIntentActive;
    datetime closeIntentAt;
+   bool     closeAcceptedPending;
+   bool     modifyIntentActive;
+   datetime modifyIntentAt;
+   double   modifyIntentSL;
+   double   modifyIntentTP;
 };
 XAU_TradeGuardState g_tradeGuard[];
 
@@ -10567,6 +10572,11 @@ int XAU_TradeGuard_FindOrCreateIdx(ulong ticket)
    g_tradeGuard[n].ticket = ticket;
    g_tradeGuard[n].closeIntentActive = false;
    g_tradeGuard[n].closeIntentAt = 0;
+   g_tradeGuard[n].closeAcceptedPending = false;
+   g_tradeGuard[n].modifyIntentActive = false;
+   g_tradeGuard[n].modifyIntentAt = 0;
+   g_tradeGuard[n].modifyIntentSL = 0.0;
+   g_tradeGuard[n].modifyIntentTP = 0.0;
    return n;
 }
 
@@ -10752,7 +10762,29 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       curTP = PositionGetDouble(POSITION_TP);
       double tol = MathMax(point * 2, 0.00001);  // 2-pt tolerance
       if(MathAbs(curSL - newSL) < tol && MathAbs(curTP - tp) < tol)
-         return true;  // already where we want it — silent success
+      {
+         int resolvedGuard=XAU_TradeGuard_FindOrCreateIdx(ticket);
+         g_tradeGuard[resolvedGuard].modifyIntentActive=false;
+         return true;
+      }
+   }
+
+   {
+      int pendingGuard=XAU_TradeGuard_FindOrCreateIdx(ticket);
+      double pendingTol=MathMax(point*2.0,0.00001);
+      bool samePendingTarget=g_tradeGuard[pendingGuard].modifyIntentActive &&
+         MathAbs(g_tradeGuard[pendingGuard].modifyIntentSL-newSL)<=pendingTol &&
+         MathAbs(g_tradeGuard[pendingGuard].modifyIntentTP-tp)<=pendingTol;
+      if(samePendingTarget)
+      {
+         if(TimeCurrent()-g_tradeGuard[pendingGuard].modifyIntentAt < 30)
+         {
+            PrintFormat("SL_MODIFY_PENDING_RECONCILIATION | ticket=%I64u | target=%.5f | age=%d | action=NO_RESEND",
+                        ticket,newSL,(int)(TimeCurrent()-g_tradeGuard[pendingGuard].modifyIntentAt));
+            return false;
+         }
+         g_tradeGuard[pendingGuard].modifyIntentActive=false;
+      }
    }
 
    // Fifth pass: freeze/stops safety check, evaluated against BOTH the
@@ -10860,76 +10892,73 @@ bool SafeModifySL(ulong ticket, double newSL, double tp, bool isBuy, double curP
       }
    }
 
-   // Execute modify — log any failure so they're no longer silent
-   if(!trade.PositionModify(ticket, newSL, tp))
+   // v6.28.8 P1: the CTrade Boolean is not broker execution truth.
+   // Retcode classifies accepted/rejected; live position readback confirms.
+   ResetLastError();
+   bool modifyCallOk=trade.PositionModify(ticket,newSL,tp);
+   uint ret=trade.ResultRetcode();
+   int err=GetLastError();
+   bool brokerAccepted=(ret==TRADE_RETCODE_DONE || ret==TRADE_RETCODE_DONE_PARTIAL ||
+                        ret==TRADE_RETCODE_PLACED || ret==TRADE_RETCODE_NO_CHANGES);
+
+   if(!brokerAccepted && (err==4756 || ret==TRADE_RETCODE_INVALID_STOPS))
    {
-      uint ret = trade.ResultRetcode();
-      int  err = GetLastError();
-      // v5.8.51: context-busy retry — broker context sometimes holds after a prior
-      // request completes. A 150ms yield often clears it without wasting a full tick.
-      if(err == 4756 || ret == 10016)
-      {
-         Sleep(150);
-         ResetLastError();
-         if(trade.PositionModify(ticket, newSL, tp))
-         {
-            uint astraRetryRet=trade.ResultRetcode();
-            double astraRetryTol=MathMax(point*2,0.00001);
-            if(astraRetryRet!=TRADE_RETCODE_PLACED && XAU_BrokerOpenRetcodeAccepted(astraRetryRet) &&
-               PositionSelectByTicket(ticket) && MathAbs(PositionGetDouble(POSITION_SL)-newSL)<=astraRetryTol)
-            {
-               XAU_SetPendingSLReason(ticket, newSL, logTag);
-               return true;
-            }
-         }
-         ret = trade.ResultRetcode();
-         err = GetLastError();
-      }
-      // Record this rejection (whatever the retcode) so the next identical
-      // request within the cooldown window (above) is skipped entirely
-      // rather than resent to the broker. Unconditional on purpose — see
-      // the third-pass note above.
-      g_lastRejectedModifyTicket = ticket;
-      g_lastRejectedModifySL     = newSL;
-      g_lastRejectedModifyAt     = TimeCurrent();
-      // v4.6.5 — Downgrade common non-fatal retcodes to throttled INFO (1/min).
-      //   10025 NO_CHANGES, 10004 REQUOTE, 10021 OFF_QUOTES, 10016 INVALID_STOPS,
-      //   10029 FROZEN, 4756 context busy are transient/benign — the cooldown
-      //   above already prevents the request itself from repeating, so the log
-      //   line only needs the same throttle. Don't spam the log.
-      bool benign = (ret == 10025 || ret == 10004 || ret == 10021 || ret == 10016 || ret == 10029 || err == 4756 || err == 10025);
-      if(benign)
-      {
-         static datetime lastBenignWarn = 0;
-         if(TimeCurrent() - lastBenignWarn > 60)
-         {
-            Print("SL-MOD INFO #", ticket, " (", logTag, ") transient ret=", ret,
-                  " err=", err, " — will retry next tick.");
-            lastBenignWarn = TimeCurrent();
-         }
-      }
-      else
-      {
-         Print("SL-MOD FAIL #", ticket, " (", logTag, ") Ret=", ret,
-               " Err=", err, " newSL=", DoubleToString(newSL, digits));
-      }
+      Sleep(150);
+      ResetLastError();
+      modifyCallOk=trade.PositionModify(ticket,newSL,tp);
+      ret=trade.ResultRetcode();
+      err=GetLastError();
+      brokerAccepted=(ret==TRADE_RETCODE_DONE || ret==TRADE_RETCODE_DONE_PARTIAL ||
+                      ret==TRADE_RETCODE_PLACED || ret==TRADE_RETCODE_NO_CHANGES);
+   }
+
+   int modifyGuard=XAU_TradeGuard_FindOrCreateIdx(ticket);
+   double readbackTol=MathMax(point*2.0,0.00001);
+   bool readbackConfirmed=PositionSelectByTicket(ticket) &&
+                          MathAbs(PositionGetDouble(POSITION_SL)-newSL)<=readbackTol &&
+                          MathAbs(PositionGetDouble(POSITION_TP)-tp)<=readbackTol;
+
+   if(brokerAccepted && readbackConfirmed)
+   {
+      g_tradeGuard[modifyGuard].modifyIntentActive=false;
+      XAU_SetPendingSLReason(ticket,newSL,logTag);
+      PrintFormat("SL_MODIFY_CONFIRMED | ticket=%I64u | ret=%u | callOk=%s | target=%.5f | authority=%s",
+                  ticket,ret,modifyCallOk?"true":"false",newSL,logTag);
+      return true;
+   }
+
+   if(brokerAccepted)
+   {
+      g_tradeGuard[modifyGuard].modifyIntentActive=true;
+      g_tradeGuard[modifyGuard].modifyIntentAt=TimeCurrent();
+      g_tradeGuard[modifyGuard].modifyIntentSL=newSL;
+      g_tradeGuard[modifyGuard].modifyIntentTP=tp;
+      PrintFormat("SL_MODIFY_ACCEPTED_PENDING | ticket=%I64u | ret=%u | callOk=%s | target=%.5f | authority=%s | action=READBACK_RECONCILE_NO_RESEND",
+                  ticket,ret,modifyCallOk?"true":"false",newSL,logTag);
       return false;
    }
-   uint astraModifyRet=trade.ResultRetcode();
-   double astraModifyTol=MathMax(point*2,0.00001);
-   if(astraModifyRet==TRADE_RETCODE_PLACED)
+
+   g_tradeGuard[modifyGuard].modifyIntentActive=false;
+   g_lastRejectedModifyTicket=ticket;
+   g_lastRejectedModifySL=newSL;
+   g_lastRejectedModifyAt=TimeCurrent();
+   bool benign=(ret==TRADE_RETCODE_REQUOTE || ret==TRADE_RETCODE_PRICE_OFF ||
+                ret==TRADE_RETCODE_INVALID_STOPS || ret==TRADE_RETCODE_FROZEN || err==4756);
+   if(benign)
    {
-      PrintFormat("SL_MODIFY_ACCEPTED_PENDING | ticket=%I64u | target=%.5f | authority=%s",ticket,newSL,logTag);
-      return false;
+      static datetime lastBenignWarn=0;
+      if(TimeCurrent()-lastBenignWarn>60)
+      {
+         PrintFormat("SL-MOD INFO #%I64u (%s) rejected ret=%u err=%d -- no broker success recorded",
+                     ticket,logTag,ret,err);
+         lastBenignWarn=TimeCurrent();
+      }
    }
-   if(!XAU_BrokerOpenRetcodeAccepted(astraModifyRet) || !PositionSelectByTicket(ticket) ||
-      MathAbs(PositionGetDouble(POSITION_SL)-newSL)>astraModifyTol)
-   {
-      PrintFormat("SL_MODIFY_READBACK_NOT_CONFIRMED | ticket=%I64u | ret=%u | target=%.5f | authority=%s",ticket,astraModifyRet,newSL,logTag);
-      return false;
-   }
-   XAU_SetPendingSLReason(ticket, newSL, logTag);
-   return true; // ASTRA_REPAIR_V2_6287 / 009
+   else
+      PrintFormat("SL-MOD FAIL #%I64u (%s) ret=%u err=%d newSL=%.5f",
+                  ticket,logTag,ret,err,newSL);
+   return false;
+
 }
 
 //+------------------------------------------------------------------+
@@ -28786,27 +28815,35 @@ bool OWNER_R_EXIT_CLOSE_ONLY(ulong ticket, string ctx, bool externalManual = fal
       if(ident > 0) exitPosId = ident;
    }
 
-   bool ok = trade.PositionClose(ticket);
-   uint astraCloseRet = trade.ResultRetcode();
-   if(ok && astraCloseRet == TRADE_RETCODE_PLACED)
+   ResetLastError();
+   bool closeCallOk=trade.PositionClose(ticket);
+   uint astraCloseRet=trade.ResultRetcode();
+   int astraCloseErr=GetLastError();
+   bool closeAccepted=(astraCloseRet==TRADE_RETCODE_DONE ||
+                       astraCloseRet==TRADE_RETCODE_DONE_PARTIAL ||
+                       astraCloseRet==TRADE_RETCODE_PLACED);
+   int closeGuard=XAU_TradeGuard_FindOrCreateIdx(ticket);
+
+   if(!closeAccepted)
    {
-      PrintFormat("OWNER_R_EXIT_CLOSE_ACCEPTED_PENDING | ticket=%I64u | authority=%s | ret=%u", ticket, ctx, astraCloseRet);
+      g_tradeGuard[closeGuard].closeAcceptedPending=false;
+      g_lastRejectedCloseTicket=ticket;
+      g_lastRejectedCloseAt=TimeCurrent();
+      PrintFormat("OWNER_R_EXIT_CLOSE_FAILED | ticket=%I64u | authority=%s | callOk=%s | ret=%u | ret_text=%s | err=%d",
+                  ticket,ctx,closeCallOk?"true":"false",astraCloseRet,
+                  trade.ResultRetcodeDescription(),astraCloseErr);
       return false;
    }
-   if(ok && !XAU_BrokerOpenRetcodeAccepted(astraCloseRet)) ok=false;
-   if(ok && PositionSelectByTicket(ticket))
+
+   if(PositionSelectByTicket(ticket))
    {
-      PrintFormat("OWNER_R_EXIT_CLOSE_READBACK_PENDING | ticket=%I64u | authority=%s | ret=%u", ticket, ctx, astraCloseRet);
+      g_tradeGuard[closeGuard].closeAcceptedPending=true;
+      g_tradeGuard[closeGuard].closeIntentAt=TimeCurrent();
+      PrintFormat("OWNER_R_EXIT_CLOSE_ACCEPTED_PENDING | ticket=%I64u | authority=%s | callOk=%s | ret=%u | action=READBACK_RECONCILE_NO_IMMEDIATE_RESEND",
+                  ticket,ctx,closeCallOk?"true":"false",astraCloseRet);
       return false;
    }
-   if(!ok)
-   {
-      g_lastRejectedCloseTicket = ticket;
-      g_lastRejectedCloseAt     = TimeCurrent();
-      PrintFormat("OWNER_R_EXIT_CLOSE_FAILED | ticket=%I64u | authority=%s | ret=%u | ret_text=%s | err=%d",
-                  ticket, ctx, trade.ResultRetcode(), trade.ResultRetcodeDescription(), GetLastError());
-      return false;
-   }
+   g_tradeGuard[closeGuard].closeAcceptedPending=false;
    // v6.28.6 FIX 5: guarantee every EA-initiated close carries a provable
    // reason. Stamped only AFTER the broker accepted the close (so a rejected
    // request can never leave a stale attribution behind), and only when no
@@ -30607,6 +30644,20 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
       }
    }
 
+   if(g_rExit[idx].closeState == R_CLOSE_REQUESTED)
+   {
+      if(!PositionSelectByTicket(currentTicket))
+      {
+         g_rExit[idx].closeState=R_CLOSE_CONFIRMED;
+         XAU_RExit_Clear(g_rExit[idx].positionId);
+         XAU_RExit_SaveState(true);
+         return true;
+      }
+      if(g_rExit[idx].lastCloseAttemptTime>0 && now-g_rExit[idx].lastCloseAttemptTime<30)
+         return false;
+      g_rExit[idx].closeState=R_CLOSE_PENDING_RETRY;
+   }
+
    if(g_rExit[idx].closeState == R_CLOSE_PENDING_RETRY && now - g_rExit[idx].lastCloseAttemptTime < 3)
       return false;
 
@@ -30668,10 +30719,14 @@ bool XAU_RExit_RequestClose(int idx, ulong currentTicket, string reason)
       return true;
    }
 
-   g_rExit[idx].closeState = R_CLOSE_PENDING_RETRY;
-   PrintFormat("R_EXIT_MANAGER ticket=%I64u action=CLOSE_PENDING_RETRY reason=%s attempt=%d sendOk=%s stillOpen=%s",
-               currentTicket, g_rExit[idx].pendingCloseReason, g_rExit[idx].closeAttemptCount,
-               sendOk ? "true" : "false", stillOpen ? "true" : "false");
+   uint closeRet=trade.ResultRetcode();
+   bool acceptedPending=(closeRet==TRADE_RETCODE_DONE || closeRet==TRADE_RETCODE_DONE_PARTIAL ||
+                         closeRet==TRADE_RETCODE_PLACED) && stillOpen;
+   g_rExit[idx].closeState = acceptedPending ? R_CLOSE_REQUESTED : R_CLOSE_PENDING_RETRY;
+   PrintFormat("R_EXIT_MANAGER ticket=%I64u action=%s reason=%s attempt=%d sendOk=%s stillOpen=%s ret=%u",
+               currentTicket, acceptedPending?"CLOSE_ACCEPTED_PENDING":"CLOSE_PENDING_RETRY",
+               g_rExit[idx].pendingCloseReason, g_rExit[idx].closeAttemptCount,
+               sendOk ? "true" : "false", stillOpen ? "true" : "false",closeRet);
    XAU_RExit_SaveState(true);
    return false;
 }
