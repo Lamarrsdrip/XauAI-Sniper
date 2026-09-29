@@ -94,3 +94,15 @@ export const DirectionReservationReleaseReqSchema = z.object({
   symbol: z.string().optional().default(""),
   reservation_id: z.string().optional().default(""),
 });
+
+/** Renew an accepted-pending broker reservation without granting execution authority to a new caller. */
+export const DirectionReservationRenewReqSchema = z.object({
+  pin: z.string().optional().default(""),
+  license_key: z.string().optional().default(""),
+  broker_server: z.string().optional().default(""),
+  account: z.string().optional().default(""),
+  symbol: z.string().optional().default(""),
+  reservation_id: z.string().trim().min(1),
+  execution_key: z.string().trim().min(1).max(240),
+  ttl_seconds: z.number().optional().default(120),
+});
