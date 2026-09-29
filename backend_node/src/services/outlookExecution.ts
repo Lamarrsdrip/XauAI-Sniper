@@ -77,6 +77,16 @@ const DEFAULT_THESIS_TTL_SECONDS = 3600;
  */
 export async function publishOutlookThesis(doc: Record<string, unknown> | null, sourceLabel = "MARKET_OUTLOOK"): Promise<string | null> {
   if (!doc) return null;
+
+  // P1 HTF safety boundary: the audit requires real closed H1/H4/D1 broker
+  // evidence AND an owner-specified rule for turning it into direction
+  // authority. We have the evidence, but the owner rule is intentionally not
+  // invented. Until that rule is explicitly configured, Outlook/M10 remains
+  // observable only and cannot publish a thesis that Aurum could use as an
+  // OUTLOOK_ALIGNED candidate.
+  if (doc["broker_htf_evidence_complete"] !== true) return null;
+  if (doc["broker_htf_direction_rule_configured"] !== true) return null;
+
   const account = String(doc["account"] ?? "");
   const direction = String(doc["primary_direction"] ?? "").toUpperCase();
   const signalId = String(doc["id"] ?? doc["candidate_id"] ?? "");
