@@ -48,6 +48,6 @@ describe("resolveEaMonitorLicense broker-server boundary", () => {
           broker_server: "OtherBroker-Live",
           account: "1001",
         },
-      } satisfies Partial<LicenseError>);
+      });
   });
 });
