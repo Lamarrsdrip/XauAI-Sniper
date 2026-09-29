@@ -20452,12 +20452,12 @@ void CheckPyramidOpportunity()
       return;
 
    string pyramidReservationId = "";
+   string pyramidExecutionKey = StringFormat("%I64d|%s|%d|PYRAMID|%s|CAMPAIGN=%I64d|ADD=%d",
+                                             AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), InpMagicNumber,
+                                             isBuy?"BUY":"SELL", g_campaign[XAU_CampaignSlot(dir)].campaignId,
+                                             addsAlready+1);
    {
       string pyramidGuardReason = "";
-      string pyramidExecutionKey = StringFormat("%I64d|%s|%d|PYRAMID|%s|CAMPAIGN=%I64d|ADD=%d",
-                                                AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), InpMagicNumber,
-                                                isBuy?"BUY":"SELL", g_campaign[XAU_CampaignSlot(dir)].campaignId,
-                                                addsAlready+1);
       if(!XAU_CanOpenDirection(isBuy ? 1 : -1, "PYRAMID", pyramidGuardReason,
                                pyramidReservationId, pyramidExecutionKey))
       {
@@ -20527,6 +20527,13 @@ void CheckPyramidOpportunity()
    {
       if(!XAU_BrokerOpenRetcodeAccepted(pyramidRetcode))
          XAU_ReleaseDirectionReservation(pyramidReservationId);
+      else if(!pyLiveConfirmed)
+         XAU_PendingBrokerOpenArmPyramid(dir,pyramidExecutionKey,
+                                         g_campaign[campaignSlot].campaignId,addsAlready+1,
+                                         timingSourceBar,candidateEpisodeId,
+                                         pyramidGeometry.finalOriginalRiskDistance,
+                                         pyramidGeometry.effectiveHardStopDistance,
+                                         trade.ResultOrder());
       g_alignedCandidates[2].firstCandidateTime = 0;
       PrintFormat("PYRAMID_OPEN_NOT_CONFIRMED | requestOk=%s retcode=%u accepted=%s positionId=%I64u liveConfirmed=%s err=%d",
                   requestOk?"true":"false",pyramidRetcode,
@@ -20567,6 +20574,7 @@ void CheckPyramidOpportunity()
    PrintFormat("PYRAMID OK: %s %.2f lots @ %.2f | %s",
                isBuy?"BUY":"SELL",addLot,entryPx,why);
    XAU_CampaignRegisterAdd(dir, "PYRAMID");
+   XAU_PendingBrokerOpenClear(dir,"PYRAMID_IMMEDIATE_CONFIRMED");
 
    if(posId>0)
    {
@@ -25283,9 +25291,9 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
    // counter magic numbers, which the earlier campaign-only transition
    // check does not.
    string directionReservationId = "";
+   string coreExecutionKey = XAU_CoreExecutionKey(signal);
    {
       string sendGuardReason = "";
-      string coreExecutionKey = XAU_CoreExecutionKey(signal);
       if(!XAU_CanOpenDirection(signal, isManualOverride ? "MANUAL_FORCE" : "NORMAL_CORE",
                                sendGuardReason, directionReservationId, coreExecutionKey,
                                xauLeaseIsGenuineCoreEntry))
@@ -25402,6 +25410,12 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
       // this terminal nor a peer can resend the ambiguous opportunity.
       if(!XAU_BrokerOpenRetcodeAccepted(brokerRetcode))
          XAU_ReleaseDirectionReservation(directionReservationId);
+      else if(!liveConfirmed)
+         XAU_PendingBrokerOpenArmCore(signal,coreExecutionKey,funnelSetup,
+                                      g_latestDecisionSnapshot.horizon,
+                                      ownerOriginalOneRDistance,ownerEffectiveSLDistance,
+                                      frozenEntryRegime,ownerOriginalSignalDirection,
+                                      breakoutInversionApplied,brokerTP,trade.ResultOrder());
       PrintFormat("BROKER_OPEN_NOT_CONFIRMED | requestOk=%s retcode=%u accepted=%s positionId=%I64u liveConfirmed=%s",
                   requestOk?"true":"false", brokerRetcode,
                   XAU_BrokerOpenRetcodeAccepted(brokerRetcode)?"true":"false",
@@ -25497,6 +25511,7 @@ bool OpenTrade(int signal, double atr, string reason, double sizeMulti, bool isM
                            ownerOriginalOneRDistance, ownerEffectiveSLDistance,
                            coreEffectiveRiskUSD,frozenEntryRegime,
                            ownerOriginalSignalDirection,breakoutInversionApplied);
+      XAU_PendingBrokerOpenClear(signal,"CORE_IMMEDIATE_CONFIRMED");
 
       if(InpDecisionMode == XAU_DECISION_M30_THREE_M10_CONSENSUS &&
          g_m30Decision.candidateCreated && g_m30Decision.preferredDirection == approvedSignalDirection)
@@ -34518,6 +34533,137 @@ int XAU_TradeBrainPositionEntryOrderCount(ulong positionId)
    return ArraySize(seenOrders);
 }
 
+
+bool XAU_FindPendingBrokerDealPosition(int slot,ulong &positionIdOut)
+{
+   positionIdOut=0;
+   if(slot<0 || slot>1 || !g_pendingBrokerOpen[slot].active) return false;
+   if(g_pendingBrokerOpen[slot].brokerOrderId==0 || g_pendingBrokerOpen[slot].submittedAt<=0) return false;
+   if(!HistorySelect(g_pendingBrokerOpen[slot].submittedAt-60,TimeCurrent()+1)) return false;
+   for(int i=HistoryDealsTotal()-1;i>=0;i--)
+   {
+      ulong deal=HistoryDealGetTicket(i);
+      if(deal==0) continue;
+      if((ulong)HistoryDealGetInteger(deal,DEAL_ORDER)!=g_pendingBrokerOpen[slot].brokerOrderId) continue;
+      if((long)HistoryDealGetInteger(deal,DEAL_MAGIC)!=InpMagicNumber) continue;
+      if(HistoryDealGetString(deal,DEAL_SYMBOL)!=Symbol()) continue;
+      ENUM_DEAL_ENTRY de=(ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal,DEAL_ENTRY);
+      if(de!=DEAL_ENTRY_IN && de!=DEAL_ENTRY_INOUT) continue;
+      int dir=((ENUM_DEAL_TYPE)HistoryDealGetInteger(deal,DEAL_TYPE)==DEAL_TYPE_BUY)?1:-1;
+      if(dir!=g_pendingBrokerOpen[slot].direction) continue;
+      positionIdOut=(ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+      if(positionIdOut>0) return true;
+   }
+   return false;
+}
+
+bool XAU_PromotePendingBrokerOpen(int direction,ulong positionId,string source)
+{
+   int slot=XAU_PendingBrokerOpenSlot(direction);
+   if(positionId==0 || !g_pendingBrokerOpen[slot].active ||
+      g_pendingBrokerOpen[slot].direction!=direction) return false;
+   if(g_pendingBrokerOpen[slot].family=="CORRUPT_FAIL_CLOSED") return false;
+
+   ulong liveTicket=0; string liveSymbol=""; long liveMagic=0; int liveDir=0;
+   double liveOpen=0.0,liveVol=0.0,liveSL=0.0,liveTP=0.0;
+   if(!XAU_FindLivePositionByIdentifier(positionId,liveTicket,liveSymbol,liveMagic,liveDir,
+                                         liveOpen,liveVol,liveSL,liveTP)) return false;
+   if(liveMagic!=InpMagicNumber || liveSymbol!=Symbol() || liveDir!=direction) return false;
+
+   XAU_PendingBrokerOpenState pending=g_pendingBrokerOpen[slot];
+   double originalDist=pending.originalRiskDistance>0.0?pending.originalRiskDistance:MathAbs(liveOpen-liveSL);
+   double effectiveDist=pending.effectiveRiskDistance>0.0?pending.effectiveRiskDistance:MathAbs(liveOpen-liveSL);
+   if(originalDist<=0.0) originalDist=effectiveDist;
+   if(effectiveDist<=0.0) effectiveDist=originalDist;
+
+   if(pending.family=="CORE")
+   {
+      if(g_campaign[slot].active)
+      {
+         if(g_campaign[slot].activePositionCount>0)
+         {
+            XAU_PendingBrokerOpenClear(direction,"CORE_ALREADY_RECONCILED_"+source);
+            return true;
+         }
+         return false;
+      }
+      int digits=(int)SymbolInfoInteger(Symbol(),SYMBOL_DIGITS);
+      double structuralSL=NormalizeDouble(direction==1?liveOpen-originalDist:liveOpen+originalDist,digits);
+      double destination=liveTP>0.0?liveTP:pending.requestedTP;
+      double originalRiskUSD=liveVol*RiskPerLotForDistance(originalDist);
+      double effectiveRiskUSD=liveVol*RiskPerLotForDistance(effectiveDist);
+      XAU_CampaignOpenCore(direction,pending.setupName,(ENUM_XAU_TRADE_HORIZON)pending.horizon,
+                           structuralSL,destination,destination,destination,
+                           positionId,originalRiskUSD,originalDist,effectiveDist,effectiveRiskUSD,
+                           (ENUM_REGIME)pending.frozenEntryRegime,pending.originalSignalDirection,
+                           pending.breakoutInversionApplied);
+      int rx=XAU_RExit_EnsureIdx(positionId,liveTicket,direction==1,liveOpen,liveSL,liveVol,
+                                 false,originalDist,originalRiskUSD,effectiveRiskUSD,
+                                 (int)XAU_OwnerExitProfileForEntryRegime((ENUM_REGIME)pending.frozenEntryRegime));
+      if(rx>=0) XAU_RExit_SaveState(true);
+      PrintFormat("BROKER_DELAYED_CORE_PROMOTED | source=%s | positionId=%I64u | order=%I64u | executionKey=%s",
+                  source,positionId,pending.brokerOrderId,pending.executionKey);
+      XAU_PendingBrokerOpenClear(direction,"CORE_BROKER_CONFIRMED_"+source);
+      return true;
+   }
+
+   if(pending.family=="PYRAMID")
+   {
+      if(!g_campaign[slot].active) XAU_ReconcileCampaignOnInit();
+      if(!g_campaign[slot].active) return false;
+      if(g_campaign[slot].additionCount<pending.addNumber)
+      {
+         XAU_CampaignRegisterAdd(direction,"PYRAMID_DELAYED_BROKER_FILL");
+         g_campaign[slot].lastApprovedPyramidEvidenceBar=pending.timingSourceBar;
+         g_campaignBasketStateDirty=true;
+         lastPyramidAddTime=TimeCurrent();
+         lastPyramidPx=liveOpen;
+         lastPyramidCampaignId=g_campaign[slot].campaignId;
+         double originalRiskUSD=liveVol*RiskPerLotForDistance(originalDist);
+         double effectiveRiskUSD=liveVol*RiskPerLotForDistance(effectiveDist);
+         int rx=XAU_RExit_EnsureIdx(positionId,liveTicket,direction==1,liveOpen,liveSL,liveVol,
+                                    false,originalDist,originalRiskUSD,effectiveRiskUSD,
+                                    (int)OWNER_EXIT_PYRAMID);
+         if(rx>=0) XAU_RExit_SaveState(true);
+         XAU_ActivateBasketModeImmediately(direction);
+      }
+      PrintFormat("BROKER_DELAYED_PYRAMID_PROMOTED | source=%s | positionId=%I64u | order=%I64u | executionKey=%s | addNumber=%d",
+                  source,positionId,pending.brokerOrderId,pending.executionKey,pending.addNumber);
+      XAU_PendingBrokerOpenClear(direction,"PYRAMID_BROKER_CONFIRMED_"+source);
+      return true;
+   }
+   return false;
+}
+
+void XAU_ReconcilePendingBrokerOpens(string source)
+{
+   static datetime lastRuntime=0;
+   if(source!="STARTUP" && TimeCurrent()==lastRuntime) return;
+   if(source!="STARTUP") lastRuntime=TimeCurrent();
+   for(int slot=0;slot<2;slot++)
+   {
+      if(!g_pendingBrokerOpen[slot].active) continue;
+      if(g_pendingBrokerOpen[slot].family=="CORRUPT_FAIL_CLOSED") continue;
+      int dir=g_pendingBrokerOpen[slot].direction;
+      if(g_pendingBrokerOpen[slot].family=="CORE" && g_campaign[slot].active &&
+         g_campaign[slot].activePositionCount>0)
+      {
+         XAU_PendingBrokerOpenClear(dir,"CAMPAIGN_ALREADY_PRESENT_"+source);
+         continue;
+      }
+      if(g_pendingBrokerOpen[slot].family=="PYRAMID" && g_campaign[slot].active &&
+         g_pendingBrokerOpen[slot].addNumber>0 &&
+         g_campaign[slot].additionCount>=g_pendingBrokerOpen[slot].addNumber)
+      {
+         XAU_PendingBrokerOpenClear(dir,"PYRAMID_ALREADY_PRESENT_"+source);
+         continue;
+      }
+      ulong posId=0;
+      if(XAU_FindPendingBrokerDealPosition(slot,posId))
+         XAU_PromotePendingBrokerOpen(dir,posId,source+"_HISTORY");
+   }
+}
+
 void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest& request, const MqlTradeResult& result)
 {
    if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
@@ -34571,6 +34717,11 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
       }
       if(g_pendingSmartCautionMemory.valid && g_pendingSmartCautionMemory.direction==openDirection)
          g_pendingSmartCautionMemory.valid=false;
+      if(!XAU_PromotePendingBrokerOpen(openDirection,openPosId,"ON_TRADE_TRANSACTION"))
+      {
+         int openSlot=XAU_CampaignSlot(openDirection);
+         if(!g_campaign[openSlot].active) XAU_ReconcileCampaignOnInit();
+      }
       return;
    }
    // v6.21.2 audit fix (Fix 18): DEAL_ENTRY_OUT_BY (position closed by an
