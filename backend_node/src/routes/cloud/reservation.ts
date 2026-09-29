@@ -4,7 +4,7 @@ import { MongoServerError } from "mongodb";
 import { getDb } from "../../db.js";
 import { resolveEaMonitorLicense } from "../../services/license.js";
 import { isGoldSymbol } from "../../services/goldSymbol.js";
-import { DirectionReservationClaimReqSchema, DirectionReservationReleaseReqSchema } from "../../models/cloudActivity.js";
+import { DirectionReservationClaimReqSchema, DirectionReservationReleaseReqSchema, DirectionReservationRenewReqSchema } from "../../models/cloudActivity.js";
 
 function reservationSymbolOk(symbol: string): boolean {
   const u = symbol.trim().toUpperCase();
@@ -88,6 +88,37 @@ export async function registerCloudReservationRoutes(app: FastifyInstance): Prom
       }
       throw err;
     }
+  });
+
+  app.post("/cloud/reservation/renew", async (request, reply) => {
+    const req = DirectionReservationRenewReqSchema.parse(request.body);
+    if (!req.broker_server || !req.account || !req.symbol) {
+      return reply.code(400).send({ detail: "broker_server, account, and symbol are required" });
+    }
+    if (!reservationSymbolOk(req.symbol)) {
+      return reply.code(400).send({ detail: { ok: false, reason: "INVALID_SYMBOL", symbol: req.symbol } });
+    }
+    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account, req.broker_server);
+    const key = reservationKey(req.broker_server, req.account, req.symbol);
+    const now = new Date();
+    const ttl = Math.max(30, Math.min(Math.trunc(req.ttl_seconds || 120), 120));
+    const expiresAt = new Date(now.getTime() + ttl * 1000);
+    const result = await getDb().collection("cloud_direction_reservations").updateOne(
+      {
+        _id: key as unknown as never,
+        reservationId: req.reservation_id,
+        executionKey: req.execution_key,
+        licenseId: lic?.["id"] ?? "",
+      },
+      { $set: { expiresAt: expiresAt.toISOString(), renewedAt: now.toISOString() } },
+    );
+    if (result.matchedCount !== 1) {
+      return reply.code(409).send({
+        renewed: false,
+        reason: "RESERVATION_OWNERSHIP_NOT_CONFIRMED",
+      });
+    }
+    return { renewed: true, reservationId: req.reservation_id, expiresAt: expiresAt.toISOString() };
   });
 
   app.post("/cloud/reservation/release", async (request) => {
