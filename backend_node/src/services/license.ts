@@ -93,11 +93,50 @@ export async function resolveMonitorLicense(pin: string, account: string): Promi
 }
 
 
-export async function resolveEaMonitorLicense(pin: string, account: string): Promise<Document> {
+export function normalizeBrokerServer(value: string): string {
+  return String(value ?? "").trim().toUpperCase();
+}
+
+export async function resolveEaMonitorLicense(pin: string, account: string, brokerServer = ""): Promise<Document> {
   const acct = String(account ?? "").trim();
   if (!acct) throw new LicenseError(400, { ok: false, reason: "MISSING_MT5_ACCOUNT", message: "EA-facing requests must include the MT5 account.", account: acct });
-  const lic = await resolveMonitorLicense(pin, acct);
+
+  let lic = await resolveMonitorLicense(pin, acct);
   const bound = String(lic["mt5_account"] ?? "").trim();
   if (!bound || bound !== acct) throw new LicenseError(403, { ok: false, reason: "MT5_ACCOUNT_BINDING_NOT_CONFIRMED", message: "License/account binding is not confirmed.", bound_account: bound, account: acct });
+
+  const reportedServer = String(brokerServer ?? "").trim();
+  if (!reportedServer) return lic;
+
+  const normalizedReported = normalizeBrokerServer(reportedServer);
+  let boundServer = String(lic["broker_server"] ?? "").trim();
+  if (!boundServer) {
+    const raw = normalizeLicenseKey(pin);
+    const nowIso = new Date().toISOString();
+    const claim = await getDb().collection("pin_licenses").updateOne(
+      { pin: raw, is_active: true, mt5_account: acct, broker_server: { $in: [null, ""] } },
+      { $set: { broker_server: reportedServer, broker_server_bound_at: nowIso } },
+    );
+    if (claim.modifiedCount === 1) {
+      lic["broker_server"] = reportedServer;
+      lic["broker_server_bound_at"] = nowIso;
+      boundServer = reportedServer;
+    } else {
+      const reread = await getDb().collection("pin_licenses").findOne({ pin: raw, is_active: true }, { projection: { _id: 0 } });
+      lic = reread ?? lic;
+      boundServer = String(lic["broker_server"] ?? "").trim();
+    }
+  }
+
+  if (!boundServer || normalizeBrokerServer(boundServer) !== normalizedReported) {
+    throw new LicenseError(403, {
+      ok: false,
+      reason: "LICENSE_BOUND_TO_DIFFERENT_BROKER_SERVER",
+      message: "License is bound to a different MT5 broker server.",
+      bound_broker_server: boundServer,
+      broker_server: reportedServer,
+      account: acct,
+    });
+  }
   return lic;
-} // ASTRA_REPAIR_V2_6287 / 023
+} // 2026-09-29 P1 broker-server identity boundary
