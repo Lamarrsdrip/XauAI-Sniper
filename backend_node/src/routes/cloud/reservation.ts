@@ -40,7 +40,7 @@ export async function registerCloudReservationRoutes(app: FastifyInstance): Prom
       return reply.code(400).send({ detail: { ok: false, reason: "INVALID_SYMBOL", symbol: req.symbol } });
     }
 
-    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account);
+    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account, req.broker_server);
     const executionKey = (req.execution_key || "").trim();
     if (!executionKey || executionKey.length > 240) {
       return reply.code(400).send({ detail: "execution_key is required and must be at most 240 characters" });
@@ -92,7 +92,7 @@ export async function registerCloudReservationRoutes(app: FastifyInstance): Prom
 
   app.post("/cloud/reservation/release", async (request) => {
     const req = DirectionReservationReleaseReqSchema.parse(request.body);
-    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account);
+    const lic = await resolveEaMonitorLicense(req.pin || req.license_key, req.account, req.broker_server);
     const key = reservationKey(req.broker_server, req.account, req.symbol);
     const db = getDb();
     const reservations = db.collection("cloud_direction_reservations");
