@@ -33,6 +33,7 @@ const CloudCommandAckReqSchema = z.object({
   pin: z.string().optional().default(""),
   license_key: z.string().optional().default(""),
   account: z.string().optional().default(""),
+  broker_server: z.string().optional().default(""),
   details: z.record(z.string(), z.unknown()).optional().nullable(),
 });
 
@@ -41,6 +42,7 @@ const PendingQuerySchema = z.object({
   pin: z.string().optional().default(""),
   license_key: z.string().optional().default(""),
   account: z.string().optional().default(""),
+  broker_server: z.string().optional().default(""),
 });
 
 const VALID_ACK_STATUSES = new Set(["ACKED", "EXECUTED", "FAILED", "SKIPPED"]);
@@ -137,7 +139,7 @@ export async function registerCloudCommandRoutes(app: FastifyInstance): Promise<
   app.get("/cloud/command/pending", async (request) => {
     const q = PendingQuerySchema.parse(request.query);
     const raw = normalizeLicenseKey(q.license_key || q.pin || "");
-    const lic = await resolveEaMonitorLicense(raw, q.account || "");
+    const lic = await resolveEaMonitorLicense(raw, q.account || "", q.broker_server || "");
     const expired = await expireStalePendingCommands();
 
     const n = Math.max(1, Math.min(Math.trunc(q.limit), 10));
@@ -173,7 +175,7 @@ export async function registerCloudCommandRoutes(app: FastifyInstance): Promise<
   app.post("/cloud/command/ack", async (request, reply) => {
     const req = CloudCommandAckReqSchema.parse(request.body);
     const raw = normalizeLicenseKey(req.license_key || req.pin || "");
-    const lic = await resolveEaMonitorLicense(raw, req.account || "");
+    const lic = await resolveEaMonitorLicense(raw, req.account || "", req.broker_server || "");
     const status = (req.status || "").toUpperCase().trim();
     if (!VALID_ACK_STATUSES.has(status)) {
       return reply.code(400).send({ detail: "Invalid command acknowledgement status." });
