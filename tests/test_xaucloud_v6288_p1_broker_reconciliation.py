@@ -65,8 +65,82 @@ def test_offline_lease_restart_guards_are_present():
     for marker in markers:
         assert marker in LEASE, marker
 
+def test_pending_broker_identity_survives_persist_failure_and_renews_server_fence():
+    for marker in [
+        "XAU_PendingBrokerOpenUnsafeKey",
+        "BROKER_OPEN_PENDING_DURABILITY_UNSAFE",
+        "FAIL_CLOSED_AFTER_RESTART",
+        "FILE_COMMON",
+        "reservationId",
+        "XAU_RenewDirectionReservation",
+        "/api/cloud/reservation/renew",
+        "BROKER_PENDING_ORDER_TERMINAL_REJECT",
+        "ORDER_STATE_CANCELED",
+        "ORDER_STATE_REJECTED",
+        "ORDER_STATE_EXPIRED",
+    ]:
+        assert marker in EA, marker
+
+def _delimiter_balance(source: str):
+    braces = parens = brackets = 0
+    state = "code"
+    escaped = False
+    i = 0
+    while i < len(source):
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < len(source) else ""
+        if state == "line":
+            if ch == "\n":
+                state = "code"
+            i += 1
+            continue
+        if state == "block":
+            if ch == "*" and nxt == "/":
+                state = "code"
+                i += 2
+            else:
+                i += 1
+            continue
+        if state in {"string", "char"}:
+            quote = '"' if state == "string" else "'"
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                state = "code"
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            state = "line"
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            state = "block"
+            i += 2
+            continue
+        if ch == '"':
+            state = "string"
+        elif ch == "'":
+            state = "char"
+        elif ch == "{":
+            braces += 1
+        elif ch == "}":
+            braces -= 1
+        elif ch == "(":
+            parens += 1
+        elif ch == ")":
+            parens -= 1
+        elif ch == "[":
+            brackets += 1
+        elif ch == "]":
+            brackets -= 1
+        assert braces >= 0 and parens >= 0 and brackets >= 0
+        i += 1
+    return braces, parens, brackets, state
+
 def test_basic_source_delimiter_sanity():
-    # Not a MetaEditor compile; catches accidental text-transform damage before
-    # the candidate reaches the native compiler gate.
-    assert EA.count("{") == EA.count("}")
-    assert LEASE.count("{") == LEASE.count("}")
+    # Lexical only: ignores comments and quoted JSON/log strings. Native
+    # MetaEditor compilation remains a separate release gate.
+    assert _delimiter_balance(EA) == (0, 0, 0, "code")
+    assert _delimiter_balance(LEASE) == (0, 0, 0, "code")
