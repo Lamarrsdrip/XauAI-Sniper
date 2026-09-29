@@ -15212,7 +15212,7 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
       double distToSL = (curSL > 0 && curPrice > 0) ? MathAbs(curPrice - curSL) : 0.0;
       double distToTP = (curTP > 0 && curPrice > 0) ? MathAbs(curTP - curPrice) : 0.0;
       string body = StringFormat(
-         "{\"pin\":\"%s\",\"license_key\":\"%s\",\"account\":\"%I64d\",\"symbol\":\"%s\","
+         "{\"pin\":\"%s\",\"license_key\":\"%s\",\"account\":\"%I64d\",\"broker_server\":\"%s\",\"symbol\":\"%s\","
          "\"ticket\":\"%I64u\",\"direction\":\"%s\",\"lots\":%.2f,\"trade_age_minutes\":%d,"
          "\"setup_type\":\"%s\",\"grade\":\"%s\",\"ai_confidence\":%d,\"thesis_score\":%.2f,"
          "\"hold_probability\":%.0f,\"exit_probability\":%.0f,"
@@ -15223,7 +15223,7 @@ void XAU_LogTradeThesisStatus(ulong ticket, bool isBuy, double openPx, double cu
          "\"recovery_classification\":\"%s\",\"is_buy\":%s,\"open_price\":%.5f,"
          "\"current_price\":%.5f,\"sl\":%.5f,\"tp\":%.5f,\"dist_to_sl\":%.5f,\"dist_to_tp\":%.5f}",
          BotMonitorJsonSafe(InpLicensePIN, 32), BotMonitorJsonSafe(InpLicensePIN, 32),
-         AccountInfoInteger(ACCOUNT_LOGIN), Symbol(), ticket,
+         AccountInfoInteger(ACCOUNT_LOGIN), BotMonitorJsonSafe(AccountInfoString(ACCOUNT_SERVER),60), Symbol(), ticket,
          BotMonitorJsonSafe(direction, 8), lotsOpen, tradeAgeMinutes,
          BotMonitorJsonSafe(setupType, 40), BotMonitorJsonSafe(grade, 8),
          aiConfidence, liveScore, holdProbability, exitProbability,
@@ -46102,10 +46102,10 @@ void BotMonitorAckCommand(string commandId, string status, string message)
 {
    if(!BotMonitorEnabled() || StringLen(commandId) < 8) return;
    string body = StringFormat(
-      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"account\":\"%I64d\",\"command_id\":\"%s\",\"status\":\"%s\",\"message\":\"%s\","
+      "{\"pin\":\"%s\",\"license_key\":\"%s\",\"account\":\"%I64d\",\"broker_server\":\"%s\",\"command_id\":\"%s\",\"status\":\"%s\",\"message\":\"%s\","
       "\"details\":{\"remote_pause\":%s,\"remote_stop\":%s,\"open_positions\":%d}}",
       BotMonitorJsonSafe(InpLicensePIN, 32), BotMonitorJsonSafe(InpLicensePIN, 32),
-      AccountInfoInteger(ACCOUNT_LOGIN),
+      AccountInfoInteger(ACCOUNT_LOGIN), BotMonitorJsonSafe(AccountInfoString(ACCOUNT_SERVER),60),
       BotMonitorJsonSafe(commandId, 80), BotMonitorJsonSafe(status, 16),
       BotMonitorJsonSafe(message, 260), BotMonitorBool(g_remotePauseNewTrades),
       BotMonitorBool(g_remoteStopTrading), CountMyPositions());
@@ -46169,9 +46169,12 @@ void XAU_FetchOutlookThesis()
    StringToCharArray("", pd, 0, 0);
    string hdr = "X-Agent-Token: " + InpCloudAgentToken + "\r\n";
    ResetLastError();
+   string brokerServerQuery=AccountInfoString(ACCOUNT_SERVER);
+   StringReplace(brokerServerQuery," ","%20");
    string url = InpCloudURL + "/api/cloud/outlook/thesis?pin=" +
                 BotMonitorJsonSafe(InpLicensePIN, 32) +
-                "&account=" + (string)AccountInfoInteger(ACCOUNT_LOGIN);
+                "&account=" + (string)AccountInfoInteger(ACCOUNT_LOGIN) +
+                "&broker_server=" + brokerServerQuery;
    int code = WebRequest("GET", url, hdr, InpCloudTimeoutMs, pd, res, rh);
    if(code != 200 || ArraySize(res) == 0) return;
 
@@ -46688,9 +46691,12 @@ void BotMonitorPollCommands()
    StringToCharArray("", pd, 0, 0);
    string hdr = "X-Agent-Token: " + InpCloudAgentToken + "\r\n";
    ResetLastError();
+   string commandBrokerServerQuery=AccountInfoString(ACCOUNT_SERVER);
+   StringReplace(commandBrokerServerQuery," ","%20");
    string pendingUrl = InpCloudURL + "/api/cloud/command/pending?limit=1&pin=" +
                        BotMonitorJsonSafe(InpLicensePIN, 32) +
-                       "&account=" + (string)AccountInfoInteger(ACCOUNT_LOGIN);
+                       "&account=" + (string)AccountInfoInteger(ACCOUNT_LOGIN) +
+                       "&broker_server=" + commandBrokerServerQuery;
    int code = WebRequest("GET", pendingUrl,
                          hdr, InpCloudTimeoutMs, pd, res, rh);
    if(code != 200 || ArraySize(res) == 0)
