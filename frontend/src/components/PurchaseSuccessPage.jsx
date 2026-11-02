@@ -57,7 +57,8 @@ export default function PurchaseSuccessPage() {
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-6" data-testid="purchase-success-page">
-      <div className="max-w-lg w-full">
+      <main className="max-w-lg w-full">
+        <h1 className="mb-5 text-center font-heading text-2xl font-bold">XauCloud payment status</h1>
         {status === "checking" && (
           <div className="border border-border bg-card p-8 text-center" data-testid="payment-checking">
             <div className="w-12 h-12 bg-primary/10 flex items-center justify-center mx-auto mb-4">
@@ -94,7 +95,7 @@ export default function PurchaseSuccessPage() {
                 <li>Sign in to Command Center and link this PIN</li>
                 <li>Download the EA from Command Center and install it on MetaTrader 5</li>
                 <li>Enter this PIN in the EA settings</li>
-                <li>Enable Auto Trading and start making money!</li>
+                <li>Enable Algo Trading only after broker compatibility and demo risk checks.</li>
               </ol>
             </div>
             <div className="border-t border-border pt-4 flex items-center justify-between">
@@ -143,7 +144,7 @@ export default function PurchaseSuccessPage() {
             </button>
           </div>
         )}
-      </div>
+      </main>
     </div>
   );
 }
