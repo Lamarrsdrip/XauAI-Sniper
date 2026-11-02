@@ -18,6 +18,7 @@ export default function DirectCheckoutAdmin({ api }) {
   const [notice, setNotice] = useState("");
   const [notes, setNotes] = useState({});
   const [evidence, setEvidence] = useState({});
+  const [proofView, setProofView] = useState(null);
   const load = useCallback(async () => {
     try {
       const [config, result] = await Promise.all([
@@ -54,6 +55,15 @@ export default function DirectCheckoutAdmin({ api }) {
       await load();
     } catch (e) { setError(e.response?.data?.detail || e.message || "Could not save configuration."); }
     finally { setBusy(false); }
+  }
+  async function viewProof(reference) {
+    setError("");
+    try {
+      const response = await apiClient.get(api + "/admin/direct-checkout/" + encodeURIComponent(reference));
+      const src = response.data?.order?.evidence_image;
+      if (typeof src !== "string" || !/^data:image\/(png|jpeg|webp);base64,/.test(src)) throw new Error("No safe image proof is stored.");
+      setProofView({ reference, src });
+    } catch (err) { setError(err.response?.data?.detail || err.message || "Unable to load evidence."); }
   }
   async function action(reference, name) {
     setError(""); setNotice(""); setBusy(true);
@@ -105,6 +115,7 @@ export default function DirectCheckoutAdmin({ api }) {
         <p className="mt-2 text-[12px] text-white/60">{order.buyer_name} · {order.buyer_email} · {order.country} · {order.method}</p>
         <p className="mt-1 font-mono text-[12px] text-white/60">{order.amount_minor / 100} {order.currency} · {new Date(order.created_at).toLocaleString()}</p>
         <p className="mt-1 break-all text-xs text-white/65">Submitted reference: {order.submitted_reference || "Not submitted"}</p>
+        {order.has_proof && <button className={btnClass + " mt-2"} type="button" onClick={() => viewProof(order.reference)}>View optional proof (unverified)</button>}
         {order.payment_status === "MANUAL_SUBMITTED" && <div className="mt-4 space-y-2">
           <input className={inputClass} aria-label="Authoritative verification reference" value={evidence[order.reference] || ""} onChange={(e) => setEvidence({ ...evidence, [order.reference]: e.target.value })} placeholder="Independently verified bank/chain transaction ID"/>
           <textarea className={inputClass} aria-label="Review verification notes" value={notes[order.reference] || ""} onChange={(e) => setNotes({ ...notes, [order.reference]: e.target.value })} rows={2} placeholder="Verification evidence, amount, beneficiary/network, check date"/>
@@ -112,5 +123,12 @@ export default function DirectCheckoutAdmin({ api }) {
         </div>}
       </div>)}</div>
     </section>
+    {proofView && <div role="dialog" aria-label="Unverified transfer evidence" aria-modal="true" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4">
+      <div className="max-h-[90vh] max-w-xl overflow-auto rounded-2xl border border-white/20 bg-[#121416] p-5">
+        <div className="flex justify-between gap-4"><h3 className="text-sm font-bold text-white">Supporting evidence · {proofView.reference}</h3><button type="button" className={btnClass} onClick={() => setProofView(null)}>Close</button></div>
+        <p className="mt-2 text-xs leading-5 text-amber-200">Not verified. Check an authoritative bank statement or blockchain explorer before approving.</p>
+        <img src={proofView.src} alt="Customer submitted payment evidence, unverified" className="mt-4 max-h-[65vh] max-w-full rounded-xl object-contain"/>
+      </div>
+    </div>}
   </div>;
 }
