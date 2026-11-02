@@ -79,7 +79,9 @@ describe("XauCloud customer surface cleanup contract", () => {
     expect(hero).not.toContain("EA heartbeat");
     expect(hero).not.toContain("Mobile Command Center");
     // The approved hero headline/CTAs must survive untouched.
-    expect(hero).toContain("More control over");
+    expect(hero).toContain("Your AI Gold Trader.");
+    expect(hero).toContain("Built for Automatic Trading.");
+    expect(hero).toContain("executes XAUUSD trades automatically");
     expect(hero).toContain("Buy XauCloud");
     expect(hero).toContain("Start 3-Day Trial");
   });

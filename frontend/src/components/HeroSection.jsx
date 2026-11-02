@@ -1,5 +1,5 @@
 import React from "react";
-import { ArrowUpRight, ShieldCheck, Activity, MonitorSmartphone } from "lucide-react";
+import { ArrowUpRight, PlayCircle } from "lucide-react";
 
 export default function HeroSection() {
   return (
@@ -11,10 +11,10 @@ export default function HeroSection() {
             <span className="h-1.5 w-1.5 rounded-full bg-[#b18d45]"/> XAUUSD · MetaTrader 5 technology
           </div>
           <h1 className="max-w-[690px] font-heading text-[2.65rem] font-semibold leading-[1.06] tracking-[-0.04em] sm:text-[3.7rem] lg:text-[4.35rem]" data-testid="hero-title">
-            More control over <span className="text-[#9b7840]">gold trading.</span>
+            Your AI Gold Trader. <span className="text-[#9b7840]">Built for Automatic Trading.</span>
           </h1>
           <p className="mt-6 max-w-[535px] text-[15px] leading-[1.85] text-[#425956]">
-            XauCloud brings automated XAUUSD execution, risk controls and a connected Command Center into one trading workflow. Review actual trading records before deciding.
+            Meet XauCloud — an AI-powered trading bot for MetaTrader 5 that analyzes the gold market, executes XAUUSD trades automatically, and manages trades using built-in risk controls. Monitor its activity, track performance, and stay in control through your Command Center.
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <a href="#purchase" className="inline-flex min-h-[50px] items-center justify-center gap-2 rounded-full bg-[#15282a] px-7 text-sm font-bold text-white shadow-sm transition hover:bg-[#294043]" data-testid="hero-buy-btn">Buy XauCloud <ArrowUpRight size={17}/></a>
@@ -22,19 +22,31 @@ export default function HeroSection() {
           </div>
           <p className="mt-6 text-[11px] leading-5 text-[#51625e]">Trading involves substantial risk, including loss of capital. No performance is guaranteed.</p>
         </div>
-        <div className="relative overflow-hidden rounded-[28px] border border-[#d9d6cf] bg-white p-5 shadow-[0_22px_70px_rgba(37,45,41,0.08)] sm:p-7" aria-label="Command Center feature overview">
-          <div className="flex items-center justify-between border-b border-[#eeeae1] pb-5">
-            <div><span className="block text-[11px] font-bold uppercase tracking-[0.18em] text-[#795719]">XauCloud</span><h2 className="mt-1 font-heading text-xl font-semibold tracking-tight text-[#152729]">Command Center</h2></div>
-            <span className="rounded-full bg-[#f4f2ec] p-3"><MonitorSmartphone className="h-5 w-5 text-[#92713d]"/></span>
+        <div className="relative overflow-hidden rounded-[28px] border border-[#deded4] bg-white px-4 pb-5 pt-5 shadow-[0_22px_70px_rgba(37,45,41,0.08)] sm:px-6 sm:pt-6" data-testid="hero-video-card">
+          <div className="flex items-start justify-between gap-3 border-b border-[#ecebe3] pb-4">
+            <div>
+              <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#795719]">XauCloud in action</span>
+              <h2 className="mt-1 font-heading text-[19px] font-semibold tracking-tight text-[#15352e]">See how it works</h2>
+            </div>
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#f4eee0] text-[#8b6829]"><PlayCircle size={21}/></span>
           </div>
-          <div className="mt-5 grid gap-3">
-            <div className="flex items-center gap-4 rounded-2xl bg-[#f7f7f4] px-4 py-4"><Activity className="h-5 w-5 text-[#937340]"/><div><div className="text-sm font-bold text-[#263435]">Live bot visibility</div><div className="mt-0.5 text-xs text-[#4e6260]">See account telemetry and execution activity</div></div></div>
-            <div className="flex items-center gap-4 rounded-2xl bg-[#f7f7f4] px-4 py-4"><ShieldCheck className="h-5 w-5 text-[#937340]"/><div><div className="text-sm font-bold text-[#263435]">Risk-aware controls</div><div className="mt-0.5 text-xs text-[#4e6260]">Review decisions and manage operations</div></div></div>
+          <div className="mx-auto mt-5 w-full max-w-[255px] overflow-hidden rounded-[22px] border border-[#e4e8e2] bg-[#0b1916] shadow-[0_14px_34px_rgba(14,33,27,.18)]">
+            <div className="relative aspect-[9/16]">
+              <iframe
+                title="XauCloud product demonstration — play directly on this page"
+                src="https://www.youtube-nocookie.com/embed/guOB0N2y-N0?playsinline=1&rel=0"
+                className="absolute inset-0 h-full w-full border-0"
+                loading="lazy"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            </div>
           </div>
-          <div className="mt-6 flex items-center justify-between gap-3 border-t border-[#eeeae1] pt-5">
-            <span className="text-xs text-[#4e6260]">Access your real dashboard</span><a href="/command" className="inline-flex items-center gap-1 text-xs font-bold text-[#6d4f1d] hover:underline">Open Command Center <ArrowUpRight size={13}/></a>
+          <div className="mt-4 text-center">
+            <p className="text-[12px] leading-5 text-[#4e625a]">Tap play to watch the XauCloud walkthrough here.</p>
+            <a href="https://youtube.com/shorts/guOB0N2y-N0" target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center gap-1 text-[12px] font-bold text-[#78581e] hover:underline">Watch on YouTube if playback is unavailable <ArrowUpRight size={13}/></a>
           </div>
-          <p className="mt-3 text-[11px] text-[#52625e]">Product overview; not a simulated balance or fabricated profit display.</p>
         </div>
       </div>
     </div>
