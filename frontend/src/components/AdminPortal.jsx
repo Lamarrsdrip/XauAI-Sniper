@@ -921,6 +921,7 @@ function SettingsTab({ api }) {
   const [adminNotificationEmail, setAdminNotificationEmail] = useState("");
   const [supportEmail, setSupportEmail] = useState("");
   const [supportPhone, setSupportPhone] = useState("");
+  const [businessAddress, setBusinessAddress] = useState({ organization_street_address: "", organization_city: "", organization_region: "", organization_postal_code: "", organization_country: "" });
   const [communityLink, setCommunityLink] = useState("");
   const [mt5DownloadUrl, setMt5DownloadUrl] = useState("");
   const [vpsGuideUrl, setVpsGuideUrl] = useState("");
@@ -939,6 +940,7 @@ function SettingsTab({ api }) {
       setAdminNotificationEmail(r.data.admin_notification_email || "");
       setSupportEmail(r.data.support_email || "");
       setSupportPhone(r.data.support_phone || "");
+      setBusinessAddress((old) => Object.fromEntries(Object.keys(old).map((key) => [key, r.data[key] || ""])));
       setCommunityLink(r.data.community_link || "");
       setMt5DownloadUrl(r.data.mt5_download_url || "");
       setVpsGuideUrl(r.data.vps_guide_url || "");
@@ -965,6 +967,7 @@ function SettingsTab({ api }) {
     updates.admin_notification_email = adminNotificationEmail;
     updates.support_email = supportEmail;
     updates.support_phone = supportPhone;
+    Object.assign(updates, businessAddress);
     updates.community_link = communityLink;
     updates.mt5_download_url = mt5DownloadUrl;
     updates.vps_guide_url = vpsGuideUrl;
@@ -1052,6 +1055,21 @@ function SettingsTab({ api }) {
           <Field label="Support phone">
             <Input data-testid="settings-support-phone" value={supportPhone} onChange={e => setSupportPhone(e.target.value)} placeholder="+234 800 000 0000" />
           </Field>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+            <div className="text-[13px] font-semibold text-white">Verified public business address</div>
+            <p className="mt-2 text-xs leading-5 text-white/45">Only enter a real, authorized public address. It appears on the Contact page and structured data once street, city and country are set. Leave empty to withhold it.</p>
+            <div className="mt-4 grid gap-3">
+              {[
+                ["organization_street_address", "Street address"],
+                ["organization_city", "City"],
+                ["organization_region", "State / region"],
+                ["organization_postal_code", "Postal code"],
+                ["organization_country", "Country"],
+              ].map(([key, label]) => <Field key={key} label={label}>
+                <Input value={businessAddress[key]} onChange={(e) => setBusinessAddress((old) => ({ ...old, [key]: e.target.value }))} placeholder={label} />
+              </Field>)}
+            </div>
+          </div>
           <Field label="Community link (optional)">
             <Input data-testid="settings-community-link" value={communityLink} onChange={e => setCommunityLink(e.target.value)} placeholder="https://t.me/your-community" />
           </Field>
