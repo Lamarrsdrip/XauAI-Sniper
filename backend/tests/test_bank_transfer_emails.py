@@ -85,91 +85,22 @@ class _Recorder:
         return True
 
 
-def test_initiate_sends_instructions_to_buyer_and_notifies_admin():
+def test_legacy_bank_initiation_is_retired_and_sends_no_email():
+    """Old NGN order creation must not send instructions or accept new payments."""
+    from fastapi import HTTPException
     async def go():
         await _clear()
         await _enable_bank_transfer()
         recorder = _Recorder()
         with patch.object(srv, "_send_email", recorder):
-            await srv.initiate_bank_transfer(
-                srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
-                _fake_request("NG"),
-            )
-        assert len(recorder.sent) == 2
-        to_addrs = {m["to"] for m in recorder.sent}
-        assert "buyer@example.com" in to_addrs
-        assert ADMIN_NOTIFICATION_EMAIL in to_addrs
-        buyer_email = next(m for m in recorder.sent if m["to"] == "buyer@example.com")
-        assert "Test Bank" in buyer_email["html"]
-        assert "0123456789" in buyer_email["html"]
-        admin_email = next(m for m in recorder.sent if m["to"] == ADMIN_NOTIFICATION_EMAIL)
-        assert "Payment Started" in admin_email["subject"]
-    _run(go())
-
-
-def test_marking_submitted_notifies_admin_only():
-    async def go():
-        await _clear()
-        await _enable_bank_transfer()
-        with patch.object(srv, "_send_email", _Recorder()):
-            init = await srv.initiate_bank_transfer(
-                srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
-                _fake_request("NG"),
-            )
-        recorder = _Recorder()
-        with patch.object(srv, "_send_email", recorder):
-            await srv.bank_transfer_mark_submitted(init["reference"], _fake_request("NG"))
-        assert len(recorder.sent) == 1
-        assert recorder.sent[0]["to"] == ADMIN_NOTIFICATION_EMAIL
-        assert init["reference"] in recorder.sent[0]["html"]
-    _run(go())
-
-
-def test_reject_sends_rejection_email_to_buyer():
-    async def go():
-        await _clear()
-        await _enable_bank_transfer()
-        with patch.object(srv, "_send_email", _Recorder()):
-            init = await srv.initiate_bank_transfer(
-                srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
-                _fake_request("NG"),
-            )
-            await srv.bank_transfer_mark_submitted(init["reference"], _fake_request("NG"))
-        recorder = _Recorder()
-        with patch.object(srv, "_send_email", recorder):
-            await srv.admin_reject_bank_transfer(
-                init["reference"], srv.BankTransferAdminActionRequest(reason="mismatch"), admin=ADMIN,
-            )
-        assert len(recorder.sent) == 1
-        assert recorder.sent[0]["to"] == "buyer@example.com"
-        assert "mismatch" in recorder.sent[0]["html"]
-    _run(go())
-
-
-def test_approve_does_not_send_a_second_instructions_email():
-    """Approval sends the fulfillment PIN email (send_pin_email, tested
-    elsewhere) to the buyer, plus one "New Sale" notification to the admin
-    (owner spec, 2026-08-04) -- it must not also resend bank-transfer
-    instructions or send the buyer more than one email."""
-    async def go():
-        await _clear()
-        await _enable_bank_transfer()
-        with patch.object(srv, "_send_email", _Recorder()):
-            init = await srv.initiate_bank_transfer(
-                srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
-                _fake_request("NG"),
-            )
-            await srv.bank_transfer_mark_submitted(init["reference"], _fake_request("NG"))
-        recorder = _Recorder()
-        with patch.object(srv, "_send_email", recorder):
-            await srv.admin_approve_bank_transfer(init["reference"], admin=ADMIN)
-        assert len(recorder.sent) == 2
-        buyer_msgs = [m for m in recorder.sent if m["to"] == "buyer@example.com"]
-        assert len(buyer_msgs) == 1
-        assert "License PIN" in buyer_msgs[0]["subject"]
-        admin_msgs = [m for m in recorder.sent if m["to"] == ADMIN_NOTIFICATION_EMAIL]
-        assert len(admin_msgs) == 1
-        assert "New XauCloud Sale" in admin_msgs[0]["subject"]
+            with pytest.raises(HTTPException) as e:
+                await srv.initiate_bank_transfer(
+                    srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
+                    _fake_request("NG"),
+                )
+        assert e.value.status_code == 410
+        assert not recorder.sent
+        assert await srv.db.payment_transactions.count_documents({"provider": "BANK_TRANSFER"}) == 0
     _run(go())
 
 

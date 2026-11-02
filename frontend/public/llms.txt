@@ -1,0 +1,32 @@
+# XauCloud
+
+> XauCloud develops automated Gold (XAUUSD) trading technology for MetaTrader 5 and provides a connected Command Center. The site publishes real performance and separately labeled historical strategy tests. Automated trading carries a substantial risk of loss.
+
+## Main pages
+
+- [XauCloud homepage](https://xaucloud.io/)
+- [About XauCloud](https://xaucloud.io/about)
+- [Contact and support](https://xaucloud.io/contact)
+- [Trading performance](https://xaucloud.io/performance)
+- [Performance history](https://xaucloud.io/performance/history)
+- [Gold market outlook](https://xaucloud.io/ai-market-outlook)
+- [XauCloud Labs](https://xaucloud.io/labs)
+- [Command Center](https://xaucloud.io/command)
+
+## Terms and safety
+
+- [Terms of use](https://xaucloud.io/terms)
+- [Privacy notice](https://xaucloud.io/privacy)
+- [Trading risk disclosure](https://xaucloud.io/risk)
+
+## Verified external product listing
+
+- [XauCloud on MetaTrader MQL5 Market](https://www.mql5.com/en/market/product/188838)
+
+## Agent resources
+
+- [Sitemap](https://xaucloud.io/sitemap.xml)
+- [Markdown version of the homepage](https://xaucloud.io/index.md)
+- [MCP server card](https://xaucloud.io/.well-known/mcp/server-card.json)
+
+Prices, entitlement availability, trading results, wallet destinations and exchange rates must be obtained from live authoritative endpoints, not inferred from this file. No profits are guaranteed. Trading software is not a bank or broker.

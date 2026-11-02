@@ -28,7 +28,7 @@ import secrets as _secrets
 import json
 import asyncio
 import uuid
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 
@@ -502,41 +502,32 @@ def test_active_credentials_none_when_disabled():
 # /purchase/initialize fails closed, never falls back to Paystack
 # ---------------------------------------------------------------------
 
-def test_initialize_purchase_503_when_nomba_not_configured():
+def test_nomba_new_purchase_is_retired_without_creating_order():
     async def go():
-        await _clear()  # no Nomba config seeded at all
-        from unittest.mock import MagicMock
+        await _clear()
         req = srv.PurchaseInitRequest(buyer_name="T", buyer_email="t@example.com", origin_url="https://evil.example.com")
         fake_request = MagicMock()
         fake_request.client = MagicMock(host="1.2.3.4")
         with pytest.raises(HTTPException) as exc:
             await srv.initialize_purchase(req, fake_request)
-        assert exc.value.status_code == 503
-        # Confirm no pending transaction was left behind for a request
-        # that never got a real order created.
-        count = await srv.db.payment_transactions.count_documents({})
-        assert count == 0
+        assert exc.value.status_code == 410
+        assert await srv.db.payment_transactions.count_documents({}) == 0
         await _clear()
     _run(go())
 
 
-def test_initialize_purchase_ignores_client_supplied_origin_for_callback():
+def test_retired_nomba_initiation_never_contacts_provider():
     async def go():
         await _clear()
         await _seed_nomba_config()
-        from unittest.mock import MagicMock
         req = srv.PurchaseInitRequest(buyer_name="T", buyer_email="t@example.com", origin_url="https://evil.example.com")
         fake_request = MagicMock()
         fake_request.client = MagicMock(host="1.2.3.4")
-        captured = {}
-
-        async def fake_create_checkout_order(creds, **kwargs):
-            captured.update(kwargs)
-            return {"checkout_link": "https://checkout.nomba.com/pay/fake", "order_reference": kwargs["order_reference"]}
-
-        with patch("nomba_service.create_checkout_order", new=fake_create_checkout_order):
-            await srv.initialize_purchase(req, fake_request)
-        assert "evil.example.com" not in captured["callback_url"]
-        assert captured["callback_url"].startswith(srv.PUBLIC_SITE_URL)
+        with patch("nomba_service.create_checkout_order") as provider:
+            with pytest.raises(HTTPException) as exc:
+                await srv.initialize_purchase(req, fake_request)
+        assert exc.value.status_code == 410
+        provider.assert_not_called()
+        assert await srv.db.payment_transactions.count_documents({}) == 0
         await _clear()
     _run(go())

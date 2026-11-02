@@ -86,6 +86,30 @@ async def _enable_bank_transfer(timeout_minutes=60):
     )
 
 
+async def _seed_legacy_bank_transfer(req, request):
+    """Create a historical bank order fixture directly, never via a live purchase endpoint.
+
+    This preserves legacy customer-submission and admin-review coverage without
+    re-enabling new NGN-first checkout creation in production.
+    """
+    settings = await srv._get_bank_transfer_settings()
+    ref = "ASE-BT-" + uuid.uuid4().hex[:10].upper()
+    expires = (datetime.now(timezone.utc) + timedelta(minutes=settings.get("timeout_minutes", 60))).isoformat()
+    tx = {
+        "id": str(uuid.uuid4()), "reference": ref,
+        "provider": "BANK_TRANSFER", "amount_kobo": 30000000, "currency": "NGN",
+        "buyer_name": req.buyer_name, "buyer_email": req.buyer_email,
+        "payment_status": "BANK_TRANSFER_PENDING", "pin_generated": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "state_transitions": {}, "expires_at": expires,
+        "detected_country": srv._detect_country_code(request),
+        "bank_transfer_proof": None, "admin_notes": [],
+    }
+    await srv.db.payment_transactions.insert_one(tx)
+    return {"reference": ref, "bank_name": settings.get("bank_name", ""),
+            "account_number": settings.get("account_number", ""), "expires_at": expires}
+
+
 async def _mock_email():
     """send_pin_email hits real SMTP if configured; keep it a safe no-op."""
     patcher = patch.object(srv, "send_pin_email", AsyncMock(return_value=True))
@@ -122,61 +146,18 @@ class TestEligibility:
         _run(go())
 
 
-class TestInitiate:
-    def test_initiate_succeeds_for_nigeria(self):
+class TestRetiredInitiation:
+    def test_new_legacy_bank_transfer_orders_are_refused(self):
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            result = await srv.initiate_bank_transfer(
-                srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
-                _fake_request("NG"),
-            )
-            assert result["bank_name"] == "Test Bank"
-            assert result["account_number"] == "0123456789"
-            tx = await srv.db.payment_transactions.find_one({"reference": result["reference"]})
-            assert tx["payment_status"] == "BANK_TRANSFER_PENDING"
-            assert tx["provider"] == "BANK_TRANSFER"
-        _run(go())
-
-    def test_initiate_succeeds_regardless_of_detected_country(self):
-        """Owner directive: available to every visitor, not gated on
-        IP-geolocated country -- detected_country is still recorded on the
-        order for admin visibility, just no longer used to reject."""
-        async def go():
-            await _clear()
-            await _enable_bank_transfer()
-            result = await srv.initiate_bank_transfer(
-                srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
-                _fake_request("US"),
-            )
-            tx = await srv.db.payment_transactions.find_one({"reference": result["reference"]})
-            assert tx["payment_status"] == "BANK_TRANSFER_PENDING"
-            assert tx["detected_country"] == "US"
-        _run(go())
-
-    def test_initiate_rejected_when_not_enabled(self):
-        async def go():
-            await _clear()
             with pytest.raises(HTTPException) as exc:
                 await srv.initiate_bank_transfer(
                     srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                     _fake_request("NG"),
                 )
-            assert exc.value.status_code == 503
-        _run(go())
-
-    def test_initiate_rejected_when_not_configured(self):
-        async def go():
-            await _clear()
-            await srv.admin_update_bank_transfer_settings(
-                srv.AdminBankTransferSettingsUpdate(enabled=True), admin=ADMIN,
-            )  # enabled but no bank details set
-            with pytest.raises(HTTPException) as exc:
-                await srv.initiate_bank_transfer(
-                    srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
-                    _fake_request("NG"),
-                )
-            assert exc.value.status_code == 503
+            assert exc.value.status_code == 410
+            assert await srv.db.payment_transactions.count_documents({"provider": "BANK_TRANSFER"}) == 0
         _run(go())
 
 
@@ -185,7 +166,7 @@ class TestSubmitted:
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            init = await srv.initiate_bank_transfer(
+            init = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                 _fake_request("NG"),
             )
@@ -209,7 +190,7 @@ class TestSubmitted:
         async def go():
             await _clear()
             await _enable_bank_transfer(timeout_minutes=1)
-            init = await srv.initiate_bank_transfer(
+            init = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                 _fake_request("NG"),
             )
@@ -231,7 +212,7 @@ class TestProofUpload:
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            init = await srv.initiate_bank_transfer(
+            init = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                 _fake_request("NG"),
             )
@@ -247,7 +228,7 @@ class TestProofUpload:
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            init = await srv.initiate_bank_transfer(
+            init = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                 _fake_request("NG"),
             )
@@ -262,7 +243,7 @@ class TestProofUpload:
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            init = await srv.initiate_bank_transfer(
+            init = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                 _fake_request("NG"),
             )
@@ -280,7 +261,7 @@ class TestProofUpload:
             await _enable_bank_transfer()
             patcher = await _mock_email()
             try:
-                init = await srv.initiate_bank_transfer(
+                init = await _seed_legacy_bank_transfer(
                     srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                     _fake_request("NG"),
                 )
@@ -303,7 +284,7 @@ class TestAdminApproval:
             await _enable_bank_transfer()
             patcher = await _mock_email()
             try:
-                init = await srv.initiate_bank_transfer(
+                init = await _seed_legacy_bank_transfer(
                     srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                     _fake_request("NG"),
                 )
@@ -326,7 +307,7 @@ class TestAdminApproval:
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            init = await srv.initiate_bank_transfer(
+            init = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                 _fake_request("NG"),
             )
@@ -341,7 +322,7 @@ class TestAdminApproval:
             await _enable_bank_transfer()
             patcher = await _mock_email()
             try:
-                init = await srv.initiate_bank_transfer(
+                init = await _seed_legacy_bank_transfer(
                     srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                     _fake_request("NG"),
                 )
@@ -359,7 +340,7 @@ class TestAdminApproval:
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            init = await srv.initiate_bank_transfer(
+            init = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                 _fake_request("NG"),
             )
@@ -375,7 +356,7 @@ class TestAdminApproval:
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            init = await srv.initiate_bank_transfer(
+            init = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                 _fake_request("NG"),
             )
@@ -393,7 +374,7 @@ class TestAdminApproval:
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            init = await srv.initiate_bank_transfer(
+            init = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                 _fake_request("NG"),
             )
@@ -407,7 +388,7 @@ class TestAdminApproval:
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            init = await srv.initiate_bank_transfer(
+            init = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                 _fake_request("NG"),
             )
@@ -426,7 +407,7 @@ class TestAdminQueueAndSettings:
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            init = await srv.initiate_bank_transfer(
+            init = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                 _fake_request("NG"),
             )
@@ -443,7 +424,7 @@ class TestAdminQueueAndSettings:
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            init = await srv.initiate_bank_transfer(
+            init = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"),
                 _fake_request("NG"),
             )
@@ -474,9 +455,9 @@ class TestAdminQueueAndSettings:
         async def go():
             await _clear()
             await _enable_bank_transfer()
-            init1 = await srv.initiate_bank_transfer(
+            init1 = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="A", buyer_email="a@example.com"), _fake_request("NG"))
-            init2 = await srv.initiate_bank_transfer(
+            init2 = await _seed_legacy_bank_transfer(
                 srv.BankTransferInitiateRequest(buyer_name="B", buyer_email="b@example.com"), _fake_request("NG"))
             await srv.bank_transfer_mark_submitted(init2["reference"], _fake_request("NG"))
             pending_only = await srv.admin_list_bank_transfers(status="BANK_TRANSFER_PENDING")

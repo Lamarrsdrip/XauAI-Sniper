@@ -2,32 +2,46 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://xaucloud.io/</loc>
-    <changefreq>daily</changefreq>
-    <priority>1.0</priority>
+    <lastmod>2026-11-02</lastmod>
+  </url>
+  <url>
+    <loc>https://xaucloud.io/about</loc>
+    <lastmod>2026-11-02</lastmod>
+  </url>
+  <url>
+    <loc>https://xaucloud.io/contact</loc>
+    <lastmod>2026-11-02</lastmod>
+  </url>
+  <url>
+    <loc>https://xaucloud.io/terms</loc>
+    <lastmod>2026-11-02</lastmod>
+  </url>
+  <url>
+    <loc>https://xaucloud.io/privacy</loc>
+    <lastmod>2026-11-02</lastmod>
+  </url>
+  <url>
+    <loc>https://xaucloud.io/risk</loc>
+    <lastmod>2026-11-02</lastmod>
   </url>
   <url>
     <loc>https://xaucloud.io/performance</loc>
-    <changefreq>daily</changefreq>
-    <priority>0.8</priority>
+    <lastmod>2026-09-01</lastmod>
   </url>
   <url>
     <loc>https://xaucloud.io/performance/history</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.5</priority>
+    <lastmod>2026-09-01</lastmod>
   </url>
   <url>
     <loc>https://xaucloud.io/ai-market-outlook</loc>
-    <changefreq>daily</changefreq>
-    <priority>0.7</priority>
+    <lastmod>2026-09-18</lastmod>
   </url>
   <url>
     <loc>https://xaucloud.io/labs</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.4</priority>
+    <lastmod>2026-09-01</lastmod>
   </url>
   <url>
     <loc>https://xaucloud.io/command</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.5</priority>
+    <lastmod>2026-09-01</lastmod>
   </url>
 </urlset>

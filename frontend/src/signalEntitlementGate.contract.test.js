@@ -47,7 +47,8 @@ describe("ONE Command Center architecture contract (2026-08-25)", () => {
 
   test("the bot-purchase CTA opens an in-app checkout, never a homepage redirect", () => {
     expect(dashboard).not.toMatch(/window\.location\.href\s*=\s*"\/#purchase"/);
-    expect(dashboard).toContain("useBotCheckout");
+    expect(dashboard).toContain("useManualBotCheckout");
+    expect(dashboard).toContain("<ManualCheckout");
     expect(dashboard).toContain("Get XauCloud Bot");
   });
 
@@ -120,21 +121,22 @@ describe("admin bank transfer visibility contract", () => {
 });
 
 describe("public pricing section contract", () => {
-  test("renders all four plans: trial, weekly, monthly, and the lifetime bot", () => {
-    expect(purchaseSection).toMatch(/badge="Free Trial"/);
-    expect(purchaseSection).toMatch(/badge="Weekly"/);
-    expect(purchaseSection).toMatch(/badge="Monthly"/);
-    expect(purchaseSection).toContain("XauCloud Bot");
+  test("renders only the trial and the one-time bot purchase", () => {
+    expect(purchaseSection).toContain("3-Day Free Trial");
+    expect(purchaseSection).toContain("Buy XauCloud");
+    expect(purchaseSection).not.toContain("SIGNALS_WEEKLY");
+    expect(purchaseSection).not.toContain("SIGNALS_MONTHLY");
+    expect(purchaseSection).toContain("/cloud/signals/trial/start");
   });
 
   test("every plan price is read from a live API response, never a hardcoded NGN literal", () => {
     const codeOnly = purchaseSection.split("\n").filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*")).join("\n");
     expect(codeOnly).not.toMatch(/20[,]?000|50[,]?000|300[,]?000/);
-    expect(purchaseSection).toContain("/purchase/plans");
+    expect(purchaseSection).toContain("/purchase/direct/config");
   });
 
   test("signal subscriptions never claim to include automated execution", () => {
-    expect(purchaseSection).toMatch(/never receives automated execution|No automated execution/);
+    expect(purchaseSection).toContain("The trial is not a trial of an MT5 license");
   });
 
   test("no guaranteed-profit or risk-free language in the pricing section", () => {

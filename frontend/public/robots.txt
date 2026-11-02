@@ -1,9 +1,13 @@
 User-agent: *
+Content-Signal: search=yes, ai-train=no
 Allow: /
+Disallow: /api/
 Disallow: /admin
 Disallow: /command/dashboard
 Disallow: /command/login
 Disallow: /command/signup
+Disallow: /command/forgot-password
+Disallow: /command/reset-password
 Disallow: /purchase/success
 Disallow: /purchase/cancel
 

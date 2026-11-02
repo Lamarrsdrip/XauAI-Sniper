@@ -117,6 +117,9 @@ export class FakeCollection {
   async updateOne(query: Doc, update: { $set?: Doc; $setOnInsert?: Doc; $addToSet?: Doc; $pull?: Doc; $inc?: Doc; $unset?: Doc }, options: { upsert?: boolean } = {}) {
     const found = this.docs.find((d) => matches(d, query));
     if (found) {
+      // Mirror MongoDB's unique indexes on updates as well as inserts.
+      // Without this, double-spend/reference tests falsely pass against fake storage.
+      this.checkUnique({ ...found, ...structuredClone(update.$set ?? {}) }, found);
       Object.assign(found, structuredClone(update.$set ?? {}));
       for (const [key, value] of Object.entries(update.$inc ?? {})) {
         found[key] = Number(found[key] ?? 0) + Number(value);

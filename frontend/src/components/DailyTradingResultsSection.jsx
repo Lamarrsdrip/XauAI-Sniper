@@ -20,10 +20,10 @@ function shortDate(dateStr) {
 }
 
 function TotalCard({ icon: Icon, label, value, tone }) {
-  const toneText = { green: "text-emerald-300", red: "text-rose-300", neutral: "text-white" }[tone] || "text-white";
+  const toneText = { green: "text-emerald-700", red: "text-rose-700", neutral: "text-[#1c3032]" }[tone] || "text-[#1c3032]";
   return (
-    <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3.5">
-      <div className="mb-1.5 flex items-center gap-1.5 text-white/35">
+    <div className="rounded-2xl border border-[#e1e1db] bg-[#f8f8f4] p-3.5">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[#6c7776]">
         <Icon size={12} weight="bold" />
         <span className="font-mono text-[9px] uppercase tracking-[0.14em]">{label}</span>
       </div>
@@ -35,16 +35,16 @@ function TotalCard({ icon: Icon, label, value, tone }) {
 function DayRow({ day }) {
   const positive = day.net_gold_moves >= 0;
   return (
-    <div className={`flex items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 ${positive ? "border-emerald-400/20 bg-emerald-400/[0.04]" : "border-rose-400/20 bg-rose-400/[0.04]"}`}>
+    <div className={`flex items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 ${positive ? "border-emerald-700/15 bg-emerald-50" : "border-rose-700/15 bg-rose-50"}`}>
       <div className="min-w-0">
-        <div className="font-mono text-[12px] font-bold text-white/85">{shortDate(day.date)}</div>
-        <div className="mt-0.5 font-mono text-[10px] text-white/35">
+        <div className="font-mono text-[12px] font-bold text-[#6c7776]">{shortDate(day.date)}</div>
+        <div className="mt-0.5 font-mono text-[10px] text-[#6c7776]">
           {day.trades} trade{day.trades === 1 ? "" : "s"} · {day.wins}W / {day.losses}L{day.breakeven ? ` / ${day.breakeven}BE` : ""} · {day.account_count} acct{day.account_count === 1 ? "" : "s"}
         </div>
       </div>
-      <div className={`flex-none text-right font-mono text-[12px] font-bold ${positive ? "text-emerald-300" : "text-rose-300"}`}>
+      <div className={`flex-none text-right font-mono text-[12px] font-bold ${positive ? "text-emerald-700" : "text-rose-700"}`}>
         <div>{signed(day.net_pips)} pips</div>
-        <div className="text-[10px] font-semibold text-white/40">{signed(day.net_gold_moves, 2)} Gold moves</div>
+        <div className="text-[10px] font-semibold text-[#6c7776]">{signed(day.net_gold_moves, 2)} Gold moves</div>
       </div>
     </div>
   );
@@ -66,27 +66,27 @@ export default function DailyTradingResultsSection({ api }) {
   const totals = data?.totals;
 
   return (
-    <div className="bg-[#07080B] border-t border-white/[0.06] text-white" data-testid="daily-trading-results-section">
-      <div className="mx-auto max-w-5xl px-4 py-11 md:px-8 md:py-16">
+    <div className="bg-[#ffffff] border-t border-[#e5e3dd] text-[#1c3032]" data-testid="daily-trading-results-section">
+      <div className="mx-auto max-w-5xl px-5 py-12 md:px-8 md:py-16">
         <div className="mb-6">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-gold-300/20 bg-gold-300/[0.08] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-gold-200">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-[#dccaa6] bg-[#f7f1e5] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-[#90713e]">
             Real Trading Results
           </span>
-          <h2 className="mt-4 font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
+          <h2 className="mt-4 font-heading text-[1.85rem] font-semibold tracking-tight sm:text-[2.45rem]">
             XauCloud Daily Trading Results
           </h2>
-          <p className="mt-3 max-w-2xl text-[13px] leading-5 text-white/45">
+          <p className="mt-3 max-w-2xl text-[13px] leading-5 text-[#6c7776]">
             Real closed trades reported by XauCloud EAs across connected accounts, grouped by day in pips and Gold moves. First-party trading records, not independently verified.
           </p>
           {data?.status === "ok" && (
-            <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.14em] text-gold-200/55">
+            <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#90713e]/55">
               Aggregated from {data.account_count || 0} connected XauCloud account{data.account_count === 1 ? "" : "s"}
             </p>
           )}
         </div>
 
         {error && !data && (
-          <div className="rounded-[20px] border border-white/[0.08] bg-white/[0.03] p-6 text-[13px] text-white/45">
+          <div className="rounded-[20px] border border-[#e1e1db] bg-[#f8f8f4] p-6 text-[13px] text-[#6c7776]">
             Trading results temporarily unavailable.
           </div>
         )}
@@ -111,12 +111,12 @@ export default function DailyTradingResultsSection({ api }) {
         )}
 
         {data?.status === "ok" && days.length === 0 && (
-          <div className="mt-6 rounded-[20px] border border-white/[0.08] bg-white/[0.03] p-6 text-[13px] text-white/45">
+          <div className="mt-6 rounded-[20px] border border-[#e1e1db] bg-[#f8f8f4] p-6 text-[13px] text-[#6c7776]">
             No closed trades in the last 30 days yet.
           </div>
         )}
 
-        <p className="mt-6 max-w-xl text-[12px] leading-5 text-white/40">
+        <p className="mt-6 max-w-xl text-[12px] leading-5 text-[#6c7776]">
           First-party trading records, not independently verified. Trading involves risk. Past results do not guarantee future performance.
         </p>
       </div>

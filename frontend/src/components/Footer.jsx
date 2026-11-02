@@ -25,9 +25,13 @@ export default function Footer() {
           </div>
         </div>
 
-        <div className="mt-6 border-t border-white/[0.05] pt-6 flex flex-col items-center gap-3">
+        <nav aria-label="Company, contact and legal information" className="mt-7 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 border-t border-white/[0.05] pt-6">
+          {[["About", "/about"], ["Contact", "/contact"], ["Terms", "/terms"], ["Privacy", "/privacy"], ["Trading risks", "/risk"]].map(([label, href]) =>
+            <a key={href} href={href} className="text-[11px] font-medium text-white/60 transition hover:text-[#e3c78e]">{label}</a>)}
+        </nav>
+        <div className="mt-5 border-t border-white/[0.05] pt-6 flex flex-col items-center gap-3">
           <a
-            href="https://www.instagram.com/emriz.eth?igsh=MW43N25nMW94NGtqdQ%3D%3D&utm_source=qr"
+            href="https://x.com/ghostcdev?s=11"
             target="_blank"
             rel="noopener noreferrer"
             className="group relative flex items-center gap-3 rounded-2xl border border-gold-300/30 bg-gradient-to-r from-gold-300/[0.10] via-gold-200/[0.06] to-gold-300/[0.10] px-5 py-3 shadow-[0_0_24px_rgba(212,175,55,0.12)] transition-all duration-300 hover:border-gold-300/55 hover:shadow-[0_0_36px_rgba(212,175,55,0.22)] hover:from-gold-300/[0.16] hover:via-gold-200/[0.10] hover:to-gold-300/[0.16]"
@@ -36,13 +40,13 @@ export default function Footer() {
             <span className="pointer-events-none absolute inset-0 rounded-2xl bg-[radial-gradient(ellipse_at_center,rgba(212,175,55,0.08),transparent_70%)]" />
 
             <svg viewBox="0 0 24 24" className="relative h-4 w-4 flex-none fill-current text-gold-300 drop-shadow-[0_0_6px_rgba(212,175,55,0.6)]" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
+              <path d="M18.901 2H22l-6.771 7.738L23.193 22h-6.237l-4.886-7.427L5.572 22H2.471l7.243-8.278L1.807 2h6.395l4.417 6.744L18.901 2Zm-1.092 18h1.716L7.268 3.895H5.427L17.809 20Z"/>
             </svg>
 
             <span className="relative flex flex-col">
-              <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-gold-300/60">designed &amp; built by</span>
+              <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-gold-300/60">Built by</span>
               <span className="bg-gradient-to-r from-gold-200 via-yellow-100 to-gold-300 bg-clip-text text-[15px] font-black tracking-tight text-transparent drop-shadow-[0_0_8px_rgba(212,175,55,0.4)] group-hover:from-white group-hover:via-gold-100 group-hover:to-gold-200 transition-all duration-300">
-                emriz.eth
+                Emriz
               </span>
             </span>
 
