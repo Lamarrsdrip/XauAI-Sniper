@@ -275,6 +275,13 @@ async function main(): Promise<void> {
   // filenames from masquerading as actual published pages.
   app.setNotFoundHandler(async (request, reply) => {
     const route = request.url.split("?", 1)[0] ?? "";
+    if (request.method === "GET" && /^\/campaign\/[a-zA-Z0-9_-]{2,100}$/.test(route)) {
+      const slug = route.slice("/campaign/".length);
+      const published = await getDb().collection("marketing_landing_pages").findOne({ slug, status: "published" }, { projection: { _id: 1 } });
+      if (!published) return reply.code(404).type("text/html; charset=utf-8").send(
+        '<!doctype html><html lang="en"><head><meta name="robots" content="noindex"><title>404 — XauCloud</title></head><body><main><h1>404 — Campaign not found</h1><a href="/">Homepage</a></main></body></html>'
+      );
+    }
     if (request.method === "GET" && isSpaPath(route) && indexHtml) {
       const settings = await getSettings();
       reply.header("Link", '</llms.txt>; rel="describedby"; type="text/plain", </index.md>; rel="alternate"; type="text/markdown"');
