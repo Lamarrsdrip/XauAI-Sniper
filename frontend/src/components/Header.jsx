@@ -40,7 +40,7 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
             {quoteAvailable && (
               <div className="hidden items-center gap-2 rounded-full border border-[#d8e6e0] bg-[#f7faf8] px-3 py-1.5 md:flex" data-testid="gold-ticker">
                 <Crosshair size={11} className="text-[#8c661d]" weight="bold" />
-                <span className="font-mono text-[12px] font-bold" data-testid="gold-bid-price">{goldPrice.bid?.toFixed(2)}</span>
+                <span className="font-mono text-[13px] font-bold" data-testid="gold-bid-price">{goldPrice.bid?.toFixed(2)}</span>
                 <span className={`flex items-center gap-0.5 font-mono text-[11px] font-semibold ${up ? "text-emerald-700" : "text-rose-700"}`} data-testid="gold-change">
                   {up ? <TrendUp size={10} weight="bold" /> : <TrendDown size={10} weight="bold" />}
                   {up ? "+" : ""}{goldPrice.change?.toFixed(2)}
@@ -48,16 +48,16 @@ export default function Header({ activeSection, onNavigate, goldPrice }) {
               </div>
             )}
             <button onClick={() => onNavigate("purchase")}
-              className="rounded-full bg-[#183d3b] px-4 py-2 text-[12px] font-bold text-white transition hover:bg-[#275851] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#183d3b]">
+              className="rounded-full bg-[#183d3b] px-4 py-2 text-[13px] font-bold text-white transition hover:bg-[#275851] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#183d3b]">
               Buy Now
             </button>
             <a href="https://www.mql5.com/en/market/product/188838" target="_blank" rel="noopener noreferrer"
               data-testid="header-mql5-link"
-              className="hidden rounded-full border border-[#d8e2dc] bg-white px-4 py-2 text-[12px] font-semibold text-[#334e4b] transition hover:text-[#102e2e] hover:bg-[#f2f7f3] sm:inline-flex items-center gap-1.5">
+              className="hidden rounded-full border border-[#d8e2dc] bg-white px-4 py-2 text-[13px] font-semibold text-[#334e4b] transition hover:text-[#102e2e] hover:bg-[#f2f7f3] sm:inline-flex items-center gap-1.5">
               MQL5 Market
             </a>
             <a href="/command"
-              className="hidden rounded-full border border-[#d8e2dc] bg-white px-4 py-2 text-[12px] font-semibold text-[#334e4b] transition hover:text-[#102e2e] hover:bg-[#f2f7f3] sm:inline-flex items-center gap-1.5">
+              className="hidden rounded-full border border-[#d8e2dc] bg-white px-4 py-2 text-[13px] font-semibold text-[#334e4b] transition hover:text-[#102e2e] hover:bg-[#f2f7f3] sm:inline-flex items-center gap-1.5">
               Command
             </a>
             <button aria-label="Open menu" onClick={() => setMobileOpen(true)} className="rounded-full border border-[#cbd8d2] bg-[#f6f9f7] p-2 text-[#1b4240] lg:hidden">
