@@ -280,7 +280,11 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
   app.get("/admin/direct-checkout/orders", { preHandler: requireAdmin }, async () => {
     const entries = await getDb().collection("payment_transactions").find(
       { provider: "MANUAL_DIRECT" }, { projection: { _id: 0, evidence_image: 0 } }).sort({ created_at: -1 }).limit(200).toArray();
-    for (const tx of entries) tx["payment_status"] = await effectiveStatus(tx);
+    for (const tx of entries) {
+      tx["payment_status"] = await effectiveStatus(tx);
+      tx["has_proof"] = Boolean(tx["evidence_image"] || tx["evidence_uploaded_at"]);
+      delete tx["evidence_image"];
+    }
     return { entries };
   });
 
