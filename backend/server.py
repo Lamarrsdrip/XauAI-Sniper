@@ -8733,12 +8733,59 @@ api_router.include_router(_local_ai_remote.build_router(
 ))
 
 from manual_direct_checkout import build_router as _build_direct_checkout
+
+async def _send_direct_checkout_instructions(*, buyer_name, buyer_email, reference,
+                                             method, amount_formatted, usd_price, details, expires_at):
+    """Customer receives actual order destination details. Sending is not payment confirmation."""
+    from html import escape as esc
+    def safe(value):
+        return esc(str(value or ""), quote=True)
+    if method == "BANK":
+        fields = [("Bank name", details.get("bank_name")),
+                  ("Beneficiary", details.get("account_name")),
+                  ("Account number", details.get("account_number"))]
+        method_help = "Transfer the exact amount to this verified Nigerian bank account."
+    else:
+        fields = [("Asset", details.get("asset")), ("Network", details.get("network")),
+                  ("Receiving wallet", details.get("address"))]
+        method_help = ("Send only the specified token on the exact network shown. "
+                       "Wrong-network transfers can be lost. Network fees are separate.")
+    rows = "".join(
+        f'<tr><td style="padding:12px 0;color:#50665d;width:38%;">{safe(label)}</td>'
+        f'<td style="padding:12px 0;font-weight:700;overflow-wrap:anywhere;">{safe(value)}</td></tr>'
+        for label, value in fields)
+    content = (
+        '<div style="font-family:Arial,sans-serif;background:#f4f8f5;padding:24px 10px;">'
+        '<div style="max-width:600px;margin:auto;background:white;color:#173a33;'
+        'border-radius:18px;padding:28px;border:1px solid #dce8de;">'
+        '<p style="font-size:12px;color:#8a6a2b;font-weight:700;">XAUCLOUD · PAYMENT INSTRUCTIONS</p>'
+        '<h1 style="font-size:26px;">Your payment is awaiting transfer</h1>'
+        f'<p>Hello {safe(buyer_name)}. An order has been created but is not yet paid or approved. '
+        f'{safe(method_help)}</p>'
+        '<div style="padding:20px;background:#eff5f0;border-radius:12px;margin:22px 0;">'
+        '<div style="font-size:12px;color:#52665b;">Exact amount to send</div>'
+        f'<div style="font-size:27px;font-weight:800;margin:6px 0;">{safe(amount_formatted)}</div>'
+        f'<div style="font-size:12px;color:#52665b;">One-time license · {safe(usd_price)} base price</div>'
+        '</div><table style="width:100%;border-collapse:collapse;font-size:14px;">'
+        f'{rows}</table>'
+        '<p style="background:#f8f5ea;padding:15px;border-radius:10px;">'
+        f'<strong>Order reference:</strong> {safe(reference)}<br>'
+        f'<strong>Payment window closes:</strong> {safe(expires_at)} UTC</p>'
+        '<p style="line-height:1.7;font-size:13px;">After transferring, return to XauCloud and '
+        'submit the real bank transfer reference or blockchain hash. Our team independently '
+        'verifies receipt before issuing a license.</p>'
+        '<p style="font-size:12px;color:#52665b;">If the quote expired, do not reuse it. '
+        'Contact support with the order reference if you already paid.</p></div></div>'
+    )
+    return await _send_email(buyer_email, f"XauCloud payment instructions — {reference}", content)
+
 api_router.include_router(_build_direct_checkout(
     db=db, get_settings=get_settings, admin_dep=get_current_admin, user_dep=get_cloud_user,
     rate_limit=_rate_limit, client_ip=_client_ip, generate_pin=generate_unique_pin,
     PinLicense=PinLicense, send_pin_email=send_pin_email,
     record_email_result=_record_fulfillment_email_result,
     notify_started=notify_admin_payment_started, notify_sale=notify_admin_new_sale, logger=logger,
+    send_instructions=_send_direct_checkout_instructions,
 ))
 
 app.include_router(api_router)

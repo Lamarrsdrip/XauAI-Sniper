@@ -43,8 +43,8 @@ describe("Public light theme readability contract", () => {
   test("checkout fields and navigation have legible contrast and visible keyboard focus", () => {
     const checkout = read("components/ManualCheckout.jsx");
     const css = read("index.css");
-    expect(checkout).toContain("placeholder:text-[#5b7068]");
-    expect(checkout).toContain("focus:ring-2");
+    expect(checkout).toContain("placeholder:text-[#5d6e66]");
+    expect(checkout).toContain("focus:ring-4");
     expect(css).toContain('data-testid="manual-checkout"');
     expect(css).toContain("focus-visible");
     expect(css).toContain("html:has(.xc-marketing)");
