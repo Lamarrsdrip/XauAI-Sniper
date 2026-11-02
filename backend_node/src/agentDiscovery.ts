@@ -91,7 +91,8 @@ export function makeAgentHtml(template: string, path: string, settings: Record<s
   }).replace(/</g, "\\u003c");
   return template
     .replace(/<title>[^<]*<\/title>/, "<title>" + safe(page.title) + "</title>")
-    .replace(/<link rel="canonical" href="[^"]*" \/>/, '<link rel="canonical" href="' + SITE_ORIGIN + path + '" />')
+    .replace(/<link rel="canonical" href="[^"]*"\s*\/>/, '<link rel="canonical" href="' + SITE_ORIGIN + path + '" />')
+    .replace(/<meta property="og:url" content="[^"]*"\s*\/?>/, '<meta property="og:url" content="' + SITE_ORIGIN + path + '"/>')
     .replace(/<div id="root"><\/div>/, '<div id="root">' + fallback + "</div>")
     .replace("</head>", '<script type="application/ld+json">' + payload + '</script><script type="application/ld+json">' + product + '</script></head>');
 }

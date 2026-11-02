@@ -31,6 +31,9 @@ describe("XauCloud agent-ready discovery", () => {
     expect(html.match(/<h1>/g)).toHaveLength(1);
     expect(html).toContain("<h1>About XauCloud</h1>");
     expect(html).toContain('rel="canonical" href="https://xaucloud.io/about"');
+    const compact = makeAgentHtml('<html><head><title>t</title><link rel="canonical" href="https://xaucloud.io/"/><meta property="og:url" content="https://xaucloud.io/"/></head><body><div id="root"></div></body></html>', "/terms", {});
+    expect(compact).toContain('rel="canonical" href="https://xaucloud.io/terms"');
+    expect(compact).toContain('property="og:url" content="https://xaucloud.io/terms"');
     expect(html).not.toContain('"telephone"');
     expect(html).not.toContain('"address"');
     expect(html).toContain('"sameAs"');
