@@ -112,7 +112,7 @@ describe("XauCloud agent-ready discovery", () => {
   it("Markdown copy includes published navigation but no invented returns", () => {
     const md = markdownFor("/", {});
     expect(md).toContain("https://xaucloud.io/risk");
-    expect(md).toContain("No future results are guaranteed");
+    expect(md).toContain("not a promise of future performance");
     expect(md).not.toMatch(/guaranteed monthly profit/i);
   });
 });
