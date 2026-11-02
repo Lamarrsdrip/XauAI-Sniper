@@ -69,6 +69,23 @@
   [data-debug-wrapper="true"] { display: contents !important; }
 }
 
+/* Keep iOS safe areas light for public pages without changing the dark trading shell. */
+@supports selector(body:has(.xc-marketing)) {
+  html:has(.xc-marketing), body:has(.xc-marketing),
+  html:has([data-testid="info-page"]), body:has([data-testid="info-page"]),
+  html:has([data-testid="purchase-success-page"]), body:has([data-testid="purchase-success-page"]) {
+    background-color: #fbfcfa;
+  }
+}
+
+.xc-marketing :is(a, button):focus-visible,
+[data-testid="main-header"] :is(a, button):focus-visible,
+[data-testid="footer"] a:focus-visible,
+[data-testid="manual-checkout"] :is(a, button, input, select):focus-visible {
+  outline: 3px solid #79581f;
+  outline-offset: 3px;
+}
+
 .font-heading { font-family: 'Clash Display', 'Manrope', sans-serif; }
 .font-mono { font-family: 'JetBrains Mono', monospace; }
 
