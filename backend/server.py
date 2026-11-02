@@ -1356,6 +1356,12 @@ async def _build_price_display(display_currency: str) -> dict:
 # --- Purchase (public) ---
 @api_router.get("/purchase/price")
 async def get_pin_price(request: Request, display_currency: Optional[str] = None):
+    s = await get_settings()
+    cents = s.get("direct_usd_cents")
+    valid = type(cents) is int and cents > 0
+    return {"currency": "USD", "charge_currency": "USD", "price_usd_cents": cents if valid else None,
+            "formatted": f"USD {cents / 100:,.2f}" if valid else None,
+            "payment_method": "manual_direct" if valid else "unavailable"}
     detected = _detect_display_currency(request, display_currency)
     price_display = await _build_price_display(detected)
     # Bug fix: this used to hard-gate the entire purchase flow on Nomba
@@ -1375,6 +1381,7 @@ async def get_pin_price(request: Request, display_currency: Optional[str] = None
 
 @api_router.post("/purchase/initialize")
 async def initialize_purchase(req: PurchaseInitRequest, request: Request):
+    raise HTTPException(status_code=410, detail="Nomba checkout retired. Use the current manual checkout.")
     # Owner directive (payment-priority reorder): Nomba is disabled by
     # default until bank/provider approval completes, and is now the LAST
     # option after Manual Bank Transfer and Paystack, not the sole active
@@ -1431,6 +1438,7 @@ async def initialize_purchase(req: PurchaseInitRequest, request: Request):
 
 @api_router.post("/purchase/paystack/initialize")
 async def initialize_paystack_purchase(req: PurchaseInitRequest, request: Request):
+    raise HTTPException(status_code=410, detail="Paystack checkout retired. Use the current manual checkout.")
     """Rebuilds the standalone Paystack checkout-initiation flow that the
     Nomba migration removed entirely (only /transaction/verify remained,
     for historical transactions). Paystack is now the second payment
@@ -1815,6 +1823,7 @@ async def _payment_method_availability(request: Request) -> dict:
 
 @api_router.get("/purchase/payment-methods")
 async def list_payment_methods(request: Request):
+    return {"methods": [], "default_method": None, "retired": True, "message": "Use /purchase/direct/config and /purchase/direct/quote."}
     _rate_limit(f"payment_methods_ip:{_client_ip(request)}", max_requests=60, window_seconds=60)
     settings = await _get_payment_methods_settings()
     availability = await _payment_method_availability(request)
@@ -1868,6 +1877,7 @@ async def bank_transfer_eligibility(request: Request):
 
 @api_router.post("/purchase/bank-transfer/initiate")
 async def initiate_bank_transfer(req: BankTransferInitiateRequest, request: Request):
+    raise HTTPException(status_code=410, detail="Legacy NGN checkout retired. Use the USD-first direct checkout.")
     _rate_limit(f"bank_transfer_init_ip:{_client_ip(request)}", max_requests=10, window_seconds=600)
     # Owner directive: available to every visitor regardless of geo-IP
     # detected country -- the old NG-only gate blocked genuine Nigerian
@@ -3309,6 +3319,7 @@ async def admin_get_payment_methods_settings():
 
 @api_router.put("/admin/settings/payment-methods")
 async def admin_update_payment_methods_settings(req: AdminPaymentMethodsSettingsUpdate, admin: dict = Depends(get_current_admin)):
+    raise HTTPException(status_code=410, detail="Nomba and Paystack settings retired. Configure manual checkout instead.")
     updates = {}
     changed_fields = []
     if req.paystack_enabled is not None:
@@ -4271,6 +4282,10 @@ async def startup():
     _index_report = []
     try:
         await db.cloud_users.create_index("email", unique=True)
+    await db.cloud_signal_trials.create_index("user_id", unique=True)
+    await db.cloud_signal_trials.create_index("email", unique=True)
+    await db.payment_transactions.create_index([("provider", 1), ("submitted_reference", 1)], unique=True,
+        partialFilterExpression={"provider": "MANUAL_DIRECT", "submitted_reference": {"$type": "string"}})
         _index_report.append("cloud_users.email: unique OK")
     except Exception as e:
         _index_report.append(f"cloud_users.email: FAILED ({e})")
@@ -8705,6 +8720,15 @@ api_router.include_router(_local_ai_remote.build_router(
     resolve_license=_resolve_monitor_license,
     rate_limit=_rate_limit,
     client_ip=_client_ip,
+))
+
+from manual_direct_checkout import build_router as _build_direct_checkout
+api_router.include_router(_build_direct_checkout(
+    db=db, get_settings=get_settings, admin_dep=get_current_admin, user_dep=get_cloud_user,
+    rate_limit=_rate_limit, client_ip=_client_ip, generate_pin=generate_unique_pin,
+    PinLicense=PinLicense, send_pin_email=send_pin_email,
+    record_email_result=_record_fulfillment_email_result,
+    notify_started=notify_admin_payment_started, notify_sale=notify_admin_new_sale, logger=logger,
 ))
 
 app.include_router(api_router)
