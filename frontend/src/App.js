@@ -4,16 +4,10 @@ import axios from "axios";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import Header from "@/components/Header";
 import HeroSection from "@/components/HeroSection";
-import TrustStrip from "@/components/TrustStrip";
 import DailyTradingResultsSection from "@/components/DailyTradingResultsSection";
 import GoldReplaySection from "@/components/GoldReplaySection";
 import HowItWorksSection from "@/components/HowItWorksSection";
-import ReassuranceSection from "@/components/ReassuranceSection";
 import PurchaseSection from "@/components/PurchaseSection";
-import FaqSection from "@/components/FaqSection";
-import FinalCtaSection from "@/components/FinalCtaSection";
-import ReleaseStrip from "@/components/ReleaseStrip";
-import ComingSoonAppsSection from "@/components/ComingSoonAppsSection";
 
 import PurchaseSuccessPage from "@/components/PurchaseSuccessPage";
 import AdminPortal from "@/components/AdminPortal";
@@ -54,23 +48,15 @@ function MainDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-[#060609]" data-testid="app-root">
+    <div className="min-h-screen bg-[#f7f6f2]" data-testid="app-root">
       <Header activeSection={activeSection} onNavigate={scrollTo} goldPrice={goldPrice} />
       <WebsiteCampaignSlots />
-      <main>
+      <main className="xc-marketing">
         <section id="overview"><HeroSection /></section>
-        <TrustStrip />
-        <section id="performance">
-          <GoldReplaySection api={API} />
-          <DailyTradingResultsSection api={API} />
-        </section>
+        <section id="performance"><DailyTradingResultsSection api={API} /></section>
+        <section id="backtest"><GoldReplaySection api={API} /></section>
         <section id="how-it-works"><HowItWorksSection /></section>
-        <ReassuranceSection />
         <section id="purchase"><PurchaseSection api={API} /></section>
-        <ReleaseStrip api={API} />
-        <ComingSoonAppsSection />
-        <section id="faq"><FaqSection /></section>
-        <FinalCtaSection />
       </main>
       <Footer />
     </div>
