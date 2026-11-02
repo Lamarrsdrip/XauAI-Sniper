@@ -49,7 +49,7 @@ class Review(BaseModel):
 
 def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
                  client_ip, generate_pin, PinLicense, send_pin_email,
-                 record_email_result, notify_started, notify_sale, logger):
+                 record_email_result, notify_started, notify_sale, logger, send_instructions=None):
     router = APIRouter()
 
     async def config():
@@ -143,15 +143,63 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
               "country": country, "method": method, "currency": currency, "amount_minor": amount_minor,
               "price_usd_cents": cents, "buyer_name": req.buyer_name.strip(), "buyer_email": email,
               "quote_details": details, "created_at": stamp.isoformat(), "expires_at": expiry,
-              "payment_status": "MANUAL_PENDING", "pin_generated": None}
+              "payment_status": "MANUAL_PENDING", "pin_generated": None, "instructions_resend_count": 0}
         await db.payment_transactions.insert_one(tx)
+        instructions_sent = False
+        if send_instructions is not None:
+            try:
+                instructions_sent = bool(await send_instructions(
+                    buyer_name=tx["buyer_name"], buyer_email=email, reference=reference,
+                    method=method, amount_formatted=formatted,
+                    usd_price=money(cents), details=details, expires_at=expiry))
+            except Exception:
+                logger.exception("Customer manual checkout email failed: %s", reference)
+        await db.payment_transactions.update_one(
+            {"reference": reference, "provider": "MANUAL_DIRECT"},
+            {"$set": {"instructions_email_status": "SENT" if instructions_sent else "FAILED",
+                      "instructions_email_attempted_at": now().isoformat()}})
         try:
             await notify_started("Manual " + method, reference, tx["buyer_name"], email, formatted)
         except Exception:
             logger.exception("Manual checkout start notification failed: %s", reference)
         return {"reference": reference, "method": method, "usd_price": money(cents),
                 "currency": currency, "amount_minor": amount_minor, "amount_formatted": formatted,
-                "details": details, "expires_at": expiry, "status": "MANUAL_PENDING"}
+                "details": details, "expires_at": expiry, "status": "MANUAL_PENDING",
+                "instructions_email_sent": instructions_sent}
+
+    @router.post("/purchase/direct/{reference}/resend-instructions")
+    async def resend_instructions(reference: str, request: Request):
+        rate_limit(f"direct_email_retry:{client_ip(request)}", 4, 600)
+        tx = await db.payment_transactions.find_one(
+            {"reference": reference, "provider": "MANUAL_DIRECT"}, {"_id": 0})
+        if not tx:
+            raise HTTPException(404, "Unknown order.")
+        if await order_status(tx) != "MANUAL_PENDING":
+            raise HTTPException(409, "This order is no longer awaiting transfer.")
+        claimed = await db.payment_transactions.update_one(
+            {"reference": reference, "provider": "MANUAL_DIRECT",
+             "payment_status": "MANUAL_PENDING", "instructions_resend_count": {"$lt": 2}},
+            {"$inc": {"instructions_resend_count": 1}})
+        if not claimed.modified_count:
+            raise HTTPException(429, "Email retry limit reached. Copy the payment details shown on screen.")
+        sent = False
+        if send_instructions is not None:
+            try:
+                formatted = (f"NGN {Decimal(tx['amount_minor'])/100:,.2f}"
+                             if tx["currency"] == "NGN" else
+                             f"{Decimal(tx['amount_minor'])/100:,.2f} {tx['currency']}")
+                sent = bool(await send_instructions(
+                    buyer_name=tx["buyer_name"], buyer_email=tx["buyer_email"],
+                    reference=reference, method=tx["method"],
+                    amount_formatted=formatted, usd_price=money(tx["price_usd_cents"]),
+                    details=tx["quote_details"], expires_at=tx["expires_at"]))
+            except Exception:
+                logger.exception("Manual checkout resend failed: %s", reference)
+        await db.payment_transactions.update_one(
+            {"reference": reference, "provider": "MANUAL_DIRECT"},
+            {"$set": {"instructions_email_status": "SENT" if sent else "FAILED",
+                      "instructions_email_attempted_at": now().isoformat()}})
+        return {"sent": sent}
 
     @router.post("/purchase/direct/{reference}/submit")
     async def submit(reference: str, req: Submitted, request: Request):
