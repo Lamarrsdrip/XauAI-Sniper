@@ -134,6 +134,45 @@ class TestDirectCheckout:
             assert unsupported.value.status_code == 503
         run(go())
 
+    def test_buyer_gets_exact_payment_email_and_retry_is_bounded(self):
+        async def go():
+            await reset()
+            sent = []
+            real_mail = srv._send_email
+            async def fake_send(address, subject, html):
+                sent.append((address, subject, html))
+                return True
+            srv._send_email = fake_send
+            try:
+                bank = await bank_quote()
+                assert bank["instructions_email_sent"] is True
+                assert sent[-1][0] == "buyer@example.com"
+                assert bank["amount_formatted"] in sent[-1][2]
+                assert bank["details"]["account_number"] in sent[-1][2]
+                assert bank["reference"] in sent[-1][2]
+                assert "not yet paid or approved" in sent[-1][2]
+                crypto = await crypto_quote()
+                assert crypto["instructions_email_sent"] is True
+                assert crypto["details"]["address"] in sent[-1][2]
+                assert crypto["details"]["network"] in sent[-1][2]
+                resend = handler("/purchase/direct/{reference}/resend-instructions")
+                assert (await resend(bank["reference"], request()))["sent"] is True
+                assert (await resend(bank["reference"], request()))["sent"] is True
+                with pytest.raises(HTTPException) as limited:
+                    await resend(bank["reference"], request())
+                assert limited.value.status_code == 429
+                assert len(sent) == 4
+                assert await srv.db.pin_licenses.count_documents({"payment_ref": bank["reference"]}) == 0
+                await srv.db.payment_transactions.update_one(
+                    {"reference": crypto["reference"]},
+                    {"$set": {"expires_at": (datetime.now(timezone.utc)-timedelta(minutes=1)).isoformat()}})
+                with pytest.raises(HTTPException) as expired:
+                    await resend(crypto["reference"], request())
+                assert expired.value.status_code == 409
+            finally:
+                srv._send_email = real_mail
+        run(go())
+
     def test_payment_submission_does_not_activate_license(self):
         async def go():
             await reset()
