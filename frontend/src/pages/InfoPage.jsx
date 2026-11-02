@@ -58,7 +58,7 @@ export default function InfoPage({ kind }) {
     return () => { mounted = false; };
   }, [kind]);
   if (!page) return null;
-  return <div className="min-h-screen bg-[#f7f6f2] text-[#1a3030]">
+  return <div className="min-h-screen bg-[#f7f6f2] text-[#1a3030]" data-testid="info-page">
     <Seo title={page.title + " — XauCloud"} description={page.description} path={"/" + kind} />
     <header className="border-b border-[#e8e1d5] bg-white">
       <div className="mx-auto flex max-w-4xl items-center justify-between gap-4 px-5 py-5">
@@ -67,12 +67,12 @@ export default function InfoPage({ kind }) {
       </div>
     </header>
     <main className="mx-auto max-w-4xl px-5 py-12 md:py-20">
-      <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#a17b3f]">Official information</p>
+      <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#74531f]">Official information</p>
       <h1 className="mt-3 max-w-3xl font-heading text-[2.25rem] font-semibold leading-tight tracking-tight sm:text-[3.1rem]">{page.title}</h1>
-      <p className="mt-4 max-w-2xl text-[15px] leading-8 text-[#667473]">{page.description}</p>
+      <p className="mt-4 max-w-2xl text-[15px] leading-8 text-[#475c56]">{page.description}</p>
       <div className="mt-10 space-y-4">
         {page.sections.map(([heading, body]) => <section key={heading} className="rounded-[19px] border border-[#e4ded2] bg-white p-6 sm:p-8">
-          <h2 className="font-heading text-lg font-semibold">{heading}</h2><p className="mt-3 text-sm leading-7 text-[#63716e]">{body}</p>
+          <h2 className="font-heading text-lg font-semibold">{heading}</h2><p className="mt-3 text-sm leading-7 text-[#455a54]">{body}</p>
         </section>)}
         {kind === "contact" && <section className="rounded-[19px] border border-[#d4c09c] bg-[#f0ebdf] p-6 sm:p-8">
           <h2 className="font-heading text-lg font-semibold">Published support contact</h2>

@@ -25,7 +25,7 @@ export default function HowItWorksSection() {
       <div className="mx-auto max-w-6xl px-5 py-12 md:px-8 md:py-16">
 
         <div className="mb-8">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-[#dccaa6] bg-[#f7f1e5] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-[#90713e]">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-[#dccaa6] bg-[#f7f1e5] px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-[0.22em] text-[#77551c]">
             How it works
           </span>
           <h2 className="mt-4 font-heading text-[1.85rem] font-semibold tracking-tight sm:text-[2.45rem]" data-testid="how-it-works-title">
@@ -38,12 +38,12 @@ export default function HowItWorksSection() {
             <div key={title} className="rounded-[24px] border border-[#e1e1db] bg-[#f8f8f4] p-6">
               <div className="mb-4 flex items-center gap-3">
                 <div className="flex h-10 w-10 flex-none items-center justify-center rounded-2xl border border-[#dccaa6] bg-[#f7f1e5]">
-                  <Icon size={18} weight="duotone" className="text-[#90713e]" />
+                  <Icon size={18} weight="duotone" className="text-[#77551c]" />
                 </div>
-                <span className="font-mono text-[11px] font-bold text-[#6c7776]">0{i + 1}</span>
+                <span className="font-mono text-[11px] font-bold text-[#485c58]">0{i + 1}</span>
               </div>
               <h3 className="mb-2 font-heading text-[16px] font-semibold text-[#1c3032]">{title}</h3>
-              <p className="text-[13px] leading-6 text-[#6c7776]">{body}</p>
+              <p className="text-[14px] leading-7 text-[#485c58]">{body}</p>
             </div>
           ))}
         </div>
