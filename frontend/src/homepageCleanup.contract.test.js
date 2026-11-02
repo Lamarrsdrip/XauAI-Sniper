@@ -35,7 +35,13 @@ describe("XauCloud customer surface cleanup contract", () => {
     expect(dashboard).toContain("brokerBrand(heartbeat.broker_server)");
   });
 
-  test("mobile roadmap uses generated high-contrast text utilities", () => {
+  test("mobile roadmap is not mounted on the public homepage", () => {
+    const app = fs.readFileSync(path.join(root, "App.js"), "utf8");
+    expect(app).not.toContain("ComingSoonAppsSection");
+    expect(app).not.toContain("mobile-apps-roadmap");
+  });
+
+  test("legacy standalone roadmap source remains unchanged for historical reference", () => {
     const roadmap = fs.readFileSync(
       path.join(root, "components", "ComingSoonAppsSection.jsx"),
       "utf8"
@@ -73,8 +79,8 @@ describe("XauCloud customer surface cleanup contract", () => {
     expect(hero).not.toContain("EA heartbeat");
     expect(hero).not.toContain("Mobile Command Center");
     // The approved hero headline/CTAs must survive untouched.
-    expect(hero).toContain("Professional automation for");
-    expect(hero).toContain("Get XauCloud");
-    expect(hero).toContain("Explore Command Center");
+    expect(hero).toContain("More control over");
+    expect(hero).toContain("Buy XauCloud");
+    expect(hero).toContain("Start 3-Day Trial");
   });
 });
