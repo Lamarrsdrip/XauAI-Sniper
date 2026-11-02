@@ -130,7 +130,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       catch { return reply.code(503).send({ detail: "A valid exchange rate is unavailable; checkout paused." }); }
       currency = "NGN";
       details = { bank_name: bank.bank_name, account_name: bank.account_name,
-                  account_number: bank.account_number, fx_rate: cfg.usd_ngn_rate, rate_as_of: cfg.rate_as_of };
+                  account_number: bank.account_number, fx_rate: String(cfg.usd_ngn_rate), rate_as_of: String(cfg.rate_as_of) };
     } else {
       if (!cfg.crypto_enabled || !cfg.crypto_countries.includes(req.country)) {
         return reply.code(403).send({ detail: "Crypto checkout is not available in this country." });
