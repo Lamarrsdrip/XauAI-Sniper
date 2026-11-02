@@ -18,13 +18,37 @@ import M10EngineCard, { normalizeSubscriberM10Evidence } from "./M10EngineCard";
 import AcademyLearningHub from "./AcademyLearningHub";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
 import { signalAxios, SignalCard, RecentSignalsCard, planSummary, relTime, formatDate as fmtDate } from "./SubscriberSignalCards";
-import { PaymentMethodModal } from "../BankTransferFlow";
+import ManualCheckout from "../ManualCheckout";
 
 import { API } from "@/lib/api";
 import * as UI from "@/lib/ui";
 import * as AK from "@/lib/appkit";
 import { webPushSupported, webPushStatus, enableWebPush, disableWebPush, testWebPush } from "@/lib/webpush";
 import { brokerBrand } from "@/lib/brokerDisplay";
+
+
+function useManualBotCheckout() {
+  const [showModal, setShowModal] = useState(false);
+  const [config, setConfig] = useState(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const open = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await axios.get(API + "/purchase/direct/config");
+      if (!response.data?.price_usd_cents) {
+        setError("Official USD price is not configured yet.");
+        return;
+      }
+      setConfig(response.data);
+      setShowModal(true);
+    } catch (err) {
+      setError(err.response?.data?.detail || "Unable to prepare checkout. Please try again.");
+    } finally { setBusy(false); }
+  };
+  return { open, showModal, config, busy, error, closeModal: () => setShowModal(false) };
+}
 
 // Map the legacy tone vocabulary used by helpers below (green/red/amber/blue/
 // violet) onto the XauCloud design-system tones so screens read consistently.
@@ -662,7 +686,7 @@ function LicensedCloudDashboard({ entitlement, entFailed }) {
   // Fail-safe (unchanged from the previous router): a transient entitlement
   // fetch failure never locks anything for an existing customer.
   const ownsBot = entFailed || Boolean(entitlement?.bot_license);
-  const botCheckout = { open: () => { window.location.href = "/#purchase"; }, showModal: false, closeModal: () => {}, error: "" };
+  const botCheckout = useManualBotCheckout();
   const [botCheckoutMe, setBotCheckoutMe] = useState(null);
   const [botLifetimePriceKobo, setBotLifetimePriceKobo] = useState(null);
   useEffect(() => {
@@ -825,6 +849,7 @@ function LicensedCloudDashboard({ entitlement, entFailed }) {
       {active==="patterns"     && <PatternScannerPage setActive={setActive} events={events} heartbeat={heartbeat} />}
       <CommandModal command={modalCommand} onCancel={()=>setModalCommand(null)} onSubmit={queueCommand} busy={commandBusy} message={commandMsg} licenseKey={licenseInfo.activation_key} />
 
+      {botCheckout.showModal && botCheckout.config && <ManualCheckout api={API} config={botCheckout.config} onClose={botCheckout.closeModal} />}
       {botCheckout.error && !botCheckout.showModal && (
         <div className="mx-auto mt-4 max-w-md px-4 text-center font-mono text-[12px] text-rose-400">{botCheckout.error}</div>
       )}
@@ -2238,7 +2263,7 @@ function BillingPage({ setActive }) {
 
   // Bot lifetime -- in-app checkout, never a homepage redirect (see
   // useBotCheckout / CRITICAL PRODUCT RULE, 2026-08-25).
-  const botCheckout = { open: () => { window.location.href = "/#purchase"; }, showModal: false, closeModal: () => {}, error: "" };
+  const botCheckout = useManualBotCheckout();
   const [me, setMe] = useState(null);
   useEffect(() => { commandAxios.get("/cloud/auth/me").then((r) => setMe(r.data)).catch(() => {}); }, []);
   const botPriceDisplay = "See official USD price";
@@ -2293,6 +2318,7 @@ function BillingPage({ setActive }) {
           )}
         </div>
         {botCheckout.error && <div className="mt-3 text-[12px] text-rose-400">{botCheckout.error}</div>}
+      {botCheckout.showModal && botCheckout.config && <ManualCheckout api={API} config={botCheckout.config} onClose={botCheckout.closeModal} />}
       </Card>
 
       <Card title="Payment history">
