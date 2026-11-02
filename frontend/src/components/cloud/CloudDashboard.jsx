@@ -19,7 +19,7 @@ import AcademyLearningHub from "./AcademyLearningHub";
 import NotificationCenterPanel, { NotificationBell } from "./NotificationCenter";
 import { signalAxios, SignalCard, RecentSignalsCard, planSummary, relTime, formatDate as fmtDate } from "./SubscriberSignalCards";
 import { PaymentMethodModal } from "../BankTransferFlow";
-import { useSignalCheckout, useBotCheckout } from "@/lib/signalCheckout";
+
 import { API } from "@/lib/api";
 import * as UI from "@/lib/ui";
 import * as AK from "@/lib/appkit";
@@ -662,7 +662,7 @@ function LicensedCloudDashboard({ entitlement, entFailed }) {
   // Fail-safe (unchanged from the previous router): a transient entitlement
   // fetch failure never locks anything for an existing customer.
   const ownsBot = entFailed || Boolean(entitlement?.bot_license);
-  const botCheckout = useBotCheckout(API);
+  const botCheckout = { open: () => { window.location.href = "/#purchase"; }, showModal: false, closeModal: () => {}, error: "" };
   const [botCheckoutMe, setBotCheckoutMe] = useState(null);
   const [botLifetimePriceKobo, setBotLifetimePriceKobo] = useState(null);
   useEffect(() => {
@@ -825,18 +825,6 @@ function LicensedCloudDashboard({ entitlement, entFailed }) {
       {active==="patterns"     && <PatternScannerPage setActive={setActive} events={events} heartbeat={heartbeat} />}
       <CommandModal command={modalCommand} onCancel={()=>setModalCommand(null)} onSubmit={queueCommand} busy={commandBusy} message={commandMsg} licenseKey={licenseInfo.activation_key} />
 
-      {botCheckout.showModal && (
-        <PaymentMethodModal
-          api={API}
-          priceDisplay={billingNaira(botLifetimePriceKobo)}
-          buyerName={botCheckoutMe?.full_name || ""}
-          buyerEmail={botCheckoutMe?.email || ""}
-          subtitle={`${billingNaira(botLifetimePriceKobo)} · ${botCheckoutMe?.email || ""}`}
-          onPaystack={() => { botCheckout.closeModal(); botCheckout.payByPaystack(botCheckoutMe?.full_name || "", botCheckoutMe?.email || ""); }}
-          onNomba={() => { botCheckout.closeModal(); botCheckout.payByNomba(botCheckoutMe?.full_name || "", botCheckoutMe?.email || ""); }}
-          onClose={botCheckout.closeModal}
-        />
-      )}
       {botCheckout.error && !botCheckout.showModal && (
         <div className="mx-auto mt-4 max-w-md px-4 text-center font-mono text-[12px] text-rose-400">{botCheckout.error}</div>
       )}
@@ -2247,16 +2235,13 @@ function BillingPage({ setActive }) {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const signalCheckout = useSignalCheckout(API);
-  const signalPlanMeta = signalCheckout.planId === "SIGNALS_WEEKLY" ? data?.plans?.signals_weekly : data?.plans?.signals_monthly;
-  const signalPriceDisplay = billingNaira(signalPlanMeta?.price_kobo);
 
   // Bot lifetime -- in-app checkout, never a homepage redirect (see
   // useBotCheckout / CRITICAL PRODUCT RULE, 2026-08-25).
-  const botCheckout = useBotCheckout(API);
+  const botCheckout = { open: () => { window.location.href = "/#purchase"; }, showModal: false, closeModal: () => {}, error: "" };
   const [me, setMe] = useState(null);
   useEffect(() => { commandAxios.get("/cloud/auth/me").then((r) => setMe(r.data)).catch(() => {}); }, []);
-  const botPriceDisplay = billingNaira(data?.plans?.bot_lifetime?.price_kobo);
+  const botPriceDisplay = "See official USD price";
 
   const ent = data?.entitlement;
   const history = data?.payment_history || [];
@@ -2279,37 +2264,23 @@ function BillingPage({ setActive }) {
             {!ent.bot_license && ent.source === "subscription" && (
               <>
                 <span className="rounded-full bg-gold-300/15 px-3 py-1 text-[11px] font-bold text-gold-200">{ent.subscription?.plan === "WEEKLY" ? "Weekly Signals" : "Monthly Signals"} · active until {fmtDate(ent.subscription?.expires_at)}</span>
-                <button type="button" onClick={() => signalCheckout.openPlan(ent.subscription?.plan === "WEEKLY" ? "SIGNALS_WEEKLY" : "SIGNALS_MONTHLY")} data-testid="renew-subscription-btn"
-                  className="no-select rounded-full bg-white/[0.06] px-3 py-1 text-[11px] font-bold text-white/60 hover:bg-white/[0.1]">
-                  Renew now
-                </button>
               </>
             )}
-            {!ent.bot_license && ent.source === "none" && <span className="rounded-full bg-white/[0.08] px-3 py-1 text-[11px] font-bold text-white/50">No signal plan active</span>}
+            {!ent.bot_license && ent.source === "none" && <span className="rounded-full bg-white/[0.08] px-3 py-1 text-[11px] font-bold text-white/50">No active paid signal entitlement</span>}
           </div>
         )}
         <p className="mt-3 text-[12px] leading-5 text-white/40">
-          Your XauCloud bot license and any signal subscription are separate products. A bot license never expires; signal plans are optional and only affect Market Outlook / 10-minute engine access, never MT5 execution.
+          Existing customer licenses and historical subscriptions remain valid under their original terms. New orders use a one-time purchase with USD-first pricing; recurring purchases are retired.
         </p>
       </div>
 
       <Card title="Available plans">
         <div className="grid gap-3 sm:grid-cols-3">
-          {[
-            { key: "signals_weekly", id: "SIGNALS_WEEKLY", label: "Weekly Signals", sub: "/ week" },
-            { key: "signals_monthly", id: "SIGNALS_MONTHLY", label: "Monthly Signals", sub: "/ month" },
-          ].map((p) => (
-            <button key={p.key} type="button" onClick={() => signalCheckout.openPlan(p.id)}
-              className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4 text-left transition hover:border-gold-300/30 hover:bg-white/[0.05]">
-              <div className="text-[12px] font-semibold text-white/80">{p.label}</div>
-              <div className="mt-1 font-mono text-[16px] font-black text-gold-200">{billingNaira(data?.plans?.[p.key]?.price_kobo)}</div>
-              <div className="mt-0.5 text-[10.5px] text-white/35">{p.sub}</div>
-            </button>
-          ))}
+          <a href="/#purchase" className="rounded-2xl border border-gold-300/20 bg-gold-300/10 p-4 text-left transition hover:bg-gold-300/20"><div className="text-[12px] font-semibold text-white/90">3-Day Free Trial or One-Time Purchase</div><div className="mt-2 text-[12px] text-white/55">View current USD price and manual checkout options</div></a>
           {ent?.bot_license ? (
             <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
               <div className="text-[12px] font-semibold text-white/80">XauCloud Bot (Lifetime)</div>
-              <div className="mt-1 font-mono text-[16px] font-black text-gold-200">{botPriceDisplay}</div>
+              <div className="mt-1 font-mono text-[16px] font-black text-gold-200">{data?.plans?.bot_lifetime?.price_kobo ? "Historical license" : "See official USD price"}</div>
               <div className="mt-0.5 text-[10.5px] text-white/35">Already active</div>
             </div>
           ) : (
@@ -2317,11 +2288,10 @@ function BillingPage({ setActive }) {
               className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4 text-left transition hover:border-gold-300/30 hover:bg-white/[0.05]">
               <div className="text-[12px] font-semibold text-white/80">XauCloud Bot (Lifetime)</div>
               <div className="mt-1 font-mono text-[16px] font-black text-gold-200">{botPriceDisplay}</div>
-              <div className="mt-0.5 text-[10.5px] text-white/35">one-time · lifetime execution</div>
+              <div className="mt-0.5 text-[10.5px] text-white/35">One-time purchase · subject to official license terms</div>
             </button>
           )}
         </div>
-        {signalCheckout.error && <div className="mt-3 text-[12px] text-rose-400">{signalCheckout.error}</div>}
         {botCheckout.error && <div className="mt-3 text-[12px] text-rose-400">{botCheckout.error}</div>}
       </Card>
 
@@ -2348,30 +2318,6 @@ function BillingPage({ setActive }) {
         )}
       </Card>
 
-      {signalCheckout.showModal && (
-        <PaymentMethodModal
-          api={API}
-          priceDisplay={signalPriceDisplay}
-          subtitle={signalPriceDisplay}
-          onPaystack={() => { signalCheckout.closeModal(); signalCheckout.payByPaystack(); }}
-          onNomba={() => { signalCheckout.closeModal(); signalCheckout.payByNomba(); }}
-          onClose={signalCheckout.closeModal}
-          bankTransfer={signalCheckout.bankTransferProps}
-        />
-      )}
-
-      {botCheckout.showModal && (
-        <PaymentMethodModal
-          api={API}
-          priceDisplay={botPriceDisplay}
-          buyerName={me?.full_name || ""}
-          buyerEmail={me?.email || ""}
-          subtitle={`${botPriceDisplay} · ${me?.email || ""}`}
-          onPaystack={() => { botCheckout.closeModal(); botCheckout.payByPaystack(me?.full_name || "", me?.email || ""); }}
-          onNomba={() => { botCheckout.closeModal(); botCheckout.payByNomba(me?.full_name || "", me?.email || ""); }}
-          onClose={botCheckout.closeModal}
-        />
-      )}
     </div>
   );
 }
