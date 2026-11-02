@@ -7,7 +7,7 @@ export default function Footer() {
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-6 h-6 rounded-full bg-[#e8ddc3] flex items-center justify-center">
-              <span className="font-mono text-[8px] font-bold text-[#715321]">XA</span>
+              <span className="font-mono text-[10px] font-bold text-[#715321]">XA</span>
             </div>
             <div>
               <span className="text-[13px] font-semibold text-[#203d38]">XauCloud</span>
