@@ -3,6 +3,7 @@ import axios from "axios";
 import EmailComposer from "./admin/EmailComposer";
 import MarketingControl from "./admin/MarketingControl";
 import GlobalBrain from "./admin/GlobalBrain";
+import DirectCheckoutAdmin from "./admin/DirectCheckoutAdmin";
 import {
   Key, GearSix, SignOut, ShieldCheck, Copy, Check, Trash, Plus,
   UserCircle, CurrencyNgn, Envelope, Lock, Eye, EyeSlash, ArrowLeft,
@@ -110,7 +111,7 @@ export default function AdminPortal({ api }) {
   const NAV_GROUPS = [
     { label: "Overview",  tabs: [["dashboard", "Dashboard", House]] },
     { label: "Customers", tabs: [["pins", "Licenses", Key], ["signals", "Signals", Broadcast]] },
-    { label: "Money",     tabs: [["transactions", "Payments", CurrencyNgn], ["bankTransfers", "Bank Transfers", Bank]] },
+    { label: "Money",     tabs: [["transactions", "Payments", CurrencyNgn], ["bankTransfers", "Bank Transfers", Bank], ["directCheckout", "Direct Checkout", Bank]] },
     { label: "Trading",   tabs: [["command", "Bot Ops", Pulse], ["performance", "Performance", TrendUp], ["globalBrain", "Global Brain", Brain]] },
     { label: "Comms",     tabs: [["marketing", "Marketing", Megaphone], ["notifications", "Notifications", Bell], ["email", "Email", Envelope], ["xPosting", "X Posting", Megaphone]] },
     { label: "System",    tabs: [["settings", "Settings", GearSix], ["account", "Account", UserCircle]] },
@@ -195,6 +196,7 @@ export default function AdminPortal({ api }) {
           {tab === "settings"      && <SettingsTab      api={api} />}
           {tab === "transactions"  && <TransactionsTab  api={api} />}
           {tab === "bankTransfers" && <BankTransfersTab api={api} />}
+          {tab === "directCheckout" && <DirectCheckoutAdmin api={api} />}
           {tab === "account"       && <AccountTab api={api} admin={admin} onLogin={handleLogin} onLogout={handleLogout} />}
         </main>
       </div>
