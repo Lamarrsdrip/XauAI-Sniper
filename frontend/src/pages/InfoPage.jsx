@@ -58,7 +58,7 @@ export default function InfoPage({ kind }) {
     return () => { mounted = false; };
   }, [kind]);
   if (!page) return null;
-  return <div className="min-h-screen bg-[#f7f6f2] text-[#1a3030]">
+  return <div className="min-h-screen bg-[#f7f6f2] text-[#1a3030]" data-testid="info-page">
     <Seo title={page.title + " — XauCloud"} description={page.description} path={"/" + kind} />
     <header className="border-b border-[#e8e1d5] bg-white">
       <div className="mx-auto flex max-w-4xl items-center justify-between gap-4 px-5 py-5">
