@@ -198,7 +198,8 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       }
       throw err;
     }
-    return { reference, status: "MANUAL_SUBMITTED" };
+    const submitted = await getDb().collection("payment_transactions").findOne({ reference, provider: "MANUAL_DIRECT" });
+    return { reference, status: "MANUAL_SUBMITTED", submitted_at: submitted?.["submitted_at"] ?? null };
   });
 
   // Optional evidence is supplementary only. Neither upload nor submission can approve an order.
