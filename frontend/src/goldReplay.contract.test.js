@@ -45,12 +45,12 @@ describe("Gold Replay section contract", () => {
     expect(section).toContain("not a guarantee of future performance");
   });
 
-  test("is embedded on the public homepage performance section, above the daily results", () => {
+  test("is embedded as a distinct backtest section after genuine closed-trade results", () => {
     expect(app).toContain("GoldReplaySection");
     const goldIdx = app.indexOf("<GoldReplaySection");
     const dailyIdx = app.indexOf("<DailyTradingResultsSection");
     expect(goldIdx).toBeGreaterThan(-1);
     expect(dailyIdx).toBeGreaterThan(-1);
-    expect(goldIdx).toBeLessThan(dailyIdx);
+    expect(goldIdx).toBeGreaterThan(dailyIdx);
   });
 });
