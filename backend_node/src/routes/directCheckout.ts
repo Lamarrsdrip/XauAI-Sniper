@@ -212,7 +212,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
   });
 
   // Optional evidence is supplementary only. Neither upload nor submission can approve an order.
-  app.post("/purchase/direct/:reference/proof", async (request, reply) => {
+  app.post("/purchase/direct/:reference/proof", { bodyLimit: 3_000_000 }, async (request, reply) => {
     rateLimit("direct_proof:" + clientIp(request), 6, 600);
     const { reference } = request.params as { reference: string };
     const req = proofSchema.parse(request.body);
