@@ -29,6 +29,9 @@ export default function ManualCheckout({ api, config, onClose }) {
   const [assetNetwork, setAssetNetwork] = useState("");
   const [quote, setQuote] = useState(null);
   const [proof, setProof] = useState("");
+  const [proofBusy, setProofBusy] = useState(false);
+  const [proofUploaded, setProofUploaded] = useState(false);
+  const [submittedAt, setSubmittedAt] = useState(null);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -42,7 +45,7 @@ export default function ManualCheckout({ api, config, onClose }) {
     const check = async () => {
       try {
         const response = await axios.get(api + "/purchase/direct/" + encodeURIComponent(quote.reference) + "/status");
-        if (!cancelled) setStatus(response.data.status);
+        if (!cancelled) { setStatus(response.data.status); if (response.data.submitted_at) setSubmittedAt(response.data.submitted_at); }
       } catch { /* noncritical connectivity; keep last known state */ }
     };
     check();
@@ -67,9 +70,32 @@ export default function ManualCheckout({ api, config, onClose }) {
     try {
       const response = await axios.post(api + "/purchase/direct/" + encodeURIComponent(quote.reference) + "/submit", { payment_reference: proof.trim() });
       setStatus(response.data.status);
+      if (response.data.submitted_at) setSubmittedAt(response.data.submitted_at);
       setStep("pending");
     } catch (err) { setError(err.response?.data?.detail || "Could not submit your reference. Check the details."); }
     finally { setBusy(false); }
+  }
+  async function uploadEvidence(file) {
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 2_000_000) {
+      setError("Choose a PNG, JPEG or WebP image smaller than 2 MB.");
+      return;
+    }
+    setProofBusy(true); setError("");
+    try {
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Could not read the selected image."));
+        reader.readAsDataURL(file);
+      });
+      if (typeof data !== "string" || !data.startsWith("data:" + file.type + ";base64,")) throw new Error("Unsupported image encoding.");
+      const dataBase64 = data.split(",")[1];
+      await axios.post(api + "/purchase/direct/" + encodeURIComponent(quote.reference) + "/proof",
+        { mime_type: file.type, data_base64: dataBase64 });
+      setProofUploaded(true);
+    } catch (err) { setError(err.response?.data?.detail || err.message || "Could not attach your optional proof."); }
+    finally { setProofBusy(false); }
   }
   return <div role="dialog" aria-modal="true" aria-label="XauCloud manual checkout" className="fixed inset-0 z-[100] overflow-y-auto bg-[#101d1c]/65 px-3 py-4 backdrop-blur-sm sm:p-8" data-testid="manual-checkout">
     <div className="mx-auto w-full max-w-[610px] overflow-hidden rounded-[26px] border border-[#e8e4d9] bg-[#f9f8f5] shadow-[0_25px_100px_rgba(0,0,0,.2)]">
@@ -132,6 +158,12 @@ export default function ManualCheckout({ api, config, onClose }) {
           <label className="mt-5 block text-[12px] font-bold text-[#475555]">{isNigeria ? "Your bank transfer reference" : "Blockchain transaction hash"}
             <input className={styles.input + " mt-2"} value={proof} onChange={(e) => setProof(e.target.value)} placeholder={isNigeria ? "Enter the reference issued by your bank" : "Enter your on-chain transaction hash"}/>
           </label>
+          <label className="mt-4 block cursor-pointer rounded-xl border border-dashed border-[#d6c7ad] bg-white px-4 py-3 text-[12px] font-semibold text-[#55645e]">
+            {proofBusy ? "Uploading optional evidence…" : proofUploaded ? "Evidence attached (not yet verified)" : "Attach receipt screenshot (optional · PNG/JPEG/WebP, max 2MB)"}
+            <input type="file" accept="image/png,image/jpeg,image/webp" disabled={proofBusy} className="sr-only"
+              onChange={(e) => uploadEvidence(e.target.files?.[0])}/>
+          </label>
+          <p className="mt-2 text-[11px] leading-5 text-[#7b8380]">Screenshots are supporting evidence only. An administrator verifies the actual bank or blockchain transaction independently.</p>
           <p className="mt-3 text-[11px] leading-5 text-[#72817e]">Never submit a reference before making a real transfer. Review takes place after submission, not automatically. Save your order reference.</p>
           {status === "MANUAL_EXPIRED" && <p role="alert" className="mt-3 text-sm text-[#a23e38]">Quote expired. Contact support if you already transferred.</p>}
           {error && <p role="alert" className="mt-3 text-sm text-[#a23e38]">{error}</p>}
@@ -146,7 +178,7 @@ export default function ManualCheckout({ api, config, onClose }) {
             <CopyValue label="Payment method" value={quote.method}/>
             <CopyValue label="Amount" value={quote.amount_formatted}/>
             <CopyValue label="Status" value={status || "MANUAL_SUBMITTED"}/>
-            <CopyValue label="Submitted at" value={new Date().toLocaleString()}/>
+            <CopyValue label="Submitted at" value={submittedAt ? new Date(submittedAt).toLocaleString() : "Awaiting server confirmation"}/>
           </div>
           <button className={styles.btn + " mt-5"} onClick={onClose}>Close and keep my reference</button>
         </>}
