@@ -45,9 +45,21 @@ function verifyPaystackSignature(rawBody: Buffer, signature: string, secret: str
 }
 
 /** Port of server.py's purchase/payment routes (lines 1356-2122). */
+function legacyNewPurchasesRetired(): boolean { return true; }
+
 export async function registerPurchaseRoutes(app: FastifyInstance): Promise<void> {
   // GET /purchase/price -- server.py:1356
   app.get("/purchase/price", async (request) => {
+    const directSettings = await getSettings();
+    const usdCents = directSettings["direct_usd_cents"];
+    const valid = typeof usdCents === "number" && Number.isSafeInteger(usdCents) && usdCents > 0;
+    if (legacyNewPurchasesRetired()) return {
+      currency: "USD", charge_currency: "USD",
+      price_usd_cents: valid ? usdCents : null,
+      formatted: valid ? "USD " + (usdCents / 100).toFixed(2) : null,
+      payment_method: valid ? "manual_direct" : "unavailable",
+    };
+
     const q = z.object({ display_currency: z.string().nullable().optional() }).parse(request.query);
     const detected = detectDisplayCurrency(request, q.display_currency);
     const priceDisplay = await buildPriceDisplay(detected);
@@ -60,6 +72,17 @@ export async function registerPurchaseRoutes(app: FastifyInstance): Promise<void
   // GET /purchase/plans -- authoritative price list for the 4-tier product (trial/weekly/monthly/lifetime).
   // The frontend renders prices from here; it never hardcodes an NGN literal.
   app.get("/purchase/plans", async () => {
+    if (legacyNewPurchasesRetired()) {
+      const cfg = await getSettings();
+      const price = cfg["direct_usd_cents"];
+      const cents = typeof price === "number" && Number.isSafeInteger(price) && price > 0 ? price : null;
+      return {
+        currency: "USD",
+        trial: { plan_id: "TRIAL", label: "3-Day Trial", price_usd_cents: 0, market_days: TRIAL_MARKET_DAY_LIMIT },
+        bot_direct: { plan_id: "BOT_DIRECT", label: "XauCloud one-time license", price_usd_cents: cents },
+      };
+    }
+
     const settings = await getSettings();
     const lifetimeKobo = Number(settings["pin_price_kobo"] ?? 30_000_000);
     return {
@@ -75,6 +98,7 @@ export async function registerPurchaseRoutes(app: FastifyInstance): Promise<void
   // Reuses the exact same payment_transactions/transitionPaymentState/fulfillPayment engine as the
   // lifetime-license flow below; only plan_id + the authenticated user_id differ.
   app.post("/purchase/signals/paystack/initialize", { preHandler: requireCloudUser }, async (request, reply) => {
+    if (legacyNewPurchasesRetired()) return reply.code(410).send({ detail: "This checkout has been retired. Use the USD-first manual checkout." });
     const req = SignalPlanInitRequestSchema.parse(request.body);
     const user = (request as typeof request & { cloudUser?: Record<string, unknown> }).cloudUser!;
     rateLimit(`signal_purchase_init_ip:${clientIp(request)}`, 10, 600);
@@ -119,6 +143,7 @@ export async function registerPurchaseRoutes(app: FastifyInstance): Promise<void
 
   // POST /purchase/signals/nomba/initialize -- authenticated signal-subscription checkout (Nomba).
   app.post("/purchase/signals/nomba/initialize", { preHandler: requireCloudUser }, async (request, reply) => {
+    if (legacyNewPurchasesRetired()) return reply.code(410).send({ detail: "This checkout has been retired. Use the USD-first manual checkout." });
     const req = SignalPlanInitRequestSchema.parse(request.body);
     const user = (request as typeof request & { cloudUser?: Record<string, unknown> }).cloudUser!;
     rateLimit(`signal_purchase_init_ip:${clientIp(request)}`, 10, 600);
@@ -161,6 +186,7 @@ export async function registerPurchaseRoutes(app: FastifyInstance): Promise<void
 
   // POST /purchase/signals/bank-transfer/initiate -- authenticated signal-subscription checkout (bank transfer).
   app.post("/purchase/signals/bank-transfer/initiate", { preHandler: requireCloudUser }, async (request, reply) => {
+    if (legacyNewPurchasesRetired()) return reply.code(410).send({ detail: "This checkout has been retired. Use the USD-first manual checkout." });
     const req = SignalPlanInitRequestSchema.parse(request.body);
     const user = (request as typeof request & { cloudUser?: Record<string, unknown> }).cloudUser!;
     rateLimit(`signal_bank_transfer_init_ip:${clientIp(request)}`, 10, 600);
@@ -200,6 +226,7 @@ export async function registerPurchaseRoutes(app: FastifyInstance): Promise<void
 
   // POST /purchase/initialize (Nomba) -- server.py:1374
   app.post("/purchase/initialize", async (request, reply) => {
+    if (legacyNewPurchasesRetired()) return reply.code(410).send({ detail: "This checkout has been retired. Use the USD-first manual checkout." });
     const req = PurchaseInitRequestSchema.parse(request.body);
     rateLimit(`purchase_init_ip:${clientIp(request)}`, 10, 600);
 
@@ -257,6 +284,7 @@ export async function registerPurchaseRoutes(app: FastifyInstance): Promise<void
 
   // POST /purchase/paystack/initialize -- server.py:1431
   app.post("/purchase/paystack/initialize", async (request, reply) => {
+    if (legacyNewPurchasesRetired()) return reply.code(410).send({ detail: "This checkout has been retired. Use the USD-first manual checkout." });
     const req = PurchaseInitRequestSchema.parse(request.body);
     rateLimit(`purchase_paystack_init_ip:${clientIp(request)}`, 10, 600);
 
@@ -318,6 +346,7 @@ export async function registerPurchaseRoutes(app: FastifyInstance): Promise<void
 
   // GET /purchase/payment-methods -- server.py:1815
   app.get("/purchase/payment-methods", async (request) => {
+    if (legacyNewPurchasesRetired()) return { methods: [], default_method: null, retired: true };
     rateLimit(`payment_methods_ip:${clientIp(request)}`, 60, 60);
     const settings = await getPaymentMethodsSettings();
     const availability = await paymentMethodAvailability(request);
@@ -346,6 +375,7 @@ export async function registerPurchaseRoutes(app: FastifyInstance): Promise<void
 
   // POST /purchase/bank-transfer/initiate -- server.py:1868
   app.post("/purchase/bank-transfer/initiate", async (request, reply) => {
+    if (legacyNewPurchasesRetired()) return reply.code(410).send({ detail: "This checkout has been retired. Use the USD-first manual checkout." });
     const req = BankTransferInitiateRequestSchema.parse(request.body);
     rateLimit(`bank_transfer_init_ip:${clientIp(request)}`, 10, 600);
     const country = detectCountryCode(request);
