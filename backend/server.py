@@ -4282,13 +4282,23 @@ async def startup():
     _index_report = []
     try:
         await db.cloud_users.create_index("email", unique=True)
-    await db.cloud_signal_trials.create_index("user_id", unique=True)
-    await db.cloud_signal_trials.create_index("email", unique=True)
-    await db.payment_transactions.create_index([("provider", 1), ("submitted_reference", 1)], unique=True,
-        partialFilterExpression={"provider": "MANUAL_DIRECT", "submitted_reference": {"$type": "string"}})
         _index_report.append("cloud_users.email: unique OK")
     except Exception as e:
         _index_report.append(f"cloud_users.email: FAILED ({e})")
+    # Dedicated manual-checkout indexes; report failures rather than hiding them.
+    try:
+        await db.cloud_signal_trials.create_index("user_id", unique=True)
+        await db.cloud_signal_trials.create_index("email", unique=True)
+        _index_report.append("cloud_signal_trials: unique identity OK")
+    except Exception as e:
+        _index_report.append(f"cloud_signal_trials: FAILED ({e})")
+    try:
+        await db.payment_transactions.create_index(
+            [("provider", 1), ("submitted_reference", 1)], unique=True,
+            partialFilterExpression={"provider": "MANUAL_DIRECT", "submitted_reference": {"$type": "string"}})
+        _index_report.append("manual_direct.submitted_reference: unique OK")
+    except Exception as e:
+        _index_report.append(f"manual_direct.submitted_reference: FAILED ({e})")
     try:
         await db.pin_licenses.create_index("pin", unique=True)
         _index_report.append("pin_licenses.pin: unique OK")
