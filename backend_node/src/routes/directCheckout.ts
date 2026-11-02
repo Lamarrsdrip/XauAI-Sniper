@@ -106,12 +106,21 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
   app.get("/purchase/direct/config", async (request) => {
     rateLimit("direct_config:" + clientIp(request), 60, 60);
     const cfg = getCfg(await getSettings());
+    const bank = await getBankTransferSettings();
+    const fxTime = cfg.rate_as_of ? Date.parse(cfg.rate_as_of) : NaN;
+    let fxValid = false;
+    try { if (cfg.usd_ngn_rate) { rateScaled(cfg.usd_ngn_rate); fxValid = true; } } catch { /* leave bank unavailable */ }
+    const bankReady = cfg.price_usd_cents != null && cfg.bank_enabled && bank.enabled &&
+      bankTransferIsConfigured(bank) && fxValid && Number.isFinite(fxTime) &&
+      Date.now() >= fxTime && Date.now() - fxTime <= 86400000;
+    const cryptoReady = cfg.price_usd_cents != null && cfg.crypto_enabled && cfg.wallets.length > 0 &&
+      cfg.crypto_countries.length > 0;
     return {
       currency: "USD", price_usd_cents: cfg.price_usd_cents,
       price_formatted: cfg.price_usd_cents != null ? usdFormatted(cfg.price_usd_cents) : null,
-      bank_enabled: cfg.bank_enabled, crypto_enabled: cfg.crypto_enabled,
+      bank_enabled: bankReady, crypto_enabled: cryptoReady,
       crypto_countries: cfg.crypto_countries,
-      crypto_options: cfg.crypto_enabled ? cfg.wallets.map((w) => ({ asset: w["asset"], network: w["network"] })) : [],
+      crypto_options: cryptoReady ? cfg.wallets.map((w) => ({ asset: w["asset"], network: w["network"] })) : [],
       trial_days: 3,
     };
   });
