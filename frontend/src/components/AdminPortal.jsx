@@ -482,7 +482,7 @@ function DashboardTab({ api }) {
             {[
               ["Licenses", "Create, revoke, activate, and copy ASE license keys."],
               ["Bot Ops",  "Watch live heartbeat, command queue, and EA activity."],
-              ["Payments", "Review Paystack transactions and generated license keys."],
+              ["Payments", "Review historical transactions and generated license keys."],
               ["Settings", "Set license price, payment keys, and email delivery."],
             ].map(([title, body]) => (
               <div key={title} className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-3">
@@ -904,93 +904,9 @@ function PinsTab({ api }) {
   );
 }
 
-// ─── Payment method priority ──────────────────────────────────────────────────
-const PAYMENT_METHOD_LABELS = { bank_transfer: "Nigeria Bank Transfer", paystack: "Paystack" };
-
-function PaymentMethodPrioritySettings({ api }) {
-  const [settings, setSettings] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const h = useMemo(() => auth(), []);
-
-  const fetchSettings = useCallback(() => {
-    ax.get(`${api}/admin/settings/payment-methods`, h).then(r => setSettings(r.data)).catch(() => {});
-  }, [api, h]);
-
-  useEffect(() => { fetchSettings(); }, [fetchSettings]);
-
-  const save = async (updates) => {
-    setSaving(true);
-    try {
-      const r = await ax.put(`${api}/admin/settings/payment-methods`, updates, h);
-      setSettings(r.data);
-      setSaved(true); setTimeout(() => setSaved(false), 3000);
-    } catch {} finally { setSaving(false); }
-  };
-
-  const moveMethod = (method, direction) => {
-    if (!settings) return;
-    const order = [...settings.payment_method_order];
-    const i = order.indexOf(method);
-    const j = i + direction;
-    if (j < 0 || j >= order.length) return;
-    [order[i], order[j]] = [order[j], order[i]];
-    save({ payment_method_order: order });
-  };
-
-  if (!settings) return <CardSection title="Payment method priority"><p className="text-[13px] text-white/35">Loading…</p></CardSection>;
-
-  return (
-    <CardSection title="Payment method priority" action={saved && <span className="text-[11px] text-emerald-400">Saved</span>}>
-      <p className="text-[12px] text-white/40 mb-4 leading-5">
-        Controls the order and availability customers see on the checkout payment-method screen.
-        Bank details live in the separate "Bank Transfers" tab; this only enables/disables/orders the
-        three methods.
-      </p>
-      <div className="space-y-3">
-        {settings.payment_method_order.map((method, i) => (
-          <div key={method} className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3">
-            <div className="flex items-center gap-3">
-              <div className="flex flex-col gap-0.5">
-                <button disabled={i === 0} onClick={() => moveMethod(method, -1)} className="text-white/30 hover:text-white disabled:opacity-20" aria-label="Move up">▲</button>
-                <button disabled={i === settings.payment_method_order.length - 1} onClick={() => moveMethod(method, 1)} className="text-white/30 hover:text-white disabled:opacity-20" aria-label="Move down">▼</button>
-              </div>
-              <div>
-                <div className="text-[13px] font-semibold text-white">{i + 1}. {PAYMENT_METHOD_LABELS[method]}</div>
-                {settings.default_payment_method === method && <div className="text-[10px] text-emerald-400">Default</div>}
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              {method !== "bank_transfer" && (
-                <label className="flex items-center gap-1.5 text-[12px] text-white/60">
-                  <input type="checkbox" checked={Boolean(settings[`${method}_enabled`])}
-                    onChange={e => save({ [`${method}_enabled`]: e.target.checked })} />
-                  Enabled
-                </label>
-              )}
-              <button
-                disabled={settings.default_payment_method === method}
-                onClick={() => save({ default_payment_method: method })}
-                className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] text-white/60 hover:text-white disabled:opacity-30"
-              >
-                Set default
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-      {saving && <p className="mt-3 text-[11px] text-white/35">Saving…</p>}
-    </CardSection>
-  );
-}
-
 // ─── Settings ─────────────────────────────────────────────────────────────────
 function SettingsTab({ api }) {
   const [settings, setSettings] = useState(null);
-  const [pk, setPk] = useState("");
-  const [priceNaira, setPriceNaira] = useState(300000);
-  const [weeklyNaira, setWeeklyNaira] = useState(20000);
-  const [monthlyNaira, setMonthlyNaira] = useState(50000);
   const [signalSourceAccount, setSignalSourceAccount] = useState("");
   const [signalBackupAccount, setSignalBackupAccount] = useState("");
   const [smtpEmail, setSmtpEmail] = useState("");
@@ -1016,7 +932,7 @@ function SettingsTab({ api }) {
 
   useEffect(() => {
     ax.get(`${api}/admin/settings`, h).then(r => {
-      setSettings(r.data); setPriceNaira(r.data.pin_price_naira || 300000); setSmtpEmail(r.data.smtp_email || "");
+      setSettings(r.data); setSmtpEmail(r.data.smtp_email || "");
       setSmtpHost(r.data.smtp_host || ""); setSmtpPort(r.data.smtp_port || 465); setMailFrom(r.data.mail_from || "");
       setOnesignalAppId(r.data.onesignal_app_id || "");
       setEmailSenderName(r.data.email_sender_name || "XauCloud");
@@ -1028,8 +944,6 @@ function SettingsTab({ api }) {
       setVpsGuideUrl(r.data.vps_guide_url || "");
       setInstallationGuideUrl(r.data.installation_guide_url || "");
       setCommandCenterUrl(r.data.command_center_url || "");
-      setWeeklyNaira(r.data.signals_weekly_price_kobo ? r.data.signals_weekly_price_kobo / 100 : 20000);
-      setMonthlyNaira(r.data.signals_monthly_price_kobo ? r.data.signals_monthly_price_kobo / 100 : 50000);
       setSignalSourceAccount(r.data.subscriber_signal_source_account || "");
       setSignalBackupAccount(r.data.subscriber_signal_backup_source_account || "");
     }).catch(() => {});
@@ -1038,10 +952,6 @@ function SettingsTab({ api }) {
   const save = async () => {
     setSaving(true);
     const updates = {};
-    if (pk) updates.paystack_secret_key = pk;
-    updates.pin_price_kobo = Math.round(priceNaira * 100);
-    updates.signals_weekly_price_kobo = Math.round(weeklyNaira * 100);
-    updates.signals_monthly_price_kobo = Math.round(monthlyNaira * 100);
     updates.subscriber_signal_source_account = signalSourceAccount;
     updates.subscriber_signal_backup_source_account = signalBackupAccount;
     if (smtpEmail) updates.smtp_email = smtpEmail;
@@ -1062,43 +972,21 @@ function SettingsTab({ api }) {
     updates.command_center_url = commandCenterUrl;
     try {
       await ax.put(`${api}/admin/settings`, updates, h);
-      setSaved(true); setPk(""); setSmtpPw(""); setOnesignalApiKey(""); setTimeout(() => setSaved(false), 3000);
+      setSaved(true); setSmtpPw(""); setOnesignalApiKey(""); setTimeout(() => setSaved(false), 3000);
       const r = await ax.get(`${api}/admin/settings`, h); setSettings(r.data);
     } catch {} finally { setSaving(false); }
   };
 
   return (
     <div className="max-w-2xl space-y-5" data-testid="admin-settings-tab">
-      <CardSection title="Pricing">
-        <div className="space-y-4">
-          <Field label="XauCloud Bot — Lifetime license price (Naira)">
-            <div className="flex items-center gap-2">
-              <span className="text-white/50">₦</span>
-              <Input data-testid="settings-price" type="number" value={priceNaira} onChange={e => setPriceNaira(parseInt(e.target.value) || 0)} className="font-mono" />
-            </div>
-            <p className="mt-1 text-[11px] text-white/35">Current: ₦{priceNaira?.toLocaleString()} — used by the Paystack checkout and Nigeria bank-transfer orders.</p>
-          </Field>
-          <Field label="Weekly Signals price (Naira)">
-            <div className="flex items-center gap-2">
-              <span className="text-white/50">₦</span>
-              <Input data-testid="settings-weekly-price" type="number" value={weeklyNaira} onChange={e => setWeeklyNaira(parseInt(e.target.value) || 0)} className="font-mono" />
-            </div>
-            <p className="mt-1 text-[11px] text-white/35">Current: ₦{weeklyNaira?.toLocaleString()} / 7 days — signal-only access, no bot license.</p>
-          </Field>
-          <Field label="Monthly Signals price (Naira)">
-            <div className="flex items-center gap-2">
-              <span className="text-white/50">₦</span>
-              <Input data-testid="settings-monthly-price" type="number" value={monthlyNaira} onChange={e => setMonthlyNaira(parseInt(e.target.value) || 0)} className="font-mono" />
-            </div>
-            <p className="mt-1 text-[11px] text-white/35">Current: ₦{monthlyNaira?.toLocaleString()} / fixed 30 days — signal-only access, no bot license.</p>
-          </Field>
-        </div>
+      <CardSection title="Direct-purchase pricing">
+        <p className="text-[13px] leading-6 text-white/55">The official one-time selling price is now configured in <strong>Money → Direct Checkout</strong> in USD. Legacy NGN amounts and subscription prices remain historical-only and cannot create new purchases.</p>
       </CardSection>
 
       <CardSection title="Subscriber signal feed">
         <div className="space-y-4">
           <p className="text-[12px] text-white/40 leading-5">
-            Trial and Weekly/Monthly subscribers see a sanitized mirror of ONE designated, already-connected
+            Eligible trial and historical subscribers see a sanitized mirror of ONE designated, already-connected
             account's Market Outlook and 10-minute engine -- never a second signal engine, and never routed into
             any licensed bot's own execution. Leave blank to keep the subscriber feed dormant
             (Market Outlook / 10-minute engine will show "temporarily unavailable" to signal-only users).
@@ -1108,25 +996,6 @@ function SettingsTab({ api }) {
           </Field>
           <Field label="Backup source MT5 account (optional)">
             <Input data-testid="settings-signal-backup" value={signalBackupAccount} onChange={e => setSignalBackupAccount(e.target.value.trim())} placeholder="Used only if the primary account's heartbeat goes stale" className="font-mono" />
-          </Field>
-        </div>
-      </CardSection>
-
-      <PaymentMethodPrioritySettings api={api} />
-
-      <CardSection title="Paystack (active — second payment option)">
-        <p className="text-[12px] text-white/40 mb-4 leading-5">
-          Paystack is active as the second checkout option, after Nigeria Bank Transfer. See "Payment
-          method priority" above to enable/disable it or change the default.
-        </p>
-        <div className="space-y-4">
-          <Field label="Paystack secret key">
-            <Input data-testid="settings-paystack-key" type="password" value={pk} onChange={e => setPk(e.target.value)}
-              placeholder={settings?.paystack_configured ? "Configured — enter new key to change" : "sk_live_xxxxxx"} className="font-mono" />
-            <p className="mt-1 text-[11px] text-white/35">
-              Status: <span className={settings?.paystack_configured ? "text-emerald-400" : "text-red-400"}>{settings?.paystack_configured ? "Configured" : "Not set"}</span>
-              {settings?.paystack_key_preview && settings.paystack_configured && <span className="ml-1 font-mono">({settings.paystack_key_preview})</span>}
-            </p>
           </Field>
         </div>
       </CardSection>
@@ -1355,7 +1224,7 @@ function BankTransfersTab({ api }) {
               <label className="flex items-center gap-2 text-[13px] text-white/70">
                 <input type="checkbox" checked={Boolean(settings.enabled)}
                   onChange={e => setSettings({ ...settings, enabled: e.target.checked })} />
-                Enable Nigeria Bank Transfer at checkout (available to every visitor, not just those detected as being in Nigeria)
+                Enable bank details for eligible Nigerian country-selected direct checkout
               </label>
             </Field>
             <Field label="Timeout (minutes)">
