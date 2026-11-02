@@ -43,7 +43,7 @@ def request():
     return req
 
 def handler(path):
-    return next(r.endpoint for r in srv.api_router.routes if r.path == path)
+    return next(r.endpoint for r in srv.api_router.routes if r.path == path or r.path == '/api' + path)
 
 BASE = {
     "direct_usd_cents": 10000, "direct_bank_enabled": True,
