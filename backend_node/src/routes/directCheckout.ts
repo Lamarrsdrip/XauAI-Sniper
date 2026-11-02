@@ -47,7 +47,7 @@ function usdFormatted(cents: number): string { return "USD " + (cents / 100).toF
 function rateScaled(rate: string): bigint {
   if (!RATE_RE.test(rate)) throw new Error("Invalid USD/NGN rate");
   const [whole, fraction = ""] = rate.split(".");
-  const scaled = BigInt(whole) * 100000000n + BigInt(fraction.padEnd(8, "0") || "0");
+  const scaled = BigInt(whole ?? "0") * 100000000n + BigInt(fraction.padEnd(8, "0") || "0");
   if (scaled < 1000000n || scaled > 100000000000000n) throw new Error("FX rate outside accepted bounds");
   return scaled;
 }
