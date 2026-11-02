@@ -20,6 +20,7 @@ import LabsPage from "@/pages/LabsPage";
 import PerformancePage from "@/pages/PerformancePage";
 import CertificateVerifyPage from "@/pages/CertificateVerifyPage";
 import PerformanceHistoryPage from "@/pages/PerformanceHistoryPage";
+import InfoPage from "@/pages/InfoPage";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { API } from "@/lib/api";
 import { CampaignLandingPage, CommandCenterAnnouncements, WebsiteCampaignSlots } from "@/components/MarketingSurfaces";
@@ -75,6 +76,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<MainDashboard />} />
+          {["about","contact","terms","privacy","risk"].map((kind) => <Route key={kind} path={"/" + kind} element={<InfoPage kind={kind} />} />)}
           <Route path="/command" element={<CloudLanding />} />
           <Route path="/command/signup" element={<CloudSignup />} />
           <Route path="/command/login" element={<CloudLogin />} />
