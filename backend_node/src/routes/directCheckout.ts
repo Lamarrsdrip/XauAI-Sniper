@@ -6,6 +6,7 @@ import { getDb } from "../db.js";
 import { clientIp, rateLimit, requireAdmin } from "../auth.js";
 import { getSettings } from "../services/settings.js";
 import { sendEmail } from "../services/email.js";
+import { sendDirectManualPaymentInstructions } from "../services/manualCheckoutInstructions.js";
 import { getBankTransferSettings, bankTransferIsConfigured } from "../services/paymentMethods.js";
 import { generateUniquePin } from "../services/paymentFulfillment.js";
 import { notifyAdminPaymentStarted, notifyAdminNewSale, sendPinEmail, recordFulfillmentEmailResult } from "../services/paymentEmails.js";
@@ -175,11 +176,27 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       payment_status: "MANUAL_PENDING", pin_generated: null, state_transitions: {},
     };
     await getDb().collection("payment_transactions").insertOne(tx);
+    // Send the buyer a permanent copy of the exact instructions at order creation.
+    // A failed SMTP attempt never marks the order paid or prevents the quote being shown.
+    let instructionsEmailSent = false;
+    try {
+      instructionsEmailSent = await sendDirectManualPaymentInstructions({
+        buyerName: req.buyer_name, buyerEmail: req.buyer_email, reference,
+        method, amountFormatted, usdPrice: usdFormatted(cents),
+        details, expiresAt: expires,
+      });
+    } catch (e) { app.log.error({ err: e, reference }, "Manual customer instructions email failed"); }
+    await getDb().collection("payment_transactions").updateOne(
+      { reference, provider: "MANUAL_DIRECT" },
+      { $set: { instructions_email_status: instructionsEmailSent ? "SENT" : "FAILED",
+                instructions_email_attempted_at: utc() } },
+    );
     try { await notifyAdminPaymentStarted("Manual " + method, reference, req.buyer_name, req.buyer_email, amountFormatted); }
     catch (e) { app.log.error({ err: e, reference }, "Manual payment start notification failed"); }
     return { reference, method, usd_price: usdFormatted(cents), currency,
              amount_minor: amountMinor, amount_formatted: amountFormatted,
-             details, expires_at: expires, status: "MANUAL_PENDING" };
+             details, expires_at: expires, status: "MANUAL_PENDING",
+             instructions_email_sent: instructionsEmailSent };
   });
 
   app.post("/purchase/direct/:reference/submit", async (request, reply) => {
