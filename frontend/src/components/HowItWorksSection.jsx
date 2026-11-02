@@ -25,7 +25,7 @@ export default function HowItWorksSection() {
       <div className="mx-auto max-w-6xl px-5 py-12 md:px-8 md:py-16">
 
         <div className="mb-8">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-[#dccaa6] bg-[#f7f1e5] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-[#77551c]">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-[#dccaa6] bg-[#f7f1e5] px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-[0.22em] text-[#77551c]">
             How it works
           </span>
           <h2 className="mt-4 font-heading text-[1.85rem] font-semibold tracking-tight sm:text-[2.45rem]" data-testid="how-it-works-title">
