@@ -51,13 +51,13 @@ export default function PurchaseSection({ api }) {
   return <div className="border-t border-[#e8e3d9] bg-[#f6f9f6] py-14 text-[#172b2e] md:py-20" data-testid="purchase-section">
     <div className="mx-auto max-w-6xl px-5 md:px-8">
       <div className="mx-auto max-w-2xl text-center">
-        <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-[#957747]">Simple pricing</span>
+        <span className="text-[12px] font-bold uppercase tracking-[0.2em] text-[#957747]">Simple pricing</span>
         <h2 className="mt-3 font-heading text-3xl font-semibold tracking-tight md:text-4xl" data-testid="purchase-title">Choose how you begin.</h2>
         <p className="mt-4 text-[14px] leading-7 text-[#475b57]">Try the Command Center signal experience for three market days, or buy a one-time XauCloud MT5 trading license. No weekly or monthly renewals.</p>
       </div>
       <div className="mx-auto mt-9 grid max-w-4xl gap-4 md:grid-cols-2">
         <div className="flex flex-col rounded-[25px] border border-[#dedbd3] bg-white p-7 shadow-[0_8px_32px_rgba(33,39,35,.03)]" data-testid="plan-card-free-trial">
-          <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-[#947747]"><Clock3 size={15}/> Explore first</div>
+          <div className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-[0.16em] text-[#947747]"><Clock3 size={15}/> Explore first</div>
           <h3 className="mt-4 font-heading text-2xl font-semibold">3-Day Free Trial</h3>
           <div className="mt-4 text-4xl font-semibold tracking-tight">Free</div>
           <div className="mt-2 text-[12px] text-[#4f605c]">Three trading-market days · no automatic billing</div>
@@ -71,7 +71,7 @@ export default function PurchaseSection({ api }) {
         </div>
         <div className="relative flex flex-col overflow-hidden rounded-[25px] border border-[#dacbaa] bg-[#fffaf0] p-7 text-[#1a3331] shadow-[0_18px_48px_rgba(46,65,51,.07)]" data-testid="purchase-form">
           <span className="pointer-events-none absolute -right-14 -top-14 h-52 w-52 rounded-full border border-[#bca36d]/35"/>
-          <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-[#715322]"><CreditCard size={15}/> One-time purchase</div>
+          <div className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-[0.16em] text-[#715322]"><CreditCard size={15}/> One-time purchase</div>
           <h3 className="mt-4 font-heading text-2xl font-semibold">Buy XauCloud</h3>
           <div className="mt-4 text-4xl font-semibold tracking-tight" data-testid="display-price">{loading ? "Loading…" : moneyAvailable ? config.price_formatted : "Price not set"}</div>
           <div className="mt-2 text-[12px] text-[#4c6058]">Official USD base price · one-time license</div>
@@ -85,7 +85,7 @@ export default function PurchaseSection({ api }) {
         </div>
       </div>
       {error && <div role="alert" className="mx-auto mt-5 flex max-w-xl flex-wrap items-center justify-center gap-3 rounded-xl border border-[#d8b8ad] bg-white p-3 text-center text-[12px] text-[#914a34]">{error}<button type="button" onClick={load} className="font-bold underline">Retry</button></div>}
-      <p className="mx-auto mt-7 max-w-3xl text-center text-[11px] leading-6 text-[#52625e]">Trading can lead to a total loss of capital. The trial is not a trial of an MT5 license. A completed payment does not grant access until verified and approved.</p>
+      <p className="mx-auto mt-7 max-w-3xl text-center text-[12px] leading-6 text-[#52625e]">Trading can lead to a total loss of capital. The trial is not a trial of an MT5 license. A completed payment does not grant access until verified and approved.</p>
     </div>
     {checkoutOpen && config && <ManualCheckout api={api} config={config} onClose={() => setCheckoutOpen(false)}/>}
   </div>;
