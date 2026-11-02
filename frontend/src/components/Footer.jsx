@@ -25,7 +25,11 @@ export default function Footer() {
           </div>
         </div>
 
-        <div className="mt-6 border-t border-white/[0.05] pt-6 flex flex-col items-center gap-3">
+        <nav aria-label="Company, contact and legal information" className="mt-7 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 border-t border-white/[0.05] pt-6">
+          {[["About", "/about"], ["Contact", "/contact"], ["Terms", "/terms"], ["Privacy", "/privacy"], ["Trading risks", "/risk"]].map(([label, href]) =>
+            <a key={href} href={href} className="text-[11px] font-medium text-white/60 transition hover:text-[#e3c78e]">{label}</a>)}
+        </nav>
+        <div className="mt-5 border-t border-white/[0.05] pt-6 flex flex-col items-center gap-3">
           <a
             href="https://x.com/ghostcdev?s=11"
             target="_blank"
