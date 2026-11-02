@@ -30,6 +30,13 @@ describe("Premium manual gateway contract", () => {
     expect(checkout).toContain('label="Account number"');
     expect(checkout).toContain('label="Receiving wallet"');
     expect(checkout).toContain('title="Copy all details"');
+    expect(checkout).toContain('label="Bank name" value={quote.details.bank_name}');
+    expect(checkout).toContain('label="Account holder" value={quote.details.account_name}');
+    expect(checkout).toContain('label="Stablecoin" value={quote.details.asset}');
+    expect(checkout).toContain('label="Network" value={quote.details.network}');
+    expect(checkout).not.toContain('label="Bank name" value={quote.details.bank_name} copy={false}');
+    expect(checkout).toContain("xaucloud.pay.session.v1");
+    expect(checkout).toContain("localStorage.getItem(ORDER_KEY)");
     expect(checkout).toContain("Submit payment for verification");
     expect(checkout).toContain("independently confirm receipt");
     expect(checkout).toContain("status === \"FULFILLED\"");

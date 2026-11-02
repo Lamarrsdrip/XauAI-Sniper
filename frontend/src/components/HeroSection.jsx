@@ -11,7 +11,7 @@ export default function HeroSection() {
             <span className="h-1.5 w-1.5 rounded-full bg-[#b18d45]"/> XAUUSD · MetaTrader 5 technology
           </div>
           <h1 className="max-w-[690px] font-heading text-[2.65rem] font-semibold leading-[1.06] tracking-[-0.04em] sm:text-[3.7rem] lg:text-[4.35rem]" data-testid="hero-title">
-            Your AI Gold Trader. <span className="text-[#9b7840]">Built for Automatic Trading.</span>
+            Your AI Gold Trader.<span className="mt-2 block text-[#9b7840]">Built for Automatic Trading.</span>
           </h1>
           <p className="mt-6 max-w-[535px] text-[15px] leading-[1.85] text-[#425956]">
             Meet XauCloud — an AI-powered trading bot for MetaTrader 5 that analyzes the gold market, executes XAUUSD trades automatically, and manages trades using built-in risk controls. Monitor its activity, track performance, and stay in control through your Command Center.

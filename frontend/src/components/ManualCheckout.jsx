@@ -13,6 +13,29 @@ const displayNames = typeof Intl.DisplayNames === "function" ? new Intl.DisplayN
 const countries = COUNTRY_CODES.map((code) => ({ code, name: displayNames ? displayNames.of(code) : code }))
   .sort((a, b) => a.name.localeCompare(b.name));
 
+const ORDER_KEY = "xaucloud.pay.session.v1";
+
+function readSavedOrder() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ORDER_KEY) || "null");
+    const quote = saved?.quote;
+    if (!quote || typeof quote.reference !== "string" || typeof quote.expires_at !== "string" || !quote.details) return null;
+    if (quote.method !== "BANK" && quote.method !== "CRYPTO") return null;
+    if (saved.country !== "NG" && quote.method === "BANK") return null;
+    if (saved.country === "NG" && quote.method === "CRYPTO") return null;
+    const details = { ...quote.details };
+    delete details.fx_rate;
+    delete details.rate_as_of;
+    return { ...saved, quote: { ...quote, details } };
+  } catch { return null; }
+}
+
+function customerQuote(quote) {
+  const details = { ...(quote.details || {}) };
+  delete details.fx_rate;
+  delete details.rate_as_of;
+  return { ...quote, details };
+}
 const fieldClass = "mt-2 w-full rounded-2xl border border-[#cbd9d0] bg-white px-4 py-3.5 text-[16px] text-[#15382d] placeholder:text-[#5d6e66] outline-none transition focus:border-[#28725d] focus:ring-4 focus:ring-[#28725d]/10";
 const primaryButton = "inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#143f35] px-5 py-3 text-[14px] font-bold text-white shadow-[0_7px_18px_rgba(20,63,53,.16)] transition hover:bg-[#1f5c4b] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#143f35] disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none";
 const secondaryButton = "inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-[#d3e0d6] bg-white px-4 py-2.5 text-[12px] font-bold text-[#2a5647] transition hover:bg-[#edf5ef] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#143f35]";
@@ -57,22 +80,23 @@ function StatusDot({ children, tone = "green" }) {
 }
 
 export default function ManualCheckout({ api, config, onClose }) {
-  const [step, setStep] = useState("country");
+  const savedOrder = useState(readSavedOrder)[0];
+  const [step, setStep] = useState(savedOrder?.step === "pending" ? "pending" : savedOrder?.quote ? "payment" : "country");
   const [search, setSearch] = useState("");
-  const [country, setCountry] = useState("");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [country, setCountry] = useState(savedOrder?.country || "");
+  const [name, setName] = useState(savedOrder?.name || "");
+  const [email, setEmail] = useState(savedOrder?.email || "");
   const [assetNetwork, setAssetNetwork] = useState("");
-  const [quote, setQuote] = useState(null);
-  const [referenceInput, setReferenceInput] = useState("");
+  const [quote, setQuote] = useState(savedOrder?.quote || null);
+  const [referenceInput, setReferenceInput] = useState(savedOrder?.referenceInput || "");
   const [proofBusy, setProofBusy] = useState(false);
-  const [proofUploaded, setProofUploaded] = useState(false);
-  const [submittedAt, setSubmittedAt] = useState(null);
-  const [status, setStatus] = useState("");
+  const [proofUploaded, setProofUploaded] = useState(Boolean(savedOrder?.proofUploaded));
+  const [submittedAt, setSubmittedAt] = useState(savedOrder?.submittedAt || null);
+  const [status, setStatus] = useState(savedOrder?.status || "");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const [instructionsSent, setInstructionsSent] = useState(false);
+  const [instructionsSent, setInstructionsSent] = useState(savedOrder?.instructionsSent === true);
   const [resendBusy, setResendBusy] = useState(false);
   const [resendMessage, setResendMessage] = useState("");
 
@@ -95,6 +119,16 @@ export default function ManualCheckout({ api, config, onClose }) {
   }, []);
 
   useEffect(() => {
+    if (!quote?.reference) return;
+    const payload = {
+      quote: customerQuote(quote), country, name, email, instructionsSent,
+      referenceInput, proofUploaded, submittedAt, status,
+      step: step === "pending" ? "pending" : "payment",
+    };
+    try { localStorage.setItem(ORDER_KEY, JSON.stringify(payload)); } catch { /* Private mode can still complete checkout on screen. */ }
+  }, [quote, country, name, email, instructionsSent, referenceInput, proofUploaded, submittedAt, status, step]);
+
+  useEffect(() => {
     const key = (event) => { if (event.key === "Escape" && !busy) onClose(); };
     window.addEventListener("keydown", key);
     const previous = document.body.style.overflow;
@@ -114,13 +148,21 @@ export default function ManualCheckout({ api, config, onClose }) {
         if (!active) return;
         setStatus(response.data.status);
         if (response.data.submitted_at) setSubmittedAt(response.data.submitted_at);
+        if (response.data.expires_at) setQuote((current) => current && current.expires_at !== response.data.expires_at ? { ...current, expires_at: response.data.expires_at } : current);
+        if (response.data.status === "MANUAL_PENDING" || response.data.status === "MANUAL_EXPIRED") setStep("payment");
         if (["MANUAL_SUBMITTED", "FULFILLING", "FULFILLED", "MANUAL_REJECTED"].includes(response.data.status)) setStep("pending");
-      } catch { /* Preserve the latest known status when offline. */ }
+      } catch (err) {
+        if (err.response?.status === 404) {
+          try { localStorage.removeItem(ORDER_KEY); } catch { /* ignore */ }
+          setQuote(null); setStep("country"); setStatus("");
+          setError("That payment order could not be restored. Create a new one if you have not already transferred.");
+        }
+      }
     };
     check();
     const timer = window.setInterval(check, 10000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [api, quote, step]);
+  }, [api, quote?.reference, step]);
 
   async function createQuote() {
     if (!enabled || !country) { setError("Checkout is unavailable for your selected country."); return; }
@@ -134,7 +176,7 @@ export default function ManualCheckout({ api, config, onClose }) {
       const response = await axios.post(api + "/purchase/direct/quote", {
         country, buyer_name: name.trim(), buyer_email: email.trim(), asset, network,
       });
-      setQuote(response.data);
+      setQuote(customerQuote(response.data));
       setInstructionsSent(response.data.instructions_email_sent === true);
       setNowMs(Date.now());
       setStatus(response.data.status);
@@ -192,8 +234,9 @@ export default function ManualCheckout({ api, config, onClose }) {
   }
 
   function newQuote() {
+    try { localStorage.removeItem(ORDER_KEY); } catch { /* ignore */ }
     setQuote(null); setReferenceInput(""); setStatus(""); setProofUploaded(false); setInstructionsSent(false);
-    setResendMessage(""); setError(""); setAssetNetwork(""); setStep("details");
+    setSubmittedAt(null); setResendMessage(""); setError(""); setAssetNetwork(""); setStep("details");
   }
 
   const instructions = quote && (isNigeria
@@ -337,12 +380,12 @@ export default function ManualCheckout({ api, config, onClose }) {
             </div>
             <div className="mt-4 border-t border-[#e7ede7]">
               {isNigeria ? <>
-                <Detail label="Bank name" value={quote.details.bank_name} copy={false}/>
-                <Detail label="Account holder" value={quote.details.account_name} copy={false}/>
+                <Detail label="Bank name" value={quote.details.bank_name}/>
+                <Detail label="Account holder" value={quote.details.account_name}/>
                 <Detail label="Account number" value={quote.details.account_number} featured/>
               </> : <>
-                <Detail label="Stablecoin" value={quote.details.asset} copy={false}/>
-                <Detail label="Network" value={quote.details.network} copy={false}/>
+                <Detail label="Stablecoin" value={quote.details.asset}/>
+                <Detail label="Network" value={quote.details.network}/>
                 <Detail label="Receiving wallet" value={quote.details.address} featured/>
               </>}
               <Detail label="Order reference" value={quote.reference}/>
