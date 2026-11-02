@@ -61,6 +61,7 @@ function organizationJson(settings: Record<string, unknown>) {
     "@context": "https://schema.org", "@type": "Organization", "@id": SITE_ORIGIN + "/#organization",
     name: "XauCloud", url: SITE_ORIGIN + "/", logo: SITE_ORIGIN + "/xauai-logo.png",
     description: "Trading technology for Gold (XAUUSD) on MetaTrader 5.",
+    sameAs: [MQL5_URL],
     // This is an external listing of the *product*, not a claim that the creator's X account is the corporate account.
     ...(id.email && { email: id.email }),
     ...(id.phone && { telephone: id.phone }),
@@ -140,6 +141,12 @@ export async function registerAgentDiscovery(app: FastifyInstance, indexHtml: Bu
     return reply.type("text/html; charset=utf-8").send(makeAgentHtml(indexHtml.toString("utf8"), path, settings));
   };
   app.get("/", (request, reply) => render(request, reply, "/"));
+  app.get("/api/public/contact", async (request, reply) => {
+    rateLimit("public_contact:" + clientIp(request), 60, 60);
+    const identity = publicIdentity(await getSettings());
+    return reply.header("Cache-Control", "public, max-age=300")
+      .send({ email: identity.email || null, telephone: identity.phone || null, address: identity.address });
+  });
   app.get("/index.md", async (request, reply) => {
     rateLimit("agent_markdown:" + clientIp(request), 60, 60);
     return reply.type("text/markdown; charset=utf-8").header("Cache-Control", "public, max-age=300")
