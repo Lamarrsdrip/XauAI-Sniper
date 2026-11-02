@@ -104,8 +104,12 @@ export default function ManualCheckout({ api, config, onClose }) {
         <button type="button" onClick={onClose} aria-label="Close checkout" className="rounded-full border border-[#eee9df] p-2.5 text-[#4a5959] hover:bg-[#f4f0e8]"><X size={19}/></button>
       </div>
       <div className="px-5 py-6 sm:px-7">
-        <div className="mb-6 flex items-center gap-2 text-[10px] font-semibold text-[#778281]">
-          {["country", "details", "payment", "pending"].map((item, i) => <React.Fragment key={item}><span className={["rounded-full px-2.5 py-1.5", item === step ? "bg-[#183235] text-white" : "bg-[#eceae4] text-[#69736d]"].join(" ")}>{["1. Country", "2. Details", "3. Pay", "4. Review"][i]}</span>{i < 3 && <ArrowRight size={11}/>}</React.Fragment>)}
+        <div className="mb-6 grid grid-cols-4 gap-1.5 text-[10px] font-semibold" aria-label="Checkout progress">
+          {["country", "details", "payment", "pending"].map((item, i) =>
+            <span key={item} aria-current={step === item ? "step" : undefined}
+              className={["min-w-0 rounded-lg px-1 py-2 text-center", item === step ? "bg-[#183235] text-white" : "bg-[#eceae4] text-[#69736d]"].join(" ")}>
+              {["Country", "Details", "Payment", "Review"][i]}
+            </span>)}
         </div>
         {step === "country" && <>
           <h3 className="font-heading text-2xl font-semibold text-[#1c3032]">Select your country</h3>
