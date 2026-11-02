@@ -24,6 +24,12 @@ vi.mock("../services/paymentMethods.js", () => ({
   bankTransferIsConfigured: (v: { bank_name?: string; account_name?: string; account_number?: string }) =>
     Boolean(v.bank_name && v.account_name && v.account_number),
 }));
+vi.mock("../services/manualCheckoutInstructions.js", () => ({
+  sendDirectManualPaymentInstructions: async () => {
+    state.notified.push("buyer-instructions");
+    return true;
+  },
+}));
 vi.mock("../services/paymentFulfillment.js", () => ({ generateUniquePin: () => "ASE-MANUAL-TEST-PIN" }));
 vi.mock("../services/paymentEmails.js", () => ({
   notifyAdminPaymentStarted: async () => { state.notified.push("started"); },
@@ -81,6 +87,44 @@ describe("USD-first manual checkout HTTP and fulfillment lifecycle", () => {
     expect((tx?.["quote_details"] as Record<string, unknown>)["fx_rate"]).toBe("1500.50");
     expect(tx?.["payment_status"]).toBe("MANUAL_PENDING");
     expect(state.db.collection("pin_licenses").docs).toHaveLength(0);
+  });
+
+  it("emails the buyer immediately with the order before any payment, for both methods", async () => {
+    const bank = await quoteBank(app);
+    expect(bank.statusCode).toBe(200);
+    expect(bank.json().instructions_email_sent).toBe(true);
+    const crypto = await quoteCrypto(app);
+    expect(crypto.statusCode).toBe(200);
+    expect(crypto.json().instructions_email_sent).toBe(true);
+    expect(state.notified.filter((x) => x === "buyer-instructions")).toHaveLength(2);
+    const first = await state.db.collection("payment_transactions").findOne({ reference: bank.json().reference });
+    expect(first?.["instructions_email_status"]).toBe("SENT");
+    expect(first?.["payment_status"]).toBe("MANUAL_PENDING");
+    expect(state.db.collection("pin_licenses").docs).toHaveLength(0);
+  });
+
+  it("resends only to the original buyer, at most twice, and never grants a license", async () => {
+    const original = (await quoteBank(app)).json();
+    const url = "/purchase/direct/" + original.reference + "/resend-instructions";
+    expect((await app.inject({ method: "POST", url })).json()).toEqual({ sent: true });
+    expect((await app.inject({ method: "POST", url })).json()).toEqual({ sent: true });
+    expect((await app.inject({ method: "POST", url })).statusCode).toBe(429);
+    expect(state.notified.filter((x) => x === "buyer-instructions")).toHaveLength(3);
+    expect(state.db.collection("pin_licenses").docs).toHaveLength(0);
+    const tx = await state.db.collection("payment_transactions").findOne({ reference: original.reference });
+    expect(tx?.["instructions_resend_count"]).toBe(2);
+  });
+
+  it("does not resend for expired or submitted quotes", async () => {
+    const order = (await quoteBank(app)).json();
+    const url = "/purchase/direct/" + order.reference + "/resend-instructions";
+    await state.db.collection("payment_transactions").updateOne({ reference: order.reference },
+      { $set: { expires_at: new Date(Date.now() - 120000).toISOString() } });
+    expect((await app.inject({ method: "POST", url })).statusCode).toBe(409);
+    const submittedOrder = (await quoteBank(app)).json();
+    await app.inject({ method: "POST", url: "/purchase/direct/" + submittedOrder.reference + "/submit",
+      payload: { payment_reference: "REAL-BANK-REF-ABC" } });
+    expect((await app.inject({ method: "POST", url: "/purchase/direct/" + submittedOrder.reference + "/resend-instructions" })).statusCode).toBe(409);
   });
 
   it("missing USD price, stale FX or absent bank destination never creates payable instructions", async () => {
