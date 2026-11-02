@@ -85,6 +85,8 @@ import { ensureMarketEvidenceIndexes } from "./services/marketEvidenceLedger.js"
 import { ensurePersistentDiagnosticIndexes } from "./services/persistentDiagnostics.js";
 import { ensureAccountProvenanceIndexes } from "./services/accountProvenance.js";
 import { backfillAllSignalOutlookHistory } from "./services/marketOutlookHistoryRepair.js";
+import { registerAgentDiscovery, isSpaPath, makeAgentHtml, markdownFor } from "./agentDiscovery.js";
+import { getSettings } from "./services/settings.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -198,10 +200,9 @@ async function main(): Promise<void> {
   // throws (its internal directory-redirect logic misfires with
   // index:false); Fastify's router always prefers an exact match over a
   // wildcard, so this takes priority and serves the SPA shell directly.
-  app.get("/", async (_request, reply) => {
-    if (indexHtml) return reply.type("text/html").send(indexHtml);
-    return reply.callNotFound();
-  });
+  // Known public routes negotiate Markdown and provide a no-JS heading.
+  // Also register a genuine read-only MCP endpoint; never advertise nonexistent tools.
+  await registerAgentDiscovery(app, indexHtml);
 
   // Port of server.py's `api_router = APIRouter(prefix="/api")` +
   // `app.include_router(api_router)` -- every /api/* route is registered
@@ -269,19 +270,23 @@ async function main(): Promise<void> {
     { prefix: "/api" },
   );
 
-  // SPA fallback -- any unmatched GET outside /api and /health serves the
-  // frontend's index.html so client-side routing (e.g. /dashboard, /admin)
-  // works on a hard refresh. Unmatched /api/* and non-GET requests keep the
-  // normal JSON 404 shape.
-  app.setNotFoundHandler((request, reply) => {
-    if (request.method === "GET" && !request.url.startsWith("/api/") && request.url !== "/health" && indexHtml) {
-      return reply.type("text/html").send(indexHtml);
+  // Unknown URLs are true HTTP 404s. Preserve only established dynamic SPA routes.
+  // This prevents arbitrary strings /llms.txt, /404-test, and invalid asset
+  // filenames from masquerading as actual published pages.
+  app.setNotFoundHandler(async (request, reply) => {
+    const route = request.url.split("?", 1)[0] ?? "";
+    if (request.method === "GET" && isSpaPath(route) && indexHtml) {
+      const settings = await getSettings();
+      reply.header("Link", '</llms.txt>; rel="describedby"; type="text/plain", </index.md>; rel="alternate"; type="text/markdown"');
+      const acceptsMarkdown = String(request.headers.accept ?? "").split(",").some((entry) => entry.trim().startsWith("text/markdown"));
+      if (acceptsMarkdown) return reply.type("text/markdown; charset=utf-8").send(markdownFor(route, settings));
+      return reply.type("text/html; charset=utf-8").send(makeAgentHtml(indexHtml.toString("utf8"), route, settings));
     }
-    return reply.code(404).send({
-      message: `Route ${request.method}:${request.url} not found`,
-      error: "Not Found",
-      statusCode: 404,
-    });
+    if (route.startsWith("/api/")) return reply.code(404).send({ message: "Not found", error: "Not Found", statusCode: 404 });
+    reply.header("Cache-Control", "no-store");
+    return reply.code(404).type("text/html; charset=utf-8").send(
+      '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>404 — XauCloud</title></head><body><main><h1>404 — Page not found</h1><p>The requested XauCloud page does not exist.</p><a href="/">Return to homepage</a></main></body></html>'
+    );
   });
 
   // Port of server.py:4309 `_outlook_hourly_loop` -- sleeps until the next
