@@ -32,18 +32,18 @@ export default function PurchaseSection({ api }) {
   }, [api]);
   useEffect(() => {
     if (buyer !== true) return;
-    axios.get(api + "/cloud/signals/trial/status", { withCredentials: true })
-      .then((r) => setTrial(r.data))
+    axios.get(api + "/cloud/entitlement", { withCredentials: true })
+      .then((r) => setTrial(r.data.trial ? { status: r.data.trial.status.toLowerCase(), expires_at: r.data.trial.trial_expires_at } : null))
       .catch(() => {});
   }, [api, buyer]);
   async function startTrial() {
     if (buyer === undefined) return;
-    if (!buyer) { navigate("/command/signup"); return; }
+    if (!buyer) { navigate("/command"); return; }
     setTrialBusy(true); setError("");
     try {
       const response = await axios.post(api + "/cloud/signals/trial/start", {}, { withCredentials: true });
-      setTrial({ status: "active", expires_at: response.data.expires_at });
-      navigate("/command/dashboard");
+      setTrial({ status: response.data.trial?.status?.toLowerCase() || "active", expires_at: response.data.trial?.trial_expires_at });
+      navigate("/command");
     } catch (err) { setError(err.response?.data?.detail || "Trial could not start; check your account eligibility."); }
     finally { setTrialBusy(false); }
   }
@@ -53,14 +53,14 @@ export default function PurchaseSection({ api }) {
       <div className="mx-auto max-w-2xl text-center">
         <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-[#957747]">Simple pricing</span>
         <h2 className="mt-3 font-heading text-3xl font-semibold tracking-tight md:text-4xl" data-testid="purchase-title">Choose how you begin.</h2>
-        <p className="mt-4 text-[14px] leading-7 text-[#667371]">Try the Command Center signal experience for three days, or buy a one-time XauCloud MT5 trading license. No weekly or monthly renewals.</p>
+        <p className="mt-4 text-[14px] leading-7 text-[#667371]">Try the Command Center signal experience for three market days, or buy a one-time XauCloud MT5 trading license. No weekly or monthly renewals.</p>
       </div>
       <div className="mx-auto mt-9 grid max-w-4xl gap-4 md:grid-cols-2">
         <div className="flex flex-col rounded-[25px] border border-[#dedbd3] bg-white p-7 shadow-[0_8px_32px_rgba(33,39,35,.03)]" data-testid="plan-card-free-trial">
           <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-[#947747]"><Clock3 size={15}/> Explore first</div>
           <h3 className="mt-4 font-heading text-2xl font-semibold">3-Day Free Trial</h3>
           <div className="mt-4 text-4xl font-semibold tracking-tight">Free</div>
-          <div className="mt-2 text-[12px] text-[#72807c]">Three calendar days · no automatic billing</div>
+          <div className="mt-2 text-[12px] text-[#72807c]">Three trading-market days · no automatic billing</div>
           <div className="mt-7 flex-1 space-y-3"><Benefit>Start with a secure Command Center account</Benefit><Benefit>Explore the available signals and Market Outlook features</Benefit><Benefit>No card or crypto deposit required</Benefit></div>
           {trial?.status === "active" && <p className="mt-4 text-[12px] font-semibold text-[#607b60]">Trial started · expires {new Date(trial.expires_at).toLocaleString()}</p>}
           {trial?.status === "expired" && <p className="mt-4 text-[12px] text-[#aa5b3d]">Your trial has expired.</p>}
