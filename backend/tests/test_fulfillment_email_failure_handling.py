@@ -130,10 +130,21 @@ def test_bank_transfer_approve_flags_order_when_email_fails():
     async def go():
         await _clear()
         await _enable_bank_transfer()
+        # Historical order fixture: no new legacy NGN checkout initiation.
+        from datetime import datetime, timedelta, timezone
+        ref = "ASE-BT-LEGACY-" + uuid.uuid4().hex[:8].upper()
+        await srv.db.payment_transactions.insert_one({
+            "id": str(uuid.uuid4()), "reference": ref,
+            "provider": "BANK_TRANSFER", "plan_id": "BOT_LIFETIME",
+            "amount_kobo": 30000000, "currency": "NGN", "buyer_name": "Buyer",
+            "buyer_email": "buyer@example.com", "payment_status": "BANK_TRANSFER_PENDING",
+            "pin_generated": None, "created_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+            "state_transitions": {}, "bank_transfer_proof": None, "admin_notes": [],
+        })
+        init = {"reference": ref}
         with patch.object(srv, "_send_email", _Recorder()):
-            init = await srv.initiate_bank_transfer(
-                srv.BankTransferInitiateRequest(buyer_name="Buyer", buyer_email="buyer@example.com"), _fake_request("NG"))
-            await srv.bank_transfer_mark_submitted(init["reference"], _fake_request("NG"))
+            await srv.bank_transfer_mark_submitted(ref, _fake_request("NG"))
         with patch.object(srv, "send_pin_email", AsyncMock(return_value=False)):
             await srv.admin_approve_bank_transfer(init["reference"], admin=ADMIN)
         tx = await srv.db.payment_transactions.find_one({"reference": init["reference"]})
