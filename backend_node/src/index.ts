@@ -34,6 +34,7 @@ import { registerNotificationRoutes } from "./routes/notificationRoutes.js";
 import { registerOutlookCurrentRoutes } from "./routes/outlookCurrent.js";
 import { registerOutlookHistoryRoutes } from "./routes/outlookHistory.js";
 import { registerPurchaseRoutes } from "./routes/purchase.js";
+import { registerDirectCheckoutRoutes, ensureDirectCheckoutIndexes } from "./routes/directCheckout.js";
 import { registerCloudSignalRoutes } from "./routes/cloud/signals.js";
 import { sweepSignalLifecycleEmails } from "./services/signalLifecycleEmails.js";
 import { registerMiscRoutes } from "./routes/misc.js";
@@ -232,6 +233,7 @@ async function main(): Promise<void> {
       await registerOutlookCurrentRoutes(api);
       await registerOutlookHistoryRoutes(api);
       await registerPurchaseRoutes(api);
+      await registerDirectCheckoutRoutes(api);
       await registerCloudSignalRoutes(api);
       await registerMiscRoutes(api);
       await registerPublicMarketFeedRoutes(api);
@@ -352,6 +354,7 @@ async function main(): Promise<void> {
   // remained false forever if any Mongo/index operation hung, while /api/health
   // still returned 200 and gave no clue which step was pending.
   await runReadinessStep("database", () => connectDb(), 30_000);
+  await ensureDirectCheckoutIndexes();
   await runReadinessStep("startup_tasks", () => runStartupTasks(app.log), 45_000);
   // Queue processing is inert until the explicitly-admin-enabled setting is true.
   setInterval(() => { void processQueuedXTradePosts().catch((error) => app.log.warn({ error }, "[x-posting] queue processing failed")); }, 30_000).unref();
