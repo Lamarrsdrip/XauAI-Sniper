@@ -84,13 +84,14 @@ async function effectiveStatus(tx: Record<string, unknown>): Promise<string> {
   return status;
 }
 
-export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promise<void> {
-  const db = getDb();
-  // Fail startup if the new checkout's duplicate-proof guarantees cannot be enforced.
-  await db.collection("payment_transactions").createIndex(
+export async function ensureDirectCheckoutIndexes(): Promise<void> {
+  await getDb().collection("payment_transactions").createIndex(
     { provider: 1, submitted_reference: 1 },
     { unique: true, partialFilterExpression: { provider: "MANUAL_DIRECT", submitted_reference: { $type: "string" } } },
   );
+}
+
+export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promise<void> {
   app.get("/purchase/direct/config", async (request) => {
     rateLimit("direct_config:" + clientIp(request), 60, 60);
     const cfg = getCfg(await getSettings());
@@ -153,7 +154,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       quote_details: details, created_at: stamp.toISOString(), expires_at: expires,
       payment_status: "MANUAL_PENDING", pin_generated: null, state_transitions: {},
     };
-    await db.collection("payment_transactions").insertOne(tx);
+    await getDb().collection("payment_transactions").insertOne(tx);
     try { await notifyAdminPaymentStarted("Manual " + method, reference, req.buyer_name, req.buyer_email, amountFormatted); }
     catch (e) { app.log.error({ err: e, reference }, "Manual payment start notification failed"); }
     return { reference, method, usd_price: usdFormatted(cents), currency,
@@ -165,7 +166,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
     rateLimit("direct_submit:" + clientIp(request), 12, 600);
     const { reference } = request.params as { reference: string };
     const req = submitSchema.parse(request.body);
-    const tx = await db.collection("payment_transactions").findOne(
+    const tx = await getDb().collection("payment_transactions").findOne(
       { provider: "MANUAL_DIRECT", reference }, { projection: { _id: 0 } });
     if (!tx) return reply.code(404).send({ detail: "Order not found." });
     const status = await effectiveStatus(tx);
@@ -176,7 +177,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       : (tx["quote_details"] as Record<string, string>)["network"] === "ERC20" ? ETH_HASH.test(proof) : TRON_HASH.test(proof);
     if (!valid) return reply.code(422).send({ detail: "Invalid payment reference or transaction hash." });
     try {
-      const result = await db.collection("payment_transactions").updateOne(
+      const result = await getDb().collection("payment_transactions").updateOne(
         { reference, provider: "MANUAL_DIRECT", payment_status: "MANUAL_PENDING" },
         { $set: { submitted_reference: proof, payment_status: "MANUAL_SUBMITTED", submitted_at: utc() } });
       if (!result.modifiedCount) return reply.code(409).send({ detail: "Order status changed; refresh it." });
@@ -192,7 +193,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
   app.get("/purchase/direct/:reference/status", async (request, reply) => {
     rateLimit("direct_status:" + clientIp(request), 60, 60);
     const { reference } = request.params as { reference: string };
-    const tx = await db.collection("payment_transactions").findOne(
+    const tx = await getDb().collection("payment_transactions").findOne(
       { provider: "MANUAL_DIRECT", reference }, { projection: { _id: 0 } });
     if (!tx) return reply.code(404).send({ detail: "Order not found." });
     return { reference, status: await effectiveStatus(tx), method: tx["method"],
@@ -228,8 +229,8 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       updates["direct_wallets"] = req.wallets;
     }
     if (Object.keys(updates).length) {
-      await db.collection("admin_settings").updateOne({ key: "main" }, { $set: updates }, { upsert: true });
-      await db.collection("payment_config_audit_log").insertOne({
+      await getDb().collection("admin_settings").updateOne({ key: "main" }, { $set: updates }, { upsert: true });
+      await getDb().collection("payment_config_audit_log").insertOne({
         id: randomUUID(), provider: "MANUAL_DIRECT", changed_fields: Object.keys(updates),
         admin_email: admin["email"], at: utc(),
       });
@@ -238,7 +239,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
   });
 
   app.get("/admin/direct-checkout/orders", { preHandler: requireAdmin }, async () => {
-    const entries = await db.collection("payment_transactions").find(
+    const entries = await getDb().collection("payment_transactions").find(
       { provider: "MANUAL_DIRECT" }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(200).toArray();
     for (const tx of entries) tx["payment_status"] = await effectiveStatus(tx);
     return { entries };
@@ -248,7 +249,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
     const { reference } = request.params as { reference: string };
     const req = reviewSchema.parse(request.body);
     const admin = (request as typeof request & { admin: Record<string, unknown> }).admin;
-    const tx = await db.collection("payment_transactions").findOne(
+    const tx = await getDb().collection("payment_transactions").findOne(
       { reference, provider: "MANUAL_DIRECT" }, { projection: { _id: 0 } });
     if (!tx) return reply.code(404).send({ detail: "Order not found." });
     if (tx["payment_status"] === "FULFILLED") return { status: "already_fulfilled" };
@@ -259,14 +260,14 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       return reply.code(409).send({ detail: "Order is being fulfilled by another reviewer." });
     }
     const claimed = tx["payment_status"] === "FULFILLING" ||
-      (await db.collection("payment_transactions").updateOne(
+      (await getDb().collection("payment_transactions").updateOne(
         { reference, provider: "MANUAL_DIRECT", payment_status: "MANUAL_SUBMITTED" },
         { $set: { payment_status: "FULFILLING", approved_by: admin["email"],
                   verified_external_reference: req.evidence_reference,
                   verification_notes: req.verification_notes, approved_at: utc() } })).modifiedCount === 1;
     if (!claimed) return reply.code(409).send({ detail: "Another reviewer claimed this order." });
     // Reuse the existing pin schema and unique payment_ref index for idempotency.
-    let license = await db.collection("pin_licenses").findOne({ payment_ref: reference });
+    let license = await getDb().collection("pin_licenses").findOne({ payment_ref: reference });
     let pin = String(license?.["pin"] ?? "");
     if (!pin) {
       pin = generateUniquePin();
@@ -276,31 +277,31 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
         created_at: utc(), notes: "Verified manual direct " + tx["method"] + " - " + reference,
         payment_ref: reference, provider: "MANUAL_DIRECT",
       };
-      try { await db.collection("pin_licenses").insertOne(doc); }
+      try { await getDb().collection("pin_licenses").insertOne(doc); }
       catch (err) {
         if (!(err instanceof MongoServerError && err.code === 11000)) throw err;
-        license = await db.collection("pin_licenses").findOne({ payment_ref: reference });
+        license = await getDb().collection("pin_licenses").findOne({ payment_ref: reference });
         if (!license) throw err;
         pin = String(license["pin"]);
       }
     }
-    const finish = await db.collection("payment_transactions").updateOne(
+    const finish = await getDb().collection("payment_transactions").updateOne(
       { provider: "MANUAL_DIRECT", reference, payment_status: "FULFILLING" },
       { $set: { payment_status: "FULFILLED", pin_generated: pin, fulfilled_at: utc(),
                 fulfillment_email_status: "PENDING" } });
     if (finish.modifiedCount) {
-      await db.collection("payment_review_log").insertOne({
+      await getDb().collection("payment_review_log").insertOne({
         id: randomUUID(), reference, action: "APPROVE", by: admin["email"], at: utc(),
         evidence_reference: req.evidence_reference, verification_notes: req.verification_notes,
       });
       try {
         const sent = await sendPinEmail(String(tx["buyer_email"]), String(tx["buyer_name"]), pin);
         await recordFulfillmentEmailResult(reference, String(tx["buyer_name"]), String(tx["buyer_email"]), pin, sent);
-        await db.collection("payment_transactions").updateOne(
+        await getDb().collection("payment_transactions").updateOne(
           { reference }, { $set: { fulfillment_email_status: sent ? "SENT" : "RETRYABLE" } });
       } catch (err) {
         app.log.error({ err, reference }, "Manual checkout fulfillment email failed");
-        await db.collection("payment_transactions").updateOne(
+        await getDb().collection("payment_transactions").updateOne(
           { reference }, { $set: { fulfillment_email_status: "RETRYABLE" } });
       }
       try {
@@ -316,12 +317,12 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
     const { reference } = request.params as { reference: string };
     const req = reviewSchema.parse(request.body);
     const admin = (request as typeof request & { admin: Record<string, unknown> }).admin;
-    const result = await db.collection("payment_transactions").updateOne(
+    const result = await getDb().collection("payment_transactions").updateOne(
       { provider: "MANUAL_DIRECT", reference, payment_status: { $in: ["MANUAL_PENDING", "MANUAL_SUBMITTED"] } },
       { $set: { payment_status: "MANUAL_REJECTED", rejected_at: utc(),
                 rejected_by: admin["email"], verification_notes: req.verification_notes } });
     if (!result.modifiedCount) return reply.code(409).send({ detail: "Order not found or no longer rejectable." });
-    await db.collection("payment_review_log").insertOne({
+    await getDb().collection("payment_review_log").insertOne({
       id: randomUUID(), reference, action: "REJECT", by: admin["email"],
       verification_notes: req.verification_notes, at: utc(),
     });
