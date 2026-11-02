@@ -5,6 +5,7 @@ import { MongoServerError } from "mongodb";
 import { getDb } from "../db.js";
 import { clientIp, rateLimit, requireAdmin } from "../auth.js";
 import { getSettings } from "../services/settings.js";
+import { sendEmail } from "../services/email.js";
 import { getBankTransferSettings, bankTransferIsConfigured } from "../services/paymentMethods.js";
 import { generateUniquePin } from "../services/paymentFulfillment.js";
 import { notifyAdminPaymentStarted, notifyAdminNewSale, sendPinEmail, recordFulfillmentEmailResult } from "../services/paymentEmails.js";
@@ -15,6 +16,9 @@ const TRON_WALLET = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;
 const ETH_HASH = /^0x[0-9a-fA-F]{64}$/;
 const TRON_HASH = /^(?:0x)?[0-9a-fA-F]{64}$/;
 const RATE_RE = /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,8})?$/;
+function escapeEmailHtml(value: unknown): string {
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
 
 const isoCountry = z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/);
 const quoteSchema = z.object({
@@ -317,6 +321,8 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
     const { reference } = request.params as { reference: string };
     const req = reviewSchema.parse(request.body);
     const admin = (request as typeof request & { admin: Record<string, unknown> }).admin;
+    const customerOrder = await getDb().collection("payment_transactions").findOne(
+      { reference, provider: "MANUAL_DIRECT" }, { projection: { _id: 0, buyer_email: 1, buyer_name: 1 } });
     const result = await getDb().collection("payment_transactions").updateOne(
       { provider: "MANUAL_DIRECT", reference, payment_status: { $in: ["MANUAL_PENDING", "MANUAL_SUBMITTED"] } },
       { $set: { payment_status: "MANUAL_REJECTED", rejected_at: utc(),
@@ -326,6 +332,25 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       id: randomUUID(), reference, action: "REJECT", by: admin["email"],
       verification_notes: req.verification_notes, at: utc(),
     });
+    if (customerOrder) {
+      try {
+        const emailSent = await sendEmail(String(customerOrder["buyer_email"] ?? ""),
+          "XauCloud manual payment review — " + reference,
+          '<div style="font-family:Arial,sans-serif;max-width:580px;margin:auto">' +
+          '<h2>XauCloud payment review</h2>' +
+          '<p>Hello ' + escapeEmailHtml(customerOrder["buyer_name"]) + ',</p>' +
+          '<p>Your submitted payment for order <strong>' + escapeEmailHtml(reference) +
+          '</strong> could not be approved after review.</p>' +
+          '<p>Please contact XauCloud support with your order reference if you believe there is a mistake. ' +
+          'A screenshot alone is not accepted as authoritative proof of transfer.</p></div>');
+        await getDb().collection("payment_transactions").updateOne({ reference },
+          { $set: { rejection_email_status: emailSent ? "SENT" : "RETRYABLE" } });
+      } catch (error) {
+        app.log.error({ error, reference }, "Failed to notify customer of payment rejection");
+        await getDb().collection("payment_transactions").updateOne({ reference },
+          { $set: { rejection_email_status: "RETRYABLE" } });
+      }
+    }
     return { status: "MANUAL_REJECTED" };
   });
 }
