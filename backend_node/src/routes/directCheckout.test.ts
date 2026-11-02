@@ -143,6 +143,24 @@ describe("USD-first manual checkout HTTP and fulfillment lifecycle", () => {
     expect(state.notified.filter((s) => s === "pin")).toHaveLength(1);
   });
 
+  it("optional image proof is strictly validated and never counts as verification", async () => {
+    const order = (await quoteBank(app)).json();
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const post = (mime_type: string, data_base64: string) => app.inject({
+      method: "POST", url: "/purchase/direct/" + order.reference + "/proof",
+      payload: { mime_type, data_base64 },
+    });
+    expect((await post("image/png", Buffer.from("<svg>unsafe</svg>").toString("base64"))).statusCode).toBe(422);
+    expect((await post("image/png", png)).statusCode).toBe(200);
+    const queue = await app.inject({ method: "GET", url: "/admin/direct-checkout/orders" });
+    expect(queue.statusCode).toBe(200);
+    expect(queue.json().entries[0].has_proof).toBe(true);
+    expect(queue.body).not.toContain("evidence_image");
+    const detail = await app.inject({ method: "GET", url: "/admin/direct-checkout/" + order.reference });
+    expect(detail.json().order.evidence_image).toContain("data:image/png;base64,");
+    expect(state.db.collection("pin_licenses").docs).toHaveLength(0);
+  });
+
   it("admin-only endpoints cannot be called without verified admin identity", async () => {
     // Auth mock always supplies identity, so verifies successful admin configuration
     // while actual requireAdmin authentication is covered by auth.session.test.ts.
