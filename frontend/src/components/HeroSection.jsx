@@ -1,75 +1,40 @@
 import React from "react";
-import { ArrowRight, CheckCircle2 } from "lucide-react";
+import { ArrowUpRight, ShieldCheck, Activity, MonitorSmartphone } from "lucide-react";
 
 export default function HeroSection() {
   return (
-    <div className="relative overflow-hidden bg-[#06070A] text-white" data-testid="hero-section">
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-white/[0.08]" />
-
-      <div className="relative z-10 mx-auto max-w-7xl px-4 pb-16 pt-12 md:px-8 md:pb-24 md:pt-20">
-        <div className="grid items-center gap-14">
-          <div className="text-left">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex items-center gap-2 rounded-full border border-[#F3C969]/20 bg-[#F3C969]/[0.06] px-3.5 py-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-[#2FD3A0]" />
-                <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#F3C969]">XAUUSD automation · MetaTrader 5</span>
-              </div>
-              <a
-                href="https://www.mql5.com/en/market/product/188838"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center rounded-full border border-white/[0.10] px-3.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-white/62 transition hover:border-white/20 hover:text-white"
-              >
-                Available on MQL5 ↗
-              </a>
-            </div>
-
-            <h1
-              className="mt-7 max-w-3xl font-heading text-[2.85rem] font-semibold leading-[0.98] tracking-[-0.04em] sm:text-6xl lg:text-[4.25rem]"
-              data-testid="hero-title"
-            >
-              Professional automation for
-              <span className="block text-[#F3C969]">XAUUSD trading.</span>
-            </h1>
-
-            <p className="mt-6 max-w-xl text-[15px] leading-7 text-white/64">
-              XauCloud combines a Gold-focused MT5 Expert Advisor with a professional Command Center for monitoring, decision visibility, risk controls, analytics, support and trader education.
-            </p>
-
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <a
-                href="#purchase"
-                data-testid="hero-buy-btn"
-                className="inline-flex min-w-[170px] items-center justify-center gap-2 rounded-full bg-[#F3C969] px-7 py-3.5 text-[13.5px] font-extrabold text-black transition hover:brightness-105"
-              >
-                Get XauCloud <ArrowRight className="h-4 w-4" />
-              </a>
-              <a
-                href="/command"
-                className="inline-flex min-w-[190px] items-center justify-center gap-2 rounded-full border border-[#F3C969]/35 bg-transparent px-7 py-3.5 text-[13.5px] font-semibold text-white transition hover:bg-[#F3C969]/[0.06]"
-              >
-                Explore Command Center
-              </a>
-            </div>
-
-            <div className="mt-9 grid max-w-xl grid-cols-2 gap-x-7 gap-y-4">
-              {[
-                "Automated XAUUSD execution",
-                "Risk-aware position controls",
-                "Command Center visibility",
-                "Support & Forex Academy",
-              ].map((item) => (
-                <div key={item} className="flex items-start gap-2 border-t border-white/[0.08] pt-3">
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 flex-none text-[#F3C969]" />
-                  <span className="text-[11px] leading-4 text-white/60">{item}</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-7 font-mono text-[9px] uppercase tracking-[0.13em] text-white/34">
-              Trading involves risk · Historical results are not guarantees · You remain in control
-            </div>
+    <div className="relative overflow-hidden border-b border-[#e7e4dc] bg-[#f7f6f2] text-[#162126]" data-testid="hero-section">
+      <div className="pointer-events-none absolute -right-20 -top-24 h-80 w-80 rounded-full border border-[#cab383]/25 md:h-[34rem] md:w-[34rem]" />
+      <div className="relative mx-auto grid max-w-7xl items-center gap-9 px-5 pb-12 pt-12 md:grid-cols-[1.12fr_.88fr] md:gap-12 md:px-8 md:pb-20 md:pt-20">
+        <div className="max-w-2xl">
+          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-[#dcd3c0] bg-white px-3.5 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#6c6045]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[#b18d45]"/> XAUUSD · MetaTrader 5 technology
           </div>
+          <h1 className="max-w-[690px] font-heading text-[2.65rem] font-semibold leading-[1.06] tracking-[-0.04em] sm:text-[3.7rem] lg:text-[4.35rem]" data-testid="hero-title">
+            More control over <span className="text-[#9b7840]">gold trading.</span>
+          </h1>
+          <p className="mt-6 max-w-[535px] text-[15px] leading-[1.85] text-[#576368]">
+            XauCloud brings automated XAUUSD execution, risk controls and a connected Command Center into one trading workflow. Review actual trading records before deciding.
+          </p>
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+            <a href="#purchase" className="inline-flex min-h-[50px] items-center justify-center gap-2 rounded-full bg-[#15282a] px-7 text-sm font-bold text-white shadow-sm transition hover:bg-[#294043]" data-testid="hero-buy-btn">Buy XauCloud <ArrowUpRight size={17}/></a>
+            <a href="#purchase" className="inline-flex min-h-[50px] items-center justify-center gap-2 rounded-full border border-[#c8b68b] bg-white px-7 text-sm font-bold text-[#3a3426] transition hover:border-[#977842]">Start 3-Day Trial</a>
+          </div>
+          <p className="mt-6 text-[11px] leading-5 text-[#758082]">Trading involves substantial risk, including loss of capital. No performance is guaranteed.</p>
+        </div>
+        <div className="relative overflow-hidden rounded-[28px] border border-[#d9d6cf] bg-white p-5 shadow-[0_22px_70px_rgba(37,45,41,0.08)] sm:p-7" aria-label="Command Center feature overview">
+          <div className="flex items-center justify-between border-b border-[#eeeae1] pb-5">
+            <div><span className="block text-[10px] font-bold uppercase tracking-[0.18em] text-[#a8894c]">XauCloud</span><h2 className="mt-1 font-heading text-xl font-semibold tracking-tight text-[#152729]">Command Center</h2></div>
+            <span className="rounded-full bg-[#f4f2ec] p-3"><MonitorSmartphone className="h-5 w-5 text-[#92713d]"/></span>
+          </div>
+          <div className="mt-5 grid gap-3">
+            <div className="flex items-center gap-4 rounded-2xl bg-[#f7f7f4] px-4 py-4"><Activity className="h-5 w-5 text-[#937340]"/><div><div className="text-sm font-bold text-[#263435]">Live bot visibility</div><div className="mt-0.5 text-xs text-[#718082]">See account telemetry and execution activity</div></div></div>
+            <div className="flex items-center gap-4 rounded-2xl bg-[#f7f7f4] px-4 py-4"><ShieldCheck className="h-5 w-5 text-[#937340]"/><div><div className="text-sm font-bold text-[#263435]">Risk-aware controls</div><div className="mt-0.5 text-xs text-[#718082]">Review decisions and manage operations</div></div></div>
+          </div>
+          <div className="mt-6 flex items-center justify-between gap-3 border-t border-[#eeeae1] pt-5">
+            <span className="text-xs text-[#6b7678]">Access your real dashboard</span><a href="/command" className="inline-flex items-center gap-1 text-xs font-bold text-[#83632f] hover:underline">Open Command Center <ArrowUpRight size={13}/></a>
+          </div>
+          <p className="mt-3 text-[10px] text-[#8a9290]">Product overview; not a simulated balance or fabricated profit display.</p>
         </div>
       </div>
     </div>
