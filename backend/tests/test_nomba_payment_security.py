@@ -28,7 +28,7 @@ import secrets as _secrets
 import json
 import asyncio
 import uuid
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 
