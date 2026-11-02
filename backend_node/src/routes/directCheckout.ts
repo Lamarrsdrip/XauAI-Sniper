@@ -173,7 +173,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       method, price_usd_cents: cents, currency, amount_minor: amountMinor,
       buyer_name: req.buyer_name, buyer_email: req.buyer_email,
       quote_details: details, created_at: stamp.toISOString(), expires_at: expires,
-      payment_status: "MANUAL_PENDING", pin_generated: null, state_transitions: {},
+      payment_status: "MANUAL_PENDING", pin_generated: null, state_transitions: {}, instructions_resend_count: 0,
     };
     await getDb().collection("payment_transactions").insertOne(tx);
     // Send the buyer a permanent copy of the exact instructions at order creation.
@@ -197,6 +197,42 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
              amount_minor: amountMinor, amount_formatted: amountFormatted,
              details, expires_at: expires, status: "MANUAL_PENDING",
              instructions_email_sent: instructionsEmailSent };
+  });
+
+  // Allow at most two retries, always sending only to the original buyer email.
+  // Never allow a client to supply a destination address, account or amount.
+  app.post("/purchase/direct/:reference/resend-instructions", async (request, reply) => {
+    rateLimit("direct_email_retry:" + clientIp(request), 4, 600);
+    const { reference } = request.params as { reference: string };
+    const tx = await getDb().collection("payment_transactions").findOne(
+      { reference, provider: "MANUAL_DIRECT" });
+    if (!tx) return reply.code(404).send({ detail: "Order not found." });
+    if (await effectiveStatus(tx) !== "MANUAL_PENDING") {
+      return reply.code(409).send({ detail: "This order is no longer awaiting transfer." });
+    }
+    const claimed = await getDb().collection("payment_transactions").updateOne(
+      { reference, provider: "MANUAL_DIRECT", payment_status: "MANUAL_PENDING",
+        instructions_resend_count: { $lt: 2 } },
+      { $inc: { instructions_resend_count: 1 } });
+    if (!claimed.modifiedCount) return reply.code(429).send({ detail: "Email retry limit reached. Please copy the payment details shown on screen." });
+    let sent = false;
+    try {
+      sent = await sendDirectManualPaymentInstructions({
+        buyerName: String(tx["buyer_name"]), buyerEmail: String(tx["buyer_email"]),
+        reference, method: tx["method"] as "BANK" | "CRYPTO",
+        amountFormatted: tx["currency"] === "NGN"
+          ? "NGN " + (Number(tx["amount_minor"]) / 100).toFixed(2)
+          : (Number(tx["amount_minor"]) / 100).toFixed(2) + " " + tx["currency"],
+        usdPrice: usdFormatted(Number(tx["price_usd_cents"])),
+        details: tx["quote_details"] as Record<string, string>,
+        expiresAt: String(tx["expires_at"]),
+      });
+    } catch (err) { app.log.error({ err, reference }, "Manual customer email retry failed"); }
+    await getDb().collection("payment_transactions").updateOne(
+      { reference, provider: "MANUAL_DIRECT" },
+      { $set: { instructions_email_status: sent ? "SENT" : "FAILED",
+                instructions_email_attempted_at: utc() } });
+    return { sent };
   });
 
   app.post("/purchase/direct/:reference/submit", async (request, reply) => {
