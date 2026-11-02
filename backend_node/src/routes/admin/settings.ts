@@ -35,6 +35,11 @@ const AdminSettingsUpdateSchema = z.object({
   admin_notification_email: z.string().nullable().optional(),
   support_email: z.string().nullable().optional(),
   support_phone: z.string().nullable().optional(),
+  organization_street_address: z.string().max(200).nullable().optional(),
+  organization_city: z.string().max(100).nullable().optional(),
+  organization_region: z.string().max(100).nullable().optional(),
+  organization_postal_code: z.string().max(25).nullable().optional(),
+  organization_country: z.string().max(90).nullable().optional(),
   community_link: z.string().nullable().optional(),
   mt5_download_url: z.string().nullable().optional(),
   vps_guide_url: z.string().nullable().optional(),
@@ -136,6 +141,11 @@ export async function registerAdminSettingsRoutes(app: FastifyInstance): Promise
       admin_notification_email: s["admin_notification_email"] ?? "",
       support_email: s["support_email"] ?? "",
       support_phone: s["support_phone"] ?? "",
+      organization_street_address: s["organization_street_address"] ?? "",
+      organization_city: s["organization_city"] ?? "",
+      organization_region: s["organization_region"] ?? "",
+      organization_postal_code: s["organization_postal_code"] ?? "",
+      organization_country: s["organization_country"] ?? "",
       community_link: s["community_link"] ?? "",
       mt5_download_url: s["mt5_download_url"] ?? "",
       vps_guide_url: s["vps_guide_url"] ?? "",
@@ -191,6 +201,9 @@ export async function registerAdminSettingsRoutes(app: FastifyInstance): Promise
       updates["admin_notification_email"] = req.admin_notification_email.trim().toLowerCase();
     if (req.support_email !== undefined && req.support_email !== null) updates["support_email"] = req.support_email.trim().toLowerCase();
     if (req.support_phone !== undefined && req.support_phone !== null) updates["support_phone"] = req.support_phone.trim();
+    for (const field of ["organization_street_address", "organization_city", "organization_region", "organization_postal_code", "organization_country"] as const) {
+      if (req[field] !== undefined && req[field] !== null) updates[field] = req[field].trim();
+    }
     if (req.community_link !== undefined && req.community_link !== null) updates["community_link"] = req.community_link.trim();
     if (req.mt5_download_url !== undefined && req.mt5_download_url !== null) updates["mt5_download_url"] = req.mt5_download_url.trim();
     if (req.vps_guide_url !== undefined && req.vps_guide_url !== null) updates["vps_guide_url"] = req.vps_guide_url.trim();
