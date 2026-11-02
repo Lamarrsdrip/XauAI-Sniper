@@ -19,10 +19,10 @@ function escapeHtml(value: unknown): string {
 export async function sendDirectManualPaymentInstructions(order: DirectManualPaymentInstruction): Promise<boolean> {
   const bank = order.method === "BANK";
   const rows: Array<[string, string]> = bank
-    ? [["Bank", order.details.bank_name], ["Beneficiary", order.details.account_name],
-       ["Account number", order.details.account_number]]
-    : [["Asset", order.details.asset], ["Network", order.details.network],
-       ["Receiving wallet", order.details.address]];
+    ? [["Bank", String(order.details.bank_name ?? "")], ["Beneficiary", String(order.details.account_name ?? "")],
+       ["Account number", String(order.details.account_number ?? "")]]
+    : [["Asset", String(order.details.asset ?? "")], ["Network", String(order.details.network ?? "")],
+       ["Receiving wallet", String(order.details.address ?? "")]];
   const rowHtml = rows.map(([label, value]) =>
     '<tr><td style="padding:12px 0;color:#52655e;vertical-align:top;width:38%;">' + escapeHtml(label) +
     '</td><td style="padding:12px 0;color:#173a33;font-weight:700;overflow-wrap:anywhere;word-break:break-word;">' +
