@@ -110,9 +110,10 @@ describe("forensic operating-company browser contracts", () => {
     // amount appeared later in the Bank Transfer step.
     const purchase = read("components/PurchaseSection.jsx");
     expect(purchase).not.toMatch(/\|\|\s*"₦300,000"/);
-    expect(purchase).toMatch(/catch\(\(\)\s*=>\s*\{\s*setPriceLoadFailed\(true\)/);
-    expect(purchase).toContain("checkoutBlocked");
-    expect(purchase).toMatch(/disabled=\{loading \|\| checkoutBlocked\}/);
-    expect(purchase).toContain("purchase-price-error");
+    expect(purchase).toContain("/purchase/direct/config");
+    expect(purchase).toContain("price_usd_cents");
+    expect(purchase).toContain("moneyAvailable");
+    expect(purchase).toMatch(/disabled=\{!moneyAvailable \|\| loading\}/);
+    expect(purchase).toContain("Unable to load the official price");
   });
 });
