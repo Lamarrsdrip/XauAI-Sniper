@@ -29,7 +29,20 @@ const quoteSchema = z.object({
   asset: z.string().optional().default(""),
   network: z.string().optional().default(""),
 });
-const submitSchema = z.object({ payment_reference: z.string().trim().min(5).max(180) });
+const submitSchema = z.object({
+  payment_reference: z.string().max(180).optional(),
+  sender_account_name: z.string().max(80).optional(),
+});
+function normalizeSenderName(raw: string | undefined): string | null {
+  const name = String(raw ?? "").trim().replace(/\s+/g, " ");
+  if (name.length < 2 || name.length > 80) return null;
+  let letters = 0;
+  for (const ch of name) {
+    if (/\p{L}/u.test(ch)) letters += 1;
+    else if (!/[0-9 .'\-]/.test(ch)) return null;
+  }
+  return letters >= 2 ? name : null;
+}
 const proofSchema = z.object({ mime_type: z.enum(["image/png", "image/jpeg", "image/webp"]), data_base64: z.string().min(20).max(2_800_000) });
 function isValidProof(bytes: Buffer, mime: string): boolean {
   if (bytes.length === 0 || bytes.length > 2_000_000) return false;
@@ -243,11 +256,20 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       { provider: "MANUAL_DIRECT", reference }, { projection: { _id: 0 } });
     if (!tx) return reply.code(404).send({ detail: "Order not found." });
     const status = await effectiveStatus(tx);
-    if (status === "MANUAL_SUBMITTED") return { reference, status };
+    if (status === "MANUAL_SUBMITTED") return { reference, status, submitted_at: tx["submitted_at"] ?? null };
     if (status !== "MANUAL_PENDING") return reply.code(409).send({ detail: "Order expired or closed. Contact support if you already paid." });
-    const proof = req.payment_reference;
-    const valid = tx["method"] === "BANK" ? /^[A-Za-z0-9 _./-]{5,160}$/.test(proof)
-      : (tx["quote_details"] as Record<string, string>)["network"] === "ERC20" ? ETH_HASH.test(proof) : TRON_HASH.test(proof);
+    if (tx["method"] === "BANK") {
+      const sender = normalizeSenderName(req.sender_account_name);
+      if (!sender) return reply.code(422).send({ detail: "Enter the account name the transfer was sent from." });
+      const result = await getDb().collection("payment_transactions").updateOne(
+        { reference, provider: "MANUAL_DIRECT", payment_status: "MANUAL_PENDING" },
+        { $set: { sender_account_name: sender, payment_status: "MANUAL_SUBMITTED", submitted_at: utc() } });
+      if (!result.modifiedCount) return reply.code(409).send({ detail: "Order status changed; refresh it." });
+      const submitted = await getDb().collection("payment_transactions").findOne({ reference, provider: "MANUAL_DIRECT" });
+      return { reference, status: "MANUAL_SUBMITTED", submitted_at: submitted?.["submitted_at"] ?? null };
+    }
+    const proof = String(req.payment_reference ?? "").trim();
+    const valid = (tx["quote_details"] as Record<string, string>)["network"] === "ERC20" ? ETH_HASH.test(proof) : TRON_HASH.test(proof);
     if (!valid) return reply.code(422).send({ detail: "Invalid payment reference or transaction hash." });
     try {
       const result = await getDb().collection("payment_transactions").updateOne(
@@ -299,7 +321,8 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
     if (!tx) return reply.code(404).send({ detail: "Order not found." });
     return { reference, status: await effectiveStatus(tx), method: tx["method"],
              amount_minor: tx["amount_minor"], currency: tx["currency"],
-             created_at: tx["created_at"], submitted_at: tx["submitted_at"] ?? null, expires_at: tx["expires_at"] };
+             created_at: tx["created_at"], submitted_at: tx["submitted_at"] ?? null, expires_at: tx["expires_at"],
+             has_proof: Boolean(tx["evidence_uploaded_at"] || tx["evidence_image"]) };
   });
 
   app.get("/admin/direct-checkout/config", { preHandler: requireAdmin }, async () => getCfg(await getSettings()));

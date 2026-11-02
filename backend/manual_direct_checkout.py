@@ -33,7 +33,18 @@ class Quote(BaseModel):
     network: str = ""
 
 class Submitted(BaseModel):
-    payment_reference: str = Field(min_length=5, max_length=180)
+    payment_reference: str | None = Field(default=None, max_length=180)
+    sender_account_name: str | None = Field(default=None, max_length=80)
+
+def normalize_sender_name(raw: str | None) -> str | None:
+    name = re.sub(r"\s+", " ", (raw or "").strip())
+    if not 2 <= len(name) <= 80:
+        return None
+    if sum(ch.isalpha() for ch in name) < 2:
+        return None
+    if any(not (ch.isalnum() or ch in " .'-") for ch in name):
+        return None
+    return name
 
 class Config(BaseModel):
     price_usd_cents: int | None = Field(default=None, gt=0, le=100000000)
@@ -212,11 +223,19 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
             return {"reference": reference, "status": status}
         if status != "MANUAL_PENDING":
             raise HTTPException(409, "Quote expired or already processed. Contact support if already paid.")
-        proof = req.payment_reference.strip()
         if tx["method"] == "BANK":
-            valid = re.fullmatch(r"[A-Za-z0-9 _./-]{5,160}", proof)
-        else:
-            valid = (HASH_EVM if tx["quote_details"]["network"] == "ERC20" else HASH_TRON).fullmatch(proof)
+            sender = normalize_sender_name(req.sender_account_name)
+            if not sender:
+                raise HTTPException(422, "Enter the account name the transfer was sent from.")
+            result = await db.payment_transactions.update_one(
+                {"reference": reference, "payment_status": "MANUAL_PENDING"},
+                {"$set": {"payment_status": "MANUAL_SUBMITTED",
+                          "sender_account_name": sender, "submitted_at": now().isoformat()}})
+            if result.modified_count != 1:
+                raise HTTPException(409, "Order status changed; refresh.")
+            return {"reference": reference, "status": "MANUAL_SUBMITTED"}
+        proof = (req.payment_reference or "").strip()
+        valid = (HASH_EVM if tx["quote_details"]["network"] == "ERC20" else HASH_TRON).fullmatch(proof)
         if not valid:
             raise HTTPException(422, "Invalid payment reference for the selected method/network.")
         if await db.payment_transactions.find_one({"provider": "MANUAL_DIRECT",

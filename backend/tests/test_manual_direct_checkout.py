@@ -178,22 +178,28 @@ class TestDirectCheckout:
             await reset()
             order = await bank_quote()
             result = await handler("/purchase/direct/{reference}/submit")(
-                order["reference"], Submitted(payment_reference="BANK-REF-12345"), request())
+                order["reference"], Submitted(sender_account_name="Adaeze Okonkwo"), request())
             assert result["status"] == "MANUAL_SUBMITTED"
             assert await srv.db.pin_licenses.count_documents({"payment_ref": order["reference"]}) == 0
             record = await srv.db.payment_transactions.find_one({"reference": order["reference"]})
             assert record["pin_generated"] is None
             assert record["payment_status"] == "MANUAL_SUBMITTED"
+            assert record["sender_account_name"] == "Adaeze Okonkwo"
         run(go())
 
-    def test_reused_reference_is_rejected(self):
+    def test_same_sender_name_is_allowed_and_crypto_hash_is_not(self):
         async def go():
             await reset()
             a, b = await bank_quote(), await bank_quote()
             submit = handler("/purchase/direct/{reference}/submit")
-            await submit(a["reference"], Submitted(payment_reference="BANK-REF-ABC123"), request())
+            await submit(a["reference"], Submitted(sender_account_name="Adaeze Okonkwo"), request())
+            again = await submit(b["reference"], Submitted(sender_account_name="Adaeze Okonkwo"), request())
+            assert again["status"] == "MANUAL_SUBMITTED"
+            first, second = await crypto_quote(), await crypto_quote()
+            tx = "0x" + "ab" * 32
+            await submit(first["reference"], Submitted(payment_reference=tx), request())
             with pytest.raises(HTTPException) as exc:
-                await submit(b["reference"], Submitted(payment_reference="BANK-REF-ABC123"), request())
+                await submit(second["reference"], Submitted(payment_reference=tx), request())
             assert exc.value.status_code == 409
         run(go())
 
@@ -205,7 +211,7 @@ class TestDirectCheckout:
                 {"reference": order["reference"]}, {"$set": {"expires_at": (datetime.now(timezone.utc)-timedelta(hours=1)).isoformat()}})
             with pytest.raises(HTTPException) as exc:
                 await handler("/purchase/direct/{reference}/submit")(
-                    order["reference"], Submitted(payment_reference="BANK-REF-ABC123"), request())
+                    order["reference"], Submitted(sender_account_name="Chinedu Okafor"), request())
             assert exc.value.status_code == 409
             record = await srv.db.payment_transactions.find_one({"reference": order["reference"]})
             assert record["payment_status"] == "MANUAL_EXPIRED"
@@ -216,7 +222,7 @@ class TestDirectCheckout:
             await reset()
             order = await bank_quote()
             await handler("/purchase/direct/{reference}/submit")(
-                order["reference"], Submitted(payment_reference="BANK-REF-ABC123"), request())
+                order["reference"], Submitted(sender_account_name="Test Buyer"), request())
             approve = handler("/admin/direct-checkout/{reference}/approve")
             review = Review(evidence_reference="VERIFIED-BANK-TXN-1",
                             verification_notes="Verified exact amount, beneficiary and transfer in official bank statement.")

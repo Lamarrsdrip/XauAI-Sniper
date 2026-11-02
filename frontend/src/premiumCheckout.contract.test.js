@@ -37,7 +37,11 @@ describe("Premium manual gateway contract", () => {
     expect(checkout).not.toContain('label="Bank name" value={quote.details.bank_name} copy={false}');
     expect(checkout).toContain("xaucloud.pay.session.v1");
     expect(checkout).toContain("localStorage.getItem(ORDER_KEY)");
-    expect(checkout).toContain("Submit payment for verification");
+    expect(checkout).toContain("Account name sent from");
+    expect(checkout).toContain("sender_account_name");
+    expect(checkout).toContain("prepareReceipt");
+    expect(checkout).toContain("Preparing receipt");
+    expect(checkout).not.toContain("Bank transaction reference");
     expect(checkout).toContain("independently confirm receipt");
     expect(checkout).toContain("status === \"FULFILLED\"");
     expect(checkout).toContain("status === \"MANUAL_REJECTED\"");

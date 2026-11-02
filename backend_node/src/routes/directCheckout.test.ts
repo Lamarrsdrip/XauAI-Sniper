@@ -123,7 +123,7 @@ describe("USD-first manual checkout HTTP and fulfillment lifecycle", () => {
     expect((await app.inject({ method: "POST", url })).statusCode).toBe(409);
     const submittedOrder = (await quoteBank(app)).json();
     await app.inject({ method: "POST", url: "/purchase/direct/" + submittedOrder.reference + "/submit",
-      payload: { payment_reference: "REAL-BANK-REF-ABC" } });
+      payload: { sender_account_name: "Adaeze Okonkwo" } });
     expect((await app.inject({ method: "POST", url: "/purchase/direct/" + submittedOrder.reference + "/resend-instructions" })).statusCode).toBe(409);
   });
 
@@ -161,21 +161,44 @@ describe("USD-first manual checkout HTTP and fulfillment lifecycle", () => {
     expect(state.db.collection("pin_licenses").docs).toHaveLength(0);
   });
 
-  it("duplicates and expired quote submissions are refused", async () => {
+  it("bank orders store the sender account name and allow the same name on another order", async () => {
     const first = (await quoteBank(app)).json(), second = (await quoteBank(app)).json();
-    const ref = "BANK-TRACE-0001";
+    const bad = await app.inject({ method: "POST", url: "/purchase/direct/" + first.reference + "/submit",
+      payload: { sender_account_name: "12" } });
+    expect(bad.statusCode).toBe(422);
+    const ok = await app.inject({ method: "POST", url: "/purchase/direct/" + first.reference + "/submit",
+      payload: { sender_account_name: "  Adaeze   Okonkwo " } });
+    expect(ok.statusCode).toBe(200);
+    const again = await app.inject({ method: "POST", url: "/purchase/direct/" + second.reference + "/submit",
+      payload: { sender_account_name: "Adaeze Okonkwo" } });
+    expect(again.statusCode).toBe(200);
+    const tx = await state.db.collection("payment_transactions").findOne({ reference: first.reference });
+    expect(tx?.["sender_account_name"]).toBe("Adaeze Okonkwo");
+    expect(tx?.["submitted_reference"]).toBeUndefined();
+    expect(tx?.["payment_status"]).toBe("MANUAL_SUBMITTED");
+    await state.db.collection("payment_transactions").updateOne({ reference: second.reference },
+      { $set: { payment_status: "MANUAL_PENDING", expires_at: new Date(Date.now() - 60000).toISOString() } });
+    const expiredOrder = (await quoteBank(app)).json();
+    await state.db.collection("payment_transactions").updateOne({ reference: expiredOrder.reference },
+      { $set: { expires_at: new Date(Date.now() - 60000).toISOString() } });
+    expect((await app.inject({ method: "POST", url: "/purchase/direct/" + expiredOrder.reference + "/submit",
+      payload: { sender_account_name: "Chinedu Okafor" } })).statusCode).toBe(409);
+    const closed = await state.db.collection("payment_transactions").findOne({ reference: expiredOrder.reference });
+    expect(closed?.["payment_status"]).toBe("MANUAL_EXPIRED");
+  });
+
+  it("crypto hashes stay unique across orders", async () => {
+    const first = (await quoteCrypto(app)).json();
+    const second = (await quoteCrypto(app)).json();
+    const ref = "0x" + "ab".repeat(32);
     expect((await app.inject({ method: "POST", url: "/purchase/direct/" + first.reference + "/submit", payload: { payment_reference: ref } })).statusCode).toBe(200);
     expect((await app.inject({ method: "POST", url: "/purchase/direct/" + second.reference + "/submit", payload: { payment_reference: ref } })).statusCode).toBe(409);
-    await state.db.collection("payment_transactions").updateOne({ reference: second.reference }, { $set: { expires_at: new Date(Date.now() - 60000).toISOString() } });
-    expect((await app.inject({ method: "POST", url: "/purchase/direct/" + second.reference + "/submit", payload: { payment_reference: "OTHER-BANK-REF" } })).statusCode).toBe(409);
-    const tx = await state.db.collection("payment_transactions").findOne({ reference: second.reference });
-    expect(tx?.["payment_status"]).toBe("MANUAL_EXPIRED");
   });
 
   it("verified admin approval fulfills exactly once, with one license and one email", async () => {
     const order = (await quoteBank(app)).json();
     await app.inject({ method: "POST", url: "/purchase/direct/" + order.reference + "/submit",
-      payload: { payment_reference: "REAL-BANK-REF" } });
+      payload: { sender_account_name: "Test Customer" } });
     const approve = () => app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/approve",
       payload: { evidence_reference: "INDEPENDENT-TXN-1",
         verification_notes: "Checked transfer, amount, beneficiary and receipt against official bank ledger." } });

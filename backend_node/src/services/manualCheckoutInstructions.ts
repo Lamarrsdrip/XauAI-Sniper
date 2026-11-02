@@ -44,14 +44,19 @@ export async function sendDirectManualPaymentInstructions(order: DirectManualPay
     '<p style="margin-top:18px;padding:14px;background:#f8f6ed;border:1px solid #e8ddbe;border-radius:10px;line-height:1.6;font-size:13px;">' +
     '<strong>Order reference:</strong> ' + escapeHtml(order.reference) + '<br>' +
     '<strong>Payment window closes:</strong> ' + escapeHtml(order.expiresAt) + ' (UTC)</p>' +
-    '<p style="font-size:13px;line-height:1.7;color:#475a53;">After transferring, return to the open XauCloud checkout and submit your actual bank transaction reference or blockchain hash. Your payment is independently checked by our team before a license can be issued. Never share passwords or wallet seed phrases.</p>' +
+    '<p style="font-size:13px;line-height:1.7;color:#475a53;">' + (bank
+      ? "After transferring, return to the open XauCloud checkout and enter the account name you sent the money from. You can also attach a photo of the receipt. "
+      : "After transferring, return to the open XauCloud checkout and submit the blockchain transaction hash. ") +
+    "Your payment is independently checked by our team before a license can be issued. Never share passwords or wallet seed phrases.</p>" +
     '<p style="font-size:12px;color:#5c6f67;margin-top:24px;">If the payment window has expired, do not reuse the old quote; contact support if you already transferred.</p>' +
     '</div></div>';
   const plain = ["XauCloud manual payment instructions", "Order: " + order.reference,
     "Status: Awaiting transfer; not paid or approved", "Amount: " + order.amountFormatted,
     "Base price: " + order.usdPrice, ...rows.map(([k, v]) => k + ": " + v),
     "Expires: " + order.expiresAt + " UTC", extra,
-    "After paying, return to XauCloud and submit your bank reference or blockchain hash for independent manual verification."].join("\n");
+    "After paying, return to XauCloud and " + (bank
+      ? "enter the account name the transfer was sent from."
+      : "submit the blockchain hash.") + " Payment is checked manually before a license is issued."].join("\n");
   const result = await sendEmailDetailed(order.buyerEmail,
     "XauCloud payment instructions — " + order.reference, html, { text: plain });
   return result.ok;

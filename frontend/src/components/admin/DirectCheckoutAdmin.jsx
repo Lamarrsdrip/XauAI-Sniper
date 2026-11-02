@@ -114,7 +114,9 @@ export default function DirectCheckoutAdmin({ api }) {
         <div className="flex flex-wrap items-center justify-between gap-2"><strong className="break-all font-mono text-xs text-white">{order.reference}</strong><span className="rounded-lg bg-white/10 px-2 py-1 text-xs text-amber-200">{order.payment_status}</span></div>
         <p className="mt-2 text-[12px] text-white/60">{order.buyer_name} · {order.buyer_email} · {order.country} · {order.method}</p>
         <p className="mt-1 font-mono text-[12px] text-white/60">{order.amount_minor / 100} {order.currency} · {new Date(order.created_at).toLocaleString()}</p>
-        <p className="mt-1 break-all text-xs text-white/65">Submitted reference: {order.submitted_reference || "Not submitted"}</p>
+        <p className="mt-1 break-all text-xs text-white/65">{order.method === "BANK"
+          ? "Account name sent from: " + (order.sender_account_name || "Not submitted")
+          : "Submitted reference: " + (order.submitted_reference || "Not submitted")}</p>
         {order.has_proof && <button className={btnClass + " mt-2"} type="button" onClick={() => viewProof(order.reference)}>View optional proof (unverified)</button>}
         {order.payment_status === "MANUAL_SUBMITTED" && <div className="mt-4 space-y-2">
           <input className={inputClass} aria-label="Authoritative verification reference" value={evidence[order.reference] || ""} onChange={(e) => setEvidence({ ...evidence, [order.reference]: e.target.value })} placeholder="Independently verified bank/chain transaction ID"/>
