@@ -73,7 +73,7 @@ async def crypto_quote(**kwargs):
     return await handler("/purchase/direct/quote")(
         Quote(country=kwargs.get("country", "US"), buyer_name="Test Buyer",
               buyer_email="buyer@example.com", asset=kwargs.get("asset", "USDT"),
-              network=kwargs.get("network", "ERC20")), request())
+              network=kwargs.get("network", "ERC20"), method=kwargs.get("method", "")), request())
 
 class TestDirectCheckout:
     def test_usd_source_and_exact_ngn_integer_quote(self):
@@ -126,9 +126,13 @@ class TestDirectCheckout:
             assert order["currency"] == "USDT"
             assert order["amount_formatted"] == "100.00 USDT"
             assert order["details"]["network"] == "ERC20"
-            with pytest.raises(HTTPException) as blocked:
-                await crypto_quote(country="FR")
-            assert blocked.value.status_code == 403
+            france = await crypto_quote(country="FR")
+            assert france["method"] == "CRYPTO"
+            nigeria = await crypto_quote(country="NG", method="CRYPTO")
+            assert nigeria["method"] == "CRYPTO"
+            with pytest.raises(HTTPException) as bank_only:
+                await crypto_quote(country="DE", method="BANK")
+            assert bank_only.value.status_code == 403
             with pytest.raises(HTTPException) as unsupported:
                 await crypto_quote(network="TRC20")
             assert unsupported.value.status_code == 503

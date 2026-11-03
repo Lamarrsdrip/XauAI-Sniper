@@ -11,7 +11,6 @@ export default function DirectCheckoutAdmin({ api }) {
   const [orders, setOrders] = useState([]);
   const [dollars, setDollars] = useState("");
   const [fx, setFx] = useState("");
-  const [countries, setCountries] = useState("");
   const [wallets, setWallets] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -29,7 +28,6 @@ export default function DirectCheckoutAdmin({ api }) {
       setOrders(result.data.entries || []);
       setDollars(config.data.price_usd_cents ? (config.data.price_usd_cents / 100).toFixed(2) : "");
       setFx(config.data.usd_ngn_rate || "");
-      setCountries((config.data.crypto_countries || []).join(", "));
       setWallets(config.data.wallets || []);
     } catch (e) { setError(e.response?.data?.detail || "Unable to fetch direct checkout administration."); }
   }, [api]);
@@ -45,7 +43,6 @@ export default function DirectCheckoutAdmin({ api }) {
       const payload = {
         price_usd_cents: cents,
         bank_enabled: cfg.bank_enabled, crypto_enabled: cfg.crypto_enabled,
-        crypto_countries: countries.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean),
         wallets: wallets.map((w) => ({ asset: w.asset, network: w.network, address: w.address.trim() }))
       };
       // Do not refresh a rate timestamp just by saving unrelated settings.
@@ -91,9 +88,9 @@ export default function DirectCheckoutAdmin({ api }) {
       <p className="mt-2 text-[11px] text-white/40">Rate timestamp: {cfg.rate_as_of ? new Date(cfg.rate_as_of).toLocaleString() : "Not configured"} · Rates older than 24 hours fail closed.</p>
       <div className="mt-5 flex flex-wrap gap-5">
         <label className="flex items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={cfg.bank_enabled} onChange={(e) => setCfg({ ...cfg, bank_enabled: e.target.checked })}/> Enable Nigerian manual bank</label>
-        <label className="flex items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={cfg.crypto_enabled} onChange={(e) => setCfg({ ...cfg, crypto_enabled: e.target.checked })}/> Enable international stablecoins</label>
+        <label className="flex items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={cfg.crypto_enabled} onChange={(e) => setCfg({ ...cfg, crypto_enabled: e.target.checked })}/> Enable USDT for every country</label>
       </div>
-      <div className="mt-5"><Label title="Approved countries for crypto (2-letter ISO codes separated by commas)"><input className={inputClass} value={countries} onChange={(e) => setCountries(e.target.value)} placeholder="US, GB, CA"/></Label></div>
+      <p className="mt-4 text-[12px] leading-5 text-white/45">USDT checkout is available in every country while this is on. Nigeria is the only country that can also pay by bank transfer.</p>
       <div className="mt-5 space-y-3">
         <p className="text-xs font-bold text-white/70">Approved receiving wallets</p>
         {wallets.map((w, i) => <div key={i} className="grid gap-2 md:grid-cols-[100px_100px_1fr_auto]">

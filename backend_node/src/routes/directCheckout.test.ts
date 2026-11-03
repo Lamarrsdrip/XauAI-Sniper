@@ -138,13 +138,20 @@ describe("USD-first manual checkout HTTP and fulfillment lifecycle", () => {
     expect(state.db.collection("payment_transactions").docs).toHaveLength(0);
   });
 
-  it("crypto quote is restricted to approved countries, assets and networks", async () => {
+  it("USDT is available in every country, and only Nigeria can also pay by bank transfer", async () => {
     const response = await quoteCrypto(app);
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ currency: "USDT", amount_minor: 10000,
+    expect(response.json()).toMatchObject({ method: "CRYPTO", currency: "USDT", amount_minor: 10000,
       details: { asset: "USDT", network: "ERC20", address: wallet } });
-    expect((await quoteCrypto(app, { country: "FR" })).statusCode).toBe(403);
+    expect((await quoteCrypto(app, { country: "FR" })).statusCode).toBe(200);
+    expect((await quoteCrypto(app, { country: "NG", method: "CRYPTO" })).json().method).toBe("CRYPTO");
+    expect((await quoteBank(app)).json().method).toBe("BANK");
+    expect((await quoteCrypto(app, { country: "DE", method: "BANK" })).statusCode).toBe(403);
     expect((await quoteCrypto(app, { network: "TRC20" })).statusCode).toBe(503);
+    await state.db.collection("admin_settings").updateOne({ key: "main" }, { $set: { direct_crypto_countries: [] } });
+    const open = await app.inject({ method: "GET", url: "/purchase/direct/config" });
+    expect(open.json().crypto_enabled).toBe(true);
+    expect((await quoteCrypto(app, { country: "GB" })).statusCode).toBe(200);
   });
 
   it("user submission cannot mint licenses and rejected malformed hash cannot advance state", async () => {

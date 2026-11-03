@@ -28,6 +28,7 @@ const quoteSchema = z.object({
   buyer_email: z.string().trim().toLowerCase().email().max(254),
   asset: z.string().optional().default(""),
   network: z.string().optional().default(""),
+  method: z.enum(["BANK", "CRYPTO"]).optional(),
 });
 const submitSchema = z.object({
   payment_reference: z.string().max(180).optional(),
@@ -127,8 +128,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
     const bankReady = cfg.price_usd_cents != null && cfg.bank_enabled && bank.enabled &&
       bankTransferIsConfigured(bank) && fxValid && Number.isFinite(fxTime) &&
       Date.now() >= fxTime && Date.now() - fxTime <= 86400000;
-    const cryptoReady = cfg.price_usd_cents != null && cfg.crypto_enabled && cfg.wallets.length > 0 &&
-      cfg.crypto_countries.length > 0;
+    const cryptoReady = cfg.price_usd_cents != null && cfg.crypto_enabled && cfg.wallets.length > 0;
     return {
       currency: "USD", price_usd_cents: cfg.price_usd_cents,
       price_formatted: cfg.price_usd_cents != null ? usdFormatted(cfg.price_usd_cents) : null,
@@ -145,7 +145,13 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
     const cfg = getCfg(await getSettings());
     const cents = cfg.price_usd_cents;
     if (cents == null) return reply.code(503).send({ detail: "Administrator has not configured the USD price." });
-    const method = req.country === "NG" ? "BANK" : "CRYPTO";
+    const requested = req.method;
+    let method: "BANK" | "CRYPTO";
+    if (req.country !== "NG") {
+      if (requested === "BANK") return reply.code(403).send({ detail: "Bank transfer is only available in Nigeria." });
+      method = "CRYPTO";
+    } else if (requested === "CRYPTO") method = "CRYPTO";
+    else method = "BANK";
     let amountMinor: number;
     let currency: string;
     let details: Record<string, string>;
@@ -166,9 +172,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       details = { bank_name: bank.bank_name, account_name: bank.account_name,
                   account_number: bank.account_number, fx_rate: String(cfg.usd_ngn_rate), rate_as_of: String(cfg.rate_as_of) };
     } else {
-      if (!cfg.crypto_enabled || !cfg.crypto_countries.includes(req.country)) {
-        return reply.code(403).send({ detail: "Crypto checkout is not available in this country." });
-      }
+      if (!cfg.crypto_enabled) return reply.code(403).send({ detail: "Crypto checkout is not available." });
       const asset = req.asset.toUpperCase();
       const network = req.network.toUpperCase();
       const wallet = cfg.wallets.find((w) => w["asset"] === asset && w["network"] === network);

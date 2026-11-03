@@ -6,12 +6,16 @@ const nodeRoute = fs.readFileSync(path.join(__dirname, "..", "..", "backend_node
 const mailer = fs.readFileSync(path.join(__dirname, "..", "..", "backend_node", "src", "services", "manualCheckoutInstructions.ts"), "utf8");
 
 describe("Premium manual gateway contract", () => {
-  test("supports NGN bank checkout only for Nigeria and stablecoin checkout for other approved countries", () => {
+  test("offers USDT in every country and bank transfer only in Nigeria", () => {
     expect(checkout).toContain('country === "NG"');
-    expect(checkout).toContain('Boolean(config.crypto_enabled && config.crypto_countries?.includes(country))');
+    expect(checkout).toContain("Every country pays with USDT");
+    expect(checkout).toContain("Nigeria can also pay by bank transfer");
     expect(checkout).toContain("Bank transfer · NGN at checkout");
-    expect(checkout).toContain("Crypto payment");
-    expect(nodeRoute).toContain('req.country === "NG" ? "BANK" : "CRYPTO"');
+    expect(checkout).toContain('defaultCryptoChoice');
+    expect(checkout).not.toContain("crypto_countries?.includes");
+    expect(checkout).not.toContain("Checkout has not been enabled for this country");
+    expect(nodeRoute).toContain('Bank transfer is only available in Nigeria.');
+    expect(nodeRoute).not.toContain("crypto_countries.includes");
   });
 
   test("renders a server-expiry-based live 30-minute countdown without displaying FX internals", () => {

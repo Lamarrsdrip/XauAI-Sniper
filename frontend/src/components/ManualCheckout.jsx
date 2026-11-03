@@ -23,7 +23,6 @@ function readSavedOrder() {
     if (!quote || typeof quote.reference !== "string" || typeof quote.expires_at !== "string" || !quote.details) return null;
     if (quote.method !== "BANK" && quote.method !== "CRYPTO") return null;
     if (saved.country !== "NG" && quote.method === "BANK") return null;
-    if (saved.country === "NG" && quote.method === "CRYPTO") return null;
     const details = { ...quote.details };
     delete details.fx_rate;
     delete details.rate_as_of;
@@ -40,6 +39,12 @@ function customerQuote(quote) {
 const fieldClass = "mt-2 w-full rounded-2xl border border-[#cbd9d0] bg-white px-4 py-3.5 text-[16px] text-[#15382d] placeholder:text-[#5d6e66] outline-none transition focus:border-[#28725d] focus:ring-4 focus:ring-[#28725d]/10";
 const primaryButton = "inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#143f35] px-5 py-3 text-[14px] font-bold text-white shadow-[0_7px_18px_rgba(20,63,53,.16)] transition hover:bg-[#1f5c4b] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#143f35] disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none";
 const secondaryButton = "inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-[#d3e0d6] bg-white px-4 py-2.5 text-[12px] font-bold text-[#2a5647] transition hover:bg-[#edf5ef] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#143f35]";
+const defaultCryptoChoice = (options) => {
+  const list = options || [];
+  const usdt = list.find((item) => item.asset === "USDT");
+  const pick = usdt || list[0];
+  return pick ? pick.asset + ":" + pick.network : "";
+};
 const moneyLabel = (value) => String(value || "").replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 const formatTime = (seconds) => String(Math.floor(seconds / 60)).padStart(2, "0") + ":" + String(seconds % 60).padStart(2, "0");
 const buttonLabel = (busy, label) => busy ? <><LoaderCircle size={17} className="animate-spin" /> Processing securely…</> : <>{label}<ArrowRight size={17}/></>;
@@ -88,6 +93,7 @@ export default function ManualCheckout({ api, config, onClose }) {
   const [name, setName] = useState(savedOrder?.name || "");
   const [email, setEmail] = useState(savedOrder?.email || "");
   const [assetNetwork, setAssetNetwork] = useState("");
+  const [payMethod, setPayMethod] = useState(savedOrder?.quote?.method === "BANK" ? "BANK" : "CRYPTO");
   const [quote, setQuote] = useState(savedOrder?.quote || null);
   const [referenceInput, setReferenceInput] = useState(savedOrder?.referenceInput || "");
   const [proofBusy, setProofBusy] = useState(false);
@@ -106,9 +112,13 @@ export default function ManualCheckout({ api, config, onClose }) {
   const filtered = useMemo(() => countries.filter((item) =>
     (item.name + " " + item.code).toLowerCase().includes(search.trim().toLowerCase())), [search]);
   const isNigeria = country === "NG";
-  const enabled = isNigeria ? Boolean(config.bank_enabled)
-    : Boolean(config.crypto_enabled && config.crypto_countries?.includes(country));
-  const options = config.crypto_options || [];
+  const cryptoOn = Boolean(config.crypto_enabled);
+  const bankOn = Boolean(config.bank_enabled);
+  const enabled = isNigeria ? (bankOn || cryptoOn) : Boolean(country && cryptoOn);
+  const options = useMemo(() => [...(config.crypto_options || [])].sort((a, b) =>
+    (a.asset === "USDT" ? 0 : 1) - (b.asset === "USDT" ? 0 : 1)), [config.crypto_options]);
+  const checkoutMethod = isNigeria ? (payMethod === "BANK" ? "BANK" : "CRYPTO") : "CRYPTO";
+  const bankPay = quote?.method === "BANK";
   const secondsLeft = quote?.expires_at ? Math.max(0, Math.ceil((Date.parse(quote.expires_at) - nowMs) / 1000)) : 0;
   const expired = step === "payment" && (secondsLeft === 0 || status === "MANUAL_EXPIRED");
   const finished = status === "FULFILLED";
@@ -124,12 +134,12 @@ export default function ManualCheckout({ api, config, onClose }) {
   useEffect(() => {
     if (!quote?.reference) return;
     const payload = {
-      quote: customerQuote(quote), country, name, email, instructionsSent,
+      quote: customerQuote(quote), country, name, email, instructionsSent, payMethod,
       referenceInput, proofUploaded, submittedAt, status,
       step: step === "pending" ? "pending" : "payment",
     };
     try { localStorage.setItem(ORDER_KEY, JSON.stringify(payload)); } catch { /* Private mode can still complete checkout on screen. */ }
-  }, [quote, country, name, email, instructionsSent, referenceInput, proofUploaded, submittedAt, status, step]);
+  }, [quote, country, name, email, instructionsSent, referenceInput, proofUploaded, submittedAt, status, step, payMethod]);
 
   useEffect(() => {
     const key = (event) => { if (event.key === "Escape" && !busy) onClose(); };
@@ -168,17 +178,28 @@ export default function ManualCheckout({ api, config, onClose }) {
     return () => { active = false; window.clearInterval(timer); };
   }, [api, quote?.reference, step]);
 
+  function chooseCountry(code) {
+    setCountry(code);
+    setError("");
+    const nextMethod = code === "NG" && bankOn ? "BANK" : "CRYPTO";
+    setPayMethod(nextMethod);
+    if (!assetNetwork) setAssetNetwork(defaultCryptoChoice(options));
+  }
+
   async function createQuote() {
-    if (!enabled || !country) { setError("Checkout is unavailable for your selected country."); return; }
+    if (!enabled || !country) { setError("Checkout is unavailable right now."); return; }
     if (name.trim().length < 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       setError("Enter your full name and a valid email to receive payment details."); return;
     }
-    if (!isNigeria && !assetNetwork) { setError("Choose a supported stablecoin and network."); return; }
+    const method = checkoutMethod;
+    const choice = assetNetwork || defaultCryptoChoice(options);
+    if (method === "CRYPTO" && !choice) { setError("USDT checkout is not configured yet."); return; }
+    if (method === "BANK" && !bankOn) { setError("Nigerian bank transfer is not available right now."); return; }
     setBusy(true); setError(""); setResendMessage("");
-    const [asset, network] = assetNetwork ? assetNetwork.split(":") : ["", ""];
+    const [asset, network] = method === "CRYPTO" ? choice.split(":") : ["", ""];
     try {
       const response = await axios.post(api + "/purchase/direct/quote", {
-        country, buyer_name: name.trim(), buyer_email: email.trim(), asset, network,
+        country, method, buyer_name: name.trim(), buyer_email: email.trim(), asset, network,
       });
       setQuote(customerQuote(response.data));
       setInstructionsSent(response.data.instructions_email_sent === true);
@@ -197,13 +218,13 @@ export default function ManualCheckout({ api, config, onClose }) {
     setBusy(true); setError("");
     try {
       const response = await axios.post(api + "/purchase/direct/" + encodeURIComponent(quote.reference) + "/submit",
-        isNigeria ? { sender_account_name: value } : { payment_reference: value });
+        bankPay ? { sender_account_name: value } : { payment_reference: value });
       setStatus(response.data.status);
       if (response.data.submitted_at) setSubmittedAt(response.data.submitted_at);
       setStep("pending");
     } catch (err) {
       const detail = err.response?.data?.detail;
-      setError(typeof detail === "string" ? detail : (isNigeria
+      setError(typeof detail === "string" ? detail : (bankPay
         ? "We couldn't record that account name. Check it and try again."
         : "We couldn't record your transaction hash. Please check it and retry."));
     }
@@ -262,10 +283,10 @@ export default function ManualCheckout({ api, config, onClose }) {
   function newQuote() {
     try { localStorage.removeItem(ORDER_KEY); } catch { /* ignore */ }
     setQuote(null); setReferenceInput(""); setStatus(""); setProofUploaded(false); setInstructionsSent(false);
-    setSubmittedAt(null); setResendMessage(""); setError(""); setAssetNetwork(""); setStep("details");
+    setSubmittedAt(null); setResendMessage(""); setError(""); setAssetNetwork(""); setPayMethod(bankOn ? "BANK" : "CRYPTO"); setStep("details");
   }
 
-  const instructions = quote && (isNigeria
+  const instructions = quote && (bankPay
     ? ["XauCloud — Bank transfer", "Amount: " + quote.amount_formatted, "Bank: " + quote.details.bank_name,
       "Beneficiary: " + quote.details.account_name, "Account number: " + quote.details.account_number,
       "Order reference: " + quote.reference].join("\n")
@@ -302,11 +323,11 @@ export default function ManualCheckout({ api, config, onClose }) {
         {step === "country" && <section>
           <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-[#e8f2ea] px-3 py-1.5 text-[11px] font-bold text-[#30674d]"><Globe2 size={13}/> STEP 01 · LOCATION</div>
           <h2 className="font-heading text-[26px] font-bold tracking-tight sm:text-[34px]">Where are you paying from?</h2>
-          <p className="mt-2 text-[14px] leading-6 text-[#52675b]">We'll show you the right payment method. Nigeria pays by bank transfer; supported other countries pay with crypto.</p>
-          <button type="button" onClick={() => { setCountry("NG"); setError(""); }}
+          <p className="mt-2 text-[14px] leading-6 text-[#52675b]">Every country pays with USDT. Nigeria can also pay by bank transfer.</p>
+          <button type="button" onClick={() => chooseCountry("NG")}
             className={"mt-6 flex w-full items-center gap-4 rounded-[22px] border p-4 text-left transition sm:p-5 " + (country === "NG" ? "border-[#28765b] bg-[#eaf5ed] shadow-[0_0_0_2px_rgba(40,118,91,.07)]" : "border-[#e0e8df] bg-white hover:border-[#a8c8b7]")}>
             <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#e4efe6] text-[#235a44]"><Landmark size={23}/></span>
-            <span className="flex-1"><strong className="block text-[15px]">Nigeria</strong><span className="mt-1 block text-[12px] text-[#5d7167]">Pay securely in NGN · Bank transfer</span></span>
+            <span className="flex-1"><strong className="block text-[15px]">Nigeria</strong><span className="mt-1 block text-[12px] text-[#5d7167]">Bank transfer or USDT</span></span>
             <span className={"flex h-6 w-6 items-center justify-center rounded-full border-2 " + (country === "NG" ? "border-[#28765b] bg-[#28765b] text-white" : "border-[#a6b7aa]")}>{country === "NG" && <Check size={14}/>}</span>
           </button>
           <div className="my-5 flex items-center gap-4 text-[11px] font-bold uppercase tracking-widest text-[#798a7f]"><span className="h-px flex-1 bg-[#dfe7dd]"/>OR ANOTHER COUNTRY<span className="h-px flex-1 bg-[#dfe7dd]"/></div>
@@ -316,15 +337,15 @@ export default function ManualCheckout({ api, config, onClose }) {
               className={fieldClass + " !mt-0 !pl-11"}/>
           </div>
           <div className="mt-3 max-h-[208px] overflow-y-auto rounded-2xl border border-[#dfe8df] bg-white p-1.5">
-            {filtered.filter((c) => c.code !== "NG").map((c) => <button key={c.code} type="button" onClick={() => { setCountry(c.code); setError(""); }}
+            {filtered.filter((c) => c.code !== "NG").map((c) => <button key={c.code} type="button" onClick={() => chooseCountry(c.code)}
               className={"flex w-full items-center justify-between rounded-xl px-4 py-2.5 text-left text-[13px] transition " + (country === c.code ? "bg-[#eaf5ed] font-bold text-[#235b46]" : "text-[#40564b] hover:bg-[#f4f7f3]")}>
               {c.name} <span className="text-[11px] text-[#76887a]">{c.code}</span>
             </button>)}
             {filtered.filter((c) => c.code !== "NG").length === 0 && <div className="p-4 text-[13px] text-[#697d70]">No matching country</div>}
           </div>
           {country && <div className={"mt-4 rounded-xl px-4 py-3 text-[12px] " + (enabled ? "bg-[#e8f5ee] text-[#236246]" : "bg-[#fff4e6] text-[#875825]")}>
-            {enabled ? (isNigeria ? "Bank transfer is available for Nigeria." : "Crypto checkout is available for your selected country.")
-              : "Checkout has not been enabled for this country. No payment will be requested."}
+            {enabled ? (isNigeria ? "Nigeria can pay by bank transfer or USDT." : "USDT crypto is available for this country.")
+              : "Crypto checkout is not configured yet. No payment will be requested."}
           </div>}
           {error && <p role="alert" className="mt-3 text-sm text-[#a1352b]">{error}</p>}
           <button type="button" disabled={!country || !enabled} onClick={() => { setError(""); setStep("details"); }} className={primaryButton + " mt-5"}>{buttonLabel(false, "Continue to payment details")}</button>
@@ -335,7 +356,7 @@ export default function ManualCheckout({ api, config, onClose }) {
           <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-[#e8f2ea] px-3 py-1.5 text-[11px] font-bold text-[#30674d]"><ReceiptText size={13}/> STEP 02 · ORDER DETAILS</div>
           <h2 className="font-heading text-[26px] font-bold tracking-tight sm:text-[34px]">Complete your order</h2>
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[22px] border border-[#d8e8dc] bg-white p-5">
-            <div><div className="text-[11px] font-semibold uppercase tracking-wider text-[#687b6d]">One-time XauCloud MT5 license</div><div className="mt-1 text-[12px] text-[#597064]">{isNigeria ? "Bank transfer · NGN at checkout" : "Crypto payment · " + country}</div></div>
+            <div><div className="text-[11px] font-semibold uppercase tracking-wider text-[#687b6d]">One-time XauCloud MT5 license</div><div className="mt-1 text-[12px] text-[#597064]">{checkoutMethod === "BANK" ? "Bank transfer · NGN at checkout" : "USDT crypto · " + country}</div></div>
             <strong className="font-heading text-[24px] tracking-tight text-[#194b39]">{config.price_formatted}</strong>
           </div>
           <label className="mt-5 block text-[13px] font-bold text-[#344f41]">Full name
@@ -345,23 +366,34 @@ export default function ManualCheckout({ api, config, onClose }) {
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} maxLength={254} autoComplete="email" placeholder="you@example.com" className={fieldClass}/>
             <span className="mt-2 flex items-start gap-2 text-[12px] font-medium leading-5 text-[#597064]"><Mail size={14} className="mt-0.5 shrink-0"/> We'll email your payment details here immediately after creating the order.</span>
           </label>
-          {!isNigeria && <label className="mt-4 block text-[13px] font-bold text-[#344f41]">Stablecoin and network
-            <select value={assetNetwork} onChange={(e) => setAssetNetwork(e.target.value)} className={fieldClass}>
-              <option value="">Select the approved crypto network</option>
+          {isNigeria && <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <button type="button" disabled={!bankOn} onClick={() => setPayMethod("BANK")}
+              className={"rounded-2xl border p-4 text-left " + (payMethod === "BANK" ? "border-[#28765b] bg-[#eaf5ed]" : "border-[#e0e8df] bg-white")}>
+              <strong className="block text-[14px]">Bank transfer</strong>
+              <span className="mt-1 block text-[12px] text-[#5d7167]">Pay in NGN · Nigeria only</span>
+            </button>
+            <button type="button" disabled={!cryptoOn} onClick={() => { setPayMethod("CRYPTO"); if (!assetNetwork) setAssetNetwork(defaultCryptoChoice(options)); }}
+              className={"rounded-2xl border p-4 text-left " + (payMethod === "CRYPTO" ? "border-[#28765b] bg-[#eaf5ed]" : "border-[#e0e8df] bg-white")}>
+              <strong className="block text-[14px]">USDT crypto</strong>
+              <span className="mt-1 block text-[12px] text-[#5d7167]">Same crypto checkout as every other country</span>
+            </button>
+          </div>}
+          {checkoutMethod === "CRYPTO" && <label className="mt-4 block text-[13px] font-bold text-[#344f41]">USDT network
+            <select value={assetNetwork || defaultCryptoChoice(options)} onChange={(e) => setAssetNetwork(e.target.value)} className={fieldClass}>
               {options.map((o) => <option key={o.asset + o.network} value={o.asset + ":" + o.network}>{o.asset} · {o.network}</option>)}
             </select>
-            <span className="mt-2 block text-[12px] leading-5 text-[#795c2b]">Only send the selected token on its exact network. Other networks are not supported.</span>
+            <span className="mt-2 block text-[12px] leading-5 text-[#795c2b]">USDT is selected by default. Only send the selected token on its exact network.</span>
           </label>}
           <p className="mt-5 flex items-start gap-2 text-[12px] leading-5 text-[#5b7164]"><ShieldCheck size={16} className="shrink-0 text-[#28684a]"/> No subscription or automatic charge. Your license is issued only after independent verification.</p>
           {error && <p role="alert" className="mt-3 rounded-xl bg-[#fff0eb] p-3 text-sm text-[#a13b32]">{error}</p>}
-          <button type="button" disabled={busy || !enabled} onClick={createQuote} className={primaryButton + " mt-6"}>{buttonLabel(busy, "Create secure payment order")}</button>
+          <button type="button" disabled={busy || !enabled || (checkoutMethod === "CRYPTO" ? !cryptoOn : !bankOn)} onClick={createQuote} className={primaryButton + " mt-6"}>{buttonLabel(busy, "Create secure payment order")}</button>
         </section>}
 
         {step === "payment" && quote && <section>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-[#e8f2ea] px-3 py-1.5 text-[11px] font-bold text-[#30674d]">{isNigeria ? <Landmark size={13}/> : <Wallet size={13}/>} STEP 03 · {isNigeria ? "BANK TRANSFER" : "CRYPTO TRANSFER"}</div>
-              <h2 className="font-heading text-[27px] font-bold tracking-tight sm:text-[34px]">{isNigeria ? "Complete your bank transfer" : "Complete your crypto payment"}</h2>
+              <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-[#e8f2ea] px-3 py-1.5 text-[11px] font-bold text-[#30674d]">{bankPay ? <Landmark size={13}/> : <Wallet size={13}/>} STEP 03 · {bankPay ? "BANK TRANSFER" : "USDT TRANSFER"}</div>
+              <h2 className="font-heading text-[27px] font-bold tracking-tight sm:text-[34px]">{bankPay ? "Complete your bank transfer" : "Complete your USDT payment"}</h2>
             </div>
             <StatusDot tone={expired ? "red" : "amber"}>{expired ? "Quote expired" : "Awaiting payment"}</StatusDot>
           </div>
@@ -399,13 +431,13 @@ export default function ManualCheckout({ api, config, onClose }) {
 
           <div className="mt-5 rounded-[22px] border border-[#dbe6db] bg-white p-5 shadow-[0_4px_14px_rgba(30,63,43,.025)] sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5"><span className="rounded-xl bg-[#e6f1e9] p-2 text-[#286348]">{isNigeria ? <Landmark size={21}/> : <Wallet size={21}/>}</span>
-                <div><h3 className="font-heading text-[17px] font-bold">{isNigeria ? "Transfer to this account" : "Send to this wallet"}</h3><p className="text-[11px] text-[#637568]">Verified payment destination</p></div>
+              <div className="flex items-center gap-2.5"><span className="rounded-xl bg-[#e6f1e9] p-2 text-[#286348]">{bankPay ? <Landmark size={21}/> : <Wallet size={21}/>}</span>
+                <div><h3 className="font-heading text-[17px] font-bold">{bankPay ? "Transfer to this account" : "Send to this wallet"}</h3><p className="text-[11px] text-[#637568]">Verified payment destination</p></div>
               </div>
               <CopyButton value={instructions} title="Copy all details"/>
             </div>
             <div className="mt-4 border-t border-[#e7ede7]">
-              {isNigeria ? <>
+              {bankPay ? <>
                 <Detail label="Bank name" value={quote.details.bank_name}/>
                 <Detail label="Account holder" value={quote.details.account_name}/>
                 <Detail label="Account number" value={quote.details.account_number} featured/>
@@ -416,7 +448,7 @@ export default function ManualCheckout({ api, config, onClose }) {
               </>}
               <Detail label="Order reference" value={quote.reference}/>
             </div>
-            <p className="mt-3 rounded-xl bg-[#f7f7f0] p-3 text-[11px] leading-5 text-[#66735e]">{isNigeria
+            <p className="mt-3 rounded-xl bg-[#f7f7f0] p-3 text-[11px] leading-5 text-[#66735e]">{bankPay
               ? "Use the order reference in the transfer narration if your bank supports it. After paying, enter the account name you sent the money from."
               : "Use the exact token and network shown above. Wrong-network transfers may be irrecoverable. Network fees are separate."}</p>
           </div>
@@ -428,13 +460,13 @@ export default function ManualCheckout({ api, config, onClose }) {
           </div> : <>
             <div className="mt-6">
               <h3 className="font-heading text-[18px] font-bold">I've made the payment</h3>
-              <p className="mt-1 text-[12px] leading-5 text-[#5a6e62]">{isNigeria
+              <p className="mt-1 text-[12px] leading-5 text-[#5a6e62]">{bankPay
                 ? "Enter the account name the transfer was sent from so our team can match your payment."
                 : "Enter the blockchain transaction hash so our team can verify your payment."}</p>
-              <label className="mt-4 block text-[12px] font-bold text-[#344f41]">{isNigeria ? "Account name sent from" : "Blockchain transaction hash"}
-                <input value={referenceInput} onChange={(e) => setReferenceInput(e.target.value)} maxLength={isNigeria ? 80 : 180}
-                  autoComplete={isNigeria ? "name" : "off"} spellCheck={isNigeria}
-                  placeholder={isNigeria ? "Name on the account you paid from" : "Transaction hash from your wallet"}
+              <label className="mt-4 block text-[12px] font-bold text-[#344f41]">{bankPay ? "Account name sent from" : "Blockchain transaction hash"}
+                <input value={referenceInput} onChange={(e) => setReferenceInput(e.target.value)} maxLength={bankPay ? 80 : 180}
+                  autoComplete={bankPay ? "name" : "off"} spellCheck={bankPay}
+                  placeholder={bankPay ? "Name on the account you paid from" : "Transaction hash from your wallet"}
                   className={fieldClass}/>
               </label>
               <label className="mt-3 flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-[#bdcfbf] bg-[#fdfefd] px-4 py-4 text-[12px] font-semibold text-[#3e6650] hover:bg-[#f0f7f1]">
@@ -446,11 +478,11 @@ export default function ManualCheckout({ api, config, onClose }) {
                     uploadEvidence(chosen, event.target);
                   }}/>
               </label>
-              <p className="mt-3 text-[11px] leading-5 text-[#66786b]">{isNigeria
+              <p className="mt-3 text-[11px] leading-5 text-[#66786b]">{bankPay
                 ? "Photos are compressed on your phone before upload. A receipt does not confirm payment. We match the sender account name against the bank record before issuing your license."
                 : "A receipt or transaction hash does not automatically confirm payment. An authorized reviewer checks the blockchain before issuing your license."}</p>
               {error && <p role="alert" className="mt-3 rounded-xl bg-[#fff0eb] px-4 py-3 text-[12px] font-medium text-[#a1352b]">{error}</p>}
-              <button type="button" disabled={busy || referenceInput.trim().length < (isNigeria ? 2 : 5)} onClick={submit} className={primaryButton + " mt-5"}>{buttonLabel(busy, "Submit payment for verification")}</button>
+              <button type="button" disabled={busy || referenceInput.trim().length < (bankPay ? 2 : 5)} onClick={submit} className={primaryButton + " mt-5"}>{buttonLabel(busy, "Submit payment for verification")}</button>
             </div>
           </>}
         </section>}

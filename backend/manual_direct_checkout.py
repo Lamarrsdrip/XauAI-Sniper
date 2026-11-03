@@ -31,6 +31,7 @@ class Quote(BaseModel):
     buyer_email: str = Field(max_length=254)
     asset: str = ""
     network: str = ""
+    method: str = ""
 
 class Submitted(BaseModel):
     payment_reference: str | None = Field(default=None, max_length=180)
@@ -113,7 +114,15 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
             raise HTTPException(422, "Invalid email.")
         stamp = now()
         expiry = (stamp + timedelta(minutes=30)).isoformat()
-        method = "BANK" if country == "NG" else "CRYPTO"
+        method_req = (req.method or "").strip().upper()
+        if country != "NG":
+            if method_req == "BANK":
+                raise HTTPException(403, "Bank transfer is only available in Nigeria.")
+            method = "CRYPTO"
+        elif method_req == "CRYPTO":
+            method = "CRYPTO"
+        else:
+            method = "BANK"
         if method == "BANK":
             s = await get_settings()
             if not (cfg["bank_enabled"] and s.get("bank_transfer_enabled") and
@@ -137,8 +146,8 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
                        "fx_rate": str(fx), "rate_as_of": fx_date.isoformat()}
             formatted = f"NGN {Decimal(amount_minor)/100:,.2f}"
         else:
-            if not cfg["crypto_enabled"] or country not in cfg["crypto_countries"]:
-                raise HTTPException(403, "Crypto checkout not approved for this country.")
+            if not cfg["crypto_enabled"]:
+                raise HTTPException(403, "Crypto checkout is not available.")
             asset, network = req.asset.upper(), req.network.upper()
             wallet = next((w for w in cfg["wallets"] if w.get("asset") == asset and
                            w.get("network") == network and is_wallet(asset, network, str(w.get("address", "")))), None)
