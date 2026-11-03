@@ -43,8 +43,9 @@ describe("Premium manual gateway contract", () => {
     expect(checkout).toContain("localStorage.getItem(ORDER_KEY)");
     expect(checkout).toContain("Account name sent from");
     expect(checkout).toContain("sender_account_name");
-    expect(checkout).toContain("prepareReceipt");
-    expect(checkout).toContain("Preparing receipt");
+    expect(checkout).toContain("No receipt photo is required");
+    expect(checkout).not.toContain("type=\"file\"");
+    expect(checkout).not.toContain("/proof");
     expect(checkout).not.toContain("Bank transaction reference");
     expect(checkout).toContain("independently confirm receipt");
     expect(checkout).toContain("status === \"FULFILLED\"");

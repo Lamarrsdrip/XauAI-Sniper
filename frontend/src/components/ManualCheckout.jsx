@@ -1,12 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import {
   ArrowLeft, ArrowRight, Check, CheckCircle2, CircleAlert, Clock3,
   Copy, CreditCard, Globe2, Landmark, LoaderCircle, LockKeyhole, Mail,
-  MailCheck, ReceiptText, RefreshCw, Search, ShieldCheck, UploadCloud,
+  MailCheck, ReceiptText, RefreshCw, Search, ShieldCheck,
   Wallet, X
 } from "lucide-react";
-import { prepareReceipt } from "../receiptImage";
 
 // The backend is authoritative for country eligibility and supported networks.
 const COUNTRY_CODES = "AW AF AO AI AX AL AD AE AR AM AS AQ TF AG AU AT AZ BI BE BJ BQ BF BD BG BH BS BA BL BY BZ BM BO BR BB BN BT BV BW CF CA CC CH CL CN CI CM CD CG CK CO KM CV CR CU CW CX KY CY CZ DE DJ DM DK DO DZ EC EG ER EH ES EE ET FI FJ FK FR FO FM GA GB GE GG GH GI GN GP GM GW GQ GR GD GL GT GF GU GY HK HM HN HR HT HU ID IM IN IO IE IR IQ IS IL IT JM JE JO JP KZ KE KG KH KI KN KR KW LA LB LR LY LC LI LK LS LT LU LV MO MF MA MC MD MG MV MX MH MK ML MT MM ME MN MP MZ MR MS MQ MU MW MY YT NA NC NE NF NG NI NU NL NO NP NR NZ OM PK PA PN PE PH PW PG PL PR KP PT PY PS PF QA RE RO RU RW SA SD SN SG GS SH SJ SB SL SV SM SO PM RS SS ST SR SK SI SE SZ SX SC SY TC TD TG TH TJ TK TM TL TO TT TN TR TV TW TZ UG UA UM UY US UZ VA VC VE VG VI VN VU WF WS YE ZA ZM ZW".split(" ");
@@ -96,10 +95,6 @@ export default function ManualCheckout({ api, config, onClose }) {
   const [payMethod, setPayMethod] = useState(savedOrder?.quote?.method === "BANK" ? "BANK" : "CRYPTO");
   const [quote, setQuote] = useState(savedOrder?.quote || null);
   const [referenceInput, setReferenceInput] = useState(savedOrder?.referenceInput || "");
-  const [proofBusy, setProofBusy] = useState(false);
-  const [proofPhase, setProofPhase] = useState("");
-  const proofLock = useRef(false);
-  const [proofUploaded, setProofUploaded] = useState(Boolean(savedOrder?.proofUploaded));
   const [submittedAt, setSubmittedAt] = useState(savedOrder?.submittedAt || null);
   const [status, setStatus] = useState(savedOrder?.status || "");
   const [error, setError] = useState("");
@@ -135,11 +130,11 @@ export default function ManualCheckout({ api, config, onClose }) {
     if (!quote?.reference) return;
     const payload = {
       quote: customerQuote(quote), country, name, email, instructionsSent, payMethod,
-      referenceInput, proofUploaded, submittedAt, status,
+      referenceInput, submittedAt, status,
       step: step === "pending" ? "pending" : "payment",
     };
     try { localStorage.setItem(ORDER_KEY, JSON.stringify(payload)); } catch { /* Private mode can still complete checkout on screen. */ }
-  }, [quote, country, name, email, instructionsSent, referenceInput, proofUploaded, submittedAt, status, step, payMethod]);
+  }, [quote, country, name, email, instructionsSent, referenceInput, submittedAt, status, step, payMethod]);
 
   useEffect(() => {
     const key = (event) => { if (event.key === "Escape" && !busy) onClose(); };
@@ -160,7 +155,6 @@ export default function ManualCheckout({ api, config, onClose }) {
         const response = await axios.get(api + "/purchase/direct/" + encodeURIComponent(quote.reference) + "/status");
         if (!active) return;
         setStatus(response.data.status);
-        if (response.data.has_proof) setProofUploaded(true);
         if (response.data.submitted_at) setSubmittedAt(response.data.submitted_at);
         if (response.data.expires_at) setQuote((current) => current && current.expires_at !== response.data.expires_at ? { ...current, expires_at: response.data.expires_at } : current);
         if (response.data.status === "MANUAL_PENDING" || response.data.status === "MANUAL_EXPIRED") setStep("payment");
@@ -206,7 +200,6 @@ export default function ManualCheckout({ api, config, onClose }) {
       setNowMs(Date.now());
       setStatus(response.data.status);
       setReferenceInput("");
-      setProofUploaded(false);
       setStep("payment");
     } catch (err) { setError(err.response?.data?.detail || "Unable to create payment instructions. Please try again."); }
     finally { setBusy(false); }
@@ -243,46 +236,9 @@ export default function ManualCheckout({ api, config, onClose }) {
     } finally { setResendBusy(false); }
   }
 
-  async function uploadEvidence(file, input) {
-    if (!file || proofLock.current) return;
-    proofLock.current = true;
-    setError("");
-    let prepared;
-    try {
-      // Copy the photo before any state update. iOS drops the File if the input is disabled or cleared first.
-      const bytes = await file.arrayBuffer();
-      if (input) input.value = "";
-      const snapshot = new File([bytes], file.name || "receipt", { type: file.type || "" });
-      setProofBusy(true);
-      setProofPhase("prepare");
-      prepared = await prepareReceipt(snapshot);
-    } catch (err) {
-      setError(err.message || "Couldn't read that photo. Try a screenshot of the receipt.");
-      setProofPhase("");
-      setProofBusy(false);
-      proofLock.current = false;
-      return;
-    }
-    setProofPhase("upload");
-    try {
-      await axios.post(api + "/purchase/direct/" + encodeURIComponent(quote.reference) + "/proof",
-        { mime_type: prepared.mime_type, data_base64: prepared.data_base64 },
-        { timeout: 45000 });
-      setProofUploaded(true);
-    } catch (err) {
-      const detail = err.response?.data?.detail;
-      if (err.code === "ECONNABORTED") setError("Upload timed out. Check your connection and try the receipt again.");
-      else setError(typeof detail === "string" ? detail : "Receipt could not be attached. You can still submit the account name.");
-    } finally {
-      setProofPhase("");
-      setProofBusy(false);
-      proofLock.current = false;
-    }
-  }
-
   function newQuote() {
     try { localStorage.removeItem(ORDER_KEY); } catch { /* ignore */ }
-    setQuote(null); setReferenceInput(""); setStatus(""); setProofUploaded(false); setInstructionsSent(false);
+    setQuote(null); setReferenceInput(""); setStatus(""); setInstructionsSent(false);
     setSubmittedAt(null); setResendMessage(""); setError(""); setAssetNetwork(""); setPayMethod(bankOn ? "BANK" : "CRYPTO"); setStep("details");
   }
 
@@ -469,18 +425,9 @@ export default function ManualCheckout({ api, config, onClose }) {
                   placeholder={bankPay ? "Name on the account you paid from" : "Transaction hash from your wallet"}
                   className={fieldClass}/>
               </label>
-              <label className="mt-3 flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-[#bdcfbf] bg-[#fdfefd] px-4 py-4 text-[12px] font-semibold text-[#3e6650] hover:bg-[#f0f7f1]">
-                {proofPhase ? <LoaderCircle size={20} className="shrink-0 animate-spin"/> : <UploadCloud size={20} className="shrink-0"/>}
-                <span className="flex-1">{proofPhase === "prepare" ? "Preparing receipt…" : proofPhase === "upload" ? "Uploading receipt…" : proofUploaded ? "Receipt attached · not yet verified" : "Attach receipt photo"}</span>
-                <input type="file" accept="image/*,.heic,.heif,.jpg,.jpeg,.png,.webp" className="sr-only" disabled={proofBusy}
-                  onChange={(event) => {
-                    const chosen = event.target.files && event.target.files[0];
-                    uploadEvidence(chosen, event.target);
-                  }}/>
-              </label>
               <p className="mt-3 text-[11px] leading-5 text-[#66786b]">{bankPay
-                ? "Photos are compressed on your phone before upload. A receipt does not confirm payment. We match the sender account name against the bank record before issuing your license."
-                : "A receipt or transaction hash does not automatically confirm payment. An authorized reviewer checks the blockchain before issuing your license."}</p>
+                ? "We match the account name against the bank transfer before issuing your license. No receipt photo is required."
+                : "An authorized reviewer checks the blockchain transaction hash before issuing your license. No receipt photo is required."}</p>
               {error && <p role="alert" className="mt-3 rounded-xl bg-[#fff0eb] px-4 py-3 text-[12px] font-medium text-[#a1352b]">{error}</p>}
               <button type="button" disabled={busy || referenceInput.trim().length < (bankPay ? 2 : 5)} onClick={submit} className={primaryButton + " mt-5"}>{buttonLabel(busy, "Submit payment for verification")}</button>
             </div>

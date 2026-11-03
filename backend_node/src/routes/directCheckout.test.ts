@@ -217,21 +217,16 @@ describe("USD-first manual checkout HTTP and fulfillment lifecycle", () => {
     expect(state.notified.filter((s) => s === "pin")).toHaveLength(1);
   });
 
-  it("optional image proof is strictly validated and never counts as verification", async () => {
+  it("receipt uploads are refused and never stored", async () => {
     const order = (await quoteBank(app)).json();
     const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-    const post = (mime_type: string, data_base64: string) => app.inject({
+    const response = await app.inject({
       method: "POST", url: "/purchase/direct/" + order.reference + "/proof",
-      payload: { mime_type, data_base64 },
+      payload: { mime_type: "image/png", data_base64: png },
     });
-    expect((await post("image/png", Buffer.from("<svg>unsafe</svg>").toString("base64"))).statusCode).toBe(422);
-    expect((await post("image/png", png)).statusCode).toBe(200);
-    const queue = await app.inject({ method: "GET", url: "/admin/direct-checkout/orders" });
-    expect(queue.statusCode).toBe(200);
-    expect(queue.json().entries[0].has_proof).toBe(true);
-    expect(queue.body).not.toContain("evidence_image");
-    const detail = await app.inject({ method: "GET", url: "/admin/direct-checkout/" + order.reference });
-    expect(detail.json().order.evidence_image).toContain("data:image/png;base64,");
+    expect(response.statusCode).toBe(410);
+    const tx = await state.db.collection("payment_transactions").findOne({ reference: order.reference });
+    expect(tx?.["evidence_image"]).toBeUndefined();
     expect(state.db.collection("pin_licenses").docs).toHaveLength(0);
   });
 

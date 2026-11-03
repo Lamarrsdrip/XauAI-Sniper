@@ -45,7 +45,7 @@ export async function sendDirectManualPaymentInstructions(order: DirectManualPay
     '<strong>Order reference:</strong> ' + escapeHtml(order.reference) + '<br>' +
     '<strong>Payment window closes:</strong> ' + escapeHtml(order.expiresAt) + ' (UTC)</p>' +
     '<p style="font-size:13px;line-height:1.7;color:#475a53;">' + (bank
-      ? "After transferring, return to the open XauCloud checkout and enter the account name you sent the money from. You can also attach a photo of the receipt. "
+      ? "After transferring, return to the open XauCloud checkout and enter the account name you sent the money from. "
       : "After transferring, return to the open XauCloud checkout and submit the blockchain transaction hash. ") +
     "Your payment is independently checked by our team before a license can be issued. Never share passwords or wallet seed phrases.</p>" +
     '<p style="font-size:12px;color:#5c6f67;margin-top:24px;">If the payment window has expired, do not reuse the old quote; contact support if you already transferred.</p>' +

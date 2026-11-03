@@ -44,13 +44,6 @@ function normalizeSenderName(raw: string | undefined): string | null {
   }
   return letters >= 2 ? name : null;
 }
-const proofSchema = z.object({ mime_type: z.enum(["image/png", "image/jpeg", "image/webp"]), data_base64: z.string().min(20).max(2_800_000) });
-function isValidProof(bytes: Buffer, mime: string): boolean {
-  if (bytes.length === 0 || bytes.length > 2_000_000) return false;
-  if (mime === "image/png") return bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
-  if (mime === "image/jpeg") return bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
-  return bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP";
-}
 const reviewSchema = z.object({
   evidence_reference: z.string().trim().min(6).max(200),
   verification_notes: z.string().trim().min(12).max(1500),
@@ -290,31 +283,9 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
     return { reference, status: "MANUAL_SUBMITTED", submitted_at: submitted?.["submitted_at"] ?? null };
   });
 
-  // Optional evidence is supplementary only. Neither upload nor submission can approve an order.
-  app.post("/purchase/direct/:reference/proof", { bodyLimit: 3_000_000 }, async (request, reply) => {
-    rateLimit("direct_proof:" + clientIp(request), 6, 600);
-    const { reference } = request.params as { reference: string };
-    const req = proofSchema.parse(request.body);
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(req.data_base64)) {
-      return reply.code(422).send({ detail: "Unsupported image encoding." });
-    }
-    const bytes = Buffer.from(req.data_base64, "base64");
-    if (bytes.toString("base64") !== req.data_base64 || !isValidProof(bytes, req.mime_type)) {
-      return reply.code(422).send({ detail: "Image is invalid or exceeds the 2 MB limit." });
-    }
-    const tx = await getDb().collection("payment_transactions").findOne(
-      { reference, provider: "MANUAL_DIRECT" }, { projection: { payment_status: 1, expires_at: 1, reference: 1 } });
-    if (!tx) return reply.code(404).send({ detail: "Order not found." });
-    const status = await effectiveStatus(tx);
-    if (!["MANUAL_PENDING", "MANUAL_SUBMITTED"].includes(status)) {
-      return reply.code(409).send({ detail: "Evidence cannot be attached to a closed order." });
-    }
-    const result = await getDb().collection("payment_transactions").updateOne(
-      { reference, provider: "MANUAL_DIRECT", payment_status: status },
-      { $set: { evidence_image: "data:" + req.mime_type + ";base64," + req.data_base64,
-                evidence_mime: req.mime_type, evidence_uploaded_at: utc() } });
-    if (!result.modifiedCount) return reply.code(409).send({ detail: "Order state changed. Refresh." });
-    return { status: "stored", verified: false };
+  // Receipt images are not accepted. Matching uses the sender account name or transaction hash.
+  app.post("/purchase/direct/:reference/proof", { bodyLimit: 1024 }, async (_request, reply) => {
+    return reply.code(410).send({ detail: "Receipt uploads are no longer accepted. Submit the account name or transaction hash instead." });
   });
 
   app.get("/purchase/direct/:reference/status", async (request, reply) => {
