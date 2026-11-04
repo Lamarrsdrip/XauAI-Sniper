@@ -51,3 +51,7 @@ passwords, or live-trading access.
   no customer/account identifiers in the payload.
 - Confirm real Agent.family orders can deliver and settle with owner wallet
   authorization. Offline tests are not proof of live settlement.
+
+## Paid orders
+
+The snapshot above is the market input for paid signal and intelligence orders. Order state, draft listings and the owner operations API live under `backend_node/src/services/agentFamily/` and `GET /api/admin/agent-family/overview`. See `docs/AGENT_FAMILY_COMMERCE.md`. Marketplace polling stays off until `XAUCLOUD_AGENT_FAMILY_ENABLED=true`. A connected terminal is still not a backtest runner; strategy backtest diagnostics stay unpublished.
