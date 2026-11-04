@@ -46,8 +46,8 @@ export async function registerAdminAgentFamilyRoutes(app: FastifyInstance): Prom
   app.post("/admin/agent-family/config/test", { preHandler: requireAdmin }, async (_request, reply) => {
     reply.header("Cache-Control", "no-store");
     const config = await getAgentFamilyConfig();
-    const client = createAgentFamilyClient(config);
-    if (!client) return reply.code(409).send({ connected: false, detail: "Enable integration and configure your Agent ID and access token first." });
+    const client = createAgentFamilyClient(config, undefined, true);
+    if (!client) return reply.code(409).send({ connected: false, detail: "Configure your Agent ID and access token before testing the connection." });
     try {
       // Safe, read-only authenticated check. Does not prove wallet ownership
       // or that services have been published.
