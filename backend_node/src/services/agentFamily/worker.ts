@@ -2,7 +2,8 @@ import { fulfillService, type MarketContext } from "./fulfillment.js";
 import { advanceOrder } from "./advance.js";
 import { loadMarketContext } from "./marketContext.js";
 import { findOrder, insertOrderIfAbsent, saveOrder } from "./store.js";
-import { termixFromEnv, type TermixClient } from "./termix.js";
+import type { TermixClient } from "./termix.js";
+import { createAgentFamilyClient, getAgentFamilyConfig } from "./config.js";
 import { prepareOrderIntent, prepareSubmitDelivery } from "./delivery.js";
 import { blankOrder, type CommerceOrder, type RemoteOrderView } from "./orderEngine.js";
 import { AGENT_FAMILY_CATEGORY, publishableCatalog } from "./catalog.js";
@@ -65,8 +66,9 @@ export async function syncMarketplaceOrders(client: TermixClient, market: Market
 }
 
 export async function pollOnce(): Promise<{ ok: true; seen: number; saved: number; conflicts: number } | { ok: false; reason: string }> {
-  if (process.env["XAUCLOUD_AGENT_FAMILY_ENABLED"] !== "true") return { ok: false, reason: "MARKETPLACE_DISABLED" };
-  const client = termixFromEnv();
+  const config = await getAgentFamilyConfig();
+  if (!config.enabled) return { ok: false, reason: "MARKETPLACE_DISABLED" };
+  const client = createAgentFamilyClient(config);
   if (!client) return { ok: false, reason: "MISSING_TERMIX_ACCESS_TOKEN" };
   if (polling) return { ok: false, reason: "POLL_ALREADY_RUNNING" };
   polling = true;
@@ -79,7 +81,7 @@ export async function pollOnce(): Promise<{ ok: true; seen: number; saved: numbe
 }
 
 export function startAgentFamilyPoller(): void {
-  if (timer || process.env["XAUCLOUD_AGENT_FAMILY_ENABLED"] !== "true") return;
+  if (timer) return;
   const ms = Math.max(5000, Number(process.env["XAUCLOUD_AGENT_FAMILY_POLL_MS"] || 15000));
   timer = setInterval(() => {
     void pollOnce().catch((error: unknown) => {
@@ -99,9 +101,9 @@ export interface ListingSyncReport {
 }
 
 /** Creates DRAFT listings only. Publishing requires XAUCLOUD_AGENT_FAMILY_PUBLISH=true and a cover URL. */
-export async function syncListings(client: TermixClient, agentId: string): Promise<ListingSyncReport> {
-  const report: ListingSyncReport = { enabled: true, publish: process.env["XAUCLOUD_AGENT_FAMILY_PUBLISH"] === "true", created: [], alreadyPresent: [], blocked: [] };
-  const cover = (process.env["XAUCLOUD_AGENT_FAMILY_COVER_URL"] || "").trim();
+export async function syncListings(client: TermixClient, agentId: string, options: { publish: boolean; cover: string }): Promise<ListingSyncReport> {
+  const report: ListingSyncReport = { enabled: true, publish: options.publish, created: [], alreadyPresent: [], blocked: [] };
+  const cover = options.cover.trim();
   const page = asRecord(await client.request("GET", "/api/v1/listings", undefined, { providerAgentId: agentId, pageSize: "100" }));
   const items = Array.isArray(page?.["items"]) ? page!["items"] as unknown[] : [];
   const tags = new Set(items.map((item) => String(asRecord(item)?.["skillTag"] ?? "")));
