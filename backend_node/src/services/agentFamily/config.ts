@@ -128,8 +128,8 @@ export async function saveAgentFamilyConfig(patch: AgentFamilyConfigPatch): Prom
   return getAgentFamilyConfig();
 }
 
-export function createAgentFamilyClient(config: AgentFamilyConfig, fetchImpl?: typeof fetch): TermixClient | null {
-  if (!config.enabled || !config.accessToken || !config.agentId) return null;
+export function createAgentFamilyClient(config: AgentFamilyConfig, fetchImpl?: typeof fetch, allowDisabled = false): TermixClient | null {
+  if ((!config.enabled && !allowDisabled) || !config.accessToken || !config.agentId) return null;
   return new TermixClient({
     baseUrl: config.baseUrl,
     accessToken: config.accessToken,
