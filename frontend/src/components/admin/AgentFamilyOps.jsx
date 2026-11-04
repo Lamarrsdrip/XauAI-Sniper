@@ -14,14 +14,23 @@ export default function AgentFamilyOps({ api }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [tx, setTx] = useState({});
+  const [config, setConfig] = useState(null);
+  const [form, setForm] = useState(null);
+  const [accessToken, setAccessToken] = useState("");
+  const [refreshToken, setRefreshToken] = useState("");
+  const [busy, setBusy] = useState("");
+  const [connection, setConnection] = useState(null);
   const load = useCallback(async () => {
     try {
-      const [overview, list] = await Promise.all([
+      const [overview, list, settings] = await Promise.all([
         apiClient.get(`${api}/admin/agent-family/overview`),
         apiClient.get(`${api}/admin/agent-family/orders`),
+        apiClient.get(`${api}/admin/agent-family/config`),
       ]);
       setData(overview.data);
       setOrders(list.data.orders || []);
+      setConfig(settings.data);
+      setForm((old) => old ?? { enabled: settings.data.enabled, publishEnabled: settings.data.publishEnabled, agentId: settings.data.agentId || "", coverUrl: settings.data.coverUrl || "" });
       setError("");
     } catch (err) {
       setError(err.response?.data?.detail || "Agent.family operations could not be loaded.");
@@ -40,6 +49,51 @@ export default function AgentFamilyOps({ api }) {
     }
   }
 
+  async function saveConfiguration(event) {
+    event.preventDefault(); setError(""); setNotice(""); setBusy("save");
+    try {
+      const payload = { ...form };
+      if (accessToken.trim()) payload.accessToken = accessToken.trim();
+      if (refreshToken.trim()) payload.refreshToken = refreshToken.trim();
+      const response = await apiClient.put(`${api}/admin/agent-family/config`, payload);
+      setConfig(response.data.config);
+      setForm({ enabled: response.data.config.enabled, publishEnabled: response.data.config.publishEnabled, agentId: response.data.config.agentId, coverUrl: response.data.config.coverUrl });
+      setAccessToken(""); setRefreshToken("");
+      setNotice("Agent.family settings saved securely. Marketplace actions follow the switches you selected.");
+      await load();
+    } catch (err) {
+      setError(err.response?.data?.detail || "Could not save Agent.family configuration.");
+    } finally { setBusy(""); }
+  }
+
+  async function testConnection() {
+    setBusy("test"); setError(""); setNotice("");
+    try {
+      const response = await apiClient.post(`${api}/admin/agent-family/config/test`);
+      setConnection(response.data);
+      setNotice(response.data.detail || "Connection checked.");
+    } catch (err) {
+      setConnection({ connected: false });
+      setError(err.response?.data?.detail || "Agent.family connection test failed.");
+    } finally { setBusy(""); }
+  }
+
+  async function revokeCredentials() {
+    if (!window.confirm("Disconnect Agent.family, disable publishing and clear the stored connection credentials?")) return;
+    setBusy("revoke"); setError(""); setNotice("");
+    try {
+      const response = await apiClient.put(`${api}/admin/agent-family/config`, {
+        enabled: false, publishEnabled: false, clearAccessToken: true, clearRefreshToken: true,
+      });
+      setConfig(response.data.config);
+      setForm({ enabled: false, publishEnabled: false, agentId: response.data.config.agentId, coverUrl: response.data.config.coverUrl });
+      setAccessToken(""); setRefreshToken(""); setConnection(null);
+      setNotice("Admin-managed credentials cleared and Agent.family processing disabled. Revoke old sessions in Agent.family as well.");
+      await load();
+    } catch (err) { setError(err.response?.data?.detail || "Could not disconnect."); }
+    finally { setBusy(""); }
+  }
+
   if (!data) return <div className="text-sm text-white/50">{error || "Loading Agent.family operations…"}</div>;
   const revenue = data.revenue || {};
   return (
@@ -48,6 +102,65 @@ export default function AgentFamilyOps({ api }) {
         <h2 className="font-heading text-2xl font-semibold text-white">Agent.family</h2>
         <p className="mt-1 max-w-3xl text-sm text-white/45">Paid research orders use owner-approved MT5 sources already connected to XauCloud. Live trading stays off. Revenue counts only after marketplace settlement, and sandbox rows are excluded.</p>
       </div>
+      <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-4 sm:p-6" aria-label="Agent.family configuration">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold text-white">Connect Agent.family</h3>
+            <p className="mt-1 text-xs text-white/50">Register and authorize your wallet on Agent.family, then enter your provider details here. Never paste a wallet seed phrase or private key.</p>
+          </div>
+          <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${config?.connectionReady ? "border-emerald-500/40 text-emerald-300" : "border-amber-400/30 text-amber-200"}`}>
+            {config?.connectionReady ? "Credentials saved" : "Not connected"}
+          </span>
+        </div>
+        <form className="mt-5 space-y-4" onSubmit={saveConfiguration}>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <label className="block space-y-1 text-xs text-white/70">
+              <span>Agent.family Agent ID</span>
+              <input value={form?.agentId || ""} onChange={(e) => setForm((v) => ({ ...v, agentId: e.target.value }))} maxLength={128}
+                autoComplete="off" placeholder="Provider agent ID" className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white placeholder:text-white/25" />
+            </label>
+            <label className="block space-y-1 text-xs text-white/70">
+              <span>Listing cover image (HTTPS)</span>
+              <input type="url" value={form?.coverUrl || ""} onChange={(e) => setForm((v) => ({ ...v, coverUrl: e.target.value }))}
+                placeholder="https://xaucloud.io/.../cover.png" className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white placeholder:text-white/25" />
+            </label>
+            <label className="block space-y-1 text-xs text-white/70">
+              <span>TermiX access token {config?.accessTokenConfigured ? "· already stored" : "· required"}</span>
+              <input type="password" value={accessToken} onChange={(e) => setAccessToken(e.target.value)} autoComplete="new-password"
+                placeholder={config?.accessTokenConfigured ? "Leave blank to keep existing token" : "Paste access token"} className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white placeholder:text-white/25" />
+            </label>
+            <label className="block space-y-1 text-xs text-white/70">
+              <span>Refresh token {config?.refreshTokenConfigured ? "· already stored" : "· optional"}</span>
+              <input type="password" value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} autoComplete="new-password"
+                placeholder="Leave blank to keep existing token" className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white placeholder:text-white/25" />
+            </label>
+          </div>
+          <div className="flex flex-wrap gap-5 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-white/80">
+              <input type="checkbox" checked={!!form?.enabled} onChange={(e) => setForm((v) => ({ ...v, enabled: e.target.checked, publishEnabled: e.target.checked ? v.publishEnabled : false }))} />
+              Enable paid-order processing
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-white/80">
+              <input type="checkbox" checked={!!form?.publishEnabled} disabled={!form?.enabled} onChange={(e) => setForm((v) => ({ ...v, publishEnabled: e.target.checked }))} />
+              Allow publishing service listings
+            </label>
+          </div>
+          <p className="text-xs text-white/40">Publishing is a separate opt-in. Disabled services remain unpublished. Wallet signatures are still completed using your connected Agent.family wallet—not by this server. Approved MT5 sources are configured in XauCloud's existing signal-source settings.</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="submit" disabled={!!busy || !form} className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-black disabled:opacity-50">
+              {busy === "save" ? "Saving…" : "Save configuration"}
+            </button>
+            <button type="button" disabled={!!busy} onClick={testConnection} className="rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+              {busy === "test" ? "Checking…" : "Test connection"}
+            </button>
+            <button type="button" disabled={!!busy} onClick={revokeCredentials} className="rounded-xl border border-rose-400/30 px-4 py-2 text-sm text-rose-200 disabled:opacity-50">
+              Disconnect
+            </button>
+          </div>
+          {connection?.connected && <p className="text-xs text-emerald-300">TermiX authenticated API reachable. Registration ownership, funded orders, and settlement are not verified by this test.</p>}
+          {config?.updatedAt && <p className="text-[11px] text-white/35">Settings last updated: {new Date(config.updatedAt).toLocaleString()}</p>}
+        </form>
+      </section>
       <div className="flex flex-wrap gap-2">
         <button type="button" className="rounded-xl border border-white/15 px-3 py-2 text-xs font-bold" onClick={async () => {
           setError(""); setNotice("");
