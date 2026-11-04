@@ -85,6 +85,7 @@ export async function mirrorSubscriberSignal(account: string, input: SubscriberS
   const db = getDb();
   const nowIso = new Date().toISOString();
   const doc = {
+    source_account: account,
     signal_id: input.signal_id,
     engine: input.engine,
     symbol: input.symbol,
@@ -200,7 +201,7 @@ export async function mirrorSubscriberM10Evaluation(account: string, m10: Record
 
   const db = getDb();
   const collection = db.collection("subscriber_signals");
-  const latest = await collection.findOne({ engine: "M10_ENGINE" }, { sort: { updated_at: -1 } });
+  const latest = await collection.findOne({ engine: "M10_ENGINE", source_account: account }, { sort: { updated_at: -1 } });
 
   const nowIso = new Date().toISOString();
   const evidenceFields = buildM10EvidenceFields(m10, decision);
@@ -222,7 +223,7 @@ export async function mirrorSubscriberM10Evaluation(account: string, m10: Record
     // above), so it's refreshed here too; created_at (last state change)
     // and effective_at are the only fields left untouched.
     await collection.updateOne(
-      { signal_id: latest!["signal_id"], engine: "M10_ENGINE" },
+      { signal_id: latest!["signal_id"], engine: "M10_ENGINE", source_account: account },
       { $set: { ...evidenceFields, direction, last_evaluated_at: nowIso, updated_at: nowIso } },
     );
     return;
@@ -235,6 +236,7 @@ export async function mirrorSubscriberM10Evaluation(account: string, m10: Record
   const signalId = String(m10["evidence_id"] ?? m10["candidate_id"] ?? `${String(m10["bar_time"] ?? "")}-${direction}-${status}`);
   const effectiveAt = String(eventTime ?? m10["bar_time"] ?? nowIso);
   const doc = {
+    source_account: account,
     signal_id: signalId,
     engine: "M10_ENGINE" as const,
     symbol: "XAUUSD",
@@ -254,7 +256,7 @@ export async function mirrorSubscriberM10Evaluation(account: string, m10: Record
     updated_at: nowIso,
   };
   await collection.updateOne(
-    { signal_id: signalId, engine: "M10_ENGINE" },
+    { signal_id: signalId, engine: "M10_ENGINE", source_account: account },
     { $set: doc, $setOnInsert: { created_at: nowIso } },
     { upsert: true },
   );
