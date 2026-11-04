@@ -109,6 +109,16 @@ export async function syncListings(client: TermixClient, agentId: string, option
   const tags = new Set(items.map((item) => String(asRecord(item)?.["skillTag"] ?? "")));
   for (const service of publishableCatalog()) {
     if (tags.has(service.skillTag)) {
+      const existing = items.map(asRecord).find((item) => String(item?.["skillTag"] ?? "") === service.skillTag);
+      const existingId = String(existing?.["id"] ?? "");
+      const status = String(existing?.["status"] ?? "").toUpperCase();
+      if (report.publish && existingId && !["PUBLISHED", "ACTIVE", "LISTED"].includes(status)) {
+        try {
+          await client.request("POST", `/api/v1/listings/${encodeURIComponent(existingId)}/publish`);
+        } catch (error) {
+          report.blocked.push(`${service.skillTag}: publish failed - ${error instanceof Error ? error.message : "unknown error"}`);
+        }
+      }
       report.alreadyPresent.push(service.skillTag);
       continue;
     }
