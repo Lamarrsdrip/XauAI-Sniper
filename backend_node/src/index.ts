@@ -68,6 +68,7 @@ import { registerAdminMonthlyReportRoutes } from "./routes/admin/monthlyReport.j
 import { registerAdminXPostingRoutes } from "./routes/admin/xPosting.js";
 import { registerCloudPerformanceAnalyticsRoutes } from "./routes/cloud/performanceAnalytics.js";
 import { registerLocalAiRoutes } from "./routes/localAi.js";
+import { registerAgentFamilySourceRoutes } from "./routes/agentFamily.js";
 import { hourlyGenerationTick } from "./services/marketOutlookHourlyTick.js";
 import { registerAcademyRoutes } from "./routes/cloud/academy.js";
 import { registerAcademyCourseRoutes } from "./routes/cloud/academyCourses.js";
@@ -260,6 +261,7 @@ async function main(): Promise<void> {
       await registerAdminXPostingRoutes(api);
       await registerCloudPerformanceAnalyticsRoutes(api);
       await registerLocalAiRoutes(api);
+      await registerAgentFamilySourceRoutes(api);
       await registerAcademyRoutes(api);
       await registerAcademyCourseRoutes(api);
       await registerAcademyVerifyRoutes(api);
