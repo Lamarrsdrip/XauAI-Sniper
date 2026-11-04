@@ -85,6 +85,7 @@ export async function mirrorSubscriberSignal(account: string, input: SubscriberS
   const db = getDb();
   const nowIso = new Date().toISOString();
   const doc = {
+    source_account: account,
     signal_id: input.signal_id,
     engine: input.engine,
     symbol: input.symbol,
