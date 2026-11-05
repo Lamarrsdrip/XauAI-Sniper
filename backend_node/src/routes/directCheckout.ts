@@ -48,6 +48,9 @@ const reviewSchema = z.object({
   evidence_reference: z.string().trim().min(6).max(200),
   verification_notes: z.string().trim().min(12).max(1500),
 });
+const rejectionSchema = z.object({
+  verification_notes: z.string().trim().min(12).max(1500),
+});
 const walletSchema = z.object({ asset: z.enum(["USDT", "USDC"]), network: z.enum(["ERC20", "TRC20"]), address: z.string().trim().max(256) });
 const adminConfigSchema = z.object({
   price_usd_cents: z.number().int().positive().max(100_000_000).optional(),
@@ -108,6 +111,102 @@ export async function ensureDirectCheckoutIndexes(): Promise<void> {
     { provider: 1, submitted_reference: 1 },
     { unique: true, partialFilterExpression: { provider: "MANUAL_DIRECT", submitted_reference: { $type: "string" } } },
   );
+  // A crash after license issuance must never allow a second PIN for this order.
+  await getDb().collection("pin_licenses").createIndex(
+    { payment_ref: 1 },
+    { unique: true, partialFilterExpression: { provider: "MANUAL_DIRECT", payment_ref: { $type: "string" } } },
+  );
+}
+
+
+const LICENSE_PIN_PATTERN = /^ASE-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
+const DELIVERY_LEASE_MS = 10 * 60_000;
+
+function directLicenseMatches(tx: Record<string, unknown>, license: Record<string, unknown> | null): boolean {
+  return Boolean(license && LICENSE_PIN_PATTERN.test(String(license["pin"] || "")) &&
+    String(license["buyer_email"] || "").trim().toLowerCase() === String(tx["buyer_email"] || "").trim().toLowerCase() &&
+    license["is_active"] === true && license["payment_ref"] === tx["reference"]);
+}
+
+async function ensureDirectLicense(tx: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const reference = String(tx["reference"]);
+  const db = getDb();
+  let existing = await db.collection("pin_licenses").findOne({ payment_ref: reference });
+  if (existing) {
+    if (!directLicenseMatches(tx, existing)) throw new Error("Existing license does not match the approved order. Requires manual investigation.");
+    return existing;
+  }
+  let pin = generateUniquePin();
+  // Check the separate PIN uniqueness constraint in addition to the payment_ref index.
+  while (await db.collection("pin_licenses").findOne({ pin })) pin = generateUniquePin();
+  const doc = {
+    id: randomUUID(), pin, buyer_name: tx["buyer_name"], buyer_email: tx["buyer_email"],
+    is_active: true, is_used: false, activated_at: null, mt5_account: null,
+    created_at: utc(), notes: "Verified manual direct " + tx["method"] + " - " + reference,
+    payment_ref: reference, provider: "MANUAL_DIRECT",
+  };
+  try { await db.collection("pin_licenses").insertOne(doc); }
+  catch (err) {
+    if (!(err instanceof MongoServerError && err.code === 11000)) throw err;
+  }
+  existing = await db.collection("pin_licenses").findOne({ payment_ref: reference });
+  if (!directLicenseMatches(tx, existing)) throw new Error("License issuance could not be verified.");
+  return existing!;
+}
+
+async function deliverDirectLicenseEmail(app: FastifyInstance, tx: Record<string, unknown>, force = false): Promise<string> {
+  const db = getDb();
+  const reference = String(tx["reference"]);
+  const license = await db.collection("pin_licenses").findOne({ payment_ref: reference });
+  if (!directLicenseMatches(tx, license)) throw new Error("Cannot send a license email: valid purchased license missing.");
+  const allowed = force ? ["SENT", "PENDING", "RETRYABLE"] : ["PENDING", "RETRYABLE"];
+  const staleBefore = new Date(Date.now() - DELIVERY_LEASE_MS).toISOString();
+  const claim = await db.collection("payment_transactions").updateOne(
+    { provider: "MANUAL_DIRECT", reference, payment_status: "FULFILLED",
+      $or: [{ fulfillment_email_status: { $in: allowed } },
+        { fulfillment_email_status: "SENDING", fulfillment_email_claimed_at: { $lt: staleBefore } }] },
+    { $set: { fulfillment_email_status: "SENDING", fulfillment_email_claimed_at: utc() } },
+  );
+  if (!claim.modifiedCount) return "ALREADY_SENDING_OR_NOT_ELIGIBLE";
+  let sent = false;
+  try {
+    sent = await sendPinEmail(String(tx["buyer_email"]), String(tx["buyer_name"]), String(license!["pin"]));
+    await recordFulfillmentEmailResult(reference, String(tx["buyer_name"]), String(tx["buyer_email"]), String(license!["pin"]), sent);
+  } catch (err) { app.log.error({ err, reference }, "Direct license email attempt failed"); }
+  await db.collection("payment_transactions").updateOne(
+    { provider: "MANUAL_DIRECT", reference, fulfillment_email_status: "SENDING" },
+    { $set: { fulfillment_email_status: sent ? "SENT" : "RETRYABLE",
+      fulfillment_email_attempted_at: utc() } },
+  );
+  return sent ? "SENT" : "RETRYABLE";
+}
+
+async function completeDirectFulfillment(app: FastifyInstance, tx: Record<string, unknown>): Promise<Record<string, string>> {
+  const db = getDb();
+  const reference = String(tx["reference"]);
+  try {
+    const license = await ensureDirectLicense(tx);
+    const finished = await db.collection("payment_transactions").updateOne(
+      { provider: "MANUAL_DIRECT", reference, payment_status: "FULFILLING" },
+      { $set: { payment_status: "FULFILLED", pin_generated: license["pin"],
+        fulfilled_at: utc(), fulfillment_email_status: "PENDING" } },
+    );
+    if (!finished.modifiedCount) throw new Error("Order changed while license fulfillment was completing.");
+    const current = await db.collection("payment_transactions").findOne({ provider: "MANUAL_DIRECT", reference });
+    const emailStatus = await deliverDirectLicenseEmail(app, current!);
+    try {
+      await notifyAdminNewSale(reference, String(tx["buyer_name"]), String(tx["buyer_email"]),
+        usdFormatted(Number(tx["price_usd_cents"])), String(license["pin"]), "Manual " + tx["method"],
+        "XauCloud EA license", String(tx["verified_external_reference"] || ""));
+    } catch (err) { app.log.error({ err, reference }, "Direct payment admin notification failed"); }
+    return { status: "FULFILLED", license_status: "ISSUED", fulfillment_email_status: emailStatus };
+  } catch (err) {
+    await db.collection("payment_transactions").updateOne(
+      { provider: "MANUAL_DIRECT", reference, payment_status: "FULFILLING" },
+      { $set: { fulfillment_failure_at: utc(),
+        fulfillment_error: "License issuance could not be completed; retry or investigate." } });
+    throw err;
+  }
 }
 
 export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promise<void> {
@@ -343,6 +442,8 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
     for (const tx of entries) {
       tx["payment_status"] = await effectiveStatus(tx);
       tx["has_proof"] = Boolean(tx["evidence_image"] || tx["evidence_uploaded_at"]);
+      const license = await getDb().collection("pin_licenses").findOne({ payment_ref: tx["reference"] });
+      tx["license_status"] = !license ? "NOT_ISSUED" : directLicenseMatches(tx, license) ? "ISSUED" : "REQUIRES_REVIEW";
       delete tx["evidence_image"];
     }
     return { entries };
@@ -360,73 +461,90 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
     const { reference } = request.params as { reference: string };
     const req = reviewSchema.parse(request.body);
     const admin = (request as typeof request & { admin: Record<string, unknown> }).admin;
-    const tx = await getDb().collection("payment_transactions").findOne(
+    const db = getDb();
+    const tx = await db.collection("payment_transactions").findOne(
       { reference, provider: "MANUAL_DIRECT" }, { projection: { _id: 0 } });
     if (!tx) return reply.code(404).send({ detail: "Order not found." });
-    if (tx["payment_status"] === "FULFILLED") return { status: "already_fulfilled" };
-    if (tx["payment_status"] !== "MANUAL_SUBMITTED" && tx["payment_status"] !== "FULFILLING") {
-      return reply.code(409).send({ detail: "Only independently verified submissions can be approved." });
+    if (tx["payment_status"] === "FULFILLED") {
+      const license = await db.collection("pin_licenses").findOne({ payment_ref: reference });
+      if (!directLicenseMatches(tx, license)) return reply.code(409).send({ detail: "Order marked fulfilled but license verification failed. Use recovery, not a second approval." });
+      return { status: "already_fulfilled", license_status: "ISSUED",
+        fulfillment_email_status: String(tx["fulfillment_email_status"] || "NOT_SENT") };
     }
-    if (tx["payment_status"] === "FULFILLING" && tx["approved_by"] !== admin["email"]) {
-      return reply.code(409).send({ detail: "Order is being fulfilled by another reviewer." });
+    if (tx["payment_status"] !== "MANUAL_SUBMITTED") {
+      return reply.code(409).send({ detail: "Only submitted payments can be approved. Use the separate recovery action for an already approved order." });
     }
-    const claimed = tx["payment_status"] === "FULFILLING" ||
-      (await getDb().collection("payment_transactions").updateOne(
-        { reference, provider: "MANUAL_DIRECT", payment_status: "MANUAL_SUBMITTED" },
-        { $set: { payment_status: "FULFILLING", approved_by: admin["email"],
-                  verified_external_reference: req.evidence_reference,
-                  verification_notes: req.verification_notes, approved_at: utc() } })).modifiedCount === 1;
-    if (!claimed) return reply.code(409).send({ detail: "Another reviewer claimed this order." });
-    // Reuse the existing pin schema and unique payment_ref index for idempotency.
-    let license = await getDb().collection("pin_licenses").findOne({ payment_ref: reference });
-    let pin = String(license?.["pin"] ?? "");
-    if (!pin) {
-      pin = generateUniquePin();
-      const doc = {
-        id: randomUUID(), pin, buyer_name: tx["buyer_name"], buyer_email: tx["buyer_email"],
-        is_active: true, is_used: false, activated_at: null, mt5_account: null,
-        created_at: utc(), notes: "Verified manual direct " + tx["method"] + " - " + reference,
-        payment_ref: reference, provider: "MANUAL_DIRECT",
-      };
-      try { await getDb().collection("pin_licenses").insertOne(doc); }
-      catch (err) {
-        if (!(err instanceof MongoServerError && err.code === 11000)) throw err;
-        license = await getDb().collection("pin_licenses").findOne({ payment_ref: reference });
-        if (!license) throw err;
-        pin = String(license["pin"]);
-      }
+    if (!["BANK", "CRYPTO"].includes(String(tx["method"])) ||
+        !Number.isSafeInteger(tx["amount_minor"]) || Number(tx["amount_minor"]) <= 0 ||
+        !Number.isSafeInteger(tx["price_usd_cents"]) || Number(tx["price_usd_cents"]) <= 0 ||
+        typeof tx["buyer_email"] !== "string" || !String(tx["buyer_email"]).includes("@")) {
+      return reply.code(409).send({ detail: "Order data is invalid; manual investigation required." });
     }
-    const finish = await getDb().collection("payment_transactions").updateOne(
-      { provider: "MANUAL_DIRECT", reference, payment_status: "FULFILLING" },
-      { $set: { payment_status: "FULFILLED", pin_generated: pin, fulfilled_at: utc(),
-                fulfillment_email_status: "PENDING" } });
-    if (finish.modifiedCount) {
-      await getDb().collection("payment_review_log").insertOne({
-        id: randomUUID(), reference, action: "APPROVE", by: admin["email"], at: utc(),
-        evidence_reference: req.evidence_reference, verification_notes: req.verification_notes,
-      });
-      try {
-        const sent = await sendPinEmail(String(tx["buyer_email"]), String(tx["buyer_name"]), pin);
-        await recordFulfillmentEmailResult(reference, String(tx["buyer_name"]), String(tx["buyer_email"]), pin, sent);
-        await getDb().collection("payment_transactions").updateOne(
-          { reference }, { $set: { fulfillment_email_status: sent ? "SENT" : "RETRYABLE" } });
-      } catch (err) {
-        app.log.error({ err, reference }, "Manual checkout fulfillment email failed");
-        await getDb().collection("payment_transactions").updateOne(
-          { reference }, { $set: { fulfillment_email_status: "RETRYABLE" } });
-      }
-      try {
-        await notifyAdminNewSale(reference, String(tx["buyer_name"]), String(tx["buyer_email"]),
-          usdFormatted(Number(tx["price_usd_cents"])), pin, "Manual " + tx["method"], "XauCloud EA license",
-          req.evidence_reference);
-      } catch (err) { app.log.error({ err, reference }, "Manual sale notification failed"); }
+    const claim = await db.collection("payment_transactions").updateOne(
+      { reference, provider: "MANUAL_DIRECT", payment_status: "MANUAL_SUBMITTED" },
+      { $set: { payment_status: "FULFILLING", approved_by: admin["email"], approved_at: utc(),
+        verified_external_reference: req.evidence_reference, verification_notes: req.verification_notes,
+        fulfillment_claimed_at: utc() } },
+    );
+    if (!claim.modifiedCount) return reply.code(409).send({ detail: "Another reviewer claimed this order." });
+    await db.collection("payment_review_log").insertOne({
+      id: randomUUID(), reference, action: "APPROVE", by: admin["email"], at: utc(),
+      evidence_reference: req.evidence_reference, verification_notes: req.verification_notes,
+    });
+    const approvedTx = await db.collection("payment_transactions").findOne({ provider: "MANUAL_DIRECT", reference });
+    return completeDirectFulfillment(app, approvedTx!);
+  });
+
+  app.post("/admin/direct-checkout/:reference/retry-fulfillment", { preHandler: requireAdmin }, async (request, reply) => {
+    const { reference } = request.params as { reference: string };
+    const db = getDb();
+    const admin = (request as typeof request & { admin: Record<string, unknown> }).admin;
+    const tx = await db.collection("payment_transactions").findOne({ provider: "MANUAL_DIRECT", reference });
+    if (!tx) return reply.code(404).send({ detail: "Order not found." });
+    if (!tx["approved_by"] || !tx["verified_external_reference"]) return reply.code(409).send({ detail: "No verified administrative approval exists for this order." });
+    const prior = String(tx["payment_status"]);
+    if (prior !== "FULFILLING" && prior !== "FULFILLED") return reply.code(409).send({ detail: "Payment has not been approved." });
+    if (prior === "FULFILLED") {
+      const license = await db.collection("pin_licenses").findOne({ payment_ref: reference });
+      if (directLicenseMatches(tx, license)) return reply.code(409).send({ detail: "License already issued. Use resend license email if needed." });
+      if (license) return reply.code(409).send({ detail: "Existing license does not match the order. Manual investigation is required." });
     }
-    return { status: "FULFILLED" };
+    const staleBefore = new Date(Date.now() - DELIVERY_LEASE_MS).toISOString();
+    const recovered = await db.collection("payment_transactions").updateOne(
+      { provider: "MANUAL_DIRECT", reference, payment_status: prior,
+        ...(prior === "FULFILLING" ? { $or: [
+          { fulfillment_claimed_at: { $exists: false } },
+          { fulfillment_claimed_at: { $lt: staleBefore } }] } : {}) },
+      { $set: { payment_status: "FULFILLING", fulfillment_claimed_at: utc(),
+        fulfillment_retried_by: admin["email"], fulfillment_retried_at: utc() } },
+    );
+    if (!recovered.modifiedCount) return reply.code(409).send({ detail: "Fulfillment is still in progress. Retry after 10 minutes if it remains stuck." });
+    await db.collection("payment_review_log").insertOne({
+      id: randomUUID(), reference, action: "RETRY_FULFILLMENT", by: admin["email"], at: utc(),
+    });
+    const current = await db.collection("payment_transactions").findOne({ provider: "MANUAL_DIRECT", reference });
+    return completeDirectFulfillment(app, current!);
+  });
+
+  app.post("/admin/direct-checkout/:reference/resend-license", { preHandler: requireAdmin }, async (request, reply) => {
+    const { reference } = request.params as { reference: string };
+    const admin = (request as typeof request & { admin: Record<string, unknown> }).admin;
+    const tx = await getDb().collection("payment_transactions").findOne({ reference, provider: "MANUAL_DIRECT" });
+    if (!tx) return reply.code(404).send({ detail: "Order not found." });
+    if (tx["payment_status"] !== "FULFILLED") return reply.code(409).send({ detail: "License fulfillment is not complete." });
+    const license = await getDb().collection("pin_licenses").findOne({ payment_ref: reference });
+    if (!directLicenseMatches(tx, license)) return reply.code(409).send({ detail: "Existing license not valid for this buyer; cannot resend." });
+    const status = await deliverDirectLicenseEmail(app, tx, true);
+    await getDb().collection("payment_review_log").insertOne({
+      id: randomUUID(), reference, action: "RESEND_LICENSE_EMAIL", by: admin["email"], at: utc(), result: status,
+    });
+    if (status === "ALREADY_SENDING_OR_NOT_ELIGIBLE") return reply.code(409).send({ detail: "Email send already in progress." });
+    return { status, license_status: "ISSUED" };
   });
 
   app.post("/admin/direct-checkout/:reference/reject", { preHandler: requireAdmin }, async (request, reply) => {
     const { reference } = request.params as { reference: string };
-    const req = reviewSchema.parse(request.body);
+    const req = rejectionSchema.parse(request.body);
     const admin = (request as typeof request & { admin: Record<string, unknown> }).admin;
     const customerOrder = await getDb().collection("payment_transactions").findOne(
       { reference, provider: "MANUAL_DIRECT" }, { projection: { _id: 0, buyer_email: 1, buyer_name: 1 } });
