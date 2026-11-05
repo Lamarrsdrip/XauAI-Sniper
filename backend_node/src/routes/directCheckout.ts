@@ -150,6 +150,42 @@ async function ensureDirectLicense(tx: Record<string, unknown>): Promise<Record<
   return existing!;
 }
 
+async function linkDirectLicenseToCustomer(tx: Record<string, unknown>, license: Record<string, unknown>): Promise<string> {
+  const db = getDb();
+  const reference = String(tx["reference"]);
+  const email = String(tx["buyer_email"] || "").trim().toLowerCase();
+  // A license belongs exclusively to its verified purchaser, even when they have not signed up yet.
+  const user = await db.collection("cloud_users").findOne({ email });
+  if (!user) {
+    await db.collection("payment_transactions").updateOne(
+      { provider: "MANUAL_DIRECT", reference },
+      { $set: { account_link_status: "AWAITING_SIGNUP" } });
+    return "AWAITING_SIGNUP";
+  }
+  const pin = String(license["pin"]);
+  const activeKey = String(user["license_key"] || user["command_license_key"] || "").trim();
+  if (activeKey && activeKey !== pin) {
+    // Never replace a customer's previously linked license without a separate owner-approved flow.
+    await db.collection("payment_transactions").updateOne(
+      { provider: "MANUAL_DIRECT", reference },
+      { $set: { account_link_status: "EXISTING_LINK_REQUIRES_REVIEW" } });
+    return "EXISTING_LINK_REQUIRES_REVIEW";
+  }
+  const userId = user["id"];
+  const updated = await db.collection("cloud_users").updateOne(
+    { id: userId, email, $or: [
+      { license_key: { $exists: false } }, { license_key: null },
+      { license_key: "" }, { license_key: pin },
+    ] },
+    { $set: { license_key: pin, command_license_key: pin, license_linked_at: utc() } },
+  );
+  if (updated.matchedCount !== 1) throw new Error("Customer account changed while linking its purchased license.");
+  await db.collection("payment_transactions").updateOne(
+    { provider: "MANUAL_DIRECT", reference },
+    { $set: { account_link_status: "LINKED", linked_cloud_user_id: userId } });
+  return "LINKED";
+}
+
 async function deliverDirectLicenseEmail(app: FastifyInstance, tx: Record<string, unknown>, force = false): Promise<string> {
   const db = getDb();
   const reference = String(tx["reference"]);
@@ -182,6 +218,7 @@ async function completeDirectFulfillment(app: FastifyInstance, tx: Record<string
   const reference = String(tx["reference"]);
   try {
     const license = await ensureDirectLicense(tx);
+    const accountStatus = await linkDirectLicenseToCustomer(tx, license);
     const finished = await db.collection("payment_transactions").updateOne(
       { provider: "MANUAL_DIRECT", reference, payment_status: "FULFILLING" },
       { $set: { payment_status: "FULFILLED", pin_generated: license["pin"],
@@ -195,7 +232,7 @@ async function completeDirectFulfillment(app: FastifyInstance, tx: Record<string
         usdFormatted(Number(tx["price_usd_cents"])), String(license["pin"]), "Manual " + tx["method"],
         "XauCloud EA license", String(tx["verified_external_reference"] || ""));
     } catch (err) { app.log.error({ err, reference }, "Direct payment admin notification failed"); }
-    return { status: "FULFILLED", license_status: "ISSUED", fulfillment_email_status: emailStatus };
+    return { status: "FULFILLED", license_status: "ISSUED", account_link_status: accountStatus, fulfillment_email_status: emailStatus };
   } catch (err) {
     await db.collection("payment_transactions").updateOne(
       { provider: "MANUAL_DIRECT", reference, payment_status: "FULFILLING" },
@@ -440,6 +477,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       tx["has_proof"] = Boolean(tx["evidence_image"] || tx["evidence_uploaded_at"]);
       const license = await getDb().collection("pin_licenses").findOne({ payment_ref: tx["reference"] });
       tx["license_status"] = !license ? "NOT_ISSUED" : directLicenseMatches(tx, license) ? "ISSUED" : "REQUIRES_REVIEW";
+      tx["account_link_status"] = tx["account_link_status"] || "NOT_LINKED";
       delete tx["evidence_image"];
     }
     return { entries };
