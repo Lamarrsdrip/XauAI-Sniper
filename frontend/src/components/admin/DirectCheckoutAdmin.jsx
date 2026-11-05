@@ -141,7 +141,7 @@ export default function DirectCheckoutAdmin({ api }) {
         <p className="mt-1 break-all text-xs text-white/65">{order.method === "BANK"
           ? "Account name sent from: " + (order.sender_account_name || "Not submitted")
           : "Submitted reference: " + (order.submitted_reference || "Not submitted")}</p>
-        <p className="mt-2 text-xs text-white/60">License: <strong>{order.license_status || "Not issued"}</strong> · License email: <strong>{order.fulfillment_email_status || "NOT_SENT"}</strong></p>
+        <p className="mt-2 text-xs text-white/60">License: <strong>{order.license_status || "Not issued"}</strong> · Account: <strong>{order.account_link_status || "NOT_LINKED"}</strong> · License email: <strong>{order.fulfillment_email_status || "NOT_SENT"}</strong></p>
         {order.approved_by && <p className="mt-1 text-xs text-white/45">Reviewed by {order.approved_by} · {order.approved_at ? new Date(order.approved_at).toLocaleString() : "Pending completion"}</p>}
         {order.has_proof && <button className={btnClass + " mt-2"} type="button" onClick={() => viewProof(order.reference)}>View optional proof (unverified)</button>}
         {order.payment_status === "MANUAL_SUBMITTED" && <div className="mt-4 space-y-2">
