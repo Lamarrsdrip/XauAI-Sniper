@@ -59,6 +59,9 @@ class Review(BaseModel):
     evidence_reference: str = Field(min_length=6, max_length=200)
     verification_notes: str = Field(min_length=12, max_length=1500)
 
+class RejectionReview(BaseModel):
+    verification_notes: str = Field(min_length=12, max_length=1500)
+
 def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
                  client_ip, generate_pin, PinLicense, send_pin_email,
                  record_email_result, notify_started, notify_sale, logger, send_instructions=None):
@@ -92,11 +95,26 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
         options = [{"asset": w["asset"], "network": w["network"]}
                    for w in cfg["wallets"] if is_wallet(str(w.get("asset")),
                                                         str(w.get("network")), str(w.get("address", "")))]
+        settings = await get_settings()
+        bank_configured = bool(cfg["bank_enabled"] and settings.get("bank_transfer_enabled")
+                               and settings.get("bank_transfer_bank_name")
+                               and settings.get("bank_transfer_account_name")
+                               and settings.get("bank_transfer_account_number"))
+        fx_fresh = False
+        try:
+            fx = Decimal(str(cfg["usd_ngn_rate"]))
+            fx_date = datetime.fromisoformat(str(cfg["rate_as_of"]).replace("Z", "+00:00"))
+            fx_fresh = bool(fx.is_finite() and Decimal("0.01") <= fx <= Decimal("1000000")
+                            and fx_date.tzinfo and timedelta(0) <= now() - fx_date <= timedelta(hours=24))
+        except (ValueError, TypeError, InvalidOperation, OverflowError):
+            pass
+        crypto_ready = bool(price and cfg["crypto_enabled"] and options)
         return {"currency": "USD", "price_usd_cents": price,
                 "price_formatted": money(price) if price else None,
-                "bank_enabled": cfg["bank_enabled"], "crypto_enabled": cfg["crypto_enabled"],
+                "bank_enabled": bool(price and bank_configured and fx_fresh),
+                "crypto_enabled": crypto_ready,
                 "crypto_countries": cfg["crypto_countries"],
-                "crypto_options": options if cfg["crypto_enabled"] else [],
+                "crypto_options": options if crypto_ready else [],
                 "trial_days": 3}
 
     @router.post("/purchase/direct/quote")
@@ -367,7 +385,7 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
         return {"status": "FULFILLED"}
 
     @router.post("/admin/direct-checkout/{reference}/reject")
-    async def reject(reference: str, req: Review, admin: dict = Depends(admin_dep)):
+    async def reject(reference: str, req: RejectionReview, admin: dict = Depends(admin_dep)):
         result = await db.payment_transactions.update_one(
             {"reference": reference, "provider": "MANUAL_DIRECT",
              "payment_status": {"$in": ["MANUAL_PENDING", "MANUAL_SUBMITTED"]}},
