@@ -62,9 +62,9 @@ jobs:
         working-directory: backend_node
         run: npm run typecheck
 
-      - name: Build production backend
+      - name: Build complete production application
         working-directory: backend_node
-        run: npm run build
+        run: npm run build:production
 
       - name: Audit production dependencies
         working-directory: backend_node
