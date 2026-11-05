@@ -63,16 +63,36 @@ export default function DirectCheckoutAdmin({ api }) {
     } catch (err) { setError(err.response?.data?.detail || err.message || "Unable to load evidence."); }
   }
   async function action(reference, name) {
-    setError(""); setNotice(""); setBusy(true);
+    setError(""); setNotice("");
+    const verificationReference = (evidence[reference] || "").trim();
+    const reviewNotes = (notes[reference] || "").trim();
+    if (name === "approve" && (verificationReference.length < 6 || reviewNotes.length < 12)) {
+      setError("To approve " + reference + ", enter the independently verified bank/chain transaction ID (6+ characters) and notes confirming the amount, beneficiary, and verification (12+ characters).");
+      return;
+    }
+    if (name === "reject" && reviewNotes.length < 12) {
+      setError("Enter a rejection reason of at least 12 characters. A verified transaction ID is not required for rejection.");
+      return;
+    }
+    const confirmations = {
+      approve: "I independently verified this payment against the bank or blockchain record, including amount and destination. Approve and issue the license?",
+      reject: "Reject this order and notify the customer using the reason entered?",
+      "resend-license": "Resend the existing license PIN to the verified purchaser's email? No new license will be created.",
+      "retry-fulfillment": "Retry fulfillment of this already-approved payment? No new charge or duplicate license will be created.",
+    };
+    if (!window.confirm(confirmations[name])) return;
+    setBusy(true);
     try {
-      const confirmation = name === "approve" ? "Approve only after independently verifying the exact bank payment or on-chain transfer. Continue?" : "Reject this order?";
-      if (!window.confirm(confirmation)) return;
-      await apiClient.post(api + "/admin/direct-checkout/" + encodeURIComponent(reference) + "/" + name,
-        { evidence_reference: (evidence[reference] || "").trim(),
-          verification_notes: (notes[reference] || "").trim() });
-      setNotice("Order " + reference + " " + (name === "approve" ? "verified and processed" : "rejected") + ".");
+      const payload = name === "approve" ? { evidence_reference: verificationReference, verification_notes: reviewNotes }
+        : name === "reject" ? { verification_notes: reviewNotes } : {};
+      const result = await apiClient.post(api + "/admin/direct-checkout/" + encodeURIComponent(reference) + "/" + name, payload);
+      const message = name === "approve" ? "Approval processed; check the license and email statuses below."
+        : name === "reject" ? "Payment rejected with an audit record."
+        : name === "retry-fulfillment" ? "Fulfillment recovery processed; inspect the resulting license and email statuses."
+        : "License email resend attempted; inspect its recorded delivery status.";
+      setNotice("Order " + reference + ": " + message + " (" + (result.data?.status || "updated") + ")");
       await load();
-    } catch (e) { setError(e.response?.data?.detail || "Unable to update order."); }
+    } catch (e) { setError(e.response?.data?.detail || e.message || "Unable to update order."); }
     finally { setBusy(false); }
   }
   return <div className="space-y-5" data-testid="admin-direct-checkout">
@@ -114,12 +134,17 @@ export default function DirectCheckoutAdmin({ api }) {
         <p className="mt-1 break-all text-xs text-white/65">{order.method === "BANK"
           ? "Account name sent from: " + (order.sender_account_name || "Not submitted")
           : "Submitted reference: " + (order.submitted_reference || "Not submitted")}</p>
+        <p className="mt-2 text-xs text-white/60">License: <strong>{order.license_status || "Not issued"}</strong> · License email: <strong>{order.fulfillment_email_status || "NOT_SENT"}</strong></p>
+        {order.approved_by && <p className="mt-1 text-xs text-white/45">Reviewed by {order.approved_by} · {order.approved_at ? new Date(order.approved_at).toLocaleString() : "Pending completion"}</p>}
         {order.has_proof && <button className={btnClass + " mt-2"} type="button" onClick={() => viewProof(order.reference)}>View optional proof (unverified)</button>}
         {order.payment_status === "MANUAL_SUBMITTED" && <div className="mt-4 space-y-2">
+          <p className="text-xs leading-5 text-white/55">Approval requires an independently confirmed transaction ID and review notes. Rejection requires only a written reason. The customer's submitted reference alone is not verification.</p>
           <input className={inputClass} aria-label="Authoritative verification reference" value={evidence[order.reference] || ""} onChange={(e) => setEvidence({ ...evidence, [order.reference]: e.target.value })} placeholder="Independently verified bank/chain transaction ID"/>
-          <textarea className={inputClass} aria-label="Review verification notes" value={notes[order.reference] || ""} onChange={(e) => setNotes({ ...notes, [order.reference]: e.target.value })} rows={2} placeholder="Verification evidence, amount, beneficiary/network, check date"/>
-          <div className="flex gap-2"><button className={btnClass} disabled={busy || (evidence[order.reference] || "").length < 6 || (notes[order.reference] || "").length < 12} onClick={() => action(order.reference, "approve")}>Approve verified payment</button><button className={btnClass} disabled={busy || (evidence[order.reference] || "").length < 6 || (notes[order.reference] || "").length < 12} onClick={() => action(order.reference, "reject")}>Reject</button></div>
+          <textarea className={inputClass} aria-label="Review verification notes or rejection reason" value={notes[order.reference] || ""} onChange={(e) => setNotes({ ...notes, [order.reference]: e.target.value })} rows={2} placeholder="For approval: amount, beneficiary/network, and verification date. For rejection: reason."/>
+          <div className="flex flex-wrap gap-2"><button className={btnClass} disabled={busy} onClick={() => action(order.reference, "approve")}>Approve payment & activate license</button><button className={btnClass} disabled={busy} onClick={() => action(order.reference, "reject")}>Reject with reason</button></div>
         </div>}
+        {order.payment_status === "FULFILLING" && <button className={btnClass + " mt-3"} disabled={busy} onClick={() => action(order.reference, "retry-fulfillment")}>Retry approved license fulfillment</button>}
+        {order.payment_status === "FULFILLED" && <button className={btnClass + " mt-3"} disabled={busy || order.license_status !== "ISSUED"} onClick={() => action(order.reference, "resend-license")}>Resend existing license email</button>}
       </div>)}</div>
     </section>
     {proofView && <div role="dialog" aria-label="Unverified transfer evidence" aria-modal="true" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4">
