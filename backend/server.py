@@ -743,7 +743,7 @@ async def _log_nomba_config_audit(admin_email: str, changed_fields: list, enviro
         "at": datetime.now(timezone.utc).isoformat(),
     })
 
-async def _send_email(to_email: str, subject: str, html: str) -> bool:
+async def _send_email(to_email: str, subject: str, html: str, *, delivery_result=None, message_id=None) -> bool:
     """v6.25.3 owner directive 2026-07-17 (Phase 6 P0) -- shared SMTP sender,
     extracted from send_pin_email's own inline logic so the new password-
     reset flow doesn't duplicate the same Gmail SMTP_SSL boilerplate.
@@ -753,24 +753,46 @@ async def _send_email(to_email: str, subject: str, html: str) -> bool:
     admin-editable sender name (default "XauCloud") via formataddr, while
     the actual SMTP envelope/login address is unchanged."""
     settings = await get_settings()
+    if delivery_result is not None:
+        delivery_result.update(ok=False, delivery_unknown=False, error=None)
     smtp_email = settings.get("smtp_email", "")
     smtp_password = settings.get("smtp_password", "")
     if not smtp_email or not smtp_password:
+        if delivery_result is not None:
+            delivery_result["error"] = "Official email sending is not configured. Configure SMTP and retry fulfillment."
         logger.info(f"Email not configured. Message to {to_email} ({subject}) not sent.")
         return False
     sender_name = (settings.get("email_sender_name") or "XauCloud").strip()
+    attempted_delivery = False
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"] = formataddr((sender_name, smtp_email))
         msg["To"] = to_email
+        if message_id:
+            msg["Message-ID"] = message_id
         msg.attach(MIMEText(html, "html"))
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
             server.login(smtp_email, smtp_password)
+            if server.sock:
+                server.sock.settimeout(30)
+            original_data = server.data
+            def tracked_data(message):
+                nonlocal attempted_delivery
+                attempted_delivery = True
+                return original_data(message)
+            server.data = tracked_data
             server.sendmail(smtp_email, to_email, msg.as_string())
+        if delivery_result is not None:
+            delivery_result.update(ok=True, error=None)
         logger.info(f"Email sent to {to_email}: {subject}")
         return True
     except Exception as e:
+        if delivery_result is not None:
+            unknown = attempted_delivery and not isinstance(e, (smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused, smtplib.SMTPDataError))
+            delivery_result.update(ok=False, delivery_unknown=unknown,
+                error=(f"Official email delivery failed ({type(e).__name__}). " +
+                       ("Delivery is unknown; check sender logs before another send." if unknown else "Check email configuration and retry fulfillment.")))
         logger.error(f"Email send failed: {e}")
         return False
 
@@ -800,7 +822,7 @@ def _email_link_button(label: str, url: str, primary: bool = False) -> str:
 </td></tr>"""
 
 
-async def send_pin_email(to_email: str, buyer_name: str, pin: str):
+async def send_pin_email(to_email: str, buyer_name: str, pin: str, *, delivery_result=None, message_id=None):
     """Fulfillment / onboarding email -- premium 2026 SaaS-style, mobile-first.
 
     Owner spec 2026-08-04: this used to interpolate release['release_notes']
@@ -876,6 +898,9 @@ Keep this PIN private -- it works on one MT5 account. Trading involves risk; pas
 </td></tr>
 </table>
 </div>"""
+    if delivery_result is not None:
+        return await _send_email(to_email, f"Your {b['sender_name']} License PIN", html,
+                                 delivery_result=delivery_result, message_id=message_id)
     return await _send_email(to_email, f"Your {b['sender_name']} License PIN", html)
 
 async def _notify_admin(subject: str, html: str) -> bool:
@@ -8754,6 +8779,10 @@ async def _send_direct_checkout_instructions(*, buyer_name, buyer_email, referen
         f'<tr><td style="padding:12px 0;color:#50665d;width:38%;">{safe(label)}</td>'
         f'<td style="padding:12px 0;font-weight:700;overflow-wrap:anywhere;">{safe(value)}</td></tr>'
         for label, value in fields)
+    bank_instructions = (f'<p style="white-space:pre-wrap;line-height:1.7;">{safe(details["instructions"])}</p>'
+                         if method == "BANK" and details.get("instructions") else "")
+    submit_help = ("enter the account name the transfer was sent from." if method == "BANK"
+                   else "submit the blockchain transaction hash.")
     content = (
         '<div style="font-family:Arial,sans-serif;background:#f4f8f5;padding:24px 10px;">'
         '<div style="max-width:600px;margin:auto;background:white;color:#173a33;'
@@ -8767,17 +8796,28 @@ async def _send_direct_checkout_instructions(*, buyer_name, buyer_email, referen
         f'<div style="font-size:27px;font-weight:800;margin:6px 0;">{safe(amount_formatted)}</div>'
         f'<div style="font-size:12px;color:#52665b;">One-time license · {safe(usd_price)} base price</div>'
         '</div><table style="width:100%;border-collapse:collapse;font-size:14px;">'
-        f'{rows}</table>'
+        f'{rows}</table>{bank_instructions}'
         '<p style="background:#f8f5ea;padding:15px;border-radius:10px;">'
         f'<strong>Order reference:</strong> {safe(reference)}<br>'
         f'<strong>Payment window closes:</strong> {safe(expires_at)} UTC</p>'
         '<p style="line-height:1.7;font-size:13px;">After transferring, return to XauCloud and '
-        'submit the real bank transfer reference or blockchain hash. Our team independently '
+        f'{submit_help} Our team independently '
         'verifies receipt before issuing a license.</p>'
         '<p style="font-size:12px;color:#52665b;">If the quote expired, do not reuse it. '
         'Contact support with the order reference if you already paid.</p></div></div>'
     )
     return await _send_email(buyer_email, f"XauCloud payment instructions — {reference}", content)
+
+async def _send_direct_license_email(buyer_email, buyer_name, pin, reference):
+    result = {}
+    try:
+        await send_pin_email(buyer_email, buyer_name, pin, delivery_result=result,
+                             message_id=f"<xaucloud-license-{reference}@xaucloud.io>")
+    except Exception:
+        logger.exception("Direct license email preparation failed for %s", reference)
+        return {"ok": False, "delivery_unknown": bool(result),
+                "error": "Official license email preparation failed. Check email configuration and retry fulfillment."}
+    return result
 
 api_router.include_router(_build_direct_checkout(
     db=db, get_settings=get_settings, admin_dep=get_current_admin, user_dep=get_cloud_user,
@@ -8786,6 +8826,7 @@ api_router.include_router(_build_direct_checkout(
     record_email_result=_record_fulfillment_email_result,
     notify_started=notify_admin_payment_started, notify_sale=notify_admin_new_sale, logger=logger,
     send_instructions=_send_direct_checkout_instructions,
+    send_pin_email_detailed=_send_direct_license_email,
 ))
 
 app.include_router(api_router)

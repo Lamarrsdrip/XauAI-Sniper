@@ -30,6 +30,8 @@ export async function sendDirectManualPaymentInstructions(order: DirectManualPay
   const extra = bank
     ? 'Transfer the exact NGN amount to the bank account shown below.'
     : 'Send only the specified asset on the specified network. Sending another asset or using the wrong network can cause permanent loss. Network fees are separate; the nominal stablecoin/USD peg is not guaranteed.';
+  const bankInstructions = bank && order.details.instructions
+    ? '<p style="white-space:pre-wrap;font-size:13px;line-height:1.7;color:#475a53;">' + escapeHtml(order.details.instructions) + '</p>' : '';
   const html = '<div style="background:#f4f8f5;padding:24px 10px;font-family:Arial,sans-serif;color:#173a33;">' +
     '<div style="max-width:600px;margin:auto;background:#fff;border:1px solid #dce8de;border-radius:18px;padding:28px;">' +
     '<p style="font-size:12px;letter-spacing:2px;color:#89692e;font-weight:700;">XAUCLOUD · PAYMENT INSTRUCTIONS</p>' +
@@ -40,7 +42,7 @@ export async function sendDirectManualPaymentInstructions(order: DirectManualPay
     '<div style="font-size:12px;color:#53665f;">Exact amount to send</div>' +
     '<div style="font-size:28px;font-weight:800;color:#173a33;margin:7px 0 4px;">' + escapeHtml(order.amountFormatted) + '</div>' +
     '<div style="color:#5b6d66;font-size:12px;">One-time XauCloud license · ' + escapeHtml(order.usdPrice) + ' base price</div></div>' +
-    '<table style="border-collapse:collapse;width:100%;font-size:14px;">' + rowHtml + '</table>' +
+    '<table style="border-collapse:collapse;width:100%;font-size:14px;">' + rowHtml + '</table>' + bankInstructions +
     '<p style="margin-top:18px;padding:14px;background:#f8f6ed;border:1px solid #e8ddbe;border-radius:10px;line-height:1.6;font-size:13px;">' +
     '<strong>Order reference:</strong> ' + escapeHtml(order.reference) + '<br>' +
     '<strong>Payment window closes:</strong> ' + escapeHtml(order.expiresAt) + ' (UTC)</p>' +
@@ -53,7 +55,7 @@ export async function sendDirectManualPaymentInstructions(order: DirectManualPay
   const plain = ["XauCloud manual payment instructions", "Order: " + order.reference,
     "Status: Awaiting transfer; not paid or approved", "Amount: " + order.amountFormatted,
     "Base price: " + order.usdPrice, ...rows.map(([k, v]) => k + ": " + v),
-    "Expires: " + order.expiresAt + " UTC", extra,
+    "Expires: " + order.expiresAt + " UTC", extra, ...(bank && order.details.instructions ? [order.details.instructions] : []),
     "After paying, return to XauCloud and " + (bank
       ? "enter the account name the transfer was sent from."
       : "submit the blockchain hash.") + " Payment is checked manually before a license is issued."].join("\n");

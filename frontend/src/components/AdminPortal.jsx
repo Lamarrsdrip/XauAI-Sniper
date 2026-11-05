@@ -112,12 +112,13 @@ export default function AdminPortal({ api }) {
   const NAV_GROUPS = [
     { label: "Overview",  tabs: [["dashboard", "Dashboard", House]] },
     { label: "Customers", tabs: [["pins", "Licenses", Key], ["signals", "Signals", Broadcast]] },
-    { label: "Money",     tabs: [["transactions", "Payments", CurrencyNgn], ["bankTransfers", "Bank Transfers", Bank], ["directCheckout", "Direct Checkout", Bank], ["agentFamily", "Agent.family", ShieldCheck]] },
+    { label: "Money",     tabs: [["transactions", "Payments", CurrencyNgn], ["directCheckout", "Pending Payments", Bank], ["bankTransfers", "Legacy Bank Orders", Bank], ["agentFamily", "Agent.family", ShieldCheck]] },
     { label: "Trading",   tabs: [["command", "Bot Ops", Pulse], ["performance", "Performance", TrendUp], ["globalBrain", "Global Brain", Brain]] },
     { label: "Comms",     tabs: [["marketing", "Marketing", Megaphone], ["notifications", "Notifications", Bell], ["email", "Email", Envelope], ["xPosting", "X Posting", Megaphone]] },
     { label: "System",    tabs: [["settings", "Settings", GearSix], ["account", "Account", UserCircle]] },
   ];
   const ALL_TABS = NAV_GROUPS.flatMap((g) => g.tabs);
+  const MOBILE_TABS = [ALL_TABS.find(([id]) => id === "directCheckout"), ...ALL_TABS.filter(([id]) => id !== "directCheckout")];
 
   return (
     <div className={`min-h-screen ${BG} text-white`} data-testid="admin-portal">
@@ -146,7 +147,7 @@ export default function AdminPortal({ api }) {
       {/* Mobile grouped nav — horizontal scroll */}
       <div className="sticky top-[calc(56px+max(env(safe-area-inset-top),0.7rem))] z-40 overflow-x-auto border-b border-white/[0.06] bg-[#060609]/92 backdrop-blur-xl md:hidden">
         <div className="flex min-w-max gap-0 px-4">
-          {ALL_TABS.map(([id, label, Icon]) => {
+          {MOBILE_TABS.map(([id, label, Icon]) => {
             const active = tab === id;
             return (
               <button key={id} onClick={() => setTab(id)} data-testid={`admin-tab-${id}`}
@@ -1319,7 +1320,7 @@ function BankTransfersTab({ api }) {
                         )}
                         {["BANK_TRANSFER_PENDING", "BANK_TRANSFER_SUBMITTED", "UNDER_ADMIN_REVIEW"].includes(t.payment_status) && (
                           <Btn variant="danger" className="!px-2.5 !py-1.5 !text-[11px]" disabled={busy}
-                            onClick={() => act(t.reference, "reject", window.prompt("Rejection reason (optional):") || "")}>
+                            onClick={() => act(t.reference, "reject")}>
                             Reject
                           </Btn>
                         )}
@@ -1360,7 +1361,7 @@ function BankTransfersTab({ api }) {
               )}
               {["BANK_TRANSFER_PENDING", "BANK_TRANSFER_SUBMITTED", "UNDER_ADMIN_REVIEW"].includes(detail.payment_status) && (
                 <Btn variant="danger" disabled={busy}
-                  onClick={() => act(detail.reference, "reject", window.prompt("Rejection reason (optional):") || "")}>
+                  onClick={() => act(detail.reference, "reject")}>
                   Reject
                 </Btn>
               )}

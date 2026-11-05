@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import {
   ArrowLeft, ArrowRight, Check, CheckCircle2, CircleAlert, Clock3,
@@ -85,6 +85,7 @@ function StatusDot({ children, tone = "green" }) {
 }
 
 export default function ManualCheckout({ api, config, onClose }) {
+  const dialogRef = useRef(null);
   const savedOrder = useState(readSavedOrder)[0];
   const [step, setStep] = useState(savedOrder?.step === "pending" ? "pending" : savedOrder?.quote ? "payment" : "country");
   const [search, setSearch] = useState("");
@@ -103,6 +104,8 @@ export default function ManualCheckout({ api, config, onClose }) {
   const [instructionsSent, setInstructionsSent] = useState(savedOrder?.instructionsSent === true);
   const [resendBusy, setResendBusy] = useState(false);
   const [resendMessage, setResendMessage] = useState("");
+  const [fulfillmentError, setFulfillmentError] = useState("");
+  const [deliveryStatus, setDeliveryStatus] = useState("");
 
   const filtered = useMemo(() => countries.filter((item) =>
     (item.name + " " + item.code).toLowerCase().includes(search.trim().toLowerCase())), [search]);
@@ -116,10 +119,17 @@ export default function ManualCheckout({ api, config, onClose }) {
   const bankPay = quote?.method === "BANK";
   const secondsLeft = quote?.expires_at ? Math.max(0, Math.ceil((Date.parse(quote.expires_at) - nowMs) / 1000)) : 0;
   const expired = step === "payment" && (secondsLeft === 0 || status === "MANUAL_EXPIRED");
-  const finished = status === "FULFILLED";
+  const fulfillmentFailed = status === "FULFILLMENT_FAILED" || deliveryStatus === "RETRYABLE" ||
+    (status === "FULFILLED" && deliveryStatus !== "SENT");
+  const finished = status === "FULFILLED" && !fulfillmentFailed;
   const rejected = status === "MANUAL_REJECTED";
-  const submitted = status === "MANUAL_SUBMITTED" || status === "FULFILLING" || finished || rejected;
+  const submitted = status === "MANUAL_SUBMITTED" || status === "FULFILLING" || status === "FULFILLED" || fulfillmentFailed || rejected;
   const progress = Math.min(100, Math.max(0, secondsLeft / 1800 * 100));
+
+  useEffect(() => {
+    // Each checkout step starts at its amount and instructions on small screens.
+    if (dialogRef.current) dialogRef.current.scrollTop = 0;
+  }, [step]);
 
   useEffect(() => {
     const tick = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -155,10 +165,12 @@ export default function ManualCheckout({ api, config, onClose }) {
         const response = await axios.get(api + "/purchase/direct/" + encodeURIComponent(quote.reference) + "/status");
         if (!active) return;
         setStatus(response.data.status);
+        setFulfillmentError(response.data.fulfillment_error || "");
+        setDeliveryStatus(response.data.fulfillment_email_status || "");
         if (response.data.submitted_at) setSubmittedAt(response.data.submitted_at);
         if (response.data.expires_at) setQuote((current) => current && current.expires_at !== response.data.expires_at ? { ...current, expires_at: response.data.expires_at } : current);
         if (response.data.status === "MANUAL_PENDING" || response.data.status === "MANUAL_EXPIRED") setStep("payment");
-        if (["MANUAL_SUBMITTED", "FULFILLING", "FULFILLED", "MANUAL_REJECTED"].includes(response.data.status)) setStep("pending");
+        if (["MANUAL_SUBMITTED", "FULFILLING", "FULFILLMENT_FAILED", "FULFILLED", "MANUAL_REJECTED"].includes(response.data.status)) setStep("pending");
       } catch (err) {
         if (err.response?.status === 404) {
           try { localStorage.removeItem(ORDER_KEY); } catch { /* ignore */ }
@@ -187,7 +199,7 @@ export default function ManualCheckout({ api, config, onClose }) {
     }
     const method = checkoutMethod;
     const choice = assetNetwork || defaultCryptoChoice(options);
-    if (method === "CRYPTO" && !choice) { setError("USDT checkout is not configured yet."); return; }
+    if (method === "CRYPTO" && !choice) { setError("Crypto checkout is not configured yet."); return; }
     if (method === "BANK" && !bankOn) { setError("Nigerian bank transfer is not available right now."); return; }
     setBusy(true); setError(""); setResendMessage("");
     const [asset, network] = method === "CRYPTO" ? choice.split(":") : ["", ""];
@@ -245,12 +257,12 @@ export default function ManualCheckout({ api, config, onClose }) {
   const instructions = quote && (bankPay
     ? ["XauCloud — Bank transfer", "Amount: " + quote.amount_formatted, "Bank: " + quote.details.bank_name,
       "Beneficiary: " + quote.details.account_name, "Account number: " + quote.details.account_number,
-      "Order reference: " + quote.reference].join("\n")
+      "Order reference: " + quote.reference, quote.details.instructions || ""].filter(Boolean).join("\n")
     : ["XauCloud — Crypto transfer", "Amount: " + quote.amount_formatted,
       "Asset: " + quote.details.asset, "Network: " + quote.details.network,
       "Wallet: " + quote.details.address, "Order reference: " + quote.reference].join("\n"));
 
-  return <div role="dialog" aria-modal="true" aria-label="XauCloud secure payment gateway"
+  return <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="XauCloud secure payment gateway"
     className="fixed inset-0 z-[100] overflow-y-auto bg-[#0c241c]/75 backdrop-blur-md sm:px-5 sm:py-8" data-testid="manual-checkout">
     <div className="mx-auto flex min-h-[100dvh] w-full max-w-[760px] flex-col overflow-hidden bg-[#f7f9f6] text-[#193d32] shadow-[0_32px_105px_rgba(0,0,0,.24)] sm:min-h-0 sm:rounded-[30px] sm:border sm:border-white/60">
 
@@ -279,7 +291,7 @@ export default function ManualCheckout({ api, config, onClose }) {
         {step === "country" && <section>
           <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-[#e8f2ea] px-3 py-1.5 text-[11px] font-bold text-[#30674d]"><Globe2 size={13}/> STEP 01 · LOCATION</div>
           <h2 className="font-heading text-[26px] font-bold tracking-tight sm:text-[34px]">Where are you paying from?</h2>
-          <p className="mt-2 text-[14px] leading-6 text-[#52675b]">Every country pays with USDT. Nigeria can also pay by bank transfer.</p>
+          <p className="mt-2 text-[14px] leading-6 text-[#52675b]">Every country pays with crypto, including USDT. Nigeria can also pay by bank transfer.</p>
           <button type="button" onClick={() => chooseCountry("NG")}
             className={"mt-6 flex w-full items-center gap-4 rounded-[22px] border p-4 text-left transition sm:p-5 " + (country === "NG" ? "border-[#28765b] bg-[#eaf5ed] shadow-[0_0_0_2px_rgba(40,118,91,.07)]" : "border-[#e0e8df] bg-white hover:border-[#a8c8b7]")}>
             <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#e4efe6] text-[#235a44]"><Landmark size={23}/></span>
@@ -301,9 +313,10 @@ export default function ManualCheckout({ api, config, onClose }) {
           </div>
           {country && <div className={"mt-4 rounded-xl px-4 py-3 text-[12px] " + (enabled ? "bg-[#e8f5ee] text-[#236246]" : "bg-[#fff4e6] text-[#875825]")}>
             {enabled ? (isNigeria
-              ? bankOn ? "Nigeria: bank transfer and USDT are available. Bank transfer is the default."
-                : "USDT is available. Bank transfer is temporarily unavailable; it cannot be selected until it is restored."
-              : "USDT crypto is available for this country.")
+              ? bankOn && cryptoOn ? "Nigeria: bank transfer and crypto are available. Choose your preferred method."
+                : bankOn ? "Nigeria: bank transfer is available."
+                : "Crypto is available. Bank transfer is temporarily unavailable."
+              : "Crypto payment is available for this country.")
               : "Checkout is temporarily unavailable. No payment will be requested."}
           </div>}
           {error && <p role="alert" className="mt-3 text-sm text-[#a1352b]">{error}</p>}
@@ -315,7 +328,7 @@ export default function ManualCheckout({ api, config, onClose }) {
           <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-[#e8f2ea] px-3 py-1.5 text-[11px] font-bold text-[#30674d]"><ReceiptText size={13}/> STEP 02 · ORDER DETAILS</div>
           <h2 className="font-heading text-[26px] font-bold tracking-tight sm:text-[34px]">Complete your order</h2>
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[22px] border border-[#d8e8dc] bg-white p-5">
-            <div><div className="text-[11px] font-semibold uppercase tracking-wider text-[#687b6d]">One-time XauCloud MT5 license</div><div className="mt-1 text-[12px] text-[#597064]">{checkoutMethod === "BANK" ? "Bank transfer · NGN at checkout" : "USDT crypto · " + country}</div></div>
+            <div><div className="text-[11px] font-semibold uppercase tracking-wider text-[#687b6d]">One-time XauCloud MT5 license</div><div className="mt-1 text-[12px] text-[#597064]">{checkoutMethod === "BANK" ? "Bank transfer · NGN at checkout" : "Crypto payment · " + country}</div></div>
             <strong className="font-heading text-[24px] tracking-tight text-[#194b39]">{config.price_formatted}</strong>
           </div>
           <label className="mt-5 block text-[13px] font-bold text-[#344f41]">Full name
@@ -329,20 +342,20 @@ export default function ManualCheckout({ api, config, onClose }) {
             <button type="button" disabled={!bankOn} aria-pressed={bankOn && payMethod === "BANK"} aria-label={"Nigerian bank transfer" + (bankOn ? "" : " - temporarily unavailable")} onClick={() => { setPayMethod("BANK"); setError(""); }}
               className={"rounded-2xl border p-4 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#28765b] disabled:cursor-not-allowed disabled:opacity-50 " + (payMethod === "BANK" && bankOn ? "border-[#28765b] bg-[#eaf5ed]" : "border-[#e0e8df] bg-white")}>
               <strong className="block text-[14px]">Bank transfer</strong>
-              <span className="mt-1 block text-[12px] text-[#5d7167]">{bankOn ? "Pay in NGN · Nigeria only" : "Temporarily unavailable · Please use USDT"}</span>
+              <span className="mt-1 block text-[12px] text-[#5d7167]">{bankOn ? "Pay in NGN · Nigeria only" : "Temporarily unavailable · Please use crypto"}</span>
             </button>
             <button type="button" disabled={!cryptoOn} aria-pressed={cryptoOn && payMethod === "CRYPTO"} onClick={() => { setPayMethod("CRYPTO"); setError(""); if (!assetNetwork) setAssetNetwork(defaultCryptoChoice(options)); }}
               className={"rounded-2xl border p-4 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#28765b] disabled:cursor-not-allowed disabled:opacity-50 " + (payMethod === "CRYPTO" && cryptoOn ? "border-[#28765b] bg-[#eaf5ed]" : "border-[#e0e8df] bg-white")}>
-              <strong className="block text-[14px]">USDT crypto</strong>
+              <strong className="block text-[14px]">Crypto · USDT and supported coins</strong>
               <span className="mt-1 block text-[12px] text-[#5d7167]">Same crypto checkout as every other country</span>
             </button>
           </div>}
           {isNigeria && !bankOn && <p role="status" className="mt-3 rounded-xl bg-[#fff1df] p-3 text-[12px] leading-5 text-[#76521c]">Bank payment is unavailable right now. Your existing crypto order cannot be converted; a new order must be created after bank transfer is restored.</p>}
-          {checkoutMethod === "CRYPTO" && <label className="mt-4 block text-[13px] font-bold text-[#344f41]">USDT network
+          {checkoutMethod === "CRYPTO" && <label className="mt-4 block text-[13px] font-bold text-[#344f41]">Coin and network
             <select value={assetNetwork || defaultCryptoChoice(options)} onChange={(e) => setAssetNetwork(e.target.value)} className={fieldClass}>
               {options.map((o) => <option key={o.asset + o.network} value={o.asset + ":" + o.network}>{o.asset} · {o.network}</option>)}
             </select>
-            <span className="mt-2 block text-[12px] leading-5 text-[#795c2b]">USDT is selected by default. Only send the selected token on its exact network.</span>
+            <span className="mt-2 block text-[12px] leading-5 text-[#795c2b]">Only send the selected coin on its exact network shown below.</span>
           </label>}
           <p className="mt-5 flex items-start gap-2 text-[12px] leading-5 text-[#5b7164]"><ShieldCheck size={16} className="shrink-0 text-[#28684a]"/> No subscription or automatic charge. Your license is issued only after independent verification.</p>
           {error && <p role="alert" className="mt-3 rounded-xl bg-[#fff0eb] p-3 text-sm text-[#a13b32]">{error}</p>}
@@ -352,8 +365,8 @@ export default function ManualCheckout({ api, config, onClose }) {
         {step === "payment" && quote && <section>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-[#e8f2ea] px-3 py-1.5 text-[11px] font-bold text-[#30674d]">{bankPay ? <Landmark size={13}/> : <Wallet size={13}/>} STEP 03 · {bankPay ? "BANK TRANSFER" : "USDT TRANSFER"}</div>
-              <h2 className="font-heading text-[27px] font-bold tracking-tight sm:text-[34px]">{bankPay ? "Complete your bank transfer" : "Complete your USDT payment"}</h2>
+              <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-[#e8f2ea] px-3 py-1.5 text-[11px] font-bold text-[#30674d]">{bankPay ? <Landmark size={13}/> : <Wallet size={13}/>} STEP 03 · {bankPay ? "BANK TRANSFER" : quote.details.asset + " TRANSFER"}</div>
+              <h2 className="font-heading text-[27px] font-bold tracking-tight sm:text-[34px]">{bankPay ? "Complete your bank transfer" : "Complete your " + quote.details.asset + " payment"}</h2>
             </div>
             <StatusDot tone={expired ? "red" : "amber"}>{expired ? "Quote expired" : "Awaiting payment"}</StatusDot>
           </div>
@@ -408,6 +421,7 @@ export default function ManualCheckout({ api, config, onClose }) {
               </>}
               <Detail label="Order reference" value={quote.reference}/>
             </div>
+            {bankPay && quote.details.instructions && <p className="mt-3 whitespace-pre-wrap rounded-xl bg-[#edf5ef] p-3 text-[12px] leading-5 text-[#345b46]">{quote.details.instructions}</p>}
             <p className="mt-3 rounded-xl bg-[#f7f7f0] p-3 text-[11px] leading-5 text-[#66735e]">{bankPay
               ? "Use the order reference in the transfer narration if your bank supports it. After paying, enter the account name you sent the money from."
               : "Use the exact token and network shown above. Wrong-network transfers may be irrecoverable. Network fees are separate."}</p>
@@ -441,14 +455,15 @@ export default function ManualCheckout({ api, config, onClose }) {
         {step === "pending" && quote && <section className="pb-1">
           <div className="mx-auto max-w-xl text-center">
             <div className={"mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-[22px] " + (rejected ? "bg-[#fff1e8] text-[#a44535]" : "bg-[#e8f6ed] text-[#28744f]")}>{rejected ? <CircleAlert size={32}/> : <CheckCircle2 size={34}/>}</div>
-            <StatusDot tone={rejected ? "red" : finished ? "green" : "amber"}>{rejected ? "Not approved" : finished ? "Verified" : "Under manual review"}</StatusDot>
-            <h2 className="mt-4 font-heading text-[25px] font-bold leading-tight tracking-tight">{finished ? "Your license has been issued" : rejected ? "Payment couldn't be approved" : "Your payment is under review"}</h2>
-            <p className="mt-3 text-[13px] leading-6 text-[#556d5e]">{finished ? "Your license has been issued. Check your email for the activation instructions." : rejected ? "The payment was not approved. Contact support if you believe this is a mistake." : "We've recorded the reference you supplied. Our team must independently confirm receipt of funds before your license is issued."}</p>
+            <StatusDot tone={rejected ? "red" : finished ? "green" : "amber"}>{rejected ? "Not approved" : finished ? "Verified" : fulfillmentFailed ? "Approved · fulfillment delayed" : "Under manual review"}</StatusDot>
+            <h2 className="mt-4 font-heading text-[25px] font-bold leading-tight tracking-tight">{finished ? "Your license has been issued" : rejected ? "Payment couldn't be approved" : fulfillmentFailed ? "Your payment is approved" : "Your payment is under review"}</h2>
+            <p className="mt-3 text-[13px] leading-6 text-[#556d5e]">{finished ? "Your license has been issued. Check your email for the activation instructions." : rejected ? "The payment was not approved. Contact support if you believe this is a mistake." : fulfillmentFailed ? "Your payment is confirmed. Our team needs to retry license activation or email delivery. You do not need to pay again." : "We've recorded the reference you supplied. Our team must independently confirm receipt of funds before your license is issued."}</p>
+            {fulfillmentFailed && fulfillmentError && <p role="status" className="mt-3 text-[12px] leading-5 text-[#795c2b]">Contact support with your order reference for fulfillment assistance.</p>}
           </div>
           <div className="mt-7 rounded-[22px] border border-[#dbe6db] bg-white px-5 py-1 sm:px-6">
             <Detail label="Order reference" value={quote.reference}/>
             <Detail label="Amount" value={quote.amount_formatted} copy={false}/>
-            <Detail label="Payment status" value={finished ? "Verified" : rejected ? "Not approved" : status === "FULFILLING" ? "Issuing license" : "Awaiting independent review"} copy={false}/>
+            <Detail label="Payment status" value={finished ? "Verified" : rejected ? "Not approved" : fulfillmentFailed ? "Approved · fulfillment delayed" : status === "FULFILLING" ? "Issuing license" : "Awaiting independent review"} copy={false}/>
             {submittedAt && <Detail label="Submitted on" value={new Date(submittedAt).toLocaleString()} copy={false}/>}
           </div>
           <p className="mt-5 flex items-center justify-center gap-2 text-center text-[12px] leading-5 text-[#5c7063]"><MailCheck size={17}/> We'll send your license by email after successful verification.</p>

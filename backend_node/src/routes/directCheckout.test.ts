@@ -36,6 +36,7 @@ vi.mock("../services/paymentEmails.js", () => ({
   notifyAdminPaymentStarted: async () => { state.notified.push("started"); },
   notifyAdminNewSale: async () => { state.notified.push("sold"); },
   sendPinEmail: async () => { state.notified.push("pin"); return state.deliverySucceeds; },
+  sendPinEmailDetailed: async () => { state.notified.push("pin"); return { ok: state.deliverySucceeds, error: state.deliverySucceeds ? undefined : "Email delivery is not configured." }; },
   recordFulfillmentEmailResult: async () => {},
 }));
 
@@ -217,6 +218,41 @@ describe("USD-first manual checkout HTTP and fulfillment lifecycle", () => {
     expect((await approve()).json().status).toBe("already_fulfilled");
     expect(state.db.collection("pin_licenses").docs).toHaveLength(1);
     expect(state.notified.filter((s) => s === "pin")).toHaveLength(1);
+    expect(state.db.collection("admin_email_log").docs).toHaveLength(1);
+    expect(state.db.collection("admin_email_log").docs[0]).toMatchObject({
+      template_id: "license_delivery", canonical_recipient: "test@example.com", status: "sent", reference: order.reference,
+    });
+  });
+
+  it("does not resend an accepted license email when admin history logging fails", async () => {
+    const order = (await quoteBank(app)).json();
+    vi.spyOn(state.db.collection("admin_email_log"), "updateOne").mockRejectedValueOnce(new Error("Injected history outage"));
+    const approve = () => app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/approve" });
+    expect((await approve()).json().status).toBe("FULFILLED");
+    expect((await approve()).json().status).toBe("already_fulfilled");
+    expect(state.notified.filter((s) => s === "pin")).toHaveLength(1);
+    expect((await state.db.collection("payment_transactions").findOne({ reference: order.reference }))?.["fulfillment_email_status"]).toBe("SENT");
+  });
+
+  it("recovers immediately after retry audit history recording fails without duplicating fulfillment", async () => {
+    const order = (await quoteBank(app)).json();
+    const action = (name: string) => app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/" + name });
+    state.deliverySucceeds = false;
+    expect((await action("approve")).json().fulfillment_stage).toBe("EMAIL");
+    state.deliverySucceeds = true;
+    const audit = state.db.collection("payment_review_log");
+    const originalUpdate = audit.updateOne.bind(audit);
+    const fault = vi.spyOn(audit, "updateOne").mockImplementation(async (query, update, options) => {
+      if (String(query["id"]).startsWith("RETRY:")) throw new Error("Injected retry audit outage");
+      return originalUpdate(query, update, options);
+    });
+    const failedRetry = await action("retry-fulfillment");
+    fault.mockRestore();
+    expect(failedRetry.json()).toMatchObject({ status: "FULFILLMENT_FAILED", fulfillment_stage: "AUDIT" });
+    expect((await action("retry-fulfillment")).json().status).toBe("FULFILLED");
+    expect(state.db.collection("pin_licenses").docs).toHaveLength(1);
+    expect(state.notified.filter((s) => s === "pin")).toHaveLength(2); // One rejected SMTP attempt, one accepted.
+    expect(audit.docs.filter((row) => row.action === "RETRY_FULFILLMENT")).toHaveLength(1);
   });
 
 
@@ -241,17 +277,17 @@ describe("USD-first manual checkout HTTP and fulfillment lifecycle", () => {
     const approval = await app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/approve",
       payload: { evidence_reference: "VERIFIED-BANK-TXN", verification_notes: "Checked official bank ledger and beneficiary." } });
     expect(approval.statusCode).toBe(200);
-    expect(approval.json()).toMatchObject({ status: "FULFILLED", license_status: "ISSUED", fulfillment_email_status: "RETRYABLE" });
+    expect(approval.json()).toMatchObject({ status: "FULFILLMENT_FAILED", license_status: "ISSUED", fulfillment_email_status: "RETRYABLE", fulfillment_error: "Email delivery is not configured." });
     state.deliverySucceeds = true;
     const resend = await app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/resend-license" });
     expect(resend.statusCode).toBe(200);
-    expect(resend.json().status).toBe("SENT");
+    expect(resend.json().status).toBe("FULFILLED");
     expect(state.db.collection("pin_licenses").docs).toHaveLength(1);
     const tx = await state.db.collection("payment_transactions").findOne({ reference: order.reference });
     expect(tx?.["fulfillment_email_status"]).toBe("SENT");
     const entries = (await app.inject({ method: "GET", url: "/admin/direct-checkout/orders" })).json().entries;
     expect(entries.find((e: {reference: string}) => e.reference === order.reference).license_status).toBe("ISSUED");
-    expect(state.db.collection("payment_review_log").docs.some((e) => e.action === "RESEND_LICENSE_EMAIL")).toBe(true);
+    expect(state.db.collection("payment_review_log").docs.some((e) => e.action === "RETRY_FULFILLMENT")).toBe(true);
   });
 
   it("recovers stale approved fulfillment without creating another license", async () => {
@@ -299,7 +335,8 @@ describe("USD-first manual checkout HTTP and fulfillment lifecycle", () => {
       payload: { evidence_reference: "TEST-VERIFIED-LEDGER-2",
         verification_notes: "Independently confirmed beneficiary and received amount." } });
     expect(response.statusCode).toBe(200);
-    expect(response.json().account_link_status).toBe("EXISTING_LINK_REQUIRES_REVIEW");
+    expect(response.json().status).toBe("FULFILLMENT_FAILED");
+    expect(response.json().fulfillment_stage).toBe("ACCOUNT");
     expect((await state.db.collection("cloud_users").findOne({ id: "customer-002" }))?.["license_key"]).toBe("ASE-OLD1-OLD2");
     expect(state.db.collection("pin_licenses").docs).toHaveLength(1);
   });

@@ -64,12 +64,17 @@ export async function registerAdminBankTransferRoutes(app: FastifyInstance): Pro
     const tx = await db.collection("payment_transactions").findOne({ reference, provider: "BANK_TRANSFER" }, { projection: { _id: 0 } });
     if (!tx) return reply.code(404).send({ detail: "Not found" });
     const effective = await bankTransferEffectiveStatus(tx);
+    if (effective === "BANK_TRANSFER_REJECTED") return { status: "rejected", no_op: true };
+    if (!["BANK_TRANSFER_PENDING", "BANK_TRANSFER_SUBMITTED", "UNDER_ADMIN_REVIEW", "BANK_TRANSFER_EXPIRED"].includes(effective)) {
+      return reply.code(409).send({ detail: `Cannot reject an order in state ${effective}.` });
+    }
     const won = await transitionPaymentState(reference, [effective], "BANK_TRANSFER_REJECTED");
     if (!won) return reply.code(409).send({ detail: `Cannot reject an order in state ${effective}.` });
     await db.collection("payment_transactions").updateOne(
       { reference },
       { $set: { rejected_by: admin["email"], rejected_at: new Date().toISOString(), rejection_reason: req.reason ?? "" } },
     );
+    await db.collection("payment_review_log").insertOne({ reference, action: "REJECT", by: admin["email"], at: new Date().toISOString(), provider: "BANK_TRANSFER" });
     await sendBankTransferRejectedEmail(String(tx["buyer_email"] ?? ""), String(tx["buyer_name"] ?? ""), reference, req.reason ?? "");
     return { status: "rejected" };
   });
@@ -81,6 +86,9 @@ export async function registerAdminBankTransferRoutes(app: FastifyInstance): Pro
     if (!tx) return reply.code(404).send({ detail: "Not found" });
     const effective = await bankTransferEffectiveStatus(tx);
     if (effective === "BANK_TRANSFER_EXPIRED") return { status: "BANK_TRANSFER_EXPIRED", no_op: true };
+    if (!["BANK_TRANSFER_PENDING", "BANK_TRANSFER_SUBMITTED", "UNDER_ADMIN_REVIEW"].includes(effective)) {
+      return reply.code(409).send({ detail: `Cannot expire an order in state ${effective}.` });
+    }
     const won = await transitionPaymentState(reference, [effective], "BANK_TRANSFER_EXPIRED");
     if (!won) return reply.code(409).send({ detail: `Cannot expire an order in state ${effective}.` });
     return { status: "BANK_TRANSFER_EXPIRED", no_op: false };

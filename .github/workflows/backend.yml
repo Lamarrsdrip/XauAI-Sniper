@@ -51,6 +51,13 @@ jobs:
         working-directory: backend_node
         run: npm test -- --run --silent
 
+      - name: Verify manual checkout with real MongoDB and admin permissions
+        working-directory: backend_node
+        env:
+          DIRECT_CHECKOUT_MONGO_TESTS: "1"
+          CHECKOUT_TEST_MONGO_URL: mongodb://127.0.0.1:27017
+        run: npm test -- src/routes/directCheckout.mongo.test.ts --maxWorkers=1 --testTimeout=30000 --hookTimeout=120000
+
       - name: Typecheck production backend
         working-directory: backend_node
         run: npm run typecheck
