@@ -31,7 +31,7 @@ vi.mock("../services/manualCheckoutInstructions.js", () => ({
     return true;
   },
 }));
-vi.mock("../services/paymentFulfillment.js", () => ({ generateUniquePin: () => "ASE-MANUAL-TEST-PIN" }));
+vi.mock("../services/paymentFulfillment.js", () => ({ generateUniquePin: () => "ASE-ABCD-EFGH" }));
 vi.mock("../services/paymentEmails.js", () => ({
   notifyAdminPaymentStarted: async () => { state.notified.push("started"); },
   notifyAdminNewSale: async () => { state.notified.push("sold"); },
