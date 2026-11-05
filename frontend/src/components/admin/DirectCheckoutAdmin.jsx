@@ -8,6 +8,7 @@ function Label({ title, children }) {
 }
 export default function DirectCheckoutAdmin({ api }) {
   const [cfg, setCfg] = useState(null);
+  const [bankCheckoutLive, setBankCheckoutLive] = useState(null);
   const [orders, setOrders] = useState([]);
   const [dollars, setDollars] = useState("");
   const [fx, setFx] = useState("");
@@ -20,11 +21,13 @@ export default function DirectCheckoutAdmin({ api }) {
   const [proofView, setProofView] = useState(null);
   const load = useCallback(async () => {
     try {
-      const [config, result] = await Promise.all([
+      const [config, result, publicConfig] = await Promise.all([
         apiClient.get(api + "/admin/direct-checkout/config"),
-        apiClient.get(api + "/admin/direct-checkout/orders")
+        apiClient.get(api + "/admin/direct-checkout/orders"),
+        apiClient.get(api + "/purchase/direct/config"),
       ]);
       setCfg(config.data);
+      setBankCheckoutLive(publicConfig.data.bank_enabled === true);
       setOrders(result.data.entries || []);
       setDollars(config.data.price_usd_cents ? (config.data.price_usd_cents / 100).toFixed(2) : "");
       setFx(config.data.usd_ngn_rate || "");
@@ -106,6 +109,10 @@ export default function DirectCheckoutAdmin({ api }) {
         <Label title="USD → NGN rate (manually reviewed; valid 24h)"><input className={inputClass} inputMode="decimal" value={fx} onChange={(e) => setFx(e.target.value)} placeholder="Rate from a verified current source"/></Label>
       </div>
       <p className="mt-2 text-[11px] text-white/40">Rate timestamp: {cfg.rate_as_of ? new Date(cfg.rate_as_of).toLocaleString() : "Not configured"} · Rates older than 24 hours fail closed.</p>
+      <p role="status" className={"mt-3 rounded-xl border px-3 py-2.5 text-xs leading-5 " + (bankCheckoutLive ? "border-emerald-300/20 bg-emerald-300/5 text-emerald-200" : "border-amber-300/30 bg-amber-300/5 text-amber-200")}>
+        Customer-facing Nigerian bank checkout: <strong>{bankCheckoutLive ? "AVAILABLE" : "UNAVAILABLE"}</strong>.
+        {!bankCheckoutLive && " To enable it, verify Bank Transfers settings, turn on Nigerian manual bank, enter a current verified USD/NGN rate here, save and refresh. The public checkout will not accept bank orders while any requirement is missing."}
+      </p>
       <div className="mt-5 flex flex-wrap gap-5">
         <label className="flex items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={cfg.bank_enabled} onChange={(e) => setCfg({ ...cfg, bank_enabled: e.target.checked })}/> Enable Nigerian manual bank</label>
         <label className="flex items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={cfg.crypto_enabled} onChange={(e) => setCfg({ ...cfg, crypto_enabled: e.target.checked })}/> Enable USDT for every country</label>
@@ -143,7 +150,7 @@ export default function DirectCheckoutAdmin({ api }) {
           <textarea className={inputClass} aria-label="Review verification notes or rejection reason" value={notes[order.reference] || ""} onChange={(e) => setNotes({ ...notes, [order.reference]: e.target.value })} rows={2} placeholder="For approval: amount, beneficiary/network, and verification date. For rejection: reason."/>
           <div className="flex flex-wrap gap-2"><button className={btnClass} disabled={busy} onClick={() => action(order.reference, "approve")}>Approve payment & activate license</button><button className={btnClass} disabled={busy} onClick={() => action(order.reference, "reject")}>Reject with reason</button></div>
         </div>}
-        {order.payment_status === "FULFILLING" && <button className={btnClass + " mt-3"} disabled={busy} onClick={() => action(order.reference, "retry-fulfillment")}>Retry approved license fulfillment</button>}
+        {(order.payment_status === "FULFILLING" || (order.payment_status === "FULFILLED" && order.license_status === "NOT_ISSUED")) && <button className={btnClass + " mt-3"} disabled={busy} onClick={() => action(order.reference, "retry-fulfillment")}>Recover approved license fulfillment</button>}
         {order.payment_status === "FULFILLED" && <button className={btnClass + " mt-3"} disabled={busy || order.license_status !== "ISSUED"} onClick={() => action(order.reference, "resend-license")}>Resend existing license email</button>}
       </div>)}</div>
     </section>
