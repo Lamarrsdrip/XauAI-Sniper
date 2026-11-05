@@ -111,11 +111,7 @@ export async function ensureDirectCheckoutIndexes(): Promise<void> {
     { provider: 1, submitted_reference: 1 },
     { unique: true, partialFilterExpression: { provider: "MANUAL_DIRECT", submitted_reference: { $type: "string" } } },
   );
-  // A crash after license issuance must never allow a second PIN for this order.
-  await getDb().collection("pin_licenses").createIndex(
-    { payment_ref: 1 },
-    { unique: true, partialFilterExpression: { provider: "MANUAL_DIRECT", payment_ref: { $type: "string" } } },
-  );
+  // The existing startup index on pin_licenses.payment_ref enforces one PIN per order.
 }
 
 
