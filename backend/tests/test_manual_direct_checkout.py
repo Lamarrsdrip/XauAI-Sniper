@@ -8,7 +8,7 @@ import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -43,7 +43,13 @@ def request():
     return req
 
 def handler(path):
-    return next(r.endpoint for r in srv.api_router.routes if r.path == path or r.path == '/api' + path)
+    def routes(router):
+        for route in router.routes:
+            if hasattr(route, "path"):
+                yield route
+            elif hasattr(route, "original_router"):
+                yield from routes(route.original_router)
+    return next(r.endpoint for r in routes(srv.api_router) if r.path == path or r.path == '/api' + path)
 
 BASE = {
     "direct_usd_cents": 10000, "direct_bank_enabled": True,
@@ -228,12 +234,16 @@ class TestDirectCheckout:
             await handler("/purchase/direct/{reference}/submit")(
                 order["reference"], Submitted(sender_account_name="Test Buyer"), request())
             approve = handler("/admin/direct-checkout/{reference}/approve")
-            review = Review(evidence_reference="VERIFIED-BANK-TXN-1",
-                            verification_notes="Verified exact amount, beneficiary and transfer in official bank statement.")
-            result = await approve(order["reference"], review, admin={"email": "admin@test.com"})
+            # Official email is part of successful fulfillment. Isolate SMTP
+            # while exercising the real order/license/index path in Mongo.
+            async def delivered(*args, **kwargs):
+                kwargs["delivery_result"].update(ok=True)
+                return True
+            with patch.object(srv, "send_pin_email", side_effect=delivered):
+                result = await approve(order["reference"], admin={"email": "admin@test.com"})
             assert result["status"] == "FULFILLED"
             assert await srv.db.pin_licenses.count_documents({"payment_ref": order["reference"]}) == 1
-            again = await approve(order["reference"], review, admin={"email": "admin@test.com"})
+            again = await approve(order["reference"], admin={"email": "admin@test.com"})
             assert again["status"] == "already_fulfilled"
             assert await srv.db.pin_licenses.count_documents({"payment_ref": order["reference"]}) == 1
         run(go())

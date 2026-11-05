@@ -5,11 +5,13 @@ export interface EmailSendOptions {
   text?: string;
   replyTo?: string;
   senderName?: string;
+  messageId?: string;
 }
 
 export interface EmailSendResult {
   ok: boolean;
   error?: string;
+  deliveryUnknown?: boolean;
 }
 
 export interface ResolvedEmailSender {
@@ -56,6 +58,9 @@ export async function sendEmailDetailed(
       port,
       secure,
       auth: { user: smtpEmail, pass: smtpPassword },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 30_000,
     });
     await transporter.sendMail({
       from: { name: sender.name, address: sender.address },
@@ -66,12 +71,19 @@ export async function sendEmailDetailed(
       subject,
       html,
       text: options.text,
+      messageId: options.messageId,
     });
     return { ok: true };
   } catch (error) {
     const code = typeof error === "object" && error && "code" in error ? String(error.code) : "SMTP_ERROR";
     // Deliberately do not return server names, credentials, or provider responses.
-    return { ok: false, error: `Delivery provider rejected the message (${code}).` };
+    const responseCode = typeof error === "object" && error && "responseCode" in error ? Number(error.responseCode) : 0;
+    const command = typeof error === "object" && error && "command" in error ? String(error.command).trim().toUpperCase() : "";
+    const beforeMessage = ["CONN", "EHLO", "HELO", "STARTTLS", "AUTH", "MAIL FROM", "RCPT TO"].some((phase) => command === phase || command.startsWith(phase + " "));
+    const definitiveFailure = responseCode >= 400 || beforeMessage || ["EAUTH", "EENVELOPE", "EMESSAGE", "EDNS", "ETLS"].includes(code);
+    return { ok: false, deliveryUnknown: !definitiveFailure,
+      error: definitiveFailure ? `Delivery provider rejected the message (${code}).`
+        : `Email delivery outcome is unknown (${code}). Check the official sender's delivery log before retrying.` };
   }
 }
 

@@ -22,7 +22,8 @@ function matchesClause(doc: Doc, key: string, expected: unknown): boolean {
     if ("$gte" in ops && !(compareLoose(actual, ops["$gte"]) >= 0)) return false;
     if ("$lt" in ops && !(compareLoose(actual, ops["$lt"]) < 0)) return false;
     if ("$lte" in ops && !(compareLoose(actual, ops["$lte"]) <= 0)) return false;
-    const knownOps = ["$ne", "$in", "$exists", "$gt", "$gte", "$lt", "$lte"];
+    if ("$regex" in ops && !new RegExp(String(ops["$regex"]), String(ops["$options"] ?? "")).test(String(actual ?? ""))) return false;
+    const knownOps = ["$ne", "$in", "$exists", "$gt", "$gte", "$lt", "$lte", "$regex"];
     if (knownOps.some((op) => op in ops)) return true;
   }
   return identityEqual(actual, expected);

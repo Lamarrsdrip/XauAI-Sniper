@@ -8,7 +8,7 @@ const mailer = fs.readFileSync(path.join(__dirname, "..", "..", "backend_node", 
 describe("Premium manual gateway contract", () => {
   test("offers USDT in every country and bank transfer only in Nigeria", () => {
     expect(checkout).toContain('country === "NG"');
-    expect(checkout).toContain("Every country pays with USDT");
+    expect(checkout).toContain("Every country pays with crypto, including USDT");
     expect(checkout).toContain("Nigeria can also pay by bank transfer");
     expect(checkout).toContain("Bank transfer · NGN at checkout");
     expect(checkout).toContain('defaultCryptoChoice');

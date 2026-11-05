@@ -1,40 +1,203 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
+
 const apiClient = axios.create({ withCredentials: true });
-const inputClass = "w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-[13px] text-white outline-none focus:border-amber-300/50";
-const btnClass = "rounded-xl border border-white/15 bg-white/10 px-3.5 py-2.5 text-xs font-bold text-white disabled:opacity-40 hover:bg-white/15";
+const inputClass = "w-full min-w-0 rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-base text-white outline-none focus:border-amber-300/50";
+const btnClass = "min-h-11 rounded-xl border border-white/15 bg-white/10 px-3.5 py-2.5 text-sm font-bold text-white disabled:opacity-40 hover:bg-white/15";
+const reviewable = new Set(["MANUAL_PENDING", "MANUAL_SUBMITTED", "MANUAL_EXPIRED"]);
+
 function Label({ title, children }) {
-  return <label className="block space-y-1.5"><span className="text-[11px] font-medium text-white/55">{title}</span>{children}</label>;
+  return <label className="block space-y-1.5"><span className="text-xs font-medium text-white/55">{title}</span>{children}</label>;
 }
+function dateLabel(value) {
+  if (!value || Number.isNaN(Date.parse(value))) return "Not submitted";
+  return new Date(value).toLocaleString();
+}
+function amountLabel(order) {
+  const currency = order.currency || "USD";
+  const amount = Number(order.amount_minor) / 100;
+  if (!Number.isFinite(amount)) return "Amount unavailable";
+  try { return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount) + " " + currency; }
+  catch { return amount.toFixed(2) + " " + currency; }
+}
+function statusInfo(order) {
+  const status = order.payment_status;
+  if (status === "FULFILLMENT_FAILED" || order.fulfillment_error ||
+      (status === "FULFILLED" && (order.license_status !== "ISSUED" || order.fulfillment_email_status !== "SENT" || order.account_link_status === "EXISTING_LINK_REQUIRES_REVIEW"))) {
+    return ["Fulfillment failed", "border-rose-300/30 bg-rose-300/10 text-rose-200"];
+  }
+  if (status === "MANUAL_REJECTED") return ["Rejected", "border-rose-300/30 bg-rose-300/10 text-rose-200"];
+  if (status === "FULFILLED") return ["Approved", "border-emerald-300/30 bg-emerald-300/10 text-emerald-200"];
+  if (status === "FULFILLING") return ["Approved · fulfilling", "border-sky-300/30 bg-sky-300/10 text-sky-200"];
+  if (status === "MANUAL_EXPIRED") return ["Pending · payment window expired", "border-amber-300/30 bg-amber-300/10 text-amber-200"];
+  return ["Pending", "border-amber-300/30 bg-amber-300/10 text-amber-200"];
+}
+
 export default function DirectCheckoutAdmin({ api }) {
+  const [orders, setOrders] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("pending");
+  const [busyOrders, setBusyOrders] = useState({});
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const inflight = useRef(new Set());
+  const requestId = useRef(0);
+  const refreshOrders = useRef(null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(search.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  const loadOrders = useCallback(async (offset = 0) => {
+    const id = ++requestId.current;
+    setLoading(true);
+    try {
+      const result = await apiClient.get(api + "/admin/direct-checkout/orders", {
+        params: { status: statusFilter, q: query, limit: 50, offset },
+      });
+      if (id !== requestId.current) return;
+      const entries = result.data.entries || [];
+      setOrders((previous) => offset ? [...new Map([...previous, ...entries].map((order) => [order.reference, order])).values()] : entries);
+      setTotal(result.data.total ?? entries.length);
+      setError("");
+    } catch (e) {
+      if (id === requestId.current) setError(e.response?.data?.detail || "Unable to load payments. Please refresh.");
+    } finally {
+      if (id === requestId.current) setLoading(false);
+    }
+  }, [api, query, statusFilter]);
+
+  useEffect(() => {
+    refreshOrders.current = loadOrders;
+    loadOrders();
+    const timer = window.setInterval(() => loadOrders(), 30000);
+    return () => { window.clearInterval(timer); requestId.current += 1; };
+  }, [loadOrders]);
+
+  async function action(order, name) {
+    if (inflight.current.has(order.reference)) return;
+    const prompts = {
+      approve: "Approve payment for " + order.buyer_name + " (" + order.reference + ") and activate the purchased license?",
+      reject: "Reject payment for " + order.buyer_name + " (" + order.reference + ")?",
+      "retry-fulfillment": "Retry license activation and delivery for " + order.reference + "?",
+    };
+    if (!window.confirm(prompts[name])) return;
+    inflight.current.add(order.reference);
+    setBusyOrders((current) => ({ ...current, [order.reference]: true }));
+    setError(""); setNotice("");
+    try {
+      const result = await apiClient.post(api + "/admin/direct-checkout/" + encodeURIComponent(order.reference) + "/" + name, {});
+      const failed = result.data.status === "FULFILLMENT_FAILED";
+      if (failed) {
+        setStatusFilter("failed");
+        await refreshOrders.current();
+        setError(result.data.fulfillment_error || "Payment approved, but fulfillment failed. Use Retry Fulfillment below.");
+      } else {
+        await refreshOrders.current();
+        setNotice(name === "reject" ? order.reference + ": payment rejected."
+          : order.reference + ": payment approved. License: " + (result.data.license_status || "processing") + ". Email: " + (result.data.fulfillment_email_status || "processing") + ".");
+      }
+    } catch (e) {
+      await refreshOrders.current();
+      setError(e.response?.data?.detail || e.message || "Unable to update payment. Please refresh and retry.");
+    } finally {
+      inflight.current.delete(order.reference);
+      setBusyOrders((current) => ({ ...current, [order.reference]: false }));
+    }
+  }
+
+  return <div className="space-y-5" data-testid="admin-direct-checkout">
+    <section className="space-y-4" aria-labelledby="pending-payments-heading" data-testid="pending-payments">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h2 id="pending-payments-heading" className="font-heading text-2xl font-semibold text-white">Pending Payments</h2><p className="mt-1 text-sm text-white/55">Confirm receipt in your bank or wallet, then approve.</p></div>
+        <button type="button" className={btnClass} onClick={() => loadOrders()} disabled={loading}>Refresh</button>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-[1fr_180px]">
+        <label className="block"><span className="sr-only">Search by customer name, email, or order ID</span><input type="search" maxLength={254} className={inputClass} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Name, email, or order ID"/></label>
+        <label className="block"><span className="sr-only">Payment status</span><select className={inputClass} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <option className="bg-[#111216]" value="pending">Pending</option>
+          <option className="bg-[#111216]" value="approved">Approved</option>
+          <option className="bg-[#111216]" value="failed">Fulfillment failed</option>
+          <option className="bg-[#111216]" value="rejected">Rejected</option>
+          <option className="bg-[#111216]" value="all">All payments</option>
+        </select></label>
+      </div>
+      {error && <p role="alert" className="break-words rounded-xl border border-rose-300/30 bg-rose-300/10 p-3 text-sm text-rose-200">{error}</p>}
+      {notice && <p role="status" className="break-words rounded-xl border border-emerald-300/30 bg-emerald-300/10 p-3 text-sm text-emerald-200">{notice}</p>}
+      <div aria-live="polite" aria-busy={loading}>
+        <p className="mb-3 text-xs text-white/50">{loading ? "Updating payments…" : total + (total === 1 ? " payment" : " payments")}</p>
+        {!loading && orders.length === 0 && <p className="rounded-xl border border-white/10 p-5 text-sm text-white/55">No payments match this search and status.</p>}
+        <div className="grid items-start gap-3 lg:grid-cols-2">{orders.map((order) => {
+          const [status, tone] = statusInfo(order);
+          const busy = Boolean(busyOrders[order.reference]);
+          const needsRetry = status === "Fulfillment failed" || order.payment_status === "FULFILLING";
+          const asset = order.quote_details?.asset || order.asset || "Crypto";
+          const network = order.quote_details?.network || order.network;
+          return <article key={order.reference} className="min-w-0 rounded-2xl border border-white/10 bg-[#111216] p-4" aria-label={"Payment " + order.reference} data-testid="payment-card">
+            <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="break-words text-base font-semibold text-white">{order.buyer_name || "Customer"}</h3><span className={"rounded-full border px-2.5 py-1 text-xs font-semibold " + tone}>{status}</span></div>
+            <p className="mt-1 break-all text-sm text-white/75">{order.buyer_email}</p>
+            <p className="mt-1 break-all font-mono text-xs text-white/50">{order.reference}</p>
+            <p className="mt-3 text-sm font-medium text-white">{order.product_name || "One-Time XauCloud MT5 License"}</p>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1"><p className="font-mono text-base font-bold text-white">{amountLabel(order)}</p><p className="text-sm text-white/70">{order.method === "BANK" ? "Bank Transfer" : asset + " Crypto"}{order.method !== "BANK" && network ? " · " + network : ""}</p></div>
+            <p className="mt-2 text-xs text-white/50">{order.submitted_at ? "Submitted " + dateLabel(order.submitted_at) : "Created " + dateLabel(order.created_at)}</p>
+            {(order.fulfillment_error || order.fulfillment_email_error) && <p role="alert" className="mt-3 break-words rounded-xl border border-rose-300/20 bg-rose-300/5 p-3 text-sm text-rose-200">{order.fulfillment_error || order.fulfillment_email_error}</p>}
+            {order.account_link_status === "EXISTING_LINK_REQUIRES_REVIEW" && !order.fulfillment_error && <p role="alert" className="mt-3 text-sm text-rose-200">Customer account linking requires recovery. Use Retry Fulfillment.</p>}
+            {reviewable.has(order.payment_status) && <div className="mt-4 grid grid-cols-2 gap-3">
+              <button type="button" className="min-h-12 touch-manipulation rounded-xl bg-emerald-400 px-3 py-3 text-sm font-bold text-[#062315] hover:bg-emerald-300 disabled:opacity-40" disabled={busy} onClick={() => action(order, "approve")}>✓ APPROVE</button>
+              <button type="button" className="min-h-12 touch-manipulation rounded-xl border border-rose-300/30 bg-rose-400/15 px-3 py-3 text-sm font-bold text-rose-200 hover:bg-rose-400/25 disabled:opacity-40" disabled={busy} onClick={() => action(order, "reject")}>✕ REJECT</button>
+            </div>}
+            {needsRetry && <button type="button" className={btnClass + " mt-4 w-full min-h-12 border-amber-300/30 text-amber-200"} disabled={busy} onClick={() => action(order, "retry-fulfillment")}>{busy ? "Retrying…" : "Retry Fulfillment"}</button>}
+            {busy && <p role="status" className="mt-2 text-xs text-white/65">Updating payment…</p>}
+            <details className="mt-3 border-t border-white/10 pt-3 text-xs text-white/60">
+              <summary className="cursor-pointer py-1 text-white/65">Order details</summary>
+              <dl className="mt-2 space-y-2 break-words">
+                <div><dt className="inline text-white/40">License: </dt><dd className="inline">{order.license_status || "NOT_ISSUED"}</dd></div>
+                <div><dt className="inline text-white/40">Account: </dt><dd className="inline">{order.account_link_status || "NOT_LINKED"}</dd></div>
+                <div><dt className="inline text-white/40">License email: </dt><dd className="inline">{order.fulfillment_email_status || "NOT_SENT"}</dd></div>
+                <div><dt className="inline text-white/40">Created: </dt><dd className="inline">{dateLabel(order.created_at)}</dd></div>
+                <div><dt className="inline text-white/40">Submitted: </dt><dd className="inline">{dateLabel(order.submitted_at)}</dd></div>
+                {order.approved_by && <div><dt className="inline text-white/40">Approved by: </dt><dd className="inline">{order.approved_by} · {dateLabel(order.approved_at)}</dd></div>}
+                {order.rejected_by && <div><dt className="inline text-white/40">Rejected by: </dt><dd className="inline">{order.rejected_by} · {dateLabel(order.rejected_at)}</dd></div>}
+              </dl>
+            </details>
+          </article>;
+        })}</div>
+        {orders.length < total && <button type="button" className={btnClass + " mt-4 w-full"} disabled={loading} onClick={() => loadOrders(orders.length)}>Load more payments</button>}
+      </div>
+    </section>
+    <PaymentSettings api={api}/>
+  </div>;
+}
+
+function PaymentSettings({ api }) {
   const [cfg, setCfg] = useState(null);
   const [bankCheckoutLive, setBankCheckoutLive] = useState(null);
-  const [orders, setOrders] = useState([]);
+  const [bankUnavailableReason, setBankUnavailableReason] = useState(null);
   const [dollars, setDollars] = useState("");
   const [fx, setFx] = useState("");
   const [wallets, setWallets] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [notes, setNotes] = useState({});
-  const [evidence, setEvidence] = useState({});
-  const [proofView, setProofView] = useState(null);
   const load = useCallback(async () => {
     try {
-      const [config, result, publicConfig] = await Promise.all([
+      const [config, publicConfig] = await Promise.all([
         apiClient.get(api + "/admin/direct-checkout/config"),
-        apiClient.get(api + "/admin/direct-checkout/orders"),
         apiClient.get(api + "/purchase/direct/config"),
       ]);
       setCfg(config.data);
       setBankCheckoutLive(publicConfig.data.bank_enabled === true);
-      setOrders(result.data.entries || []);
+      setBankUnavailableReason(publicConfig.data.bank_unavailable_reason || null);
       setDollars(config.data.price_usd_cents ? (config.data.price_usd_cents / 100).toFixed(2) : "");
       setFx(config.data.usd_ngn_rate || "");
       setWallets(config.data.wallets || []);
-    } catch (e) { setError(e.response?.data?.detail || "Unable to fetch direct checkout administration."); }
+      setError("");
+    } catch (e) { setError(e.response?.data?.detail || "Unable to load payment configuration."); }
   }, [api]);
-  useEffect(() => { load(); }, [load]);
   async function save() {
     setBusy(true); setError(""); setNotice("");
     try {
@@ -46,120 +209,54 @@ export default function DirectCheckoutAdmin({ api }) {
       const payload = {
         price_usd_cents: cents,
         bank_enabled: cfg.bank_enabled, crypto_enabled: cfg.crypto_enabled,
-        wallets: wallets.map((w) => ({ asset: w.asset, network: w.network, address: w.address.trim() }))
+        wallets: wallets.map((w) => ({ asset: w.asset, network: w.network, address: w.address.trim() })),
       };
-      // Do not refresh a rate timestamp just by saving unrelated settings.
+      // Preserve the reviewed rate timestamp when unrelated settings change.
       if (fx.trim() !== (cfg.usd_ngn_rate || "")) payload.usd_ngn_rate = fx.trim();
       await apiClient.put(api + "/admin/direct-checkout/config", payload);
-      setNotice("Configuration saved. Production payments require validated destinations and operational review.");
       await load();
+      setNotice("Payment configuration saved.");
     } catch (e) { setError(e.response?.data?.detail || e.message || "Could not save configuration."); }
     finally { setBusy(false); }
   }
-  async function viewProof(reference) {
-    setError("");
+  async function saveReviewedRate() {
+    setBusy(true); setError(""); setNotice("");
     try {
-      const response = await apiClient.get(api + "/admin/direct-checkout/" + encodeURIComponent(reference));
-      const src = response.data?.order?.evidence_image;
-      if (typeof src !== "string" || !/^data:image\/(png|jpeg|webp);base64,/.test(src)) throw new Error("No safe image proof is stored.");
-      setProofView({ reference, src });
-    } catch (err) { setError(err.response?.data?.detail || err.message || "Unable to load evidence."); }
-  }
-  async function action(reference, name) {
-    setError(""); setNotice("");
-    const verificationReference = (evidence[reference] || "").trim();
-    const reviewNotes = (notes[reference] || "").trim();
-    if (name === "approve" && (verificationReference.length < 6 || reviewNotes.length < 12)) {
-      setError("To approve " + reference + ", enter the independently verified bank/chain transaction ID (6+ characters) and notes confirming the amount, beneficiary, and verification (12+ characters).");
-      return;
-    }
-    if (name === "reject" && reviewNotes.length < 12) {
-      setError("Enter a rejection reason of at least 12 characters. A verified transaction ID is not required for rejection.");
-      return;
-    }
-    const confirmations = {
-      approve: "I independently verified this payment against the bank or blockchain record, including amount and destination. Approve and issue the license?",
-      reject: "Reject this order and notify the customer using the reason entered?",
-      "resend-license": "Resend the existing license PIN to the verified purchaser's email? No new license will be created.",
-      "retry-fulfillment": "Retry fulfillment of this already-approved payment? No new charge or duplicate license will be created.",
-    };
-    if (!window.confirm(confirmations[name])) return;
-    setBusy(true);
-    try {
-      const payload = name === "approve" ? { evidence_reference: verificationReference, verification_notes: reviewNotes }
-        : name === "reject" ? { verification_notes: reviewNotes } : {};
-      const result = await apiClient.post(api + "/admin/direct-checkout/" + encodeURIComponent(reference) + "/" + name, payload);
-      const message = name === "approve" ? "Approval processed; check the license and email statuses below."
-        : name === "reject" ? "Payment rejected with an audit record."
-        : name === "retry-fulfillment" ? "Fulfillment recovery processed; inspect the resulting license and email statuses."
-        : "License email resend attempted; inspect its recorded delivery status.";
-      setNotice("Order " + reference + ": " + message + " (" + (result.data?.status || "updated") + ")");
+      await apiClient.put(api + "/admin/direct-checkout/config", { usd_ngn_rate: fx.trim() });
       await load();
-    } catch (e) { setError(e.response?.data?.detail || e.message || "Unable to update order."); }
+      setNotice("Reviewed USD/NGN rate saved.");
+    } catch (e) { setError(e.response?.data?.detail || e.message || "Could not save the reviewed rate."); }
     finally { setBusy(false); }
   }
-  return <div className="space-y-5" data-testid="admin-direct-checkout">
-    <div><h2 className="font-heading text-2xl font-semibold text-white">Manual payment operations</h2><p className="mt-1 text-sm text-white/45">USD is the source price. Bank FX and crypto destinations must be approved manually before checkout is enabled.</p></div>
-    {error && <p role="alert" className="rounded-xl border border-rose-300/30 bg-rose-300/10 p-3 text-sm text-rose-300">{error}</p>}
-    {notice && <p className="rounded-xl border border-emerald-300/30 bg-emerald-300/10 p-3 text-sm text-emerald-300">{notice}</p>}
-    {cfg && <section className="rounded-2xl border border-white/10 bg-[#111216] p-5">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h3 className="text-base font-bold text-white">Payment settings</h3><button onClick={load} className={btnClass}>Refresh</button></div>
-      <div className="grid gap-4 md:grid-cols-2">
-        <Label title="One-time product price (USD)"><input className={inputClass} inputMode="decimal" value={dollars} onChange={(e) => setDollars(e.target.value)} placeholder="Set official selling price"/></Label>
-        <Label title="USD → NGN rate (manually reviewed; valid 24h)"><input className={inputClass} inputMode="decimal" value={fx} onChange={(e) => setFx(e.target.value)} placeholder="Rate from a verified current source"/></Label>
-      </div>
-      <p className="mt-2 text-[11px] text-white/40">Rate timestamp: {cfg.rate_as_of ? new Date(cfg.rate_as_of).toLocaleString() : "Not configured"} · Rates older than 24 hours fail closed.</p>
-      <p role="status" className={"mt-3 rounded-xl border px-3 py-2.5 text-xs leading-5 " + (bankCheckoutLive ? "border-emerald-300/20 bg-emerald-300/5 text-emerald-200" : "border-amber-300/30 bg-amber-300/5 text-amber-200")}>
-        Customer-facing Nigerian bank checkout: <strong>{bankCheckoutLive ? "AVAILABLE" : "UNAVAILABLE"}</strong>.
-        {!bankCheckoutLive && " To enable it, verify Bank Transfers settings, turn on Nigerian manual bank, enter a current verified USD/NGN rate here, save and refresh. The public checkout will not accept bank orders while any requirement is missing."}
-      </p>
-      <div className="mt-5 flex flex-wrap gap-5">
-        <label className="flex items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={cfg.bank_enabled} onChange={(e) => setCfg({ ...cfg, bank_enabled: e.target.checked })}/> Enable Nigerian manual bank</label>
-        <label className="flex items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={cfg.crypto_enabled} onChange={(e) => setCfg({ ...cfg, crypto_enabled: e.target.checked })}/> Enable USDT for every country</label>
-      </div>
-      <p className="mt-4 text-[12px] leading-5 text-white/45">USDT checkout is available in every country while this is on. Nigeria is the only country that can also pay by bank transfer.</p>
-      <div className="mt-5 space-y-3">
-        <p className="text-xs font-bold text-white/70">Approved receiving wallets</p>
-        {wallets.map((w, i) => <div key={i} className="grid gap-2 md:grid-cols-[100px_100px_1fr_auto]">
-          <select className={inputClass} value={w.asset} onChange={(e) => setWallets(wallets.map((v, j) => i === j ? { ...v, asset: e.target.value } : v))}><option className="bg-black" value="USDT">USDT</option><option className="bg-black" value="USDC">USDC</option></select>
-          <select className={inputClass} value={w.network} onChange={(e) => setWallets(wallets.map((v, j) => i === j ? { ...v, network: e.target.value } : v))}><option className="bg-black" value="ERC20">ERC20</option><option className="bg-black" value="TRC20">TRC20</option></select>
-          <input className={inputClass} aria-label="Receiving wallet address" placeholder="Approved destination address" value={w.address} onChange={(e) => setWallets(wallets.map((v, j) => i === j ? { ...v, address: e.target.value } : v))}/>
-          <button className={btnClass} onClick={() => setWallets(wallets.filter((_, j) => i !== j))}>Remove</button>
-        </div>)}
-        <button className={btnClass} onClick={() => setWallets([...wallets, { asset: "USDT", network: "ERC20", address: "" }])}>Add approved wallet</button>
-        <p className="text-[11px] text-white/40">Nigerian bank account details are managed in the existing Bank Transfers tab. Wallets must be independently verified before activating payments.</p>
-      </div>
-      <button disabled={busy} onClick={save} className="mt-5 rounded-xl bg-amber-300 px-5 py-3 text-sm font-bold text-black disabled:opacity-50">Save direct-checkout configuration</button>
-    </section>}
-    <section className="rounded-2xl border border-white/10 bg-[#111216] p-5">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h3 className="text-base font-bold text-white">Manual orders and review</h3><button className={btnClass} onClick={load}>Refresh orders</button></div>
-      {orders.length === 0 && <p className="text-sm text-white/45">No direct-checkout orders yet.</p>}
-      <div className="space-y-3">{orders.map((order) => <div key={order.reference} className="rounded-xl border border-white/10 bg-white/[.03] p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2"><strong className="break-all font-mono text-xs text-white">{order.reference}</strong><span className="rounded-lg bg-white/10 px-2 py-1 text-xs text-amber-200">{order.payment_status}</span></div>
-        <p className="mt-2 text-[12px] text-white/60">{order.buyer_name} · {order.buyer_email} · {order.country} · {order.method}</p>
-        <p className="mt-1 font-mono text-[12px] text-white/60">{order.amount_minor / 100} {order.currency} · {new Date(order.created_at).toLocaleString()}</p>
-        <p className="mt-1 break-all text-xs text-white/65">{order.method === "BANK"
-          ? "Account name sent from: " + (order.sender_account_name || "Not submitted")
-          : "Submitted reference: " + (order.submitted_reference || "Not submitted")}</p>
-        <p className="mt-2 text-xs text-white/60">License: <strong>{order.license_status || "Not issued"}</strong> · Account: <strong>{order.account_link_status || "NOT_LINKED"}</strong> · License email: <strong>{order.fulfillment_email_status || "NOT_SENT"}</strong></p>
-        {order.approved_by && <p className="mt-1 text-xs text-white/45">Reviewed by {order.approved_by} · {order.approved_at ? new Date(order.approved_at).toLocaleString() : "Pending completion"}</p>}
-        {order.has_proof && <button className={btnClass + " mt-2"} type="button" onClick={() => viewProof(order.reference)}>View optional proof (unverified)</button>}
-        {order.payment_status === "MANUAL_SUBMITTED" && <div className="mt-4 space-y-2">
-          <p className="text-xs leading-5 text-white/55">Approval requires an independently confirmed transaction ID and review notes. Rejection requires only a written reason. The customer's submitted reference alone is not verification.</p>
-          <input className={inputClass} aria-label="Authoritative verification reference" value={evidence[order.reference] || ""} onChange={(e) => setEvidence({ ...evidence, [order.reference]: e.target.value })} placeholder="Independently verified bank/chain transaction ID"/>
-          <textarea className={inputClass} aria-label="Review verification notes or rejection reason" value={notes[order.reference] || ""} onChange={(e) => setNotes({ ...notes, [order.reference]: e.target.value })} rows={2} placeholder="For approval: amount, beneficiary/network, and verification date. For rejection: reason."/>
-          <div className="flex flex-wrap gap-2"><button className={btnClass} disabled={busy} onClick={() => action(order.reference, "approve")}>Approve payment & activate license</button><button className={btnClass} disabled={busy} onClick={() => action(order.reference, "reject")}>Reject with reason</button></div>
-        </div>}
-        {(order.payment_status === "FULFILLING" || (order.payment_status === "FULFILLED" && order.license_status === "NOT_ISSUED")) && <button className={btnClass + " mt-3"} disabled={busy} onClick={() => action(order.reference, "retry-fulfillment")}>Recover approved license fulfillment</button>}
-        {order.payment_status === "FULFILLED" && <button className={btnClass + " mt-3"} disabled={busy || order.license_status !== "ISSUED"} onClick={() => action(order.reference, "resend-license")}>Resend existing license email</button>}
-      </div>)}</div>
-    </section>
-    {proofView && <div role="dialog" aria-label="Unverified transfer evidence" aria-modal="true" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4">
-      <div className="max-h-[90vh] max-w-xl overflow-auto rounded-2xl border border-white/20 bg-[#121416] p-5">
-        <div className="flex justify-between gap-4"><h3 className="text-sm font-bold text-white">Supporting evidence · {proofView.reference}</h3><button type="button" className={btnClass} onClick={() => setProofView(null)}>Close</button></div>
-        <p className="mt-2 text-xs leading-5 text-amber-200">Not verified. Check an authoritative bank statement or blockchain explorer before approving.</p>
-        <img src={proofView.src} alt="Customer submitted payment evidence, unverified" className="mt-4 max-h-[65vh] max-w-full rounded-xl object-contain"/>
-      </div>
-    </div>}
-  </div>;
+  return <details className="rounded-2xl border border-white/10 bg-[#111216] p-4" onToggle={(event) => { if (event.currentTarget.open && !cfg) load(); }}>
+    <summary className="cursor-pointer py-1 text-sm font-semibold text-white/70">Payment settings</summary>
+    <div className="mt-4 space-y-4">
+      {error && <p role="alert" className="text-sm text-rose-200">{error}</p>}
+      {notice && <p role="status" className="text-sm text-emerald-200">{notice}</p>}
+      {!cfg ? <button type="button" className={btnClass} onClick={load}>Load settings</button> : <>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Label title="One-time product price (USD)"><input className={inputClass} inputMode="decimal" value={dollars} onChange={(e) => setDollars(e.target.value)}/></Label>
+          <Label title="Reviewed USD → NGN rate"><input className={inputClass} inputMode="decimal" value={fx} onChange={(e) => setFx(e.target.value)}/></Label>
+        </div>
+        <div className="flex flex-wrap items-center gap-3"><p className="text-xs text-white/50">Rate reviewed: {cfg.rate_as_of ? dateLabel(cfg.rate_as_of) : "Not configured"}</p><button type="button" className={btnClass} disabled={busy || !fx.trim()} onClick={saveReviewedRate}>Save reviewed rate</button></div>
+        <p className="text-sm text-white/70">Nigerian bank checkout: <strong>{bankCheckoutLive ? "Available" : "Unavailable"}</strong>{!bankCheckoutLive && " · " + ({ USD_PRICE_MISSING: "Set the official USD price.", BANK_DISABLED: "Enable bank transfer here and in the bank account settings.", BANK_DETAILS_MISSING: "Restore the verified receiving bank account in Legacy Bank Orders.", FX_RATE_MISSING: "Enter the configured, verified USD/NGN rate.", FX_RATE_INVALID: "Correct the saved USD/NGN rate.", FX_TIMESTAMP_MISSING: "Review and save the configured USD/NGN rate.", FX_RATE_STALE: "Review the configured rate and use Save reviewed rate; the prior review is over 24 hours old." }[bankUnavailableReason] || "Check the saved bank account and pricing configuration.")}</p>
+        <div className="flex flex-wrap gap-5">
+          <label className="flex items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={Boolean(cfg.bank_enabled)} onChange={(e) => setCfg({ ...cfg, bank_enabled: e.target.checked })}/> Enable Nigerian bank transfer</label>
+          <label className="flex items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={Boolean(cfg.crypto_enabled)} onChange={(e) => setCfg({ ...cfg, crypto_enabled: e.target.checked })}/> Enable crypto for every country</label>
+        </div>
+        <div className="space-y-3">
+          <p className="text-xs font-bold text-white/70">Configured receiving wallets</p>
+          {wallets.map((wallet, index) => <div key={index} className="grid gap-2 md:grid-cols-[100px_100px_1fr_auto]">
+            <label><span className="sr-only">Wallet {index + 1} coin</span><select className={inputClass} value={wallet.asset} onChange={(e) => setWallets(wallets.map((value, i) => index === i ? { ...value, asset: e.target.value } : value))}><option className="bg-black" value="USDT">USDT</option><option className="bg-black" value="USDC">USDC</option></select></label>
+            <label><span className="sr-only">Wallet {index + 1} network</span><select className={inputClass} value={wallet.network} onChange={(e) => setWallets(wallets.map((value, i) => index === i ? { ...value, network: e.target.value } : value))}><option className="bg-black" value="ERC20">ERC20</option><option className="bg-black" value="TRC20">TRC20</option></select></label>
+            <input className={inputClass} aria-label={"Wallet " + (index + 1) + " receiving address"} value={wallet.address} onChange={(e) => setWallets(wallets.map((value, i) => index === i ? { ...value, address: e.target.value } : value))}/>
+            <button type="button" className={btnClass} onClick={() => setWallets(wallets.filter((_, i) => index !== i))}>Remove</button>
+          </div>)}
+          <button type="button" className={btnClass} onClick={() => setWallets([...wallets, { asset: "USDT", network: "ERC20", address: "" }])}>Add configured wallet</button>
+          <p className="text-xs text-white/50">Nigerian bank account details are managed under Legacy Bank Orders. Save only verified receiving accounts and wallets.</p>
+        </div>
+        <button type="button" disabled={busy} onClick={save} className="min-h-12 rounded-xl bg-amber-300 px-5 py-3 text-sm font-bold text-black disabled:opacity-50">Save payment settings</button>
+      </>}
+    </div>
+  </details>;
 }

@@ -1,14 +1,28 @@
 import { getDb } from "../db.js";
 import { env } from "../env.js";
-import { sendEmail } from "./email.js";
+import { sendEmail, sendEmailDetailed, type EmailSendResult } from "./email.js";
 import { adminNotifyRow, emailBranding, emailLinkButton, emailStep, notifyAdmin, TELEGRAM_SUPPORT_URL } from "./emailBranding.js";
 import { currentEaRelease } from "./releaseManifest.js";
 import { publishedTransactionalRender } from "./adminOpsControl.js";
 
 /** Port of server.py:803 `send_pin_email` -- fulfillment/onboarding email. */
 export async function sendPinEmail(toEmail: string, buyerName: string, pin: string): Promise<boolean> {
+  return (await sendPinEmailDetailed(toEmail, buyerName, pin)).ok;
+}
+
+export async function sendPinEmailDetailed(toEmail: string, buyerName: string, pin: string, messageId?: string): Promise<EmailSendResult> {
+  try { return await renderAndSendPinEmail(toEmail, buyerName, pin, messageId); }
+  catch {
+    // Rendering and sender/settings lookup happen before SMTP submission.
+    // Transport errors are already classified by sendEmailDetailed, so a
+    // preparation failure is known not to have delivered a message.
+    return { ok: false, error: "Official license email template or sender settings could not be prepared. Retry fulfillment." };
+  }
+}
+
+async function renderAndSendPinEmail(toEmail: string, buyerName: string, pin: string, messageId?: string): Promise<EmailSendResult> {
   const override = await publishedTransactionalRender("license_delivery", { buyer_name: buyerName, first_name: buyerName, buyer_email: toEmail, account_email: toEmail, license_pin: pin });
-  if (override) return sendEmail(toEmail, String(override["subject"]), String(override["html"]), { text: String(override["text"] ?? "") });
+  if (override) return sendEmailDetailed(toEmail, String(override["subject"]), String(override["html"]), { text: String(override["text"] ?? ""), messageId });
   const b = await emailBranding();
   const release = await currentEaRelease();
   const versionText = release ? release.version : "your Command Center dashboard";
@@ -71,7 +85,7 @@ Keep this PIN private -- it works on one MT5 account. Trading involves risk; pas
 </td></tr>
 </table>
 </div>`;
-  return sendEmail(toEmail, `Your ${b.sender_name} License PIN`, html);
+  return sendEmailDetailed(toEmail, `Your ${b.sender_name} License PIN`, html, { messageId });
 }
 
 /** Port of server.py:898 `notify_admin_payment_started`. */
