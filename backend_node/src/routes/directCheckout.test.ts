@@ -273,6 +273,37 @@ describe("USD-first manual checkout HTTP and fulfillment lifecycle", () => {
     expect(state.notified.filter((s) => s === "pin")).toHaveLength(1);
   });
 
+  it("links a verified purchase to the existing purchaser account without replacing another license", async () => {
+    await state.db.collection("cloud_users").insertOne({ id: "customer-001", email: "test@example.com" });
+    const order = (await quoteBank(app)).json();
+    await app.inject({ method: "POST", url: "/purchase/direct/" + order.reference + "/submit",
+      payload: { sender_account_name: "Test Customer" } });
+    const response = await app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/approve",
+      payload: { evidence_reference: "TEST-VERIFIED-LEDGER-1",
+        verification_notes: "Independently confirmed beneficiary and received amount." } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().account_link_status).toBe("LINKED");
+    const user = await state.db.collection("cloud_users").findOne({ id: "customer-001" });
+    expect(user?.["license_key"]).toBe("ASE-ABCD-EFGH");
+    expect(user?.["command_license_key"]).toBe("ASE-ABCD-EFGH");
+    expect(state.db.collection("pin_licenses").docs).toHaveLength(1);
+  });
+
+  it("preserves an existing customer's prior license and records an account-link conflict", async () => {
+    await state.db.collection("cloud_users").insertOne({ id: "customer-002", email: "test@example.com",
+      license_key: "ASE-OLD1-OLD2" });
+    const order = (await quoteBank(app)).json();
+    await app.inject({ method: "POST", url: "/purchase/direct/" + order.reference + "/submit",
+      payload: { sender_account_name: "Test Customer" } });
+    const response = await app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/approve",
+      payload: { evidence_reference: "TEST-VERIFIED-LEDGER-2",
+        verification_notes: "Independently confirmed beneficiary and received amount." } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().account_link_status).toBe("EXISTING_LINK_REQUIRES_REVIEW");
+    expect((await state.db.collection("cloud_users").findOne({ id: "customer-002" }))?.["license_key"]).toBe("ASE-OLD1-OLD2");
+    expect(state.db.collection("pin_licenses").docs).toHaveLength(1);
+  });
+
   it("receipt uploads are refused and never stored", async () => {
     const order = (await quoteBank(app)).json();
     const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
