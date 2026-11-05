@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   db: null as unknown as FakeDb,
   notified: [] as string[],
   bankConfigured: true,
+  deliverySucceeds: true,
 }));
 vi.mock("../db.js", () => ({ getDb: () => state.db }));
 vi.mock("../auth.js", () => ({
@@ -30,11 +31,11 @@ vi.mock("../services/manualCheckoutInstructions.js", () => ({
     return true;
   },
 }));
-vi.mock("../services/paymentFulfillment.js", () => ({ generateUniquePin: () => "ASE-MANUAL-TEST-PIN" }));
+vi.mock("../services/paymentFulfillment.js", () => ({ generateUniquePin: () => "ASE-ABCD-EFGH" }));
 vi.mock("../services/paymentEmails.js", () => ({
   notifyAdminPaymentStarted: async () => { state.notified.push("started"); },
   notifyAdminNewSale: async () => { state.notified.push("sold"); },
-  sendPinEmail: async () => { state.notified.push("pin"); return true; },
+  sendPinEmail: async () => { state.notified.push("pin"); return state.deliverySucceeds; },
   recordFulfillmentEmailResult: async () => {},
 }));
 
@@ -71,6 +72,7 @@ describe("USD-first manual checkout HTTP and fulfillment lifecycle", () => {
     state.db.uniqueIndexes["pin_licenses"] = ["payment_ref"];
     state.notified = [];
     state.bankConfigured = true;
+    state.deliverySucceeds = true;
     await state.db.collection("admin_settings").insertOne(testSettings());
     app = await makeApp();
   });
@@ -215,6 +217,91 @@ describe("USD-first manual checkout HTTP and fulfillment lifecycle", () => {
     expect((await approve()).json().status).toBe("already_fulfilled");
     expect(state.db.collection("pin_licenses").docs).toHaveLength(1);
     expect(state.notified.filter((s) => s === "pin")).toHaveLength(1);
+  });
+
+
+  it("rejects a submitted payment with a reason alone and never issues a license", async () => {
+    const order = (await quoteCrypto(app)).json();
+    await app.inject({ method: "POST", url: "/purchase/direct/" + order.reference + "/submit",
+      payload: { payment_reference: "0x" + "a".repeat(64) } });
+    const rejected = await app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/reject",
+      payload: { verification_notes: "Bank or chain evidence does not match payment destination." } });
+    expect(rejected.statusCode).toBe(200);
+    expect(rejected.json().status).toBe("MANUAL_REJECTED");
+    expect(state.db.collection("pin_licenses").docs).toHaveLength(0);
+    expect((await app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/approve",
+      payload: { evidence_reference: "VERIFIED-TXN-1", verification_notes: "Independently verified the payment and amount." } })).statusCode).toBe(409);
+  });
+
+  it("records failed license email without losing fulfillment and supports audited resend", async () => {
+    state.deliverySucceeds = false;
+    const order = (await quoteBank(app)).json();
+    await app.inject({ method: "POST", url: "/purchase/direct/" + order.reference + "/submit",
+      payload: { sender_account_name: "Test Customer" } });
+    const approval = await app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/approve",
+      payload: { evidence_reference: "VERIFIED-BANK-TXN", verification_notes: "Checked official bank ledger and beneficiary." } });
+    expect(approval.statusCode).toBe(200);
+    expect(approval.json()).toMatchObject({ status: "FULFILLED", license_status: "ISSUED", fulfillment_email_status: "RETRYABLE" });
+    state.deliverySucceeds = true;
+    const resend = await app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/resend-license" });
+    expect(resend.statusCode).toBe(200);
+    expect(resend.json().status).toBe("SENT");
+    expect(state.db.collection("pin_licenses").docs).toHaveLength(1);
+    const tx = await state.db.collection("payment_transactions").findOne({ reference: order.reference });
+    expect(tx?.["fulfillment_email_status"]).toBe("SENT");
+    const entries = (await app.inject({ method: "GET", url: "/admin/direct-checkout/orders" })).json().entries;
+    expect(entries.find((e: {reference: string}) => e.reference === order.reference).license_status).toBe("ISSUED");
+    expect(state.db.collection("payment_review_log").docs.some((e) => e.action === "RESEND_LICENSE_EMAIL")).toBe(true);
+  });
+
+  it("recovers stale approved fulfillment without creating another license", async () => {
+    const order = (await quoteBank(app)).json();
+    await app.inject({ method: "POST", url: "/purchase/direct/" + order.reference + "/submit",
+      payload: { sender_account_name: "Test Customer" } });
+    await state.db.collection("payment_transactions").updateOne({ reference: order.reference },
+      { $set: { payment_status: "FULFILLING", approved_by: "reviewer@example.com",
+        approved_at: new Date().toISOString(), verified_external_reference: "BANK-VERIFIED-1",
+        fulfillment_claimed_at: new Date(Date.now() - 12 * 60000).toISOString() } });
+    await state.db.collection("pin_licenses").insertOne({
+      pin: "ASE-ABCD-EFGH", buyer_email: "test@example.com", buyer_name: "Test Customer",
+      is_active: true, is_used: false, payment_ref: order.reference, provider: "MANUAL_DIRECT",
+    });
+    const retry = await app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/retry-fulfillment" });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json().status).toBe("FULFILLED");
+    expect(state.db.collection("pin_licenses").docs).toHaveLength(1);
+    expect(state.notified.filter((s) => s === "pin")).toHaveLength(1);
+  });
+
+  it("links a verified purchase to the existing purchaser account without replacing another license", async () => {
+    await state.db.collection("cloud_users").insertOne({ id: "customer-001", email: "test@example.com" });
+    const order = (await quoteBank(app)).json();
+    await app.inject({ method: "POST", url: "/purchase/direct/" + order.reference + "/submit",
+      payload: { sender_account_name: "Test Customer" } });
+    const response = await app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/approve",
+      payload: { evidence_reference: "TEST-VERIFIED-LEDGER-1",
+        verification_notes: "Independently confirmed beneficiary and received amount." } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().account_link_status).toBe("LINKED");
+    const user = await state.db.collection("cloud_users").findOne({ id: "customer-001" });
+    expect(user?.["license_key"]).toBe("ASE-ABCD-EFGH");
+    expect(user?.["command_license_key"]).toBe("ASE-ABCD-EFGH");
+    expect(state.db.collection("pin_licenses").docs).toHaveLength(1);
+  });
+
+  it("preserves an existing customer's prior license and records an account-link conflict", async () => {
+    await state.db.collection("cloud_users").insertOne({ id: "customer-002", email: "test@example.com",
+      license_key: "ASE-OLD1-OLD2" });
+    const order = (await quoteBank(app)).json();
+    await app.inject({ method: "POST", url: "/purchase/direct/" + order.reference + "/submit",
+      payload: { sender_account_name: "Test Customer" } });
+    const response = await app.inject({ method: "POST", url: "/admin/direct-checkout/" + order.reference + "/approve",
+      payload: { evidence_reference: "TEST-VERIFIED-LEDGER-2",
+        verification_notes: "Independently confirmed beneficiary and received amount." } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().account_link_status).toBe("EXISTING_LINK_REQUIRES_REVIEW");
+    expect((await state.db.collection("cloud_users").findOne({ id: "customer-002" }))?.["license_key"]).toBe("ASE-OLD1-OLD2");
+    expect(state.db.collection("pin_licenses").docs).toHaveLength(1);
   });
 
   it("receipt uploads are refused and never stored", async () => {

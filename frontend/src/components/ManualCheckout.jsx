@@ -300,8 +300,11 @@ export default function ManualCheckout({ api, config, onClose }) {
             {filtered.filter((c) => c.code !== "NG").length === 0 && <div className="p-4 text-[13px] text-[#697d70]">No matching country</div>}
           </div>
           {country && <div className={"mt-4 rounded-xl px-4 py-3 text-[12px] " + (enabled ? "bg-[#e8f5ee] text-[#236246]" : "bg-[#fff4e6] text-[#875825]")}>
-            {enabled ? (isNigeria ? "Nigeria can pay by bank transfer or USDT." : "USDT crypto is available for this country.")
-              : "Crypto checkout is not configured yet. No payment will be requested."}
+            {enabled ? (isNigeria
+              ? bankOn ? "Nigeria: bank transfer and USDT are available. Bank transfer is the default."
+                : "USDT is available. Bank transfer is temporarily unavailable; it cannot be selected until it is restored."
+              : "USDT crypto is available for this country.")
+              : "Checkout is temporarily unavailable. No payment will be requested."}
           </div>}
           {error && <p role="alert" className="mt-3 text-sm text-[#a1352b]">{error}</p>}
           <button type="button" disabled={!country || !enabled} onClick={() => { setError(""); setStep("details"); }} className={primaryButton + " mt-5"}>{buttonLabel(false, "Continue to payment details")}</button>
@@ -323,17 +326,18 @@ export default function ManualCheckout({ api, config, onClose }) {
             <span className="mt-2 flex items-start gap-2 text-[12px] font-medium leading-5 text-[#597064]"><Mail size={14} className="mt-0.5 shrink-0"/> We'll email your payment details here immediately after creating the order.</span>
           </label>
           {isNigeria && <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <button type="button" disabled={!bankOn} onClick={() => setPayMethod("BANK")}
-              className={"rounded-2xl border p-4 text-left " + (payMethod === "BANK" ? "border-[#28765b] bg-[#eaf5ed]" : "border-[#e0e8df] bg-white")}>
+            <button type="button" disabled={!bankOn} aria-pressed={bankOn && payMethod === "BANK"} aria-label={"Nigerian bank transfer" + (bankOn ? "" : " - temporarily unavailable")} onClick={() => { setPayMethod("BANK"); setError(""); }}
+              className={"rounded-2xl border p-4 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#28765b] disabled:cursor-not-allowed disabled:opacity-50 " + (payMethod === "BANK" && bankOn ? "border-[#28765b] bg-[#eaf5ed]" : "border-[#e0e8df] bg-white")}>
               <strong className="block text-[14px]">Bank transfer</strong>
-              <span className="mt-1 block text-[12px] text-[#5d7167]">Pay in NGN · Nigeria only</span>
+              <span className="mt-1 block text-[12px] text-[#5d7167]">{bankOn ? "Pay in NGN · Nigeria only" : "Temporarily unavailable · Please use USDT"}</span>
             </button>
-            <button type="button" disabled={!cryptoOn} onClick={() => { setPayMethod("CRYPTO"); if (!assetNetwork) setAssetNetwork(defaultCryptoChoice(options)); }}
-              className={"rounded-2xl border p-4 text-left " + (payMethod === "CRYPTO" ? "border-[#28765b] bg-[#eaf5ed]" : "border-[#e0e8df] bg-white")}>
+            <button type="button" disabled={!cryptoOn} aria-pressed={cryptoOn && payMethod === "CRYPTO"} onClick={() => { setPayMethod("CRYPTO"); setError(""); if (!assetNetwork) setAssetNetwork(defaultCryptoChoice(options)); }}
+              className={"rounded-2xl border p-4 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#28765b] disabled:cursor-not-allowed disabled:opacity-50 " + (payMethod === "CRYPTO" && cryptoOn ? "border-[#28765b] bg-[#eaf5ed]" : "border-[#e0e8df] bg-white")}>
               <strong className="block text-[14px]">USDT crypto</strong>
               <span className="mt-1 block text-[12px] text-[#5d7167]">Same crypto checkout as every other country</span>
             </button>
           </div>}
+          {isNigeria && !bankOn && <p role="status" className="mt-3 rounded-xl bg-[#fff1df] p-3 text-[12px] leading-5 text-[#76521c]">Bank payment is unavailable right now. Your existing crypto order cannot be converted; a new order must be created after bank transfer is restored.</p>}
           {checkoutMethod === "CRYPTO" && <label className="mt-4 block text-[13px] font-bold text-[#344f41]">USDT network
             <select value={assetNetwork || defaultCryptoChoice(options)} onChange={(e) => setAssetNetwork(e.target.value)} className={fieldClass}>
               {options.map((o) => <option key={o.asset + o.network} value={o.asset + ":" + o.network}>{o.asset} · {o.network}</option>)}
