@@ -45,8 +45,8 @@ export default function Footer() {
 
             <span className="relative flex flex-col">
               <span className="font-mono text-[12px] uppercase tracking-[0.25em] text-[#725525]">Built by</span>
-              <span className="text-[#2c483a] text-[15px] font-black tracking-tight group-hover:text-[#725525] transition-all duration-300">
-                Emriz
+              <span className="font-mono text-[11px] font-medium lowercase tracking-wide text-[#2c483a] group-hover:text-[#725525] transition-all duration-300">
+                emriz.eth
               </span>
             </span>
 
