@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { getDb } from "../../db.js";
 import { requireAdmin } from "../../auth.js";
-import { getSettings } from "../../services/settings.js";
+import { paymentRevenueReport } from "../../services/paymentRevenue.js";
 
 interface HourStat {
   hour: number;
@@ -16,8 +16,8 @@ export async function registerAdminMonthlyReportRoutes(app: FastifyInstance): Pr
     const patterns = db.collection("ml_patterns");
     const totalPatterns = await patterns.countDocuments({});
     const wins = await patterns.countDocuments({ was_winner: true });
-    const totalTxs = await db.collection("payment_transactions").countDocuments({});
-    const paidTxs = await db.collection("payment_transactions").countDocuments({ payment_status: "success" });
+    const revenue = await paymentRevenueReport(db);
+    const paidTxs = revenue.successful_payments;
     const totalPins = await db.collection("pin_licenses").countDocuments({});
     const activePins = await db.collection("pin_licenses").countDocuments({ is_active: true, is_used: true });
 
@@ -42,9 +42,6 @@ export async function registerAdminMonthlyReportRoutes(app: FastifyInstance): Pr
     const bestHours = [...allHours].sort((a, b) => b.win_rate - a.win_rate).slice(0, 5);
     const worstHours = [...allHours].sort((a, b) => a.win_rate - b.win_rate).slice(0, 5);
 
-    const s = await getSettings();
-    const priceNaira = Number(s["pin_price_kobo"] ?? 30_000_000) / 100;
-
     const bestStr = bestHours
       .slice(0, 3)
       .map((h) => `${h.hour}:00 (${h.win_rate}%)`)
@@ -53,7 +50,7 @@ export async function registerAdminMonthlyReportRoutes(app: FastifyInstance): Pr
       .slice(0, 3)
       .map((h) => `${h.hour}:00 (${h.win_rate}%)`)
       .join(", ");
-    const revenueNaira = paidTxs * priceNaira;
+    const revenueUsd = revenue.formatted_revenue;
 
     return {
       ml_stats: {
@@ -61,9 +58,13 @@ export async function registerAdminMonthlyReportRoutes(app: FastifyInstance): Pr
         global_win_rate: totalPatterns > 0 ? Math.round((wins / totalPatterns) * 1000) / 10 : 0,
       },
       sales: {
-        total_transactions: totalTxs,
+        total_transactions: revenue.total_orders,
         successful_payments: paidTxs,
-        revenue_naira: revenueNaira,
+        formatted_revenue: revenue.formatted_revenue,
+        total_revenue_usd_cents: revenue.total_revenue_usd_cents,
+        excluded_unconverted_payments: revenue.excluded_unconverted_payments,
+        pending_payments: revenue.pending_payments,
+        failed_rejected_payments: revenue.failed_rejected_payments,
         total_pins: totalPins,
         active_users: activePins,
       },
@@ -74,7 +75,7 @@ export async function registerAdminMonthlyReportRoutes(app: FastifyInstance): Pr
           ? [
               `Best trading hours: ${bestStr}`,
               `Avoid trading at: ${worstStr}`,
-              `Revenue so far: ₦${revenueNaira.toLocaleString("en-US", { maximumFractionDigits: 0 })} from ${paidTxs} sales`,
+              `Revenue so far: ${revenueUsd} from ${paidTxs} fulfilled sales`,
             ]
           : ["Not enough data yet. As more users trade, insights will appear."],
     };

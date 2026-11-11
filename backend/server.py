@@ -3331,6 +3331,8 @@ async def admin_update_bank_transfer_settings(req: AdminBankTransferSettingsUpda
             updates[db_key] = val
             changed_fields.append(field)
     if updates:
+        if isinstance(updates.get("bank_transfer_enabled"), bool):
+            updates["direct_bank_enabled"] = updates["bank_transfer_enabled"]
         await db.admin_settings.update_one({"key": "main"}, {"$set": updates}, upsert=True)
         await db.payment_config_audit_log.insert_one({
             "id": str(uuid.uuid4()), "provider": "BANK_TRANSFER", "admin_email": admin["email"],
@@ -3718,20 +3720,8 @@ async def admin_dashboard():
     purchased = pr.get("purchased", [{}])[0].get("c", 0) if pr.get("purchased") else 0
     free_given = pr.get("free_generated", [{}])[0].get("c", 0) if pr.get("free_generated") else 0
 
-    # Payment stats
-    tx_pipeline = [{"$facet": {
-        "total": [{"$count": "c"}],
-        "paid": [{"$match": {"payment_status": "success"}}, {"$count": "c"}],
-        "pending": [{"$match": {"payment_status": "pending"}}, {"$count": "c"}],
-        "total_revenue": [{"$match": {"payment_status": "success"}}, {"$group": {"_id": None, "sum": {"$sum": "$amount_kobo"}}}],
-    }}]
-    tx_result = (await db.payment_transactions.aggregate(tx_pipeline).to_list(1))
-    tr = tx_result[0] if tx_result else {}
-    total_txs = tr.get("total", [{}])[0].get("c", 0) if tr.get("total") else 0
-    paid_txs = tr.get("paid", [{}])[0].get("c", 0) if tr.get("paid") else 0
-    pending_txs = tr.get("pending", [{}])[0].get("c", 0) if tr.get("pending") else 0
-    revenue_kobo = tr.get("total_revenue", [{}])[0].get("sum", 0) if tr.get("total_revenue") else 0
-    revenue_naira = revenue_kobo / 100
+    from payment_revenue import payment_revenue_report
+    revenue = await payment_revenue_report(db)
 
     # ML performance
     ml_total = await db.ml_patterns.count_documents({})
@@ -3785,13 +3775,7 @@ async def admin_dashboard():
             "sold_via_payment": purchased,
             "free_generated": free_given,
         },
-        "revenue": {
-            "total_transactions": total_txs,
-            "successful_payments": paid_txs,
-            "pending_payments": pending_txs,
-            "total_revenue_naira": revenue_naira,
-            "formatted_revenue": f"\u20a6{revenue_naira:,.0f}",
-        },
+        "revenue": revenue,
         "performance": {
             "total_trades": ml_total,
             "wins": ml_wins,
@@ -4115,8 +4099,8 @@ async def admin_monthly_report():
     """Generate monthly performance report for admin"""
     total_patterns = await db.ml_patterns.count_documents({})
     wins = await db.ml_patterns.count_documents({"was_winner": True})
-    total_txs = await db.payment_transactions.count_documents({})
-    paid_txs = await db.payment_transactions.count_documents({"payment_status": "success"})
+    from payment_revenue import payment_revenue_report
+    revenue = await payment_revenue_report(db)
     total_pins = await db.pin_licenses.count_documents({})
     active_pins = await db.pin_licenses.count_documents({"is_active": True, "is_used": True})
 
@@ -4140,9 +4124,6 @@ async def admin_monthly_report():
         key=lambda x: x["win_rate"]
     )[:5]
 
-    s = await get_settings()
-    price_naira = s.get("pin_price_kobo", 30000000) / 100
-
     best_str = ', '.join([f'{h["hour"]}:00 ({h["win_rate"]}%)' for h in best_hours[:3]])
     worst_str = ', '.join([f'{h["hour"]}:00 ({h["win_rate"]}%)' for h in worst_hours[:3]])
 
@@ -4152,9 +4133,13 @@ async def admin_monthly_report():
             "global_win_rate": round(wins / total_patterns * 100, 1) if total_patterns > 0 else 0,
         },
         "sales": {
-            "total_transactions": total_txs,
-            "successful_payments": paid_txs,
-            "revenue_naira": paid_txs * price_naira,
+            "total_transactions": revenue["total_orders"],
+            "successful_payments": revenue["successful_payments"],
+            "formatted_revenue": revenue["formatted_revenue"],
+            "total_revenue_usd_cents": revenue["total_revenue_usd_cents"],
+            "excluded_unconverted_payments": revenue["excluded_unconverted_payments"],
+            "pending_payments": revenue["pending_payments"],
+            "failed_rejected_payments": revenue["failed_rejected_payments"],
             "total_pins": total_pins,
             "active_users": active_pins,
         },
@@ -4163,7 +4148,7 @@ async def admin_monthly_report():
         "recommendations": [
             f"Best trading hours: {best_str}",
             f"Avoid trading at: {worst_str}",
-            f"Revenue so far: \u20a6{paid_txs * price_naira:,.0f} from {paid_txs} sales",
+            f"Revenue so far: {revenue['formatted_revenue']} from {revenue['successful_payments']} fulfilled sales",
         ] if best_hours else ["Not enough data yet. As more users trade, insights will appear."]
     }
 

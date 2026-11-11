@@ -460,8 +460,19 @@ function DashboardTab({ api }) {
         <StatCard label="Licenses issued"   value={b.total_sold}       sub={`${b.sold_via_payment} paid · ${b.free_generated} manual`} testId="stat-total-sold" />
         <StatCard label="Activated"         value={b.actively_trading} sub={`${b.purchased_not_activated} waiting`} tone="green" testId="stat-active" />
         <StatCard label="Revoked"           value={b.revoked}          tone="red" testId="stat-revoked" />
-        <StatCard label="Revenue"           value={rev.formatted_revenue} sub={`${rev.successful_payments} payments`} tone="amber" testId="stat-revenue" />
+        <StatCard label="Total Revenue (USD)" value={rev.formatted_revenue || "$0.00"} sub={`${rev.successful_payments ?? 0} successful`} tone="amber" testId="stat-revenue" />
       </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard label="Successful Payments" value={rev.successful_payments ?? 0} tone="green" testId="stat-successful-payments" />
+        <StatCard label="Total Orders" value={rev.total_orders ?? rev.total_transactions ?? 0} testId="stat-total-orders" />
+        <StatCard label="Pending Payments" value={rev.pending_payments ?? 0} tone="amber" testId="stat-pending-payments" />
+        <StatCard label="Failed/Rejected" value={rev.failed_rejected_payments ?? 0} tone="red" testId="stat-failed-payments" />
+      </div>
+      {rev.excluded_unconverted_payments > 0 && (
+        <p className="text-[12px] leading-5 text-white/45" data-testid="stat-unconverted">
+          {rev.excluded_unconverted_note || `${rev.excluded_unconverted_payments} historical payments were excluded because they have no recorded USD value.`}
+        </p>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <CardSection title="License business overview" data-testid="license-business-overview">
@@ -1119,6 +1130,21 @@ function SettingsTab({ api }) {
   );
 }
 
+function paymentAmount(t) {
+  if (Number.isFinite(t.price_usd_cents) && t.price_usd_cents > 0) {
+    return "$" + (t.price_usd_cents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  if (Number.isFinite(t.amount_kobo)) return "₦" + (t.amount_kobo / 100).toLocaleString();
+  if (Number.isFinite(t.amount_minor)) return (t.amount_minor / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " " + (t.currency || "");
+  return "—";
+}
+function paymentTone(status) {
+  const value = String(status || "");
+  if (value === "FULFILLED" || value.toLowerCase() === "success") return "green";
+  if (/REJECT|FAIL|EXPIRED|ERROR/i.test(value)) return "red";
+  return "amber";
+}
+
 // ─── Transactions ─────────────────────────────────────────────────────────────
 function TransactionsTab({ api }) {
   const [txs, setTxs] = useState([]);
@@ -1145,9 +1171,9 @@ function TransactionsTab({ api }) {
                   <tr key={t.reference}>
                     <td className="px-5 py-3 font-mono text-[11px] text-white/55">{t.reference}</td>
                     <td className="px-5 py-3"><div>{t.buyer_name}</div><div className="text-white/35">{t.buyer_email}</div></td>
-                    <td className="px-5 py-3 text-right font-mono">₦{(t.amount_kobo / 100).toLocaleString()}</td>
+                    <td className="px-5 py-3 text-right font-mono">{paymentAmount(t)}</td>
                     <td className="px-5 py-3 text-center">
-                      <Badge tone={t.payment_status === "success" ? "green" : "amber"}>{(t.payment_status || "pending").toUpperCase()}</Badge>
+                      <Badge tone={paymentTone(t.payment_status)}>{(t.payment_status || "pending").toUpperCase()}</Badge>
                     </td>
                     <td className="px-5 py-3 font-mono text-[11px]">{t.pin_generated || "—"}</td>
                     <td className="px-5 py-3 text-white/40">{t.created_at?.split("T")[0]}</td>
@@ -1177,7 +1203,6 @@ const PLAN_LABEL = { SIGNALS_WEEKLY: "Weekly Signals", SIGNALS_MONTHLY: "Monthly
 const planLabel = (planId) => PLAN_LABEL[planId] || "Lifetime Bot";
 
 function BankTransfersTab({ api }) {
-  const [settings, setSettings] = useState(null);
   const [entries, setEntries] = useState([]);
   const [statusFilter, setStatusFilter] = useState("");
   const [detail, setDetail] = useState(null);
@@ -1185,30 +1210,12 @@ function BankTransfersTab({ api }) {
   const [msg, setMsg] = useState("");
   const h = useMemo(() => auth(), []);
 
-  const fetchSettings = useCallback(() => {
-    ax.get(`${api}/admin/settings/bank-transfer`, h).then(r => setSettings(r.data)).catch(() => {});
-  }, [api, h]);
-
   const fetchQueue = useCallback(() => {
     const params = statusFilter ? { status: statusFilter } : {};
     ax.get(`${api}/admin/bank-transfers`, { ...h, params }).then(r => setEntries(r.data.entries || [])).catch(() => {});
   }, [api, h, statusFilter]);
 
-  useEffect(() => { fetchSettings(); }, [fetchSettings]);
   useEffect(() => { fetchQueue(); }, [fetchQueue]);
-
-  const saveSettings = async () => {
-    setBusy(true); setMsg("");
-    try {
-      const r = await ax.put(`${api}/admin/settings/bank-transfer`, settings, h);
-      setSettings(r.data);
-      setMsg("Saved.");
-    } catch (e) {
-      setMsg(e.response?.data?.detail || "Could not save settings.");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const act = async (reference, action, reason) => {
     setBusy(true); setMsg("");
@@ -1236,47 +1243,11 @@ function BankTransfersTab({ api }) {
 
   return (
     <div className="space-y-4" data-testid="admin-bank-transfers-tab">
-      <CardSection title="Bank transfer settings" action={
-        <Btn variant="primary" onClick={saveSettings} disabled={busy || !settings}><FloppyDisk size={14} /> Save</Btn>
-      }>
-        {!settings ? <p className="text-[13px] text-white/35">Loading…</p> : (
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Enabled">
-              <label className="flex items-center gap-2 text-[13px] text-white/70">
-                <input type="checkbox" checked={Boolean(settings.enabled)}
-                  onChange={e => setSettings({ ...settings, enabled: e.target.checked })} />
-                Enable bank details for eligible Nigerian country-selected direct checkout
-              </label>
-            </Field>
-            <Field label="Timeout (minutes)">
-              <Input type="number" value={settings.timeout_minutes || 60}
-                onChange={e => setSettings({ ...settings, timeout_minutes: Number(e.target.value) })} />
-            </Field>
-            <Field label="Bank name">
-              <Input value={settings.bank_name || ""} onChange={e => setSettings({ ...settings, bank_name: e.target.value })} />
-            </Field>
-            <Field label="Account name">
-              <Input value={settings.account_name || ""} onChange={e => setSettings({ ...settings, account_name: e.target.value })} />
-            </Field>
-            <Field label="Account number">
-              <Input value={settings.account_number || ""} onChange={e => setSettings({ ...settings, account_number: e.target.value })} />
-            </Field>
-            <Field label="Support contact">
-              <Input value={settings.support_contact || ""} onChange={e => setSettings({ ...settings, support_contact: e.target.value })} />
-            </Field>
-            <Field label="Require proof of payment">
-              <label className="flex items-center gap-2 text-[13px] text-white/70">
-                <input type="checkbox" checked={Boolean(settings.proof_required)}
-                  onChange={e => setSettings({ ...settings, proof_required: e.target.checked })} />
-                Customer must upload a screenshot
-              </label>
-            </Field>
-            <Field label="Instructions shown to customer">
-              <Input value={settings.instructions || ""} onChange={e => setSettings({ ...settings, instructions: e.target.value })} />
-            </Field>
-          </div>
-        )}
-        {msg && <p className="mt-3 text-[12px] text-gold-300">{msg}</p>}
+      <CardSection title="Historical bank orders">
+        <p className="text-[13px] leading-6 text-white/55">
+          Nigerian bank details, the USD price, crypto wallets, and the bank-transfer switch are configured in <strong>Pending Payments → Payment configuration</strong>. This queue only reviews older bank-transfer orders. New checkout orders are approved from Pending Payments.
+        </p>
+        {msg && <p className="mt-3 text-[13px] text-red-300" role="alert">{msg}</p>}
       </CardSection>
 
       <CardSection title={`Review queue · ${entries.length}`} action={

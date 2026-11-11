@@ -173,6 +173,19 @@ export default function DirectCheckoutAdmin({ api }) {
   </div>;
 }
 
+function networksFor(asset) {
+  return asset === "USDC" ? ["ERC20"] : ["ERC20", "TRC20"];
+}
+const BANK_REASON = {
+  USD_PRICE_MISSING: "Set the official USD price.",
+  BANK_DISABLED: "Turn on Nigerian bank transfer in this payment configuration. Crypto stays available.",
+  BANK_DETAILS_MISSING: "Enter the beneficiary name, bank name, and account number.",
+  FX_RATE_MISSING: "Enter the verified USD/NGN rate. Crypto checkout stays available.",
+  FX_RATE_INVALID: "Correct the saved USD/NGN rate. Crypto checkout stays available.",
+  FX_TIMESTAMP_MISSING: "Review and save the configured USD/NGN rate. Crypto checkout stays available.",
+  FX_RATE_STALE: "The USD/NGN review is over 24 hours old. Save the reviewed rate to restore bank transfer. Crypto stays available.",
+};
+
 function PaymentSettings({ api }) {
   const [cfg, setCfg] = useState(null);
   const [bankCheckoutLive, setBankCheckoutLive] = useState(null);
@@ -180,6 +193,10 @@ function PaymentSettings({ api }) {
   const [dollars, setDollars] = useState("");
   const [fx, setFx] = useState("");
   const [wallets, setWallets] = useState([]);
+  const [bankName, setBankName] = useState("");
+  const [accountName, setAccountName] = useState("");
+  const [accountNumber, setAccountNumber] = useState("");
+  const [instructions, setInstructions] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -195,9 +212,14 @@ function PaymentSettings({ api }) {
       setDollars(config.data.price_usd_cents ? (config.data.price_usd_cents / 100).toFixed(2) : "");
       setFx(config.data.usd_ngn_rate || "");
       setWallets(config.data.wallets || []);
+      setBankName(config.data.bank_name || "");
+      setAccountName(config.data.account_name || "");
+      setAccountNumber(config.data.account_number || "");
+      setInstructions(config.data.instructions || "");
       setError("");
     } catch (e) { setError(e.response?.data?.detail || "Unable to load payment configuration."); }
   }, [api]);
+  useEffect(() => { load(); }, [load]);
   async function save() {
     setBusy(true); setError(""); setNotice("");
     try {
@@ -206,16 +228,20 @@ function PaymentSettings({ api }) {
       const [whole, fraction = ""] = amount.split(".");
       const cents = Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
       if (!Number.isSafeInteger(cents) || cents <= 0) throw new Error("USD price exceeds safe limits.");
+      const number = accountNumber.trim();
+      if (number && !/^\d{6,20}$/.test(number)) throw new Error("Account number must be 6 to 20 digits.");
       const payload = {
         price_usd_cents: cents,
         bank_enabled: cfg.bank_enabled, crypto_enabled: cfg.crypto_enabled,
-        wallets: wallets.map((w) => ({ asset: w.asset, network: w.network, address: w.address.trim() })),
+        bank_name: bankName.trim(), account_name: accountName.trim(), instructions: instructions.trim(),
+        wallets: wallets.map((w) => ({ asset: w.asset, network: networksFor(w.asset).includes(w.network) ? w.network : "ERC20", address: w.address.trim() })),
       };
-      // Preserve the reviewed rate timestamp when unrelated settings change.
+      if (number) payload.account_number = number;
+      else if (cfg.account_number) throw new Error("Enter the Nigerian account number. Leave crypto enabled if bank transfer is not ready.");
       if (fx.trim() !== (cfg.usd_ngn_rate || "")) payload.usd_ngn_rate = fx.trim();
       await apiClient.put(api + "/admin/direct-checkout/config", payload);
       await load();
-      setNotice("Payment configuration saved.");
+      setNotice("Payment configuration saved. Checkout now uses these settings.");
     } catch (e) { setError(e.response?.data?.detail || e.message || "Could not save configuration."); }
     finally { setBusy(false); }
   }
@@ -228,35 +254,48 @@ function PaymentSettings({ api }) {
     } catch (e) { setError(e.response?.data?.detail || e.message || "Could not save the reviewed rate."); }
     finally { setBusy(false); }
   }
-  return <details className="rounded-2xl border border-white/10 bg-[#111216] p-4" onToggle={(event) => { if (event.currentTarget.open && !cfg) load(); }}>
-    <summary className="cursor-pointer py-1 text-sm font-semibold text-white/70">Payment settings</summary>
+  return <section className="rounded-2xl border border-white/10 bg-[#111216] p-4" aria-labelledby="payment-configuration-heading">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h2 id="payment-configuration-heading" className="font-heading text-2xl font-semibold text-white">Payment configuration</h2>
+        <p className="mt-1 text-sm text-white/55">One place for the USD price, crypto wallets, and Nigerian bank transfer. Crypto is offered in every country. Bank transfer is Nigeria only.</p>
+      </div>
+      {!cfg && <button type="button" className={btnClass} onClick={load}>Load settings</button>}
+    </div>
     <div className="mt-4 space-y-4">
       {error && <p role="alert" className="text-sm text-rose-200">{error}</p>}
       {notice && <p role="status" className="text-sm text-emerald-200">{notice}</p>}
-      {!cfg ? <button type="button" className={btnClass} onClick={load}>Load settings</button> : <>
+      {cfg && <>
         <div className="grid gap-4 md:grid-cols-2">
-          <Label title="One-time product price (USD)"><input className={inputClass} inputMode="decimal" value={dollars} onChange={(e) => setDollars(e.target.value)}/></Label>
-          <Label title="Reviewed USD → NGN rate"><input className={inputClass} inputMode="decimal" value={fx} onChange={(e) => setFx(e.target.value)}/></Label>
+          <Label title="Official product price (USD)"><input className={inputClass} inputMode="decimal" value={dollars} onChange={(e) => setDollars(e.target.value)}/></Label>
+          <Label title="Reviewed USD → NGN rate (Nigeria bank transfer)"><input className={inputClass} inputMode="decimal" value={fx} onChange={(e) => setFx(e.target.value)}/></Label>
         </div>
         <div className="flex flex-wrap items-center gap-3"><p className="text-xs text-white/50">Rate reviewed: {cfg.rate_as_of ? dateLabel(cfg.rate_as_of) : "Not configured"}</p><button type="button" className={btnClass} disabled={busy || !fx.trim()} onClick={saveReviewedRate}>Save reviewed rate</button></div>
-        <p className="text-sm text-white/70">Nigerian bank checkout: <strong>{bankCheckoutLive ? "Available" : "Unavailable"}</strong>{!bankCheckoutLive && " · " + ({ USD_PRICE_MISSING: "Set the official USD price.", BANK_DISABLED: "Enable bank transfer here and in the bank account settings.", BANK_DETAILS_MISSING: "Restore the verified receiving bank account in Legacy Bank Orders.", FX_RATE_MISSING: "Enter the configured, verified USD/NGN rate.", FX_RATE_INVALID: "Correct the saved USD/NGN rate.", FX_TIMESTAMP_MISSING: "Review and save the configured USD/NGN rate.", FX_RATE_STALE: "Review the configured rate and use Save reviewed rate; the prior review is over 24 hours old." }[bankUnavailableReason] || "Check the saved bank account and pricing configuration.")}</p>
+        <p className="text-sm text-white/70">Nigerian bank checkout: <strong>{bankCheckoutLive ? "Available" : "Unavailable"}</strong>{!bankCheckoutLive && " · " + (BANK_REASON[bankUnavailableReason] || "Check the saved bank account and pricing configuration.")}</p>
         <div className="flex flex-wrap gap-5">
-          <label className="flex items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={Boolean(cfg.bank_enabled)} onChange={(e) => setCfg({ ...cfg, bank_enabled: e.target.checked })}/> Enable Nigerian bank transfer</label>
-          <label className="flex items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={Boolean(cfg.crypto_enabled)} onChange={(e) => setCfg({ ...cfg, crypto_enabled: e.target.checked })}/> Enable crypto for every country</label>
+          <label className="flex min-h-11 items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={Boolean(cfg.bank_enabled)} onChange={(e) => setCfg({ ...cfg, bank_enabled: e.target.checked })}/> Bank transfer enabled (Nigeria only)</label>
+          <label className="flex min-h-11 items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={Boolean(cfg.crypto_enabled)} onChange={(e) => setCfg({ ...cfg, crypto_enabled: e.target.checked })}/> Crypto payments enabled for every country</label>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Label title="Nigerian bank name"><input className={inputClass} value={bankName} onChange={(e) => setBankName(e.target.value)}/></Label>
+          <Label title="Beneficiary name"><input className={inputClass} value={accountName} onChange={(e) => setAccountName(e.target.value)}/></Label>
+          <Label title="Account number"><input className={inputClass} inputMode="numeric" value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)}/></Label>
+          <Label title="Bank payment instructions"><input className={inputClass} value={instructions} onChange={(e) => setInstructions(e.target.value)}/></Label>
         </div>
         <div className="space-y-3">
-          <p className="text-xs font-bold text-white/70">Configured receiving wallets</p>
-          {wallets.map((wallet, index) => <div key={index} className="grid gap-2 md:grid-cols-[100px_100px_1fr_auto]">
-            <label><span className="sr-only">Wallet {index + 1} coin</span><select className={inputClass} value={wallet.asset} onChange={(e) => setWallets(wallets.map((value, i) => index === i ? { ...value, asset: e.target.value } : value))}><option className="bg-black" value="USDT">USDT</option><option className="bg-black" value="USDC">USDC</option></select></label>
-            <label><span className="sr-only">Wallet {index + 1} network</span><select className={inputClass} value={wallet.network} onChange={(e) => setWallets(wallets.map((value, i) => index === i ? { ...value, network: e.target.value } : value))}><option className="bg-black" value="ERC20">ERC20</option><option className="bg-black" value="TRC20">TRC20</option></select></label>
-            <input className={inputClass} aria-label={"Wallet " + (index + 1) + " receiving address"} value={wallet.address} onChange={(e) => setWallets(wallets.map((value, i) => index === i ? { ...value, address: e.target.value } : value))}/>
+          <p className="text-xs font-bold text-white/70">Supported coins, networks, and receiving wallets</p>
+          {wallets.map((wallet, index) => <div key={index} className="grid gap-2 md:grid-cols-[100px_110px_1fr_auto]">
+            <label><span className="sr-only">Wallet {index + 1} coin</span><select className={inputClass} value={wallet.asset} onChange={(e) => setWallets(wallets.map((value, i) => index === i ? { ...value, asset: e.target.value, network: networksFor(e.target.value).includes(value.network) ? value.network : "ERC20" } : value))}><option className="bg-black" value="USDT">USDT</option><option className="bg-black" value="USDC">USDC</option></select></label>
+            <label><span className="sr-only">Wallet {index + 1} network</span><select className={inputClass} value={networksFor(wallet.asset).includes(wallet.network) ? wallet.network : "ERC20"} onChange={(e) => setWallets(wallets.map((value, i) => index === i ? { ...value, network: e.target.value } : value))}>{networksFor(wallet.asset).map((network) => <option className="bg-black" key={network} value={network}>{network}</option>)}</select></label>
+            <input className={inputClass} aria-label={"Wallet " + (index + 1) + " receiving address"} value={wallet.address} onChange={(e) => setWallets(wallets.map((value, i) => index === i ? { ...value, address: e.target.value } : value))} placeholder="Receiving wallet address"/>
             <button type="button" className={btnClass} onClick={() => setWallets(wallets.filter((_, i) => index !== i))}>Remove</button>
           </div>)}
           <button type="button" className={btnClass} onClick={() => setWallets([...wallets, { asset: "USDT", network: "ERC20", address: "" }])}>Add configured wallet</button>
-          <p className="text-xs text-white/50">Nigerian bank account details are managed under Legacy Bank Orders. Save only verified receiving accounts and wallets.</p>
+          <p className="text-xs text-white/50">USDT supports ERC20 and TRC20. USDC supports ERC20. Wallet addresses are only saved when you enter them. Nothing is generated automatically.</p>
         </div>
-        <button type="button" disabled={busy} onClick={save} className="min-h-12 rounded-xl bg-amber-300 px-5 py-3 text-sm font-bold text-black disabled:opacity-50">Save payment settings</button>
+        <button type="button" disabled={busy} onClick={save} className="min-h-12 w-full rounded-xl bg-amber-300 px-5 py-3 text-sm font-bold text-black disabled:opacity-50 sm:w-auto">Save payment configuration</button>
       </>}
     </div>
-  </details>;
+  </section>;
 }
+

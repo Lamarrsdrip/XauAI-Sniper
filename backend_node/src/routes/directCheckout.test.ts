@@ -19,8 +19,10 @@ vi.mock("../services/settings.js", () => ({
 }));
 vi.mock("../services/paymentMethods.js", () => ({
   getBankTransferSettings: async () => ({
-    enabled: state.bankConfigured, bank_name: "Verified Test Bank",
-    account_name: "XauCloud TEST", account_number: "0000000000",
+    enabled: state.bankConfigured,
+    bank_name: state.bankConfigured ? "Verified Test Bank" : "",
+    account_name: state.bankConfigured ? "XauCloud TEST" : "",
+    account_number: state.bankConfigured ? "0000000000" : "",
   }),
   bankTransferIsConfigured: (v: { bank_name?: string; account_name?: string; account_number?: string }) =>
     Boolean(v.bank_name && v.account_name && v.account_number),

@@ -54,6 +54,10 @@ class Config(BaseModel):
     crypto_enabled: bool | None = None
     crypto_countries: list[str] | None = None
     wallets: list[dict] | None = None
+    bank_name: str | None = Field(default=None, max_length=120)
+    account_name: str | None = Field(default=None, max_length=120)
+    account_number: str | None = Field(default=None, max_length=20)
+    instructions: str | None = Field(default=None, max_length=1000)
 
 class Review(BaseModel):
     evidence_reference: str | None = Field(default=None, max_length=200)
@@ -281,24 +285,38 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
                    for w in cfg["wallets"] if is_wallet(str(w.get("asset")),
                                                         str(w.get("network")), str(w.get("address", "")))]
         settings = await get_settings()
-        bank_configured = bool(cfg["bank_enabled"] and settings.get("bank_transfer_enabled")
-                               and settings.get("bank_transfer_bank_name")
-                               and settings.get("bank_transfer_account_name")
-                               and settings.get("bank_transfer_account_number"))
-        fx_fresh = False
+        details_ready = bool(settings.get("bank_transfer_bank_name") and settings.get("bank_transfer_account_name")
+                             and settings.get("bank_transfer_account_number"))
+        fx_reason = "FX_RATE_MISSING"
         try:
-            fx = Decimal(str(cfg["usd_ngn_rate"]))
-            fx_date = datetime.fromisoformat(str(cfg["rate_as_of"]).replace("Z", "+00:00"))
-            fx_fresh = bool(fx.is_finite() and Decimal("0.01") <= fx <= Decimal("1000000")
-                            and fx_date.tzinfo and timedelta(0) <= now() - fx_date <= timedelta(hours=24))
+            if cfg["usd_ngn_rate"]:
+                fx = Decimal(str(cfg["usd_ngn_rate"]))
+                if not fx.is_finite() or not Decimal("0.01") <= fx <= Decimal("1000000"):
+                    fx_reason = "FX_RATE_INVALID"
+                else:
+                    raw_as_of = cfg.get("rate_as_of")
+                    if not raw_as_of:
+                        fx_reason = "FX_TIMESTAMP_MISSING"
+                    else:
+                        fx_date = datetime.fromisoformat(str(raw_as_of).replace("Z", "+00:00"))
+                        if fx_date.tzinfo is None or fx_date > now() or now() - fx_date > timedelta(hours=24):
+                            fx_reason = "FX_RATE_STALE"
+                        else:
+                            fx_reason = None
         except (ValueError, TypeError, InvalidOperation, OverflowError):
-            pass
+            fx_reason = "FX_RATE_INVALID" if cfg.get("usd_ngn_rate") else "FX_RATE_MISSING"
         crypto_ready = bool(price and cfg["crypto_enabled"] and options)
-        bank_reason = ("USD_PRICE_MISSING" if not price else "BANK_DISABLED" if not cfg["bank_enabled"] or not settings.get("bank_transfer_enabled")
-                       else "BANK_DETAILS_MISSING" if not bank_configured else "FX_RATE_STALE" if not fx_fresh else None)
+        if not price:
+            bank_reason = "USD_PRICE_MISSING"
+        elif not cfg["bank_enabled"]:
+            bank_reason = "BANK_DISABLED"
+        elif not details_ready:
+            bank_reason = "BANK_DETAILS_MISSING"
+        else:
+            bank_reason = fx_reason
         return {"currency": "USD", "price_usd_cents": price,
                 "price_formatted": money(price) if price else None,
-                "bank_enabled": bool(price and bank_configured and fx_fresh),
+                "bank_enabled": bank_reason is None,
                 "bank_unavailable_reason": bank_reason,
                 "crypto_enabled": crypto_ready,
                 "crypto_countries": cfg["crypto_countries"],
@@ -331,10 +349,9 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
             method = "BANK"
         if method == "BANK":
             s = await get_settings()
-            if not (cfg["bank_enabled"] and s.get("bank_transfer_enabled") and
-                    s.get("bank_transfer_bank_name") and s.get("bank_transfer_account_name") and
-                    s.get("bank_transfer_account_number")):
-                raise HTTPException(503, "Nigerian bank transfer is unavailable.")
+            if not (cfg["bank_enabled"] and s.get("bank_transfer_bank_name") and
+                    s.get("bank_transfer_account_name") and s.get("bank_transfer_account_number")):
+                raise HTTPException(503, "Nigerian bank transfer is not configured.")
             try:
                 fx = Decimal(str(cfg["usd_ngn_rate"]))
                 fx_date = datetime.fromisoformat(str(cfg["rate_as_of"]).replace("Z", "+00:00"))
@@ -342,7 +359,7 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
                         and fx_date.tzinfo and timedelta(0) <= stamp - fx_date <= timedelta(hours=24)):
                     raise ValueError("FX rate unavailable or stale")
             except (ValueError, TypeError, InvalidOperation):
-                raise HTTPException(503, "A current USD/NGN quote is unavailable.")
+                raise HTTPException(503, "Nigerian bank transfer needs a current verified USD/NGN rate. Crypto checkout is unchanged.")
             # USD cents * NGN/USD gives NGN kobo (integer); no float arithmetic.
             amount_minor = int((Decimal(cents) * fx).quantize(Decimal(1), rounding=ROUND_HALF_UP))
             currency = "NGN"
@@ -482,7 +499,15 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
 
     @router.get("/admin/direct-checkout/config")
     async def admin_config(admin: dict = Depends(admin_dep)):
-        return await config()
+        cfg = await config()
+        settings = await get_settings()
+        cfg.update({
+            "bank_name": settings.get("bank_transfer_bank_name") or "",
+            "account_name": settings.get("bank_transfer_account_name") or "",
+            "account_number": settings.get("bank_transfer_account_number") or "",
+            "instructions": settings.get("bank_transfer_instructions") or "",
+        })
+        return cfg
 
     @router.put("/admin/direct-checkout/config")
     async def update_config(req: Config, admin: dict = Depends(admin_dep)):
@@ -500,8 +525,19 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
             changes["direct_fx_as_of"] = now().isoformat()
         if req.bank_enabled is not None:
             changes["direct_bank_enabled"] = req.bank_enabled
+            changes["bank_transfer_enabled"] = req.bank_enabled
         if req.crypto_enabled is not None:
             changes["direct_crypto_enabled"] = req.crypto_enabled
+        if req.bank_name is not None:
+            changes["bank_transfer_bank_name"] = req.bank_name.strip()
+        if req.account_name is not None:
+            changes["bank_transfer_account_name"] = req.account_name.strip()
+        if req.account_number is not None:
+            if not re.fullmatch(r"\d{6,20}", req.account_number.strip()):
+                raise HTTPException(422, "Account number must be 6 to 20 digits.")
+            changes["bank_transfer_account_number"] = req.account_number.strip()
+        if req.instructions is not None:
+            changes["bank_transfer_instructions"] = req.instructions.strip()
         if req.crypto_countries is not None:
             countries = sorted(set(x.strip().upper() for x in req.crypto_countries))
             if any(not re.fullmatch(r"[A-Z]{2}", x) or x == "NG" for x in countries):
@@ -522,7 +558,15 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
             await db.payment_config_audit_log.insert_one({"id": str(uuid.uuid4()), "provider": "MANUAL_DIRECT",
                                                           "admin_email": admin["email"], "changed_fields": list(changes),
                                                           "at": now().isoformat()})
-        return await config()
+        saved = await config()
+        fresh = await get_settings()
+        saved.update({
+            "bank_name": fresh.get("bank_transfer_bank_name") or "",
+            "account_name": fresh.get("bank_transfer_account_name") or "",
+            "account_number": fresh.get("bank_transfer_account_number") or "",
+            "instructions": fresh.get("bank_transfer_instructions") or "",
+        })
+        return saved
 
     @router.get("/admin/direct-checkout/orders")
     async def orders(admin: dict = Depends(admin_dep), q: str = "", status: str = "all", limit: int = 100, offset: int = 0):

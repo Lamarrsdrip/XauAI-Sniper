@@ -52,6 +52,10 @@ const adminConfigSchema = z.object({
   crypto_enabled: z.boolean().optional(),
   crypto_countries: z.array(isoCountry).max(249).optional(),
   wallets: z.array(walletSchema).max(20).optional(),
+  bank_name: z.string().trim().max(120).optional(),
+  account_name: z.string().trim().max(120).optional(),
+  account_number: z.string().trim().regex(/^\d{6,20}$/).optional(),
+  instructions: z.string().trim().max(1000).optional(),
 });
 
 function isApprovedWallet(asset: string, network: string, address: string): boolean {
@@ -91,7 +95,7 @@ function getCfg(settings: Record<string, unknown>) {
 }
 function bankUnavailableReason(cfg: ReturnType<typeof getCfg>, bank: Awaited<ReturnType<typeof getBankTransferSettings>>): string | null {
   if (cfg.price_usd_cents == null) return "USD_PRICE_MISSING";
-  if (!cfg.bank_enabled || !bank.enabled) return "BANK_DISABLED";
+  if (!cfg.bank_enabled) return "BANK_DISABLED";
   if (!bankTransferIsConfigured(bank)) return "BANK_DETAILS_MISSING";
   try { if (!cfg.usd_ngn_rate) return "FX_RATE_MISSING"; rateScaled(cfg.usd_ngn_rate); }
   catch { return "FX_RATE_INVALID"; }
@@ -336,6 +340,19 @@ async function completeDirectFulfillment(app: FastifyInstance, tx: Record<string
   }
 }
 
+async function adminDirectConfig() {
+  const cfg = getCfg(await getSettings());
+  const bank = await getBankTransferSettings();
+  return {
+    ...cfg,
+    bank_name: bank.bank_name,
+    account_name: bank.account_name,
+    account_number: bank.account_number,
+    instructions: bank.instructions,
+    bank_unavailable_reason: bankUnavailableReason(cfg, bank),
+  };
+}
+
 export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promise<void> {
   app.get("/purchase/direct/config", async (request) => {
     rateLimit("direct_config:" + clientIp(request), 60, 60);
@@ -374,16 +391,16 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
     const stamp = new Date();
     if (method === "BANK") {
       const bank = await getBankTransferSettings();
-      if (!cfg.bank_enabled || !bank.enabled || !bankTransferIsConfigured(bank)) {
-        return reply.code(503).send({ detail: "Nigerian bank checkout is not configured." });
+      if (!cfg.bank_enabled || !bankTransferIsConfigured(bank)) {
+        return reply.code(503).send({ detail: "Nigerian bank transfer is not configured." });
       }
       const updated = cfg.rate_as_of ? new Date(cfg.rate_as_of) : null;
       if (!cfg.usd_ngn_rate || !updated || !Number.isFinite(updated.getTime()) ||
           updated.getTime() > stamp.getTime() || stamp.getTime() - updated.getTime() > 86400000) {
-        return reply.code(503).send({ detail: "A current USD/NGN rate is unavailable; checkout paused." });
+        return reply.code(503).send({ detail: "Nigerian bank transfer needs a current verified USD/NGN rate. Crypto checkout is unchanged." });
       }
       try { amountMinor = toNgnKobo(cents, cfg.usd_ngn_rate); }
-      catch { return reply.code(503).send({ detail: "A valid exchange rate is unavailable; checkout paused." }); }
+      catch { return reply.code(503).send({ detail: "Nigerian bank transfer needs a valid USD/NGN rate. Crypto checkout is unchanged." }); }
       currency = "NGN";
       details = { bank_name: bank.bank_name, account_name: bank.account_name,
                   account_number: bank.account_number, fx_rate: String(cfg.usd_ngn_rate), rate_as_of: String(cfg.rate_as_of),
@@ -527,7 +544,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
              has_proof: Boolean(tx["evidence_uploaded_at"] || tx["evidence_image"]) };
   });
 
-  app.get("/admin/direct-checkout/config", { preHandler: requireAdmin }, async () => getCfg(await getSettings()));
+  app.get("/admin/direct-checkout/config", { preHandler: requireAdmin }, async () => adminDirectConfig());
   app.put("/admin/direct-checkout/config", { preHandler: requireAdmin }, async (request, reply) => {
     const req = adminConfigSchema.parse(request.body);
     const admin = (request as typeof request & { admin: Record<string, unknown> }).admin;
@@ -539,8 +556,15 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       updates["direct_usd_ngn_rate"] = req.usd_ngn_rate;
       updates["direct_fx_as_of"] = utc();
     }
-    if (req.bank_enabled !== undefined) updates["direct_bank_enabled"] = req.bank_enabled;
+    if (req.bank_enabled !== undefined) {
+      updates["direct_bank_enabled"] = req.bank_enabled;
+      updates["bank_transfer_enabled"] = req.bank_enabled;
+    }
     if (req.crypto_enabled !== undefined) updates["direct_crypto_enabled"] = req.crypto_enabled;
+    if (req.bank_name !== undefined) updates["bank_transfer_bank_name"] = req.bank_name;
+    if (req.account_name !== undefined) updates["bank_transfer_account_name"] = req.account_name;
+    if (req.account_number !== undefined) updates["bank_transfer_account_number"] = req.account_number;
+    if (req.instructions !== undefined) updates["bank_transfer_instructions"] = req.instructions;
     if (req.crypto_countries !== undefined) {
       const values = [...new Set(req.crypto_countries)].filter((c) => c !== "NG").sort();
       if (values.length !== req.crypto_countries.length) return reply.code(422).send({ detail: "Duplicate country or invalid Nigeria crypto rule." });
@@ -561,7 +585,7 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
         admin_email: admin["email"], at: utc(),
       });
     }
-    return getCfg(await getSettings());
+    return adminDirectConfig();
   });
 
   app.get("/admin/direct-checkout/orders", { preHandler: requireAdmin }, async (request) => {

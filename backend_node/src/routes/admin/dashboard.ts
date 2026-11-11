@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { getDb } from "../../db.js";
 import { requireAdmin } from "../../auth.js";
+import { paymentRevenueReport } from "../../services/paymentRevenue.js";
 import { sendPinEmail } from "../../services/paymentEmails.js";
 
 /** Port of server.py:3665 `admin_dashboard` -- bots sold, active, performance, revenue. */
@@ -38,30 +39,7 @@ export async function registerAdminDashboardRoutes(app: FastifyInstance): Promis
     const purchased = pr.purchased?.[0]?.c ?? 0;
     const freeGiven = pr.free_generated?.[0]?.c ?? 0;
 
-    const txs = db.collection("payment_transactions");
-    const [txFacet] = await txs
-      .aggregate<{
-        total?: { c: number }[];
-        paid?: { c: number }[];
-        pending?: { c: number }[];
-        total_revenue?: { sum: number }[];
-      }>([
-        {
-          $facet: {
-            total: [{ $count: "c" }],
-            paid: [{ $match: { payment_status: "success" } }, { $count: "c" }],
-            pending: [{ $match: { payment_status: "pending" } }, { $count: "c" }],
-            total_revenue: [{ $match: { payment_status: "success" } }, { $group: { _id: null, sum: { $sum: "$amount_kobo" } } }],
-          },
-        },
-      ])
-      .toArray();
-    const tr = txFacet ?? {};
-    const totalTxs = tr.total?.[0]?.c ?? 0;
-    const paidTxs = tr.paid?.[0]?.c ?? 0;
-    const pendingTxs = tr.pending?.[0]?.c ?? 0;
-    const revenueKobo = tr.total_revenue?.[0]?.sum ?? 0;
-    const revenueNaira = revenueKobo / 100;
+    const revenue = await paymentRevenueReport(db);
 
     const mlPatterns = db.collection("ml_patterns");
     const mlTotal = await mlPatterns.countDocuments({});
@@ -123,13 +101,7 @@ export async function registerAdminDashboardRoutes(app: FastifyInstance): Promis
         sold_via_payment: purchased,
         free_generated: freeGiven,
       },
-      revenue: {
-        total_transactions: totalTxs,
-        successful_payments: paidTxs,
-        pending_payments: pendingTxs,
-        total_revenue_naira: revenueNaira,
-        formatted_revenue: `₦${revenueNaira.toLocaleString("en-US", { maximumFractionDigits: 0 })}`,
-      },
+      revenue,
       performance: {
         total_trades: mlTotal,
         wins: mlWins,

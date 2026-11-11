@@ -12,6 +12,14 @@ const paidCustomer = {
   created_at: "2026-11-01T12:00:00Z", submitted_at: "2026-11-01T12:05:00Z", license_status: "NOT_ISSUED",
 };
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
+function isOrdersRequest(url) { return String(url).endsWith("/admin/direct-checkout/orders"); }
+function configResponse(url) {
+  if (String(url).endsWith("/purchase/direct/config")) return { data: { bank_enabled: true, crypto_enabled: true, crypto_options: [] } };
+  if (String(url).endsWith("/admin/direct-checkout/config")) {
+    return { data: { price_usd_cents: 25000, usd_ngn_rate: "1600", rate_as_of: "2026-11-11T00:00:00Z", bank_enabled: true, crypto_enabled: true, wallets: [], bank_name: "Access Bank", account_name: "XauCloud Ltd", account_number: "0123456789", instructions: "" } };
+  }
+  return null;
+}
 let container;
 let root;
 let entries;
@@ -34,7 +42,9 @@ beforeEach(() => {
   container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);
   entries = [{ ...paidCustomer }];
   client.get.mockReset(); client.post.mockReset();
-  client.get.mockImplementation(async (_url, options) => {
+  client.get.mockImplementation(async (url, options) => {
+    const configured = configResponse(url);
+    if (configured) return configured;
     const filter = options?.params?.status;
     const filtered = entries.filter((order) => filter === "failed" ? order.payment_status === "FULFILLMENT_FAILED"
       : filter === "pending" ? order.payment_status.startsWith("MANUAL_") && order.payment_status !== "MANUAL_REJECTED" : true);
@@ -59,7 +69,7 @@ test("shows the existing customer, product, amount, network and submission immed
   expect(queue.querySelector("textarea")).toBeNull();
   expect(button("✓ APPROVE").className).toContain("min-h-12");
   expect(button("✕ REJECT").className).toContain("min-h-12");
-  expect(client.get).toHaveBeenCalledTimes(1);
+  expect(client.get.mock.calls.filter((call) => isOrdersRequest(call[0]))).toHaveLength(1);
 });
 
 test("approves with an empty body, prevents repeated clicks, and reports license/email delivery", async () => {
@@ -119,7 +129,11 @@ test("searches the server by a historical customer's full order ID and switches 
 });
 
 test("loads subsequent results without losing earlier customers", async () => {
-  client.get.mockImplementation(async (_url, options) => ({ data: { entries: options.params.offset ? [{ ...paidCustomer, reference: "XC-SECOND", buyer_name: "Another Customer" }] : [paidCustomer], total: 2 } }));
+  client.get.mockImplementation(async (url, options) => {
+    const configured = configResponse(url);
+    if (configured) return configured;
+    return { data: { entries: options?.params?.offset ? [{ ...paidCustomer, reference: "XC-SECOND", buyer_name: "Another Customer" }] : [paidCustomer], total: 2 } };
+  });
   await render(); await click(button("Load more payments"));
   expect(client.get).toHaveBeenLastCalledWith("/api/admin/direct-checkout/orders", { params: { status: "pending", q: "", limit: 50, offset: 1 } });
   expect(container.querySelectorAll('[data-testid="payment-card"]')).toHaveLength(2);

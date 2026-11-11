@@ -387,6 +387,7 @@ export async function registerAdminSettingsRoutes(app: FastifyInstance): Promise
       }
     }
     if (Object.keys(updates).length > 0) {
+      if (typeof updates["bank_transfer_enabled"] === "boolean") updates["direct_bank_enabled"] = updates["bank_transfer_enabled"];
       await getDb().collection("admin_settings").updateOne({ key: "main" }, { $set: updates }, { upsert: true });
       await getDb().collection("payment_config_audit_log").insertOne({
         id: randomUUID(),
