@@ -1,4 +1,6 @@
-/** USD revenue from stored payment records. Never mutates orders and never invents an exchange rate. */
+/** USD revenue from stored payment records. Never mutates orders.
+ * Legacy naira amounts convert with that payment's own recorded FX, otherwise
+ * the administrator's saved NGN-per-USD rate. No rate is invented. */
 
 export interface PaymentRevenueReport {
   currency: "USD";
@@ -32,47 +34,76 @@ export function formatUsdFromCents(cents: number): string {
   return `${negative ? "-" : ""}$${dollars}.${fraction}`;
 }
 
-function positiveInt(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "bigint") {
+    const n = Number(value);
+    return Number.isSafeInteger(n) ? n : null;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const n = Number(value.trim());
+    return Number.isFinite(n) ? n : null;
+  }
+  if (value && typeof value === "object") {
+    const boxed = value as { toNumber?: () => number; toString?: () => string };
+    if (typeof boxed.toNumber === "function") {
+      const n = boxed.toNumber();
+      if (Number.isFinite(n)) return n;
+    }
+    const text = typeof boxed.toString === "function" ? boxed.toString() : "";
+    if (text && text !== "[object Object]") {
+      const n = Number(text);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return null;
 }
 
-function positiveFinite(value: unknown): number | null {
-  const n = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : null;
+function positive(value: unknown): number | null {
+  const n = asNumber(value);
+  return n != null && n > 0 ? n : null;
 }
 
 function acceptCents(cents: number): number | null {
-  return Number.isSafeInteger(cents) && cents > 0 && cents <= MAX_USD_CENTS ? cents : null;
+  const rounded = Math.round(cents);
+  return Number.isSafeInteger(rounded) && rounded > 0 && rounded <= MAX_USD_CENTS ? rounded : null;
 }
 
 function isSuccessful(status: string): boolean {
   return status === "FULFILLED" || status.toLowerCase() === "success";
 }
 
-/** Immutable USD cents for one successful order, or null when it cannot be converted reliably. */
-export function usdCentsForSuccessfulPayment(tx: Record<string, unknown>): number | null {
-  const recorded = positiveInt(tx["price_usd_cents"]);
+/** NGN per 1 USD when the rate is in that unit; smaller rates are USD per 1 NGN. */
+function ngnKoboToUsdCents(kobo: number, rate: number): number | null {
+  if (!(kobo > 0) || !(rate > 0)) return null;
+  return acceptCents(rate >= 50 ? kobo / rate : kobo * rate);
+}
+
+/** Immutable USD cents for one successful order, or null when it cannot be converted. */
+export function usdCentsForSuccessfulPayment(tx: Record<string, unknown>, ngnPerUsd?: number | null): number | null {
+  const recorded = positive(tx["price_usd_cents"]);
   if (recorded != null) return acceptCents(recorded);
 
   const currency = String(tx["currency"] ?? "").toUpperCase();
-  // Stablecoin minor units are not NGN kobo and are not a USD price unless price_usd_cents was stored.
-  if (currency === "USDT" || currency === "USDC") return null;
-  if (currency === "USD") {
-    return acceptCents(positiveInt(tx["amount_minor"]) ?? positiveInt(tx["amount_kobo"]) ?? 0);
-  }
+  const minor = positive(tx["amount_minor"]) ?? positive(tx["amount_kobo"]);
+  if (currency === "USD") return minor == null ? null : acceptCents(minor);
+  // Direct checkout stores stablecoin minor units equal to the USD cents (1 token = 1 USD).
+  if (currency === "USDT" || currency === "USDC") return minor == null ? null : acceptCents(minor);
+
+  const kobo = positive(tx["amount_kobo"]) ?? (currency === "NGN" ? positive(tx["amount_minor"]) : null);
+  if (kobo == null) return null;
+  if (currency !== "NGN" && currency !== "") return null;
 
   const displayCurrency = String(tx["display_currency"] ?? "").toUpperCase();
-  if (currency !== "NGN" && currency !== "") return null;
-  if (displayCurrency !== "USD") return null;
-
-  const shown = positiveFinite(tx["display_amount"]);
-  if (shown != null) return acceptCents(Math.round(shown * 100));
-
-  const rate = positiveFinite(tx["fx_rate"]);
-  const kobo = positiveInt(tx["amount_kobo"]);
-  if (rate == null || kobo == null) return null;
-  // Historical checkout stored USD per 1 NGN (exchange-rate API with NGN base).
-  return acceptCents(Math.round((kobo / 100) * rate * 100));
+  if (displayCurrency === "USD") {
+    const shown = positive(tx["display_amount"]);
+    if (shown != null) return acceptCents(shown * 100);
+  }
+  if (!displayCurrency || displayCurrency === "USD" || displayCurrency === "NGN") {
+    const ownRate = positive(tx["fx_rate"]);
+    if (ownRate != null) return ngnKoboToUsdCents(kobo, ownRate);
+  }
+  return ngnPerUsd != null ? ngnKoboToUsdCents(kobo, ngnPerUsd) : null;
 }
 
 function createdKey(tx: Record<string, unknown>): string {
@@ -93,6 +124,7 @@ function inRange(tx: Record<string, unknown>, from?: string, to?: string): boole
 export function summarizePaymentRevenue(
   rows: Record<string, unknown>[],
   range: { from?: string; to?: string } = {},
+  options: { ngnPerUsd?: number | null } = {},
 ): PaymentRevenueReport {
   const byReference = new Map<string, Record<string, unknown>>();
   const anonymous: Record<string, unknown>[] = [];
@@ -120,7 +152,7 @@ export function summarizePaymentRevenue(
     const status = String(tx["payment_status"] ?? "");
     if (isSuccessful(status)) {
       successful += 1;
-      const cents = usdCentsForSuccessfulPayment(tx);
+      const cents = usdCentsForSuccessfulPayment(tx, options.ngnPerUsd);
       if (cents == null) excluded += 1;
       else revenue += cents;
     } else if (PENDING.has(status) || status.toLowerCase() === "pending") pending += 1;
@@ -139,7 +171,7 @@ export function summarizePaymentRevenue(
     failed_rejected_payments: failed,
     excluded_unconverted_payments: excluded,
     excluded_unconverted_note: excluded
-      ? `${excluded} successful historical payment${excluded === 1 ? "" : "s"} had no recorded USD price or exchange rate and ${excluded === 1 ? "was" : "were"} excluded from revenue.`
+      ? `${excluded} successful payment${excluded === 1 ? "" : "s"} had no amount and no USD/NGN rate, so ${excluded === 1 ? "it was" : "they were"} left out of the USD total.`
       : "",
   };
 }
@@ -153,5 +185,8 @@ export async function paymentRevenueReport(
     query["created_at"] = { ...(range.from ? { $gte: range.from } : {}), ...(range.to ? { $lte: range.to } : {}) };
   }
   const rows = await db.collection("payment_transactions").find(query).toArray();
-  return summarizePaymentRevenue(rows, range);
+  const settings = await db.collection("admin_settings").find({ key: "main" }).toArray();
+  const rate = positive(settings[0]?.["direct_usd_ngn_rate"]);
+  const ngnPerUsd = rate != null && rate >= 50 && rate <= 1_000_000 ? rate : null;
+  return summarizePaymentRevenue(rows, range, { ngnPerUsd });
 }

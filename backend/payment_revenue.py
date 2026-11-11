@@ -1,4 +1,7 @@
-"""USD revenue from stored payment records. Does not mutate orders or invent exchange rates."""
+"""USD revenue from stored payment records. Does not mutate orders.
+Legacy naira amounts convert with that payment's own recorded FX, otherwise
+the administrator's saved NGN-per-USD rate. No rate is invented.
+"""
 from __future__ import annotations
 
 PENDING = {
@@ -16,54 +19,72 @@ def format_usd_from_cents(cents: int) -> str:
     return f"{'-' if negative else ''}${absolute // 100:,}.{absolute % 100:02d}"
 
 
-def _positive_int(value):
-    return value if type(value) is int and value > 0 else None
-
-
-def _positive_finite(value):
-    if isinstance(value, str):
+def _number(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return float(value)
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return None
+        return value
+    if isinstance(value, str) and value.strip():
         try:
-            value = float(value)
+            return float(value.strip())
         except ValueError:
             return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    if value != value or value in (float("inf"), float("-inf")) or value <= 0:
-        return None
-    return float(value)
+    return None
+
+
+def _positive(value):
+    number = _number(value)
+    return number if number is not None and number > 0 else None
 
 
 def _accept(cents) -> int | None:
-    if type(cents) is not int or cents <= 0 or cents > MAX_USD_CENTS:
+    if isinstance(cents, bool) or not isinstance(cents, (int, float)):
         return None
-    return cents
+    rounded = int(round(cents))
+    if rounded <= 0 or rounded > MAX_USD_CENTS:
+        return None
+    return rounded
 
 
 def _success(status: str) -> bool:
     return status == "FULFILLED" or status.lower() == "success"
 
 
-def usd_cents_for_successful_payment(tx: dict) -> int | None:
-    recorded = _positive_int(tx.get("price_usd_cents"))
+def _ngn_kobo_to_usd_cents(kobo: float, rate: float) -> int | None:
+    if kobo <= 0 or rate <= 0:
+        return None
+    return _accept(kobo / rate if rate >= 50 else kobo * rate)
+
+
+def usd_cents_for_successful_payment(tx: dict, ngn_per_usd: float | None = None) -> int | None:
+    recorded = _positive(tx.get("price_usd_cents"))
     if recorded is not None:
         return _accept(recorded)
     currency = str(tx.get("currency") or "").upper()
-    if currency in ("USDT", "USDC"):
-        return None
+    minor = _positive(tx.get("amount_minor")) or _positive(tx.get("amount_kobo"))
     if currency == "USD":
-        return _accept(_positive_int(tx.get("amount_minor")) or _positive_int(tx.get("amount_kobo")) or 0)
-    if currency not in ("NGN", ""):
+        return _accept(minor) if minor is not None else None
+    if currency in ("USDT", "USDC"):
+        return _accept(minor) if minor is not None else None
+    kobo = _positive(tx.get("amount_kobo")) or (_positive(tx.get("amount_minor")) if currency == "NGN" else None)
+    if kobo is None or currency not in ("NGN", ""):
         return None
-    if str(tx.get("display_currency") or "").upper() != "USD":
+    display = str(tx.get("display_currency") or "").upper()
+    if display == "USD":
+        shown = _positive(tx.get("display_amount"))
+        if shown is not None:
+            return _accept(shown * 100)
+    if display in ("", "USD", "NGN"):
+        own_rate = _positive(tx.get("fx_rate"))
+        if own_rate is not None:
+            return _ngn_kobo_to_usd_cents(kobo, own_rate)
+    if ngn_per_usd is None:
         return None
-    shown = _positive_finite(tx.get("display_amount"))
-    if shown is not None:
-        return _accept(int(round(shown * 100)))
-    rate = _positive_finite(tx.get("fx_rate"))
-    kobo = _positive_int(tx.get("amount_kobo"))
-    if rate is None or kobo is None:
-        return None
-    return _accept(int(round((kobo / 100) * rate * 100)))
+    return _ngn_kobo_to_usd_cents(kobo, ngn_per_usd)
 
 
 def _created(tx: dict) -> str:
@@ -71,7 +92,7 @@ def _created(tx: dict) -> str:
     return value.isoformat() if hasattr(value, "isoformat") else value if isinstance(value, str) else ""
 
 
-def summarize_payment_revenue(rows, range_from: str | None = None, range_to: str | None = None) -> dict:
+def summarize_payment_revenue(rows, range_from: str | None = None, range_to: str | None = None, ngn_per_usd: float | None = None) -> dict:
     chosen = {}
     anonymous = []
     for row in rows:
@@ -92,7 +113,7 @@ def summarize_payment_revenue(rows, range_from: str | None = None, range_to: str
         status = str(tx.get("payment_status") or "")
         if _success(status):
             successful += 1
-            cents = usd_cents_for_successful_payment(tx)
+            cents = usd_cents_for_successful_payment(tx, ngn_per_usd)
             if cents is None:
                 excluded += 1
             else:
@@ -113,8 +134,8 @@ def summarize_payment_revenue(rows, range_from: str | None = None, range_to: str
         "failed_rejected_payments": failed,
         "excluded_unconverted_payments": excluded,
         "excluded_unconverted_note": (
-            f"{excluded} successful historical payment{'s' if excluded != 1 else ''} had no recorded USD price or exchange rate and "
-            f"{'were' if excluded != 1 else 'was'} excluded from revenue."
+            f"{excluded} successful payment{'s' if excluded != 1 else ''} had no amount and no USD/NGN rate, so "
+            f"{'they were' if excluded != 1 else 'it was'} left out of the USD total."
         ) if excluded else "",
     }
 
@@ -133,4 +154,7 @@ async def payment_revenue_report(db, range_from: str | None = None, range_to: st
         "amount_minor": 1, "amount_kobo": 1, "price_usd_cents": 1, "created_at": 1,
         "display_currency": 1, "display_amount": 1, "fx_rate": 1,
     }).to_list(length=100000)
-    return summarize_payment_revenue(rows, range_from, range_to)
+    settings = await db.admin_settings.find_one({"key": "main"}, {"_id": 0, "direct_usd_ngn_rate": 1})
+    rate = _positive((settings or {}).get("direct_usd_ngn_rate"))
+    ngn_per_usd = rate if rate is not None and 50 <= rate <= 1_000_000 else None
+    return summarize_payment_revenue(rows, range_from, range_to, ngn_per_usd)
