@@ -47,14 +47,15 @@ describe("country checkout and existing beneficiary configuration", { timeout: 3
     await app.close();
   });
 
-  it("honors an explicit bank disable and gives an actionable cause for stale FX", async () => {
+  it("honors an explicit bank disable, and an old rate falls back to 1400 naira per dollar", async () => {
     const app = await appForTest();
     await state.db.collection("admin_settings").updateOne({ key: "main" }, { $set: { direct_bank_enabled: false } });
     expect((await app.inject({ url: "/purchase/direct/config" })).json()).toMatchObject({ bank_enabled: false, bank_unavailable_reason: "BANK_DISABLED" });
-    await state.db.collection("admin_settings").updateOne({ key: "main" }, { $set: { direct_bank_enabled: true, direct_fx_as_of: new Date(Date.now() - 25 * 3600000).toISOString() } });
-    expect((await app.inject({ url: "/purchase/direct/config" })).json()).toMatchObject({ bank_enabled: false, bank_unavailable_reason: "FX_RATE_STALE", crypto_enabled: true });
-    expect((await app.inject({ method: "POST", url: "/purchase/direct/quote", payload: quotePayload("NG", "BANK") })).statusCode).toBe(503);
-    expect(state.db.collection("payment_transactions").docs).toHaveLength(0);
+    await state.db.collection("admin_settings").updateOne({ key: "main" }, { $set: { direct_bank_enabled: true, direct_fx_as_of: "2026-10-01T00:00:00.000Z" } });
+    expect((await app.inject({ url: "/purchase/direct/config" })).json()).toMatchObject({ bank_enabled: true, bank_unavailable_reason: null, crypto_enabled: true });
+    const quote = await app.inject({ method: "POST", url: "/purchase/direct/quote", payload: quotePayload("NG", "BANK") });
+    expect(quote.statusCode).toBe(200);
+    expect(quote.json()).toMatchObject({ method: "BANK", details: { fx_rate: "1400" } });
     await app.close();
   });
 
@@ -85,9 +86,11 @@ describe("country checkout and existing beneficiary configuration", { timeout: 3
     expect((await app.inject({ url: "/purchase/direct/config" })).json()).toMatchObject({ bank_enabled: true, crypto_enabled: true, bank_unavailable_reason: null });
     await state.db.collection("admin_settings").updateOne({ key: "main" }, { $unset: { direct_usd_ngn_rate: "", direct_fx_as_of: "" } });
     const missing = (await app.inject({ url: "/purchase/direct/config" })).json();
-    expect(missing).toMatchObject({ bank_enabled: false, bank_unavailable_reason: "FX_RATE_MISSING", crypto_enabled: true });
+    expect(missing).toMatchObject({ bank_enabled: true, bank_unavailable_reason: null, crypto_enabled: true });
     expect((await app.inject({ method: "POST", url: "/purchase/direct/quote", payload: quotePayload("NG", "CRYPTO") })).statusCode).toBe(200);
-    expect((await app.inject({ method: "POST", url: "/purchase/direct/quote", payload: quotePayload("NG", "BANK") })).statusCode).toBe(503);
+    const bank = await app.inject({ method: "POST", url: "/purchase/direct/quote", payload: quotePayload("NG", "BANK") });
+    expect(bank.statusCode).toBe(200);
+    expect(bank.json().details.fx_rate).toBe("1400");
     await app.close();
   });
 

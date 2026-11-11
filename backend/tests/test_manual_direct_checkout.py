@@ -108,12 +108,12 @@ class TestDirectCheckout:
             assert await srv.db.payment_transactions.count_documents({"provider": "MANUAL_DIRECT"}) == 0
         run(go())
 
-    def test_stale_fx_fails_closed(self):
+    def test_stale_fx_uses_the_1400_default(self):
         async def go():
-            await reset({"direct_fx_as_of": (datetime.now(timezone.utc)-timedelta(days=3)).isoformat()})
-            with pytest.raises(HTTPException) as exc:
-                await bank_quote()
-            assert exc.value.status_code == 503
+            await reset({"direct_fx_as_of": "2026-10-01T00:00:00+00:00"})
+            order = await bank_quote()
+            assert order["details"]["fx_rate"] == "1400"
+            assert order["amount_minor"] == 14000000
         run(go())
 
     def test_missing_bank_fails_closed(self):

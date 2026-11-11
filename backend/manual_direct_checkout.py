@@ -67,7 +67,24 @@ class RejectionReview(BaseModel):
     verification_notes: str | None = Field(default=None, max_length=1500)
 
 APPROVABLE = ["MANUAL_PENDING", "MANUAL_SUBMITTED", "MANUAL_EXPIRED"]
+DEFAULT_NGN_PER_USD = "1400"
+RATE_POLICY_AT = datetime(2026, 11, 11, tzinfo=timezone.utc)
 PIN_PATTERN = re.compile(r"^ASE-[A-Z0-9]{4}-[A-Z0-9]{4}$")
+
+def effective_ngn_rate(settings: dict) -> tuple[str, str | None, str]:
+    """Return (rate, reviewed_at, source). Saved rates older than the default policy use 1400."""
+    raw = settings.get("direct_usd_ngn_rate")
+    reviewed = settings.get("direct_fx_as_of")
+    try:
+        fx = Decimal(str(raw))
+        reviewed_at = datetime.fromisoformat(str(reviewed).replace("Z", "+00:00"))
+        if reviewed_at.tzinfo is None:
+            reviewed_at = reviewed_at.replace(tzinfo=timezone.utc)
+        if fx.is_finite() and Decimal("0.01") <= fx <= Decimal("1000000") and reviewed_at >= RATE_POLICY_AT:
+            return str(fx), reviewed_at.isoformat(), "admin"
+    except (ValueError, TypeError, InvalidOperation, OverflowError):
+        pass
+    return DEFAULT_NGN_PER_USD, None, "default"
 
 class FulfillmentError(Exception):
     def __init__(self, stage, message):
@@ -83,9 +100,11 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
     async def config():
         s = await get_settings()
         p = s.get("direct_usd_cents")
+        rate, reviewed_at, source = effective_ngn_rate(s)
         return {"price_usd_cents": p if type(p) is int and p > 0 else None,
-                "usd_ngn_rate": s.get("direct_usd_ngn_rate"),
-                "rate_as_of": s.get("direct_fx_as_of"),
+                "usd_ngn_rate": rate,
+                "rate_as_of": reviewed_at,
+                "fx_rate_source": source,
                 "bank_enabled": (s["direct_bank_enabled"] if type(s.get("direct_bank_enabled")) is bool
                                  else s.get("bank_transfer_enabled") is True),
                 "crypto_enabled": bool(s.get("direct_crypto_enabled")),
@@ -287,24 +306,13 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
         settings = await get_settings()
         details_ready = bool(settings.get("bank_transfer_bank_name") and settings.get("bank_transfer_account_name")
                              and settings.get("bank_transfer_account_number"))
-        fx_reason = "FX_RATE_MISSING"
+        fx_reason = None
         try:
-            if cfg["usd_ngn_rate"]:
-                fx = Decimal(str(cfg["usd_ngn_rate"]))
-                if not fx.is_finite() or not Decimal("0.01") <= fx <= Decimal("1000000"):
-                    fx_reason = "FX_RATE_INVALID"
-                else:
-                    raw_as_of = cfg.get("rate_as_of")
-                    if not raw_as_of:
-                        fx_reason = "FX_TIMESTAMP_MISSING"
-                    else:
-                        fx_date = datetime.fromisoformat(str(raw_as_of).replace("Z", "+00:00"))
-                        if fx_date.tzinfo is None or fx_date > now() or now() - fx_date > timedelta(hours=24):
-                            fx_reason = "FX_RATE_STALE"
-                        else:
-                            fx_reason = None
+            fx = Decimal(str(cfg["usd_ngn_rate"]))
+            if not fx.is_finite() or not Decimal("0.01") <= fx <= Decimal("1000000"):
+                fx_reason = "FX_RATE_INVALID"
         except (ValueError, TypeError, InvalidOperation, OverflowError):
-            fx_reason = "FX_RATE_INVALID" if cfg.get("usd_ngn_rate") else "FX_RATE_MISSING"
+            fx_reason = "FX_RATE_INVALID"
         crypto_ready = bool(price and cfg["crypto_enabled"] and options)
         if not price:
             bank_reason = "USD_PRICE_MISSING"
@@ -354,19 +362,17 @@ def build_router(*, db, get_settings, admin_dep, user_dep, rate_limit,
                 raise HTTPException(503, "Nigerian bank transfer is not configured.")
             try:
                 fx = Decimal(str(cfg["usd_ngn_rate"]))
-                fx_date = datetime.fromisoformat(str(cfg["rate_as_of"]).replace("Z", "+00:00"))
-                if not (fx.is_finite() and Decimal("0.01") <= fx <= Decimal("1000000")
-                        and fx_date.tzinfo and timedelta(0) <= stamp - fx_date <= timedelta(hours=24)):
-                    raise ValueError("FX rate unavailable or stale")
+                if not (fx.is_finite() and Decimal("0.01") <= fx <= Decimal("1000000")):
+                    raise ValueError("FX rate invalid")
             except (ValueError, TypeError, InvalidOperation):
-                raise HTTPException(503, "Nigerian bank transfer needs a current verified USD/NGN rate. Crypto checkout is unchanged.")
+                raise HTTPException(503, "Nigerian bank transfer needs a valid USD/NGN rate. Crypto checkout is unchanged.")
             # USD cents * NGN/USD gives NGN kobo (integer); no float arithmetic.
             amount_minor = int((Decimal(cents) * fx).quantize(Decimal(1), rounding=ROUND_HALF_UP))
             currency = "NGN"
             details = {"bank_name": s["bank_transfer_bank_name"],
                        "account_name": s["bank_transfer_account_name"],
                        "account_number": s["bank_transfer_account_number"],
-                       "fx_rate": str(fx), "rate_as_of": fx_date.isoformat(),
+                       "fx_rate": str(fx), "rate_as_of": cfg.get("rate_as_of") or "default",
                        "instructions": str(s.get("bank_transfer_instructions") or ""),
                        "support_contact": str(s.get("bank_transfer_support_contact") or "")}
             formatted = f"NGN {Decimal(amount_minor)/100:,.2f}"

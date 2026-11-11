@@ -25,6 +25,8 @@ const PENDING = new Set([
 ]);
 
 const MAX_USD_CENTS = 100_000_000;
+const DEFAULT_NGN_PER_USD = 1400;
+const RATE_POLICY_AT = Date.parse("2026-11-11T00:00:00.000Z");
 
 export function formatUsdFromCents(cents: number): string {
   const negative = cents < 0;
@@ -186,7 +188,11 @@ export async function paymentRevenueReport(
   }
   const rows = await db.collection("payment_transactions").find(query).toArray();
   const settings = await db.collection("admin_settings").find({ key: "main" }).toArray();
-  const rate = positive(settings[0]?.["direct_usd_ngn_rate"]);
-  const ngnPerUsd = rate != null && rate >= 50 && rate <= 1_000_000 ? rate : null;
+  const saved = settings[0];
+  const reviewedAt = Date.parse(String(saved?.["direct_fx_as_of"] ?? ""));
+  const rate = positive(saved?.["direct_usd_ngn_rate"]);
+  const ngnPerUsd = rate != null && rate >= 50 && rate <= 1_000_000 && Number.isFinite(reviewedAt) && reviewedAt >= RATE_POLICY_AT
+    ? rate
+    : DEFAULT_NGN_PER_USD;
   return summarizePaymentRevenue(rows, range, { ngnPerUsd });
 }

@@ -180,10 +180,10 @@ const BANK_REASON = {
   USD_PRICE_MISSING: "Set the official USD price.",
   BANK_DISABLED: "Turn on Nigerian bank transfer in this payment configuration. Crypto stays available.",
   BANK_DETAILS_MISSING: "Enter the beneficiary name, bank name, and account number.",
-  FX_RATE_MISSING: "Enter the verified USD/NGN rate. Crypto checkout stays available.",
+  FX_RATE_MISSING: "The 1400 naira-per-dollar default is not available. Crypto checkout stays available.",
   FX_RATE_INVALID: "Correct the saved USD/NGN rate. Crypto checkout stays available.",
-  FX_TIMESTAMP_MISSING: "Review and save the configured USD/NGN rate. Crypto checkout stays available.",
-  FX_RATE_STALE: "The USD/NGN review is over 24 hours old. Save the reviewed rate to restore bank transfer. Crypto stays available.",
+  FX_TIMESTAMP_MISSING: "Save the naira rate in this form. Crypto checkout stays available.",
+  FX_RATE_STALE: "The saved naira rate is not current, so checkout is using the 1400 default.",
 };
 
 function PaymentSettings({ api }) {
@@ -210,7 +210,7 @@ function PaymentSettings({ api }) {
       setBankCheckoutLive(publicConfig.data.bank_enabled === true);
       setBankUnavailableReason(publicConfig.data.bank_unavailable_reason || null);
       setDollars(config.data.price_usd_cents ? (config.data.price_usd_cents / 100).toFixed(2) : "");
-      setFx(config.data.usd_ngn_rate || "");
+      setFx(config.data.usd_ngn_rate || "1400");
       setWallets(config.data.wallets || []);
       setBankName(config.data.bank_name || "");
       setAccountName(config.data.account_name || "");
@@ -268,9 +268,9 @@ function PaymentSettings({ api }) {
       {cfg && <>
         <div className="grid gap-4 md:grid-cols-2">
           <Label title="Official product price (USD)"><input className={inputClass} inputMode="decimal" value={dollars} onChange={(e) => setDollars(e.target.value)}/></Label>
-          <Label title="Reviewed USD → NGN rate (Nigeria bank transfer)"><input className={inputClass} inputMode="decimal" value={fx} onChange={(e) => setFx(e.target.value)}/></Label>
+          <Label title="Naira per $1"><input className={inputClass} inputMode="decimal" value={fx} onChange={(e) => setFx(e.target.value)} placeholder="1400"/></Label>
         </div>
-        <div className="flex flex-wrap items-center gap-3"><p className="text-xs text-white/50">Rate reviewed: {cfg.rate_as_of ? dateLabel(cfg.rate_as_of) : "Not configured"}</p><button type="button" className={btnClass} disabled={busy || !fx.trim()} onClick={saveReviewedRate}>Save reviewed rate</button></div>
+        <div className="flex flex-wrap items-center gap-3"><p className="text-xs text-white/50">{cfg.fx_rate_source === "admin" ? "Using your saved rate" : "Using the 1400 default"}. {cfg.rate_as_of ? "Saved " + dateLabel(cfg.rate_as_of) + "." : "Change this number and save to replace the default."}</p><button type="button" className={btnClass} disabled={busy || !fx.trim()} onClick={saveReviewedRate}>Save naira rate</button></div>
         <p className="text-sm text-white/70">Nigerian bank checkout: <strong>{bankCheckoutLive ? "Available" : "Unavailable"}</strong>{!bankCheckoutLive && " · " + (BANK_REASON[bankUnavailableReason] || "Check the saved bank account and pricing configuration.")}</p>
         <div className="flex flex-wrap gap-5">
           <label className="flex min-h-11 items-center gap-2 text-sm text-white/70"><input type="checkbox" checked={Boolean(cfg.bank_enabled)} onChange={(e) => setCfg({ ...cfg, bank_enabled: e.target.checked })}/> Bank transfer enabled (Nigeria only)</label>

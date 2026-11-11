@@ -4,6 +4,8 @@ the administrator's saved NGN-per-USD rate. No rate is invented.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 PENDING = {
     "pending", "PENDING",
     "MANUAL_PENDING", "MANUAL_SUBMITTED", "MANUAL_EXPIRED",
@@ -11,6 +13,8 @@ PENDING = {
     "BANK_TRANSFER_PENDING", "BANK_TRANSFER_SUBMITTED", "UNDER_ADMIN_REVIEW",
 }
 MAX_USD_CENTS = 100_000_000
+DEFAULT_NGN_PER_USD = 1400.0
+RATE_POLICY_AT = datetime(2026, 11, 11, tzinfo=timezone.utc)
 
 
 def format_usd_from_cents(cents: int) -> str:
@@ -154,7 +158,16 @@ async def payment_revenue_report(db, range_from: str | None = None, range_to: st
         "amount_minor": 1, "amount_kobo": 1, "price_usd_cents": 1, "created_at": 1,
         "display_currency": 1, "display_amount": 1, "fx_rate": 1,
     }).to_list(length=100000)
-    settings = await db.admin_settings.find_one({"key": "main"}, {"_id": 0, "direct_usd_ngn_rate": 1})
+    settings = await db.admin_settings.find_one({"key": "main"}, {"_id": 0, "direct_usd_ngn_rate": 1, "direct_fx_as_of": 1})
     rate = _positive((settings or {}).get("direct_usd_ngn_rate"))
-    ngn_per_usd = rate if rate is not None and 50 <= rate <= 1_000_000 else None
+    reviewed = (settings or {}).get("direct_fx_as_of")
+    reviewed_at = None
+    if isinstance(reviewed, str):
+        try:
+            reviewed_at = datetime.fromisoformat(reviewed.replace("Z", "+00:00"))
+        except ValueError:
+            reviewed_at = None
+    if reviewed_at is not None and reviewed_at.tzinfo is None:
+        reviewed_at = reviewed_at.replace(tzinfo=timezone.utc)
+    ngn_per_usd = rate if rate is not None and 50 <= rate <= 1_000_000 and reviewed_at is not None and reviewed_at >= RATE_POLICY_AT else DEFAULT_NGN_PER_USD
     return summarize_payment_revenue(rows, range_from, range_to, ngn_per_usd)

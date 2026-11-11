@@ -53,18 +53,19 @@ describe("USD payment revenue", () => {
     expect(report.pending_payments).toBe(1);
   });
 
-  it("does not invent a rate when naira payments have no saved FX", () => {
+  it("converts naira payments at 1400 per dollar when the admin has not saved a newer rate", () => {
     const report = summarizePaymentRevenue([
       { reference: "LEGACY-NGN", payment_status: "success", currency: "NGN", amount_kobo: 30_000_000 },
-    ]);
-    expect(report.total_revenue_usd_cents).toBe(0);
+    ], {}, { ngnPerUsd: 1400 });
+    expect(report.total_revenue_usd_cents).toBe(21429);
+    expect(report.formatted_revenue).toBe("$214.29");
     expect(report.successful_payments).toBe(1);
-    expect(report.excluded_unconverted_payments).toBe(1);
+    expect(report.excluded_unconverted_payments).toBe(0);
   });
 
   it("applies the same date window and the saved rate", async () => {
     const db = new FakeDb();
-    await db.collection("admin_settings").insertOne({ key: "main", direct_usd_ngn_rate: "1600" });
+    await db.collection("admin_settings").insertOne({ key: "main", direct_usd_ngn_rate: "1600", direct_fx_as_of: "2026-11-11T12:00:00.000Z" });
     await db.collection("payment_transactions").insertOne({ reference: "IN", payment_status: "success", currency: "NGN", amount_kobo: 32_000_000, created_at: "2026-06-15T00:00:00.000Z" });
     await db.collection("payment_transactions").insertOne({ reference: "OUT", payment_status: "FULFILLED", price_usd_cents: 50000, currency: "USDT", amount_minor: 50000, created_at: "2026-08-01T00:00:00.000Z" });
     const report = await paymentRevenueReport(db, { from: "2026-06-01T00:00:00.000Z", to: "2026-06-30T23:59:59.000Z" });

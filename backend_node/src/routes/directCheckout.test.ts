@@ -135,12 +135,12 @@ describe("USD-first manual checkout HTTP and fulfillment lifecycle", () => {
   it("missing USD price, stale FX or absent bank destination never creates payable instructions", async () => {
     await state.db.collection("admin_settings").updateOne({ key: "main" }, { $set: { direct_usd_cents: null } });
     expect((await quoteBank(app)).statusCode).toBe(503);
-    await state.db.collection("admin_settings").updateOne({ key: "main" }, { $set: { direct_usd_cents: 10000, direct_fx_as_of: new Date(Date.now() - 72 * 3600000).toISOString() } });
-    expect((await quoteBank(app)).statusCode).toBe(503);
+    await state.db.collection("admin_settings").updateOne({ key: "main" }, { $set: { direct_usd_cents: 10000, direct_fx_as_of: "2026-10-01T00:00:00.000Z" } });
+    expect((await quoteBank(app)).json()).toMatchObject({ method: "BANK", details: { fx_rate: "1400" } });
     await state.db.collection("admin_settings").updateOne({ key: "main" }, { $set: { direct_fx_as_of: new Date().toISOString() } });
     state.bankConfigured = false;
     expect((await quoteBank(app)).statusCode).toBe(503);
-    expect(state.db.collection("payment_transactions").docs).toHaveLength(0);
+    expect(state.db.collection("payment_transactions").docs).toHaveLength(1);
   });
 
   it("USDT is available in every country, and only Nigeria can also pay by bank transfer", async () => {

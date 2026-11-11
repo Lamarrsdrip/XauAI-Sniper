@@ -17,6 +17,9 @@ const TRON_WALLET = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;
 const ETH_HASH = /^0x[0-9a-fA-F]{64}$/;
 const TRON_HASH = /^(?:0x)?[0-9a-fA-F]{64}$/;
 const RATE_RE = /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,8})?$/;
+const DEFAULT_NGN_PER_USD = "1400";
+// A rate saved before this default is not treated as the admin's current choice.
+const RATE_POLICY_AT = Date.parse("2026-11-11T00:00:00.000Z");
 function escapeEmailHtml(value: unknown): string {
   return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -76,14 +79,25 @@ function toNgnKobo(usdCents: number, rate: string): number {
   return Number(result);
 }
 function utc(): string { return new Date().toISOString(); }
+function savedNgnRate(settings: Record<string, unknown>): { rate: string; rate_as_of: string } | null {
+  const raw = settings["direct_usd_ngn_rate"];
+  const rate = typeof raw === "string" ? raw.trim() : typeof raw === "number" && Number.isFinite(raw) ? String(raw) : "";
+  const rateAsOf = typeof settings["direct_fx_as_of"] === "string" ? settings["direct_fx_as_of"] : "";
+  const reviewedAt = Date.parse(rateAsOf);
+  if (!rate || !Number.isFinite(reviewedAt) || reviewedAt < RATE_POLICY_AT) return null;
+  try { rateScaled(rate); } catch { return null; }
+  return { rate, rate_as_of: new Date(reviewedAt).toISOString() };
+}
 function getCfg(settings: Record<string, unknown>) {
   const raw = settings["direct_usd_cents"];
   const price = typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0 ? raw : null;
   const wallets = Array.isArray(settings["direct_wallets"]) ? settings["direct_wallets"] as Record<string, unknown>[] : [];
+  const saved = savedNgnRate(settings);
   return {
     price_usd_cents: price,
-    usd_ngn_rate: typeof settings["direct_usd_ngn_rate"] === "string" ? settings["direct_usd_ngn_rate"] : null,
-    rate_as_of: typeof settings["direct_fx_as_of"] === "string" ? settings["direct_fx_as_of"] : null,
+    usd_ngn_rate: saved?.rate ?? DEFAULT_NGN_PER_USD,
+    rate_as_of: saved?.rate_as_of ?? null,
+    fx_rate_source: saved ? "admin" as const : "default" as const,
     // Reuse an already enabled legacy beneficiary when migrating to direct
     // checkout. An explicit direct-checkout disable still takes precedence.
     bank_enabled: typeof settings["direct_bank_enabled"] === "boolean"
@@ -97,11 +111,7 @@ function bankUnavailableReason(cfg: ReturnType<typeof getCfg>, bank: Awaited<Ret
   if (cfg.price_usd_cents == null) return "USD_PRICE_MISSING";
   if (!cfg.bank_enabled) return "BANK_DISABLED";
   if (!bankTransferIsConfigured(bank)) return "BANK_DETAILS_MISSING";
-  try { if (!cfg.usd_ngn_rate) return "FX_RATE_MISSING"; rateScaled(cfg.usd_ngn_rate); }
-  catch { return "FX_RATE_INVALID"; }
-  const fxTime = cfg.rate_as_of ? Date.parse(cfg.rate_as_of) : NaN;
-  if (!Number.isFinite(fxTime)) return "FX_TIMESTAMP_MISSING";
-  if (fxTime > Date.now() || Date.now() - fxTime > 86400000) return "FX_RATE_STALE";
+  try { rateScaled(cfg.usd_ngn_rate); } catch { return "FX_RATE_INVALID"; }
   return null;
 }
 async function effectiveStatus(tx: Record<string, unknown>): Promise<string> {
@@ -394,16 +404,11 @@ export async function registerDirectCheckoutRoutes(app: FastifyInstance): Promis
       if (!cfg.bank_enabled || !bankTransferIsConfigured(bank)) {
         return reply.code(503).send({ detail: "Nigerian bank transfer is not configured." });
       }
-      const updated = cfg.rate_as_of ? new Date(cfg.rate_as_of) : null;
-      if (!cfg.usd_ngn_rate || !updated || !Number.isFinite(updated.getTime()) ||
-          updated.getTime() > stamp.getTime() || stamp.getTime() - updated.getTime() > 86400000) {
-        return reply.code(503).send({ detail: "Nigerian bank transfer needs a current verified USD/NGN rate. Crypto checkout is unchanged." });
-      }
       try { amountMinor = toNgnKobo(cents, cfg.usd_ngn_rate); }
       catch { return reply.code(503).send({ detail: "Nigerian bank transfer needs a valid USD/NGN rate. Crypto checkout is unchanged." }); }
       currency = "NGN";
       details = { bank_name: bank.bank_name, account_name: bank.account_name,
-                  account_number: bank.account_number, fx_rate: String(cfg.usd_ngn_rate), rate_as_of: String(cfg.rate_as_of),
+                  account_number: bank.account_number, fx_rate: cfg.usd_ngn_rate, rate_as_of: cfg.rate_as_of ?? "default",
                   instructions: bank.instructions, support_contact: bank.support_contact };
     } else {
       if (!cfg.crypto_enabled) return reply.code(403).send({ detail: "Crypto checkout is not available." });
