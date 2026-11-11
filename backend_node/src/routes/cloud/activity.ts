@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { getDb } from "../../db.js";
 import { normalizeLicenseKey, resolveEaMonitorLicense } from "../../services/license.js";
 import { storeBotActivity } from "../../services/botActivity.js";
-import { sendPatternActivityNotification, sendTradeActivityNotification } from "../../services/notifications.js";
+import { sendPatternActivityNotification, sendTradeActivityNotification, classifyTradeActivity } from "../../services/notifications.js";
+import { enqueueOpenedTradeForXPost } from "../../services/xTradePosting.js";
 import { ACTIVITY_DETAIL_FIELDS, BotActivityReqSchema } from "../../models/cloudActivity.js";
 import { runMarketIntelligenceForEaRequest } from "../../services/marketIntelligencePipeline.js";
 import { resolveTrustedRuntimeEnvironment } from "../../services/accountProvenance.js";
@@ -101,6 +102,7 @@ export async function registerCloudActivityRoutes(app: FastifyInstance): Promise
       try {
         await sendTradeActivityNotification(doc);
         await sendPatternActivityNotification(doc);
+        if (classifyTradeActivity(doc) === "TRADE_OPENED") await enqueueOpenedTradeForXPost(doc);
       } catch {
         /* best-effort, matches Python's logged-but-swallowed exception */
       }

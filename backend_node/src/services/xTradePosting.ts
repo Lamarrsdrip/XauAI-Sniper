@@ -12,6 +12,81 @@ const RETRYABLE_STATUSES = ["QUEUED", "RETRYING", "queued"];
 const PROCESSING_STATUSES = ["PROCESSING", "posting"];
 const asNumber = (v: unknown) => typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : Number.NaN;
 
+function detailsOf(activity: FinalTrade): Record<string, unknown> {
+  const details = activity["details"];
+  return details && typeof details === "object" ? details as Record<string, unknown> : {};
+}
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function setupGrade(...sources: unknown[]): string {
+  const allowed = /^(A\+|A|B\+|B|C\+|C)$/;
+  for (const source of sources) {
+    const direct = String(source ?? "").trim().toUpperCase();
+    if (allowed.test(direct)) return direct;
+    const match = String(source ?? "").match(/grade=(A\+|A|B\+|B|C\+|C)/i);
+    if (match?.[1]) return match[1].toUpperCase();
+  }
+  return "";
+}
+
+function taggedNumber(text: string, label: string): number {
+  const match = text.match(new RegExp(`${label}[=:]\\s*([0-9]+(?:\\.[0-9]+)?)`, "i"));
+  return match ? Number(match[1]) : Number.NaN;
+}
+
+function formatOpenTime(value: unknown): string {
+  let ms = Number.NaN;
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) ms = value > 1e12 ? value : value * 1000;
+  else if (typeof value === "string" && value.trim()) {
+    const numeric = Number(value);
+    ms = Number.isFinite(numeric) && numeric > 0 ? (numeric > 1e12 ? numeric : numeric * 1000) : Date.parse(value);
+  }
+  if (!Number.isFinite(ms)) return "";
+  const date = new Date(ms);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const hh = String(date.getUTCHours()).padStart(2, "0");
+  const mm = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${date.getUTCDate()} ${months[date.getUTCMonth()]}, ${hh}:${mm} UTC`;
+}
+
+/** Pull the broker-confirmed open the EA already sent. Never invent a lot, stop, or score. */
+export function openedTradeFields(activity: FinalTrade): FinalTrade {
+  const details = detailsOf(activity);
+  const direction = firstText(activity["position_direction"], details["position_direction"], activity["direction"], activity["signal_direction"], details["signal_direction"]).toUpperCase();
+  const entry = asNumber(activity["entry_price"] ?? activity["price"] ?? details["price"]);
+  const lotText = firstText(activity["risk_lot_decision"], details["risk_lot_decision"], activity["decision"], details["decision"]);
+  const reason = firstText(activity["reason"], details["reason"]);
+  let lots = asNumber(activity["lots"] ?? details["lots"] ?? activity["volume"] ?? details["volume"]);
+  if (!Number.isFinite(lots) || lots <= 0) lots = taggedNumber(lotText, "lot");
+  if (!Number.isFinite(lots) || lots <= 0) {
+    const prose = lotText.match(/([0-9]+(?:\.[0-9]+)?)\s*lot/i);
+    if (prose) lots = Number(prose[1]);
+  }
+  let stop = asNumber(activity["stop_loss"] ?? activity["sl"] ?? details["sl"] ?? details["stop_loss"]);
+  if (!Number.isFinite(stop) || stop <= 0) stop = taggedNumber(reason, "SL");
+  const score = asNumber(activity["score"] ?? details["score"]);
+  const grade = setupGrade(activity["grade"], details["grade"], reason);
+  return {
+    symbol: activity["symbol"] ?? details["symbol"] ?? "XAUUSD",
+    direction: direction === "BUY" || direction === "SELL" ? direction : "",
+    entry_price: entry,
+    lots,
+    stop_loss: stop,
+    score,
+    grade,
+    opened_at: firstText(activity["opened_at"], activity["ts"]),
+    account_login: String(activity["account_login"] ?? activity["account"] ?? ""),
+    ticket: String(activity["ticket"] ?? details["ticket"] ?? ""),
+  };
+}
+
 // Structured, secret- and account-number-free logging. The durable queue
 // stores only a safe error category/status, never X credentials or responses.
 function xPostLog(event: string, fields: Record<string, unknown> = {}): void {
@@ -67,7 +142,39 @@ export function buildXTradePost(t: FinalTrade): string {
   const direction = String(trade["direction"]);
   const result = profit > 0 ? "WIN" : profit < 0 ? "LOSS" : "BREAKEVEN";
   const emoji = profit > 0 ? "🟢" : profit < 0 ? "🔴" : "⚪️";
-  const text = `XauCloud Trade Closed ${emoji}\n\n${normalizePublicSymbol(trade["symbol"])} • ${direction}\nEntry: ${entry.toFixed(2)}\nExit: ${exit.toFixed(2)}\n\nResult: ${result}\nP/L: ${profit >= 0 ? "+" : "-"}$${Math.abs(profit).toFixed(2)}\n\nXauCloud — Built for Gold.`;
+  const lots = asNumber(trade["lots"]);
+  const lotLine = Number.isFinite(lots) && lots > 0 ? `\nLot: ${lots.toFixed(2)}` : "";
+  const text = `XauCloud Trade Closed ${emoji}\n\n$XAUUSD • ${direction}\nEntry: ${entry.toFixed(2)}\nExit: ${exit.toFixed(2)}${lotLine}\n\nResult: ${result}\nP/L: ${profit >= 0 ? "+" : "-"}$${Math.abs(profit).toFixed(2)}\n\nXauCloud — Built for Gold.`;
+  if (text.length > MAX_X_POST_LENGTH) throw new Error("X post exceeds the character limit.");
+  return text;
+}
+
+export function buildXTradeOpenPost(t: FinalTrade): string {
+  const trade = t["direction"] && t["entry_price"] && !t["event_type"] ? t : openedTradeFields(t);
+  const direction = String(trade["direction"] ?? "").toUpperCase();
+  const entry = asNumber(trade["entry_price"]);
+  if (direction !== "BUY" && direction !== "SELL") throw new Error("Open trade data is incomplete: MISSING_OR_INVALID_DIRECTION.");
+  if (!Number.isFinite(entry) || entry <= 0) throw new Error("Open trade data is incomplete: MISSING_OR_INVALID_ENTRY_PRICE.");
+  const lines = [
+    "XauCloud Trade Opened ♻️",
+    "",
+    `$XAUUSD • ${direction}`,
+  ];
+  const opened = formatOpenTime(trade["opened_at"]);
+  if (opened) lines.push(`Opened: ${opened}`);
+  lines.push(`Entry: ${entry.toFixed(2)}`);
+  const lots = asNumber(trade["lots"]);
+  const stop = asNumber(trade["stop_loss"]);
+  if (Number.isFinite(lots) && lots > 0) lines.push(`Lot: ${lots.toFixed(2)}`);
+  if (Number.isFinite(stop) && stop > 0) lines.push(`Stop: ${stop.toFixed(2)}`);
+  const score = asNumber(trade["score"]);
+  const grade = setupGrade(trade["grade"]);
+  const scoreText = Number.isFinite(score) && score > 0 ? (Number.isInteger(score) ? String(score) : score.toFixed(1)) : "";
+  if (scoreText && grade) lines.push(`Score: ${scoreText} ${grade}`);
+  else if (scoreText) lines.push(`Score: ${scoreText}`);
+  else if (grade) lines.push(`Score: ${grade}`);
+  lines.push("", "XauCloud — Built for Gold.");
+  const text = lines.join("\n");
   if (text.length > MAX_X_POST_LENGTH) throw new Error("X post exceeds the character limit.");
   return text;
 }
@@ -117,6 +224,43 @@ export async function enqueueFinalTradeForXPost(trade: FinalTrade): Promise<void
     { upsert: true },
   );
   if (result.upsertedCount) xPostLog(status === "QUEUED" ? "queued" : "blocked_invalid_trade_data", { closed_trade_id: id, ...(checked.valid ? {} : { reason: checked.reason }) });
+  else xPostLog("skip_already_queued", { closed_trade_id: id });
+}
+
+/** One public open post per account ticket. Repeats of the same fill do not queue again. */
+export async function enqueueOpenedTradeForXPost(activity: FinalTrade): Promise<void> {
+  const trade = openedTradeFields(activity);
+  const account = String(trade["account_login"] ?? "");
+  const ticket = String(trade["ticket"] ?? "");
+  if (!account || !ticket) {
+    xPostLog("skip_open_no_identity", {});
+    return;
+  }
+  const id = `${account}:${ticket}`;
+  const direction = String(trade["direction"] ?? "");
+  const entry = asNumber(trade["entry_price"]);
+  const valid = (direction === "BUY" || direction === "SELL") && Number.isFinite(entry) && entry > 0;
+  const reason = direction !== "BUY" && direction !== "SELL" ? "MISSING_OR_INVALID_DIRECTION" : "MISSING_OR_INVALID_ENTRY_PRICE";
+  const status: XPostStatus = valid ? "QUEUED" : "BLOCKED_INVALID_TRADE_DATA";
+  const now = new Date().toISOString();
+  const result = await getDb().collection("x_trade_posts").updateOne(
+    { idempotency_key: `x_trade_open:${id}` },
+    {
+      $setOnInsert: {
+        id: `xpost-${randomUUID()}`,
+        idempotency_key: `x_trade_open:${id}`,
+        post_kind: "OPEN",
+        closed_trade_id: id,
+        trade,
+        status,
+        retry_count: 0,
+        created_at: now,
+        ...(valid ? {} : { blocked_at: now, failure_category: reason }),
+      },
+    },
+    { upsert: true },
+  );
+  if (result.upsertedCount) xPostLog(status === "QUEUED" ? "queued_open" : "blocked_invalid_trade_data", { closed_trade_id: id, ...(valid ? {} : { reason }) });
   else xPostLog("skip_already_queued", { closed_trade_id: id });
 }
 
@@ -237,6 +381,7 @@ async function persistAuthoritativeExitPrice(trade: FinalTrade): Promise<void> {
 }
 
 async function processClaimedXTradePost(row: Record<string, unknown>, source: "auto" | "admin_manual"): Promise<Record<string, unknown>> {
+  if (String(row["post_kind"] ?? "") === "OPEN") return processClaimedOpenPost(row, source);
   const checked = validateFinalTrade(row["trade"] as FinalTrade);
   if (!checked.valid) { await blockInvalidXTradePost(row, checked); return { status: "BLOCKED_INVALID_TRADE_DATA", closed_trade_id: row["closed_trade_id"] }; }
   await persistAuthoritativeExitPrice(checked.trade);
@@ -261,6 +406,38 @@ async function processClaimedXTradePost(row: Record<string, unknown>, source: "a
     await failXTradePost(row, error); throw error;
   }
 } // ASTRA_REPAIR_V2_6287 / 017
+
+async function processClaimedOpenPost(row: Record<string, unknown>, source: "auto" | "admin_manual"): Promise<Record<string, unknown>> {
+  let text = "";
+  try {
+    text = buildXTradeOpenPost(row["trade"] as FinalTrade);
+  } catch (error) {
+    const message = String((error as Error).message ?? "");
+    const reason = message.includes("DIRECTION") ? "MISSING_OR_INVALID_DIRECTION" : message.includes("ENTRY") ? "MISSING_OR_INVALID_ENTRY_PRICE" : "OPEN_TRADE_INCOMPLETE";
+    await blockInvalidXTradePost(row, { valid: false, reason, trade: row["trade"] as FinalTrade });
+    return { status: "BLOCKED_INVALID_TRADE_DATA", closed_trade_id: row["closed_trade_id"] };
+  }
+  xPostLog("publishing", { closed_trade_id: row["closed_trade_id"], source, post_kind: "OPEN" });
+  let providerPostId = "";
+  try {
+    const posted = await postToX(text);
+    providerPostId = posted.id;
+    const result = { status: "POSTED", x_post_id: posted.id, posted_at: new Date().toISOString(), last_attempt_at: new Date().toISOString() };
+    try {
+      const persisted = await getDb().collection("x_trade_posts").updateOne({ idempotency_key: String(row["idempotency_key"] ?? ""), status: { $in: PROCESSING_STATUSES } }, { $set: result });
+      if (persisted.matchedCount !== 1) throw new Error("claimed X-post row was not persistable after provider success");
+    } catch (persistError) {
+      await getDb().collection("x_trade_posts").updateOne({ idempotency_key: String(row["idempotency_key"] ?? "") }, { $set: { status: "UNCERTAIN", x_post_id: posted.id, failure_category: "POST_SUCCEEDED_PERSISTENCE_UNCERTAIN", last_attempt_at: new Date().toISOString(), next_attempt_at: null } }).catch(() => undefined);
+      throw Object.assign(new Error("X post succeeded but persistence is uncertain; automatic resend fenced."), { category: "X_POST_PERSISTENCE_UNCERTAIN", cause: persistError });
+    }
+    xPostLog("posted", { closed_trade_id: row["closed_trade_id"], x_post_id: posted.id, post_kind: "OPEN" });
+    return { ...result, closed_trade_id: row["closed_trade_id"] };
+  } catch (error) {
+    if (providerPostId) { xPostLog("uncertain", { closed_trade_id: row["closed_trade_id"], x_post_id: providerPostId }); throw error; }
+    xPostLog("failed", { closed_trade_id: row["closed_trade_id"], category: String((error as { category?: unknown })?.category ?? "X_POSTING_ERROR") });
+    await failXTradePost(row, error); throw error;
+  }
+}
 
 
 export async function publishApprovedXTrade(trade: FinalTrade): Promise<Record<string, unknown>> {
@@ -301,12 +478,26 @@ export async function processQueuedXTradePosts(limit = 20): Promise<void> {
   const now = new Date().toISOString();
   const rows = await coll.find({ status: { $in: RETRYABLE_STATUSES }, retry_count: { $lt: 5 }, $or: [{ next_attempt_at: { $exists: false } }, { next_attempt_at: null }, { next_attempt_at: { $lte: now } }] }).limit(limit).toArray();
   for (const row of rows) {
-    const checked = validateFinalTrade(row["trade"] as FinalTrade);
-    if (!checked.valid) { await blockInvalidXTradePost(row, checked); continue; }
-    const ineligibleReason = eligibleForAutoPost(asNumber(checked.trade["profit"]), settings);
-    if (ineligibleReason) {
-      xPostLog("skip_ineligible", { closed_trade_id: row["closed_trade_id"], reason: ineligibleReason });
-      continue;
+    const isOpen = String(row["post_kind"] ?? "") === "OPEN";
+    let tradeForClaim = row["trade"] as FinalTrade;
+    if (isOpen) {
+      try {
+        buildXTradeOpenPost(tradeForClaim);
+      } catch (error) {
+        const message = String((error as Error).message ?? "");
+        const reason = message.includes("DIRECTION") ? "MISSING_OR_INVALID_DIRECTION" : message.includes("ENTRY") ? "MISSING_OR_INVALID_ENTRY_PRICE" : "OPEN_TRADE_INCOMPLETE";
+        await blockInvalidXTradePost(row, { valid: false, reason, trade: tradeForClaim });
+        continue;
+      }
+    } else {
+      const checked = validateFinalTrade(tradeForClaim);
+      if (!checked.valid) { await blockInvalidXTradePost(row, checked); continue; }
+      const ineligibleReason = eligibleForAutoPost(asNumber(checked.trade["profit"]), settings);
+      if (ineligibleReason) {
+        xPostLog("skip_ineligible", { closed_trade_id: row["closed_trade_id"], reason: ineligibleReason });
+        continue;
+      }
+      tradeForClaim = checked.trade;
     }
     const rateSlot = await getDb().collection("x_posting_settings").updateOne(
       { id: "trade_posts", auto_post_enabled: true, $or: [{ last_auto_post_at: { $exists: false } }, { last_auto_post_at: null }, { last_auto_post_at: { $lte: new Date(Date.now() - 15_000).toISOString() } }] },
@@ -315,7 +506,7 @@ export async function processQueuedXTradePosts(limit = 20): Promise<void> {
     if (!rateSlot.modifiedCount) break;
     const claimed = await coll.findOneAndUpdate(
       { idempotency_key: String(row["idempotency_key"] ?? ""), status: { $in: RETRYABLE_STATUSES } },
-      { $set: { status: "PROCESSING", attempted_at: new Date().toISOString(), trade: checked.trade } },
+      { $set: { status: "PROCESSING", attempted_at: new Date().toISOString(), trade: tradeForClaim } },
       { returnDocument: "after" },
     );
     if (!claimed) continue;

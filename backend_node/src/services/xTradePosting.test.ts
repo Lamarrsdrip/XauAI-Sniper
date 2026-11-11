@@ -81,9 +81,11 @@ vi.mock("./xOAuth.js", () => ({
 
 const {
   buildXTradePost,
+  buildXTradeOpenPost,
   authoritativeExitPrice,
   normalizePublicSymbol,
   enqueueFinalTradeForXPost,
+  enqueueOpenedTradeForXPost,
   processQueuedXTradePosts,
   publishApprovedXTrade,
 } = await import("./xTradePosting.js");
@@ -108,6 +110,7 @@ describe("X closed-trade post contract", () => {
   it("formats a final win without customer or account data", () => {
     const post = buildXTradePost(closedTrade());
     expect(post).toContain("XAUUSD • SELL");
+    expect(post).toContain("$XAUUSD • SELL");
     expect(post).toContain("Result: WIN");
     expect(post).toContain("+$666.00");
     expect(post).not.toContain("476396807");
@@ -250,8 +253,65 @@ describe("X auto-post queue + eligibility", () => {
     const loss = buildXTradePost(closedTrade({ profit: -25, price: 4400.01 }));
     expect(win).toContain("XauCloud Trade Closed 🟢");
     expect(loss).toContain("XauCloud Trade Closed 🔴");
+    expect(win).not.toContain("♻️");
     expect(win.length).toBeLessThanOrEqual(280);
     expect(loss.length).toBeLessThanOrEqual(280);
+  });
+
+  it("formats an open with the recycle mark, lot, stop, and score", () => {
+    const post = buildXTradeOpenPost({
+      event_type: "TRADE_EXECUTED",
+      account: "476396807",
+      symbol: "XAUUSD",
+      ticket: "99",
+      ts: "2026-11-11T16:21:00.000Z",
+      price: 4048.37,
+      position_direction: "SELL",
+      score: 8.4,
+      reason: "grade=A+ setup=BREAK SL=4055.20 TP=4030.00",
+      risk_lot_decision: "LOT_MODE=UNIFIED lot=0.10 riskInput=1.20%",
+      decision: "Entry allowed: SELL 0.10 lot @4048.37",
+    });
+    expect(post).toBe([
+      "XauCloud Trade Opened ♻️",
+      "",
+      "$XAUUSD • SELL",
+      "Opened: 11 Nov, 16:21 UTC",
+      "Entry: 4048.37",
+      "Lot: 0.10",
+      "Stop: 4055.20",
+      "Score: 8.4 A+",
+      "",
+      "XauCloud — Built for Gold.",
+    ].join("\n"));
+    expect(post).not.toContain("476396807");
+    expect(post).not.toContain("🟢");
+    expect(post).not.toContain("🔴");
+  });
+
+  it("publishes one open post and does not duplicate it", async () => {
+    await setSettings({ auto_post_enabled: true });
+    const activity = {
+      event_type: "TRADE_EXECUTED",
+      account: "476396807",
+      symbol: "XAUUSD",
+      ticket: "99",
+      ts: "2026-11-11T16:21:00.000Z",
+      price: 4048.37,
+      position_direction: "SELL",
+      score: 8.4,
+      reason: "SL=4055.20",
+      risk_lot_decision: "lot=0.10",
+    };
+    await enqueueOpenedTradeForXPost(activity);
+    await enqueueOpenedTradeForXPost(activity);
+    expect(state.db.collection("x_trade_posts").docs).toHaveLength(1);
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 201, headers: new Headers(), json: async () => ({ data: { id: "18000000000" } }) })));
+    await processQueuedXTradePosts();
+    const row = state.db.collection("x_trade_posts").docs[0]!;
+    expect(row["status"]).toBe("POSTED");
+    expect(row["post_kind"]).toBe("OPEN");
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("retries a temporary X failure and posts exactly once after the retry", async () => {
