@@ -142,9 +142,7 @@ export function buildXTradePost(t: FinalTrade): string {
   const direction = String(trade["direction"]);
   const result = profit > 0 ? "WIN" : profit < 0 ? "LOSS" : "BREAKEVEN";
   const emoji = profit > 0 ? "🟢" : profit < 0 ? "🔴" : "⚪️";
-  const lots = asNumber(trade["lots"]);
-  const lotLine = Number.isFinite(lots) && lots > 0 ? `\nLot: ${lots.toFixed(2)}` : "";
-  const text = `XauCloud Trade Closed ${emoji}\n\n$XAUUSD • ${direction}\nEntry: ${entry.toFixed(2)}\nExit: ${exit.toFixed(2)}${lotLine}\n\nResult: ${result}\nP/L: ${profit >= 0 ? "+" : "-"}$${Math.abs(profit).toFixed(2)}\n\nXauCloud — Built for Gold.`;
+  const text = `XauCloud Trade Closed ${emoji}\n\n$XAUUSD • ${direction}\nEntry: ${entry.toFixed(2)}\nExit: ${exit.toFixed(2)}\n\nResult: ${result}\nP/L: ${profit >= 0 ? "+" : "-"}$${Math.abs(profit).toFixed(2)}\n\nXauCloud — Built for Gold.`;
   if (text.length > MAX_X_POST_LENGTH) throw new Error("X post exceeds the character limit.");
   return text;
 }
@@ -163,9 +161,7 @@ export function buildXTradeOpenPost(t: FinalTrade): string {
   const opened = formatOpenTime(trade["opened_at"]);
   if (opened) lines.push(`Opened: ${opened}`);
   lines.push(`Entry: ${entry.toFixed(2)}`);
-  const lots = asNumber(trade["lots"]);
   const stop = asNumber(trade["stop_loss"]);
-  if (Number.isFinite(lots) && lots > 0) lines.push(`Lot: ${lots.toFixed(2)}`);
   if (Number.isFinite(stop) && stop > 0) lines.push(`Stop: ${stop.toFixed(2)}`);
   const score = asNumber(trade["score"]);
   const grade = setupGrade(trade["grade"]);

@@ -278,7 +278,6 @@ describe("X auto-post queue + eligibility", () => {
       "$XAUUSD • SELL",
       "Opened: 11 Nov, 16:21 UTC",
       "Entry: 4048.37",
-      "Lot: 0.10",
       "Stop: 4055.20",
       "Score: 8.4 A+",
       "",
