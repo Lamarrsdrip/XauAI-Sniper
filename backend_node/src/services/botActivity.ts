@@ -6,8 +6,6 @@ import { recordDiagnostic } from "./diagnostics.js";
 import { normalizeGoldSymbol } from "./goldSymbol.js";
 import { hasMarketEvidence, recordImmutableMarketEvidence, type MarketEvidenceInput } from "./marketEvidenceLedger.js";
 
-const OPERATIONAL_ACTIVITY_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
-
 export interface BotActivityDetails {
   license_key?: string;
   reason?: string;
@@ -72,8 +70,8 @@ async function recordMarketEvidenceSafely(input: MarketEvidenceInput): Promise<R
  * within a 15-minute window (same license/account/symbol/type/severity/
  * module/decision/reason/blocked_by/ticket hashes to the same dedupe_key),
  * bumping repeat_count instead of inserting a duplicate row; otherwise
- * inserts a new categorized activity document and prunes the collection
- * back to 2000 once it exceeds 2500 documents.
+ * inserts a new categorized activity document. Activity history is retained
+ * without a storage-based expiry or collection-size cap.
  */
 export async function storeBotActivity(
   eventType: string,
@@ -85,7 +83,6 @@ export async function storeBotActivity(
 ): Promise<Record<string, unknown>> {
   const db = getDb();
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + OPERATIONAL_ACTIVITY_RETENTION_MS);
   const sev = (severity || "INFO").toUpperCase();
   const licenseKey = normalizeLicenseKey(String(details.license_key ?? ""));
   const ev = (eventType || "INFO").toUpperCase();
@@ -115,7 +112,6 @@ export async function storeBotActivity(
       ts: now.toISOString(),
       last_repeat_at: now.toISOString(),
       repeat_count: repeatCount,
-      expires_at: expiresAt,
       message: String(message ?? "").slice(0, 600),
       details,
       normalized_symbol: normalizeGoldSymbol(symbol),
@@ -144,7 +140,6 @@ export async function storeBotActivity(
     first_seen_at: now.toISOString(),
     last_repeat_at: now.toISOString(),
     repeat_count: 1,
-    expires_at: expiresAt,
     dedupe_key: dedupeKey,
     event_type: ev,
     severity: sev,
@@ -205,17 +200,6 @@ export async function storeBotActivity(
     /* Manual Trading Intelligence will fail closed until its candle history exists. */
   }
 
-  const total = await activity.estimatedDocumentCount();
-  if (total > 2500) {
-    const oldest = await activity
-      .find({}, { projection: { _id: 1, ts: 1 } })
-      .sort({ ts: 1 })
-      .limit(total - 2000)
-      .toArray();
-    if (oldest.length > 0) {
-      await activity.deleteMany({ _id: { $in: oldest.map((o) => o["_id"]) } });
-    }
-  }
   return { ...doc, manual_market_quote: manualMarketQuote, market_evidence: marketEvidence };
 }
 

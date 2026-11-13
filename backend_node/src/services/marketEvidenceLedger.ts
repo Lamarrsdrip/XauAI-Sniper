@@ -3,7 +3,7 @@ import { MongoServerError } from "mongodb";
 import { getDb } from "../db.js";
 import { normalizeGoldSymbol } from "./goldSymbol.js";
 import { asUtc, extractEvidenceQuoteFromDetails } from "./marketOutlookEvidence.js";
-import { MARKET_EVIDENCE_COLLECTION, MARKET_EVIDENCE_RETENTION_DAYS } from "./marketIntelligenceConfig.js";
+import { MARKET_EVIDENCE_COLLECTION } from "./marketIntelligenceConfig.js";
 import { recordPersistentDiagnostic } from "./persistentDiagnostics.js";
 import { normalizeEnvironmentSource, normalizeRuntimeEnvironment } from "./accountProvenance.js";
 
@@ -115,7 +115,6 @@ export async function ensureMarketEvidenceIndexes(): Promise<void> {
   await collection.createIndex({ account: 1, received_at: -1 });
   await collection.createIndex({ license_key: 1, account: 1, received_at: -1 });
   await collection.createIndex({ normalized_symbol: 1, received_at: -1 });
-  await collection.createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 });
 }
 
 /**
@@ -146,7 +145,6 @@ export async function recordImmutableMarketEvidence(input: MarketEvidenceInput):
     event_type: input.event_type,
     received_at: now.toISOString(),
     observed_at: observedAt,
-    expires_at: new Date(now.getTime() + MARKET_EVIDENCE_RETENTION_DAYS * 86_400_000),
     quote_valid: quote.valid,
     bid: quote.bid,
     ask: quote.ask,
