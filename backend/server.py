@@ -7029,11 +7029,6 @@ async def _store_bot_activity(event_type: str, severity: str, message: str,
         "pipeline_stage": str(details.get("pipeline_stage") or ""),
     }
     await db.cloud_bot_activity.insert_one(doc.copy())
-    total = await db.cloud_bot_activity.estimated_document_count()
-    if total > 2500:
-        oldest = await db.cloud_bot_activity.find({}, {"_id": 1, "ts": 1}).sort("ts", 1).to_list(total - 2000)
-        if oldest:
-            await db.cloud_bot_activity.delete_many({"_id": {"$in": [o["_id"] for o in oldest]}})
     return doc
 
 def _monitor_severity(event_type: str, reason: str = "") -> str:
@@ -7417,11 +7412,6 @@ async def cloud_monitor_heartbeat(req: BotHeartbeatReq, request: Request):
         await _store_bot_activity("ALGO_DISABLED", "CRITICAL", "Algo Trading disabled", account, req.symbol or "", doc)
     if req.mt5_connected is False:
         await _store_bot_activity("MT5_DISCONNECTED", "CRITICAL", "MT5 disconnected", account, req.symbol or "", doc)
-    total = await db.cloud_bot_heartbeats.estimated_document_count()
-    if total > 1500:
-        oldest = await db.cloud_bot_heartbeats.find({}, {"_id": 1, "ts": 1}).sort("ts", 1).to_list(total - 1000)
-        if oldest:
-            await db.cloud_bot_heartbeats.delete_many({"_id": {"$in": [o["_id"] for o in oldest]}})
     response = {
         "ok": True,
         "status": "received",
