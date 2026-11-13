@@ -1,11 +1,9 @@
 /**
  * Durable, broker-originated candle store for Manual Trading Intelligence.
  *
- * `cloud_bot_activity` is intentionally short-lived operational telemetry.
- * It must never be the historical source of truth for a Daily/H4 thesis.
- * This collector writes only verified bid/ask observations from the connected
- * EA into account-scoped OHLC buckets, preserving the provenance and source
- * timestamp needed to audit every later thesis.
+ * This collector writes verified bid/ask observations from the connected EA
+ * into account-scoped OHLC buckets, preserving provenance and source timestamps
+ * needed to audit later theses.
  */
 import { getDb } from "../db.js";
 import { isGoldSymbol, normalizeGoldSymbol } from "./goldSymbol.js";
@@ -13,7 +11,6 @@ import { isGoldSymbol, normalizeGoldSymbol } from "./goldSymbol.js";
 import { createHash } from "node:crypto";
 const GOLD_MIN = 1000;
 const GOLD_MAX = 20_000;
-const RAW_QUOTE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 const TIMEFRAMES = [
   { name: "H1", seconds: 60 * 60 },
   { name: "H4", seconds: 4 * 60 * 60 },
@@ -74,7 +71,7 @@ export async function recordVerifiedManualTradingQuote(args: {
   const sourceOrderKey = `${sourceAt}|${sampleId}`;
   await db.collection<{ _id: string } & Record<string, unknown>>("manual_trading_broker_quote_samples").updateOne(
     { _id: sampleId },
-    { $setOnInsert: { account: args.account, symbol: normalizedSymbol, brokerSymbol: String(args.symbol), sourceAt, receivedAt, bid, ask, mid, expires_at: new Date(args.receivedAt.getTime() + RAW_QUOTE_RETENTION_MS) } },
+    { $setOnInsert: { account: args.account, symbol: normalizedSymbol, brokerSymbol: String(args.symbol), sourceAt, receivedAt, bid, ask, mid } },
     { upsert: true },
   );
 

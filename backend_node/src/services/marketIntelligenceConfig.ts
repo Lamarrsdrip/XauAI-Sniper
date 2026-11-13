@@ -1,13 +1,10 @@
 /**
- * One source of truth for XauCloud market-intelligence freshness/retention.
- * Different concepts intentionally have different windows; callers must use
- * the named constant instead of embedding magic numbers or user-facing text.
+ * One source of truth for XauCloud market-intelligence freshness windows.
  */
 export const BROKER_QUOTE_FRESH_SECONDS = 10 * 60;
 export const M10_EXPECTED_CADENCE_SECONDS = 10 * 60;
 export const M10_STALE_GRACE_SECONDS = 5 * 60;
 export const OUTLOOK_EVIDENCE_MAX_AGE_SECONDS = M10_EXPECTED_CADENCE_SECONDS + M10_STALE_GRACE_SECONDS;
-export const MARKET_EVIDENCE_RETENTION_DAYS = 3;
 export const MARKET_EVIDENCE_COLLECTION = "cloud_market_evidence";
 /**
  * Longest the heartbeat/activity routes wait for downstream intelligence
