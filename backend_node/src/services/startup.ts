@@ -105,52 +105,10 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
     log.warn(`[signal-outlook] could not create lifecycle indexes: ${String(e)}`);
   }
 
-  // Storage hygiene for high-frequency operational telemetry. These rows are
-  // not the durable source of truth for trades, licenses, Apex campaign
-  // history, or H1/H4/D1 candles. Keep only the last 3 days and strip the
-  // legacy per-tick hash arrays that could grow without bound inside candles.
-  try {
-    const retentionMs = 3 * 24 * 60 * 60 * 1000;
-    const cutoff = new Date(Date.now() - retentionMs).toISOString();
-    const legacyExpiry = new Date(Date.now() + retentionMs);
-    const [heartbeats, activity, evidence, rawQuotes, candles] = await Promise.all([
-      db.collection("cloud_bot_heartbeats").deleteMany({ ts: { $lt: cutoff } }),
-      db.collection("cloud_bot_activity").deleteMany({ ts: { $lt: cutoff } }),
-      db.collection("cloud_market_evidence").deleteMany({ received_at: { $lt: cutoff } }),
-      db.collection("manual_trading_broker_quote_samples").deleteMany({ receivedAt: { $lt: cutoff } }),
-      db.collection("manual_trading_broker_candles").updateMany(
-        { $or: [{ sampleKeys: { $exists: true } }, { samples: { $exists: true } }] },
-        { $unset: { sampleKeys: "", samples: "" } },
-      ),
-    ]);
-
-    // Legacy rows created before TTL fields existed are kept briefly rather
-    // than deleted immediately, then allowed to expire automatically.
-    await Promise.all([
-      db.collection("cloud_bot_heartbeats").updateMany(
-        { expires_at: { $exists: false } },
-        { $set: { expires_at: legacyExpiry } },
-      ),
-      db.collection("cloud_bot_activity").updateMany(
-        { expires_at: { $exists: false } },
-        { $set: { expires_at: legacyExpiry } },
-      ),
-      db.collection("manual_trading_broker_quote_samples").updateMany(
-        { expires_at: { $exists: false } },
-        { $set: { expires_at: legacyExpiry } },
-      ),
-      db.collection("cloud_market_evidence").updateMany(
-        { received_at: { $gte: cutoff }, expires_at: { $gt: legacyExpiry } },
-        { $set: { expires_at: legacyExpiry } },
-      ),
-    ]);
-
-    log.info(
-      `[storage-retention] 3d cleanup: heartbeats=${heartbeats.deletedCount}, activity=${activity.deletedCount}, marketEvidence=${evidence.deletedCount}, rawQuotes=${rawQuotes.deletedCount}, candleHashArrays=${candles.modifiedCount}`,
-    );
-  } catch (e) {
-    log.warn(`[storage-retention] cleanup failed: ${String(e)}`);
-  }
+  // Historical activity, market evidence, raw broker quotes, and candle
+  // sample details are retained. Keep storage-based expiry and pruning out of
+  // startup; security-token and temporary-workflow TTLs remain configured
+  // explicitly below.
 
   await db
     .collection("cloud_bot_commands")
@@ -176,18 +134,6 @@ export async function runStartupTasks(log: FastifyBaseLogger): Promise<void> {
   indexReport.push(await tryIndex(
     "cloud_bot_heartbeats.identity",
     () => db.collection("cloud_bot_heartbeats").createIndex({ license_id: 1, account_number: 1 }),
-  ));
-  indexReport.push(await tryIndex(
-    "cloud_bot_heartbeats.expires_at: TTL",
-    () => db.collection("cloud_bot_heartbeats").createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 }),
-  ));
-  indexReport.push(await tryIndex(
-    "cloud_bot_activity.expires_at: TTL",
-    () => db.collection("cloud_bot_activity").createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 }),
-  ));
-  indexReport.push(await tryIndex(
-    "manual_trading_broker_quote_samples.expires_at: TTL",
-    () => db.collection("manual_trading_broker_quote_samples").createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 }),
   ));
   indexReport.push(await tryIndex("cloud_users.email: unique", () => db.collection("cloud_users").createIndex("email", { unique: true })));
   indexReport.push(await tryIndex("pin_licenses.pin: unique", () => db.collection("pin_licenses").createIndex("pin", { unique: true })));
